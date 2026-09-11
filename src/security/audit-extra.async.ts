@@ -21,10 +21,13 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
+import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -48,7 +51,6 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-const loadSkillsModule = createLazyRuntimeModule(() => import("../skills/loading/workspace.js"));
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
@@ -642,19 +644,22 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const { resolveDefaultAgentId } = await loadAgentScopeModule();
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  let defaultAgentId: string | undefined;
+  if (agentIds.length > 0) {
+    try {
+      defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
+    } catch {
+      // Security audits must still inspect known agent stores when a malformed
+      // roster prevents normal default selection; config findings report that defect.
+    }
+  }
+  const ids = uniqueStrings([
+    LEGACY_IMPLICIT_AGENT_ID,
+    ...(defaultAgentId ? [defaultAgentId] : []),
+    ...agentIds,
+  ]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
@@ -896,81 +901,114 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  workspaceDir?: string;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
-  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
-
-  for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: params.cfg,
-      includeArchived: true,
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Deep audit accepts raw pre-migration and malformed configs. Continue
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  }
+  const entries = [...workspaceDirs].flatMap((workspaceDir) =>
+    loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
+  );
+  const { listAgentIds } = await loadAgentScopeModule();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
+    findings.push({
+      checkId: "skills.code_safety.scan_failed",
+      severity: "warn",
+      title: "Workshop skill inventory scan failed",
+      detail: `Static code scan could not inspect ${filePath}: ${String(error)}`,
+      remediation:
+        "Check file permissions and skill layout, then rerun `openclaw security audit --deep`.",
     });
-    for (const entry of entries) {
-      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
-        continue;
-      }
+  };
+  // Installed-code audit includes hidden and shadowed Workshop skills, not only
+  // the merged prompt inventory. Prompt discovery limits must not hide installed
+  // artifacts from the audit.
+  for (const agentId of listAgentIds(params.cfg)) {
+    const workshopDir = resolveWorkshopSkillsDir(params.cfg, agentId, env);
+    entries.push(
+      ...loadSkillRootRecords({
+        dir: workshopDir,
+        source: "openclaw-workshop",
+        config: params.cfg,
+        mode: "audit",
+        rejectHardlinks: true,
+        onDiagnostic: ({ path: filePath, message }) => reportWorkshopScanFailure(filePath, message),
+      }),
+    );
+  }
+  for (const entry of entries) {
+    if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
+      continue;
+    }
 
-      const skillDir = path.resolve(entry.skill.baseDir);
-      if (isPathInside(pluginExtensionsDir, skillDir)) {
-        // Plugin code is already covered by plugins.code_safety checks.
-        continue;
-      }
-      if (scannedSkillDirs.has(skillDir)) {
-        continue;
-      }
-      scannedSkillDirs.add(skillDir);
+    const skillDir = path.resolve(entry.skill.baseDir);
+    if (isPathInside(pluginExtensionsDir, skillDir)) {
+      // Plugin code is already covered by plugins.code_safety checks.
+      continue;
+    }
+    if (scannedSkillDirs.has(skillDir)) {
+      continue;
+    }
+    scannedSkillDirs.add(skillDir);
 
-      const skillName = entry.skill.name;
-      const summary = await getSkillCodeSafetySummary({
-        dirPath: skillDir,
-        skillFilePath: entry.skill.filePath,
-        summaryCache: params.summaryCache,
-      }).catch((err: unknown) => {
-        findings.push({
-          checkId: "skills.code_safety.scan_failed",
-          severity: "warn",
-          title: `Skill "${skillName}" code scan failed`,
-          detail: `Static code scan could not complete for ${skillDir}: ${String(err)}`,
-          remediation:
-            "Check file permissions and skill layout, then rerun `openclaw security audit --deep`.",
-        });
-        return null;
+    const skillName = entry.skill.name;
+    const summary = await getSkillCodeSafetySummary({
+      dirPath: skillDir,
+      skillFilePath: entry.skill.filePath,
+      summaryCache: params.summaryCache,
+    }).catch((err: unknown) => {
+      findings.push({
+        checkId: "skills.code_safety.scan_failed",
+        severity: "warn",
+        title: `Skill "${skillName}" code scan failed`,
+        detail: `Static code scan could not complete for ${skillDir}: ${String(err)}`,
+        remediation:
+          "Check file permissions and skill layout, then rerun `openclaw security audit --deep`.",
       });
-      if (!summary) {
-        continue;
-      }
+      return null;
+    });
+    if (!summary) {
+      continue;
+    }
 
-      if (summary.critical > 0) {
-        const criticalFindings = summary.findings.filter(
-          (finding) => finding.severity === "critical",
-        );
-        const details = formatCodeSafetyDetails(criticalFindings, skillDir);
-        findings.push({
-          checkId: "skills.code_safety",
-          severity: "critical",
-          title: `Skill "${skillName}" contains dangerous code patterns`,
-          detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
-          remediation: `Review the skill source code before use. If untrusted, remove "${skillDir}".`,
-        });
-      } else if (summary.warn > 0) {
-        const warnFindings = summary.findings.filter((finding) => finding.severity === "warn");
-        const details = formatCodeSafetyDetails(warnFindings, skillDir);
-        findings.push({
-          checkId: "skills.code_safety",
-          severity: "warn",
-          title: `Skill "${skillName}" contains suspicious code patterns`,
-          detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
-          remediation: "Review flagged lines to ensure the behavior is intentional and safe.",
-        });
-      }
+    if (summary.critical > 0) {
+      const criticalFindings = summary.findings.filter(
+        (finding) => finding.severity === "critical",
+      );
+      const details = formatCodeSafetyDetails(criticalFindings, skillDir);
+      findings.push({
+        checkId: "skills.code_safety",
+        severity: "critical",
+        title: `Skill "${skillName}" contains dangerous code patterns`,
+        detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
+        remediation: `Review the skill source code before use. If untrusted, remove "${skillDir}".`,
+      });
+    } else if (summary.warn > 0) {
+      const warnFindings = summary.findings.filter((finding) => finding.severity === "warn");
+      const details = formatCodeSafetyDetails(warnFindings, skillDir);
+      findings.push({
+        checkId: "skills.code_safety",
+        severity: "warn",
+        title: `Skill "${skillName}" contains suspicious code patterns`,
+        detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
+        remediation: "Review flagged lines to ensure the behavior is intentional and safe.",
+      });
     }
   }
 

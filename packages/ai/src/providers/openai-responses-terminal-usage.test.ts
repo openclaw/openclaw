@@ -19,7 +19,14 @@ describe("mapResponsesTerminalUsage", () => {
         total_tokens: 110,
         input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
       }),
-    ).toEqual({ input: 50, output: 10, cacheRead: 20, cacheWrite: 30, totalTokens: 110 });
+    ).toEqual({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 110 },
+      totalTokens: 110,
+    });
   });
 
   it("derives totalTokens from the buckets when the payload omits it", () => {
@@ -28,6 +35,7 @@ describe("mapResponsesTerminalUsage", () => {
       output: 12,
       cacheRead: 0,
       cacheWrite: 0,
+      contextUsage: { state: "available", promptTokens: 30, totalTokens: 42 },
       totalTokens: 42,
     });
   });
@@ -41,7 +49,26 @@ describe("mapResponsesTerminalUsage", () => {
         total_tokens: 7,
         input_tokens_details: { cached_tokens: 4 },
       }),
-    ).toEqual({ input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 });
+    ).toEqual({
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      contextUsage: { state: "unavailable" },
+      totalTokens: 9,
+    });
+  });
+
+  it.each([0, 29])("rejects an output-absent context snapshot whose total is %i", (totalTokens) => {
+    expect(
+      mapResponsesTerminalUsage({ input_tokens: 30, total_tokens: totalTokens })?.contextUsage,
+    ).toEqual({ state: "unavailable" });
+  });
+
+  it("accepts an output-absent context snapshot whose total covers its input", () => {
+    expect(mapResponsesTerminalUsage({ input_tokens: 30, total_tokens: 30 })?.contextUsage).toEqual(
+      { state: "available", promptTokens: 30, totalTokens: 30 },
+    );
   });
 });
 
@@ -64,10 +91,44 @@ describe("resolveResponsesTerminalStopReason", () => {
     ).toEqual({ stopReason: "length" });
   });
 
+  it("uses the terminal incomplete event when a compatible response omits its status", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: undefined,
+        terminalEventType: "response.incomplete",
+        hasToolCall: false,
+      }),
+    ).toEqual({ stopReason: "length" });
+  });
+
+  it("keeps an explicit response status authoritative over the terminal event", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: "completed",
+        terminalEventType: "response.incomplete",
+        hasToolCall: false,
+      }),
+    ).toEqual({ stopReason: "stop" });
+  });
+
   it("reports a content-filtered turn as a provider error", () => {
     expect(
       resolveResponsesTerminalStopReason({
         status: "incomplete",
+        incompleteReason: "content_filter",
+        hasToolCall: false,
+      }),
+    ).toEqual({
+      stopReason: "error",
+      errorMessage: "Provider incomplete_reason: content_filter",
+    });
+  });
+
+  it("does not expose filtered output when an incomplete response omits its status", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: undefined,
+        terminalEventType: "response.incomplete",
         incompleteReason: "content_filter",
         hasToolCall: false,
       }),

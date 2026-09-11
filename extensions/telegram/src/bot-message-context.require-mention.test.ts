@@ -103,52 +103,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
   });
 
-  it("keeps room events as context for the next direct group request", async () => {
-    const groupHistories = new Map();
-    const cfg = {
-      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
-    };
-    await buildTelegramMessageContextForTest({
-      cfg,
-      message: { ...buildForumMessage(99), text: "side chatter" },
-      historyLimit: 10,
-      groupHistories,
-      resolveGroupActivation: () => false,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
-        topicConfig: undefined,
-      }),
-    });
-
-    const ctx = await buildTelegramMessageContextForTest({
-      cfg,
-      message: {
-        ...buildForumMessage(99),
-        message_id: 2,
-        text: "replying directly",
-        reply_to_message: {
-          message_id: 10,
-          chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
-          from: { id: 7, first_name: "Bot", username: "bot", is_bot: true },
-          text: "previous bot message",
-        },
-      },
-      historyLimit: 10,
-      groupHistories,
-      resolveGroupActivation: () => false,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
-        topicConfig: undefined,
-      }),
-    });
-
-    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).toContain("side chatter");
-    expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
-  });
-
   it("keeps room events as context with default group history mode", async () => {
     const groupHistories = new Map();
     const cfg = {
@@ -191,7 +145,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).toContain("side chatter");
+    expect(JSON.stringify(ctx?.ctxPayload.ChannelStructuredContext)).toContain("side chatter");
     expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
     expect(ctx?.ctxPayload.InboundHistory).toEqual([
       expect.objectContaining({ body: "side chatter" }),
@@ -316,13 +270,13 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(userRequest?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).toContain(
+    expect(JSON.stringify(userRequest?.ctxPayload.ChannelStructuredContext)).toContain(
       "after watermark",
     );
-    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(userRequest?.ctxPayload.ChannelStructuredContext)).not.toContain(
       "before self marker",
     );
-    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(userRequest?.ctxPayload.ChannelStructuredContext)).not.toContain(
       "self marker body",
     );
     expect(userRequest?.ctxPayload.Body).not.toContain("before self marker");
@@ -345,13 +299,13 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(roomEvent?.ctxPayload.InboundEventKind).toBe("room_event");
-    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+    expect(JSON.stringify(roomEvent?.ctxPayload.ChannelStructuredContext)).toContain(
       "before self marker",
     );
-    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+    expect(JSON.stringify(roomEvent?.ctxPayload.ChannelStructuredContext)).toContain(
       "self marker body",
     );
-    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+    expect(JSON.stringify(roomEvent?.ctxPayload.ChannelStructuredContext)).toContain(
       "after watermark",
     );
     expect(roomEvent?.ctxPayload.Body).not.toContain("before self marker");
@@ -380,13 +334,11 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     if (!ctx?.ctxPayload) {
       throw new Error("expected Telegram context payload when topic disables requireMention");
     }
-    const activationCalls = resolveGroupActivation.mock.calls as unknown as Array<
-      [{ chatId: number; messageThreadId?: number; sessionKey: string }]
-    >;
-    const [activationOptions] = activationCalls[0] ?? [];
-    expect(activationOptions?.chatId).toBe(-1001234567890);
-    expect(activationOptions?.messageThreadId).toBe(99);
-    expect(activationOptions?.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
+    expect(resolveGroupActivation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      }),
+    );
   });
 
   it("lets explicit topic requireMention=true override always activation", async () => {

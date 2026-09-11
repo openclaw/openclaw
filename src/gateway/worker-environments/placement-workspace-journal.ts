@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { getRequired } from "./placement-row-codec.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
@@ -12,7 +13,9 @@ import {
 
 type WorkspaceJournalDatabase = Pick<
   StateDatabase,
-  "worker_session_placements" | "worker_workspace_reconciliations"
+  | "worker_session_placements"
+  | "worker_workspace_pending_results"
+  | "worker_workspace_reconciliations"
 >;
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceJournalDatabase>(db);
@@ -24,14 +27,56 @@ type WorkerWorkspaceJournalOwner = {
   placementGeneration: number;
 };
 
-function assertJournalOwner(db: DatabaseSync, owner: WorkerWorkspaceJournalOwner) {
-  const placement = getRequired(db, owner.sessionId);
+function isCurrentJournalOwner(
+  db: DatabaseSync,
+  placement: WorkerSessionPlacementRecord | undefined,
+  owner: WorkerWorkspaceJournalOwner,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }> {
   if (
-    (placement.state !== "active" && placement.state !== "draining") ||
+    (placement?.state !== "active" && placement?.state !== "draining") ||
     placement.environmentId !== owner.environmentId ||
-    placement.activeOwnerEpoch !== owner.ownerEpoch ||
-    placement.generation !== owner.placementGeneration
+    placement.activeOwnerEpoch !== owner.ownerEpoch
   ) {
+    return false;
+  }
+  if (placement.generation === owner.placementGeneration) {
+    return true;
+  }
+  if (placement.state !== "draining" || placement.generation !== owner.placementGeneration + 1) {
+    return false;
+  }
+  // A pending result retains its original active generation while a lifecycle
+  // drain closes admission. That exact durable fence alone may keep the older
+  // journal owner valid through the one-generation drain transition.
+  const pending = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_pending_results")
+      .select("session_id")
+      .where("session_id", "=", owner.sessionId)
+      .where("environment_id", "=", owner.environmentId)
+      .where("owner_epoch", "=", owner.ownerEpoch)
+      .where("placement_generation", "=", owner.placementGeneration),
+  ).rows[0];
+  return pending !== undefined;
+}
+
+function assertJournalOwner(
+  db: DatabaseSync,
+  owner: WorkerWorkspaceJournalOwner,
+  options: { allowFailedOwner?: boolean } = {},
+) {
+  const placement = getRequired(db, owner.sessionId);
+  const isCurrentOwner = isCurrentJournalOwner(db, placement, owner);
+  // Forced teardown advances the exact owner to failed before best-effort
+  // rollback. Admit that state without weakening the manifest checks below.
+  const isAllowedFailedOwner =
+    options.allowFailedOwner === true &&
+    placement.state === "failed" &&
+    placement.generation > owner.placementGeneration &&
+    placement.environmentId === owner.environmentId &&
+    placement.activeOwnerEpoch === owner.ownerEpoch;
+  if (!isCurrentOwner && !isAllowedFailedOwner) {
     throw new Error(`Cannot reconcile stale worker workspace for session ${owner.sessionId}`);
   }
   return placement;
@@ -61,6 +106,12 @@ export function clearWorkerWorkspaceReconciliation(
 export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
   const { now, read, write } = runtime;
   return {
+    getWorkspaceReconciliationPlacement(owner: WorkerWorkspaceJournalOwner) {
+      const db = read();
+      const placement = find(db, owner.sessionId);
+      return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
+    },
+
     listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
       const db = read();
       return executeSqliteQuerySync(
@@ -77,11 +128,60 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       }));
     },
 
+    pruneOrphanedWorkspaceReconciliations(options: {
+      retainFailedOwner: (recoveryError: string) => boolean;
+    }): WorkerWorkspaceJournalOwner[] {
+      return write((db) => {
+        const rows = executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom("worker_workspace_reconciliations")
+            .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
+            .orderBy("session_id"),
+        ).rows;
+        const pruned: WorkerWorkspaceJournalOwner[] = [];
+        for (const row of rows) {
+          const owner = {
+            sessionId: row.session_id,
+            environmentId: row.environment_id,
+            ownerEpoch: row.owner_epoch,
+            placementGeneration: row.placement_generation,
+          };
+          const placement = find(db, owner.sessionId);
+          const stillOwned = isCurrentJournalOwner(db, placement, owner);
+          const retainedFailedOwner =
+            placement?.state === "failed" &&
+            placement.environmentId === owner.environmentId &&
+            placement.activeOwnerEpoch === owner.ownerEpoch &&
+            placement.generation > owner.placementGeneration &&
+            options.retainFailedOwner(placement.recoveryError);
+          if (stillOwned || retainedFailedOwner) {
+            continue;
+          }
+          // Generation and owner epoch only advance, so a mismatched exact owner cannot rebind.
+          const deleted = executeSqliteQuerySync(
+            db,
+            query(db)
+              .deleteFrom("worker_workspace_reconciliations")
+              .where("session_id", "=", owner.sessionId)
+              .where("environment_id", "=", owner.environmentId)
+              .where("owner_epoch", "=", owner.ownerEpoch)
+              .where("placement_generation", "=", owner.placementGeneration),
+          );
+          if (deleted.numAffectedRows === 1n) {
+            pruned.push(owner);
+          }
+        }
+        return pruned;
+      });
+    },
+
     loadWorkspaceReconciliation(
       owner: WorkerWorkspaceJournalOwner,
+      options: { allowFailedOwner?: boolean } = {},
     ): WorkerWorkspaceReconciliationJournal | undefined {
       const db = read();
-      const placement = assertJournalOwner(db, owner);
+      const placement = assertJournalOwner(db, owner, options);
       const row = executeSqliteQuerySync(
         db,
         query(db)
@@ -154,10 +254,30 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       });
     },
 
-    abortWorkspaceReconciliation(owner: WorkerWorkspaceJournalOwner): void {
+    abortWorkspaceReconciliation(
+      owner: WorkerWorkspaceJournalOwner,
+      options: { force?: boolean } = {},
+    ): void {
       write((db) => {
-        assertJournalOwner(db, owner);
-        clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+        if (!options.force) {
+          assertJournalOwner(db, owner);
+          clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+          return;
+        }
+        // Forced teardown owns this exact durable journal even when placement
+        // state advanced after a failed recovery sweep.
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_workspace_reconciliations")
+            .where("session_id", "=", owner.sessionId)
+            .where("environment_id", "=", owner.environmentId)
+            .where("owner_epoch", "=", owner.ownerEpoch)
+            .where("placement_generation", "=", owner.placementGeneration),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
+        }
       });
     },
   };

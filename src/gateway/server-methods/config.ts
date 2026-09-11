@@ -1,9 +1,5 @@
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -18,6 +14,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -25,13 +22,20 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
-import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
-import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
+import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
+import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
+import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import {
+  collectBaseArrayPaths,
+  formatConfigPatchPath,
+  isMergePatchObjectKeyAllowed,
+  normalizeConfigPatchReplacePaths,
+} from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import { projectRuntimeChangesOntoSource } from "../../config/source-value-projection.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -40,6 +44,8 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isRetryableSecretDegradationReason,
   redactSecretDegradationReason,
@@ -48,9 +54,13 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-diff.js";
-import { createConfigGetResponse } from "../config-get-response.js";
-import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "../config-diff.js";
+import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
+import {
+  listConfigReloadRefinementPrefixes,
+  resolveConfigReloadMetadata,
+} from "../config-reload-plan.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -63,6 +73,7 @@ import {
   didSharedGatewayAuthChange,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
+  shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
 import {
   execOpenPath,
@@ -75,10 +86,13 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
-const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
+// ui.prefs is the cross-device Control UI preference surface documented in docs/web/control-ui.md.
+// Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
+// every other path keeps strict document CAS.
+const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
 
 let configSchemaResponseCache: {
-  expiresAtMs: number;
+  pluginRegistryVersion: number;
   response: ConfigSchemaResponse;
 } | null = null;
 
@@ -91,6 +105,7 @@ function requireConfigBaseHash(
   params: unknown,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
+  revisionProjector: GatewayConfigRevisionProjector,
 ): boolean {
   if (!snapshot.exists) {
     return true;
@@ -119,7 +134,7 @@ function requireConfigBaseHash(
     );
     return false;
   }
-  if (baseHash !== snapshotHash) {
+  if (baseHash !== revisionProjector.projectRawHash(snapshotHash)) {
     respond(
       false,
       undefined,
@@ -131,10 +146,6 @@ function requireConfigBaseHash(
     return false;
   }
   return true;
-}
-
-function formatConfigPatchPath(parentPath: string, key: string): string {
-  return parentPath ? `${parentPath}.${key}` : key;
 }
 
 function readConfigPatchReplacePaths(params: unknown): Set<string> {
@@ -205,28 +216,76 @@ function collectDestructiveArrayPatchPaths(params: {
   return paths;
 }
 
-function collectBaseArrayPaths(base: unknown, path: string): string[] {
-  if (Array.isArray(base)) {
-    return [path];
-  }
-  if (!isPlainObject(base)) {
-    return [];
-  }
-  const paths: string[] = [];
-  for (const [key, value] of Object.entries(base)) {
-    const childPath = formatConfigPatchPath(path, key);
-    if (!isMergePatchObjectKeyAllowed(key, path)) {
-      continue;
-    }
-    paths.push(...collectBaseArrayPaths(value, childPath));
-  }
-  return paths;
-}
-
 function isConfigPatchObjectWithStringId(
   value: unknown,
 ): value is Record<string, unknown> & { id: string } {
   return isPlainObject(value) && typeof value.id === "string" && value.id.length > 0;
+}
+
+function assertNoDuplicateConfigPatchIds(params: {
+  patch: unknown;
+  current: unknown;
+  replacePaths: ReadonlySet<string>;
+  path?: string;
+}): void {
+  const path = params.path ?? "";
+  if (Array.isArray(params.patch)) {
+    if (
+      !Array.isArray(params.current) ||
+      params.replacePaths.has(path) ||
+      !isConfigPatchIdKeyedArray(params.current)
+    ) {
+      return;
+    }
+    // ID-keyed merge is sequential and would silently let the last duplicate win.
+    // Reject only arrays using that merge contract; explicit replacements may contain duplicates.
+    const currentIds = new Set<string>();
+    for (const entry of params.current) {
+      if (currentIds.has(entry.id)) {
+        throw new Error(
+          `Cannot ID-merge array at ${path || "<root>"}: current config contains duplicate ID ${entry.id}; use replacePaths for an explicit replacement.`,
+        );
+      }
+      currentIds.add(entry.id);
+    }
+    const ids = new Set<string>();
+    for (const entry of params.patch) {
+      if (!isConfigPatchObjectWithStringId(entry)) {
+        continue;
+      }
+      if (ids.has(entry.id)) {
+        throw new Error(`Ambiguous duplicate ID ${entry.id} in array at ${path || "<root>"}.`);
+      }
+      ids.add(entry.id);
+    }
+    const currentById = new Map(params.current.map((entry) => [entry.id, entry] as const));
+    for (const entry of params.patch) {
+      if (!isConfigPatchObjectWithStringId(entry)) {
+        continue;
+      }
+      const currentEntry = currentById.get(entry.id);
+      if (currentEntry) {
+        assertNoDuplicateConfigPatchIds({
+          patch: entry,
+          current: currentEntry,
+          replacePaths: params.replacePaths,
+          path: `${path}[]`,
+        });
+      }
+    }
+    return;
+  }
+  if (!isRecord(params.patch) || !isRecord(params.current)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(params.patch)) {
+    assertNoDuplicateConfigPatchIds({
+      patch: child,
+      current: params.current[key],
+      replacePaths: params.replacePaths,
+      path: formatConfigPatchPath(path, key),
+    });
+  }
 }
 
 function isConfigPatchIdKeyedArray(
@@ -325,9 +384,10 @@ function rejectDestructiveArrayPatchWithoutIntent(params: {
 async function readConfigWriteSnapshotOrRespond(
   params: unknown,
   respond: RespondFn,
+  revisionProjector: GatewayConfigRevisionProjector,
 ): Promise<Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>> | null> {
   const result = await readConfigFileSnapshotForWrite();
-  if (!requireConfigBaseHash(params, result.snapshot, respond)) {
+  if (!requireConfigBaseHash(params, result.snapshot, respond, revisionProjector)) {
     return null;
   }
   return result;
@@ -413,6 +473,7 @@ function parseValidateConfigFromRawOrRespond(
   requestName: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
+  modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
 ): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
@@ -433,48 +494,97 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  // Validate against runtime shape, but write the source-shaped config the operator submitted.
-  const projectedValidationCandidate = snapshot.valid
-    ? applyMergePatch(
-        projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
-        createMergePatch(snapshot.config, restored.result),
-      )
+  // Full replacements may echo runtime defaults; keep only edits over the source snapshot.
+  const sourceCandidate = snapshot.valid
+    ? projectRuntimeChangesOntoSource(snapshot.resolved, snapshot.config, restored.result)
     : restored.result;
-  const validationCandidate = stripBundledProviderRuntimeDefaults({
-    candidate: projectedValidationCandidate,
-    sourceConfig: snapshot.sourceConfig,
+  const validatedSubmission = validateSubmittedConfigOrRespond({
+    candidate: stripBundledProviderRuntimeDefaults({
+      candidate: sourceCandidate,
+      sourceConfig: snapshot.sourceConfig,
+    }),
+    modelIdNormalizationPolicies,
+    respond,
   });
-  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
-  if (!sourceValidated.ok) {
-    respond(
+  if (!validatedSubmission) {
+    return null;
+  }
+  return {
+    config: validatedSubmission.config,
+    writeConfig: validatedSubmission.validationCandidate,
+    schema,
+  };
+}
+
+function listExplicitAgentRosterIds(config: OpenClawConfig): string[] {
+  const roster = readAgentRosterProperty(config);
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
+    return Object.keys(roster.value);
+  }
+  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
+    return [];
+  }
+  return roster.value.flatMap((entry) =>
+    isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
+  );
+}
+
+function rejectDroppedAgentRosterEntries(params: {
+  currentConfig: OpenClawConfig;
+  submittedConfig: OpenClawConfig;
+  respond: RespondFn;
+}): boolean {
+  const submittedIds = new Set(
+    listExplicitAgentRosterIds(params.submittedConfig).map((agentId) => normalizeAgentId(agentId)),
+  );
+  const droppedIds = listExplicitAgentRosterIds(params.currentConfig)
+    .filter((agentId) => !submittedIds.has(normalizeAgentId(agentId)))
+    .toSorted();
+  if (droppedIds.length === 0) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `config.set would remove existing agent entries: ${droppedIds.join(", ")}. ` +
+        "Use the agents.delete RPC or `openclaw agents delete <id>` for intentional deletion.",
+    ),
+  );
+  return true;
+}
+
+/** Shared normalize -> raw-validate -> plugin-validate pipeline for submitted configs; responds on failure. */
+function validateSubmittedConfigOrRespond(params: {
+  candidate: unknown;
+  modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
+  respond: RespondFn;
+}): { validationCandidate: OpenClawConfig; config: OpenClawConfig } | null {
+  const validationCandidate = normalizeSubmittedConfigModelRefs(
+    params.candidate as OpenClawConfig,
+    params.modelIdNormalizationPolicies,
+  );
+  const respondInvalid = (issues: ReadonlyArray<ConfigValidationIssue>) => {
+    params.respond(
       false,
       undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        summarizeConfigValidationIssues(sourceValidated.issues),
-        {
-          details: { issues: sourceValidated.issues },
-        },
-      ),
+      errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(issues), {
+        details: { issues },
+      }),
     );
+  };
+  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+  if (!sourceValidated.ok) {
+    respondInvalid(sourceValidated.issues);
     return null;
   }
   const validated = validateConfigObjectWithPlugins(validationCandidate);
   if (!validated.ok) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(validated.issues), {
-        details: { issues: validated.issues },
-      }),
-    );
+    respondInvalid(validated.issues);
     return null;
   }
-  return {
-    config: validated.config,
-    writeConfig: validationCandidate as OpenClawConfig,
-    schema,
-  };
+  return { validationCandidate: validationCandidate as OpenClawConfig, config: validated.config };
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
@@ -539,10 +649,7 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
 
 export function clearConfigSchemaResponseCacheForTests() {
   configSchemaResponseCache = null;
-}
-
-export function loadConfigSchemaResponseForTests(): ConfigSchemaResponse {
-  return loadSchemaWithPlugins();
+  invalidateConfigGetResponseCache();
 }
 
 function clearConfigSchemaResponseCache() {
@@ -555,12 +662,28 @@ async function respondWithConfigRestartWrite(params: {
   mode: ConfigRestartWriteMode;
   writeResult: ConfigWriteCommitResult;
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
   actor: ReturnType<typeof resolveControlPlaneActor>;
-  context: GatewayRequestContext | undefined;
+  context: GatewayRequestContext;
   respond: RespondFn;
   uiHints: ConfigRedactionHints;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
+  if (params.writeResult.application) {
+    const outcome = await params.writeResult.application;
+    if (outcome !== "applied") {
+      const message =
+        outcome === "applied-restart-required"
+          ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
+          : outcome === "restart-pending"
+            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
+            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      params.writeResult.queueFollowUp();
+      return;
+    }
+  }
   clearConfigSchemaResponseCache();
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
@@ -568,7 +691,8 @@ async function respondWithConfigRestartWrite(params: {
     mode: params.mode,
     configPath: params.writeResult.path,
     changedPaths: params.changedPaths,
-    nextConfig: params.writeResult.config,
+    previousConfig: params.previousConfig,
+    nextConfig: params.nextConfig,
     actor: params.actor,
     context: params.context,
   });
@@ -579,8 +703,11 @@ async function respondWithConfigRestartWrite(params: {
       path: params.writeResult.path,
       // Additive ack hash: matches the hash config.get would report for the
       // persisted bytes, so writers can adopt it without a reload.
-      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
+      ...(params.writeResult.hash
+        ? { hash: params.context.configRevisionProjector.projectRawHash(params.writeResult.hash) }
+        : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
+      ...(params.mode === "config.patch" ? { changedPaths: params.changedPaths } : {}),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
       sentinel: {
@@ -595,6 +722,7 @@ async function respondWithConfigRestartWrite(params: {
 
 function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
   prevConfig: OpenClawConfig;
+  prevSourceConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): boolean {
@@ -602,6 +730,7 @@ function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
     didSharedGatewayAuthChange(params.prevConfig, params.nextConfig) ||
     didActiveSharedGatewayAuthChange({
       fallbackPrev: params.prevConfig,
+      fallbackSource: params.prevSourceConfig,
       next: params.preparedSecretsSnapshot.config,
     })
   );
@@ -623,6 +752,7 @@ function respondConfigPatchNoop(params: {
     {
       ok: true,
       noop: true,
+      changedPaths: [],
       path: resolveGatewayConfigPath(params.snapshot),
       config: redactConfigObject(params.config, params.uiHints),
     },
@@ -631,43 +761,99 @@ function respondConfigPatchNoop(params: {
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = asDateTimestampMs(Date.now());
-  const cachedExpiresAt =
-    configSchemaResponseCache === null
-      ? undefined
-      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  const pluginRegistryVersion = getActivePluginRegistryVersion();
   if (
     configSchemaResponseCache &&
-    now !== undefined &&
-    cachedExpiresAt !== undefined &&
-    cachedExpiresAt > now
+    configSchemaResponseCache.pluginRegistryVersion === pluginRegistryVersion
   ) {
     return configSchemaResponseCache.response;
   }
-  if (configSchemaResponseCache) {
-    configSchemaResponseCache = null;
-  }
 
-  // Plugin schema loading is process-local; short caching avoids repeated UI lookups per render.
+  // Plugin schema metadata is process-stable until config write or registry activation.
   const response = loadGatewayRuntimeConfigSchema();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
-  if (expiresAtMs !== undefined) {
-    configSchemaResponseCache = {
-      expiresAtMs,
-      response,
-    };
-  }
+  configSchemaResponseCache = { pluginRegistryVersion, response };
   return response;
 }
 
+async function commitGatewayConfigWriteOrRespond(
+  params: Parameters<typeof commitGatewayConfigWrite>[0] & { respond: RespondFn },
+): Promise<Awaited<ReturnType<typeof commitGatewayConfigWrite>> | null> {
+  try {
+    return await commitGatewayConfigWrite(params);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+    // Non-retryable conflicts (e.g. path ownership) will fail the retry too;
+    // only advise it when a fresh base hash can actually resolve the conflict.
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error.retryable ? `${error.message}; re-run config.get and retry` : error.message,
+      ),
+    );
+    return null;
+  }
+}
+
+function isHashlessPatchLwwPath(path: string): boolean {
+  return HASHLESS_PATCH_LWW_PATH_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
+}
+
+// Hash-free LWW is a per-leaf protocol. Container replacement or deletion requires document CAS
+// so a stale client cannot wipe preference keys added by a concurrent writer.
+function hasHashlessPatchLwwStructure(patch: unknown): boolean {
+  return HASHLESS_PATCH_LWW_PATH_PREFIXES.every((prefix) => {
+    let node = patch;
+    for (const segment of prefix.split(".")) {
+      if (!isPlainObject(node)) {
+        return false;
+      }
+      if (!Object.hasOwn(node, segment)) {
+        return true;
+      }
+      node = node[segment];
+      if (!isPlainObject(node)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function diffConfigLeafPaths(prev: unknown, next: unknown, prefix = ""): string[] {
+  if (isPlainObject(prev) || isPlainObject(next)) {
+    const prevRecord = isPlainObject(prev) ? prev : {};
+    const nextRecord = isPlainObject(next) ? next : {};
+    const keys = [...new Set([...Object.keys(prevRecord), ...Object.keys(nextRecord)])];
+    if (keys.length === 0) {
+      return isDeepStrictEqual(prev, next) ? [] : [prefix || "<root>"];
+    }
+    return keys.flatMap((key) =>
+      diffConfigLeafPaths(prevRecord[key], nextRecord[key], prefix ? `${prefix}.${key}` : key),
+    );
+  }
+  return diffConfigPaths(prev, next, prefix);
+}
+
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond }) => {
+  "config.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
-    const schema = loadSchemaWithPlugins();
-    respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
+    respond(
+      true,
+      await readConfigGetResponse({
+        getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
+        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+        revisionProjector: context.configRevisionProjector,
+      }),
+      undefined,
+    );
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
@@ -712,13 +898,32 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+      params,
+      respond,
+      context.configRevisionProjector,
+    );
     if (!writeSnapshot) {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
+    const parsed = parseValidateConfigFromRawOrRespond(
+      params,
+      "config.set",
+      snapshot,
+      respond,
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
+    );
     if (!parsed) {
+      return;
+    }
+    if (
+      rejectDroppedAgentRosterEntries({
+        currentConfig: snapshot.config,
+        submittedConfig: parsed.config,
+        respond,
+      })
+    ) {
       return;
     }
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
@@ -728,12 +933,16 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     clearConfigSchemaResponseCache();
     respond(
       true,
@@ -742,7 +951,9 @@ export const configHandlers: GatewayRequestHandlers = {
         path: writeResult.path,
         // Additive ack hash: matches the hash config.get would report for the
         // persisted bytes, so writers can adopt it without a reload.
-        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
+        ...(writeResult.hash
+          ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
+          : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
       },
@@ -754,16 +965,28 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const hashlessPatch = resolveBaseHashParam(params) === null;
+    // Hash-free writes do not retry: only the client can replay fresh intent after a lost race;
+    // server re-merge would replay frozen stale intent over the winner. A paused handler can still
+    // commit stale state, an accepted residual instead of adding connection-liveness plumbing.
+    const writeSnapshot = hashlessPatch
+      ? await readConfigFileSnapshotForWrite()
+      : await readConfigWriteSnapshotOrRespond(params, respond, context.configRevisionProjector);
     if (!writeSnapshot) {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
+    const modelIdNormalizationPolicies =
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
     if (!snapshot.valid) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config; fix before patching"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `${summarizeConfigValidationIssues(snapshot.issues)}; fix (openclaw doctor) before patching`,
+          { details: { issues: snapshot.issues } },
+        ),
       );
       return;
     }
@@ -796,14 +1019,45 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const normalizedPatch = normalizeSubmittedConfigModelRefs(
+      parsedRes.parsed as OpenClawConfig,
+      modelIdNormalizationPolicies,
+    );
+    if (hashlessPatch && !hasHashlessPatchLwwStructure(normalizedPatch)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "config base hash required; re-run config.get and retry",
+        ),
+      );
+      return;
+    }
     const replacePaths = readConfigPatchReplacePaths(params);
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+    try {
+      assertNoDuplicateConfigPatchIds({
+        patch: normalizedPatch,
+        current: snapshot.config,
+        replacePaths,
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+      return;
+    }
+    // Merge authored rows first; merging runtime rows would persist catalog defaults
+    // from untouched siblings whenever an ID-keyed array changes.
+    const sourceConfig = normalizeSubmittedConfigModelRefs(
+      snapshot.sourceConfig,
+      modelIdNormalizationPolicies,
+    );
+    const mergedSource = applyMergePatch(sourceConfig, normalizedPatch, {
       // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
     const schemaPatch = loadSchemaWithPlugins();
-    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
+    const restoredMerge = restoreRedactedValues(mergedSource, snapshot.config, schemaPatch.uiHints);
     if (!restoredMerge.ok) {
       respond(
         false,
@@ -818,15 +1072,31 @@ export const configHandlers: GatewayRequestHandlers = {
     if (
       rejectDestructiveArrayPatchWithoutIntent({
         currentConfig: snapshot.config,
-        mergedConfig: restoredMerge.result,
-        patch: parsedRes.parsed,
+        mergedConfig: applyMergePatch(
+          snapshot.config,
+          createMergePatch(sourceConfig, restoredMerge.result),
+        ),
+        patch: normalizedPatch,
         replacePaths,
         respond,
       })
     ) {
       return;
     }
-    const restoredChangedPaths = diffConfigPaths(snapshot.config, restoredMerge.result);
+    // Patch presence is authored intent even when its value equals a runtime default.
+    const restoredChangedPaths = diffConfigLeafPaths(sourceConfig, restoredMerge.result);
+    if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
+      const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
+        ),
+      );
+      return;
+    }
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0) {
       respondConfigPatchNoop({
@@ -839,61 +1109,28 @@ export const configHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const validationCandidate = stripBundledProviderRuntimeDefaults({
+    const validatedSubmission = validateSubmittedConfigOrRespond({
       candidate: restoredMerge.result,
-      sourceConfig: snapshot.sourceConfig,
+      modelIdNormalizationPolicies,
+      respond,
     });
-    const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
-    if (!sourceValidated.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          summarizeConfigValidationIssues(sourceValidated.issues),
-          {
-            details: { issues: sourceValidated.issues },
-          },
-        ),
-      );
+    if (!validatedSubmission) {
       return;
     }
-    const writeConfig = validationCandidate as OpenClawConfig;
-    const validated = validateConfigObjectWithPlugins(validationCandidate);
-    if (!validated.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(validated.issues), {
-          details: { issues: validated.issues },
-        }),
-      );
-      return;
-    }
+    const writeConfig = validatedSubmission.validationCandidate;
+    const validatedConfig = validatedSubmission.config;
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
-      config: validated.config,
+      config: validatedConfig,
       respond,
     });
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, validated.config);
-
-    // No-op: if the validated config is identical to the current config,
-    // skip the file write and SIGUSR1 restart entirely. This avoids a full
-    // gateway restart (and the resulting connection drop) when a control-plane
-    // client re-sends the same config (e.g. hot-apply with no actual changes).
-    if (changedPaths.length === 0) {
-      respondConfigPatchNoop({
-        snapshot,
-        config: validated.config,
-        uiHints: schemaPatch.uiHints,
-        actor,
-        context,
-        respond,
-      });
-      return;
-    }
+    const changedPaths = diffGatewayReloadPaths(
+      snapshot.config,
+      validatedConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
 
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
@@ -902,22 +1139,34 @@ export const configHandlers: GatewayRequestHandlers = {
     // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
       prevConfig: snapshot.config,
-      nextConfig: validated.config,
+      prevSourceConfig: snapshot.sourceConfig,
+      nextConfig: validatedConfig,
       preparedSecretsSnapshot,
     });
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        changedPaths,
+        previousConfig: snapshot.config,
+        nextConfig: validatedConfig,
+      }),
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-patch",
       mode: "config.patch",
       writeResult,
       changedPaths,
+      previousConfig: snapshot.config,
+      nextConfig: validatedConfig,
       actor,
       context,
       respond,
@@ -929,12 +1178,22 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
+    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+      params,
+      respond,
+      context.configRevisionProjector,
+    );
     if (!writeSnapshot) {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
+    const parsed = parseValidateConfigFromRawOrRespond(
+      params,
+      "config.apply",
+      snapshot,
+      respond,
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
+    );
     if (!parsed) {
       return;
     }
@@ -945,7 +1204,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const changedPaths = diffGatewayReloadPaths(
+      snapshot.config,
+      parsed.config,
+      listConfigReloadRefinementPrefixes(),
+    );
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
@@ -954,22 +1217,34 @@ export const configHandlers: GatewayRequestHandlers = {
     // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = shouldDisconnectSharedAuthClientsForConfigWrite({
       prevConfig: snapshot.config,
+      prevSourceConfig: snapshot.sourceConfig,
       nextConfig: parsed.config,
       preparedSecretsSnapshot,
     });
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
       disconnectSharedAuthClients,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        changedPaths,
+        previousConfig: snapshot.config,
+        nextConfig: parsed.config,
+      }),
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-apply",
       mode: "config.apply",
       writeResult,
       changedPaths,
+      previousConfig: snapshot.config,
+      nextConfig: parsed.config,
       actor,
       context,
       respond,
@@ -982,12 +1257,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const configPath = createConfigIO().configPath;
+    const command = resolveOpenPathCommand(configPath);
     try {
-      await execOpenPath(resolveOpenPathCommand(configPath));
+      await execOpenPath(command);
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
       const errorMessage = formatOpenPathError(error);
-      const isHeadlessError = isHeadlessOpenPathError(errorMessage);
+      const isHeadlessError = isHeadlessOpenPathError(error, command);
       const detailedError = isHeadlessError
         ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to open config file: ${errorMessage}`;

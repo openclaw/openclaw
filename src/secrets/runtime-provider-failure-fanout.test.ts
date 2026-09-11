@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { clearSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.js";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
@@ -22,7 +22,7 @@ function execFixtureProvider(command: string) {
 }
 
 afterEach(() => {
-  clearSecretsRuntimeSnapshot();
+  clearSecretsRuntimeSnapshotState();
 });
 
 describe("provider-scoped SecretRef failure fan-out", () => {
@@ -101,9 +101,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
             },
           },
         },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
-        },
+        tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
       }),
       env: { PATH: process.env.PATH ?? "" },
       includeAuthStoreRefs: false,
@@ -112,7 +110,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(input.modelRef);
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
+    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "provider",

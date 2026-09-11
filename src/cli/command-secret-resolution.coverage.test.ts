@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  bundledPluginFile("memory-core", "src/cli.runtime.ts"),
+  bundledPluginFile("memory-core", "src/cli-runtime-common.ts"),
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/agents/command/prepare.ts",
@@ -30,6 +30,10 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    (/\bconst\s+scopedTargets\s*=\s*getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
+      source,
+    ) &&
+      /\bresolveLocalCapabilityRuntimeConfig\(\{[^}]*\.\.\.scopedTargets\s*[,}]/m.test(source)) ||
     source.includes("collectStatusScanOverview({")
   );
 }
@@ -53,6 +57,15 @@ describe("command secret resolution coverage", () => {
     const source = await readCommandSource("src/cli/capability-cli/shared.ts");
     expect(source).toContain("resolveCommandConfigWithSecrets({");
     expect(source).toMatch(/targetIds:\s*params\.targetIds/m);
+  });
+
+  it("rejects prepared Web target scopes from an unrelated producer", async () => {
+    const source = await readCommandSource("src/cli/capability-cli/web.ts");
+    const unrelatedSource = source.replaceAll(
+      /getCapabilityWeb(?:Fetch|Search)CommandSecretTargets/g,
+      "getUnrelatedCommandSecretTargets",
+    );
+    expect(hasSupportedTargetIdsWiring(unrelatedSource)).toBe(false);
   });
 
   it.each(SECRET_TARGET_CALLSITES)(

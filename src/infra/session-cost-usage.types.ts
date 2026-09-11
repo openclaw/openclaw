@@ -8,15 +8,6 @@ import type {
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
-export type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
-
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
   role?: "user" | "assistant";
@@ -73,31 +64,19 @@ export type UsageDailyBucket =
   | { mode: "utc-offset"; utcOffsetMinutes: number }
   | { mode: "time-zone"; timeZone: string };
 
-type SessionDailyUsage = {
+type SessionDailyUsage = CostUsageTotals & {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;
 };
 
-export type SessionDailyMessageCounts = {
+export type SessionDailyMessageCounts = SessionMessageCounts & {
   date: string; // YYYY-MM-DD
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
 };
 
-export type SessionUtcQuarterHourMessageCounts = {
+export type SessionUtcQuarterHourMessageCounts = SessionMessageCounts & {
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
 };
 
 export type SessionUtcQuarterHourTokenUsage = {
@@ -108,9 +87,7 @@ export type SessionUtcQuarterHourTokenUsage = {
   cacheRead: number;
   cacheWrite: number;
   // Uses the same token total basis as CostUsageTotals: usage.total when present,
-  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
-  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
-  // behavior until daily usage buckets are refactored separately.
+  // otherwise input + output + cacheRead + cacheWrite.
   totalTokens: number;
   totalCost: number;
 };

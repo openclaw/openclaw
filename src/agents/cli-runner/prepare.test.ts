@@ -1,53 +1,138 @@
 // Exercises CLI run preparation: auth boundaries, prompt hooks, context
 // injection, MCP loopback setup, and reusable session decisions.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
-import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import {
+  loadSessionEntryReadOnly,
+  loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
+import {
+  claimHeartbeatOutcomeForRun,
+  persistHeartbeatOutcome,
+} from "../../infra/heartbeat-outcome-store.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
+import type {
+  CliBackendExecute,
+  CliBackendExecuteContext,
+  CliBackendPlugin,
+} from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import type { SkillSnapshot } from "../../skills/types.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
+import {
+  createTestAdmittedRunContext,
+  createTestPreparedRunAdmission,
+  withTestRunAdmission,
+  wrapRunWithTestPreparedAdmission,
+} from "../admitted-run-context.test-support.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../auth-profiles/store-runtime.js";
+import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
 } from "../cli-auth-epoch.test-support.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
-import { hashCliSessionText } from "../cli-session.js";
+import {
+  buildDefaultTestCliBackend,
+  createCliRunnerPrepareFixture,
+  createTestMcpLoopbackClientGrant,
+  createTestMcpLoopbackServer,
+  createTestMcpLoopbackServerConfig,
+  createWeatherSkillFixture,
+  wrappedPluginSystemContext,
+  type TestCliBackendParams,
+} from "../cli-runner.test-helpers.js";
+import {
+  applyCliSessionBindingResult,
+  clearCliSession,
+  getCliSessionBinding,
+  hashCliSessionText,
+} from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
-import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
-import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
+import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
+import {
+  buildActiveImageGenerationTaskPromptContextForSession,
+  buildActiveMusicGenerationTaskPromptContextForSession,
+  buildActiveVideoGenerationTaskPromptContextForSession,
+} from "../media-generation-task-status.js";
+import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import {
+  captureRoutingDecisionWork,
+  createModelRoutingTestAdmission,
+} from "../test-helpers/model-routing-decision-e2e-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
+import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { executePluginOwnedProcess } from "./execute-plugin.js";
+import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { prepareCliRunContext } from "./prepare.js";
-import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
+import {
+  resetCliRunnerPrepareTestDeps,
+  setCliRunnerPrepareTestDeps,
+} from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
-
-type McpLoopbackClientGrant = ReturnType<
-  (typeof import("../../gateway/mcp-grant-store.js"))["mintMcpLoopbackClientGrant"]
->;
 
 function registerTestContextEngine(
   id: string,
@@ -58,14 +143,30 @@ function registerTestContextEngine(
   });
 }
 
+function installTestPluginRegistry() {
+  const builder = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  setActivePluginRegistry(builder.registry);
+  return builder;
+}
+
+type McpProjectionParams = Parameters<typeof resolveLoopbackTools>[0];
+
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
   vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
 );
-let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/config.js", async () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
 vi.mock("../sandbox.js", () => ({
@@ -78,25 +179,20 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-vi.mock("../video-generation-task-status.js", () => ({
+vi.mock("../media-generation-task-status.js", () => ({
   VIDEO_GENERATION_TASK_KIND: "video_generation",
   buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => ""),
   findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../image-generation-task-status.js", () => ({
   IMAGE_GENERATION_TASK_KIND: "image_generation",
   buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
-  findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../music-generation-task-status.js", () => ({
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
@@ -115,78 +211,42 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
-function wrappedPluginSystemContext(text: string): string {
-  return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
+let defaultTestCliBackend = buildDefaultTestCliBackend();
+
+function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConfig {
+  defaultTestCliBackend = buildDefaultTestCliBackend(params);
+  return {};
 }
 
-function createTestMcpLoopbackServerConfig(port: number) {
-  // Mirrors the runtime loopback config shape so tests cover env placeholder
-  // substitution without starting the real MCP HTTP server.
-  return {
-    mcpServers: {
-      openclaw: {
-        type: "http",
-        url: `http://127.0.0.1:${port}/mcp`,
-        alwaysLoad: true,
-        headers: {
-          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-          "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.";
+
+function createBundledMessageToolConfig(): OpenClawConfig {
+  setCliRunnerPrepareTestDeps({
+    getActiveMcpLoopbackRuntime: vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    })),
+    resolveMcpLoopbackScopedTools: vi.fn(() => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "Send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
         },
-      },
-    },
-  };
-}
-
-function createTestMcpLoopbackClientGrant(params: {
-  context: McpLoopbackRequestContext;
-}): McpLoopbackClientGrant {
-  return {
-    token: "loopback-token",
-    context: structuredClone(params.context),
-  };
-}
-
-async function createTestMcpLoopbackServer(port = 0) {
-  return {
-    port,
-    close: vi.fn(async () => undefined),
-  };
-}
-
-function createCliBackendConfig(
-  params: {
-    bundleMcp?: boolean;
-    reseedFromRawTranscriptWhenUncompacted?: boolean;
-    systemPromptWhen?: "first" | "always" | "never";
-  } = {},
-): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        cliBackends: {
-          "test-cli": {
-            command: "test-cli",
-            args: ["--print"],
-            systemPromptArg: "--system-prompt",
-            systemPromptWhen: params.systemPromptWhen ?? "first",
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
-            ...(params.reseedFromRawTranscriptWhenUncompacted
-              ? { reseedFromRawTranscriptWhenUncompacted: true }
-              : {}),
-            ...(params.bundleMcp
-              ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
-              : {}),
-          },
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
+      ],
+    })),
+  });
+  return createCliBackendConfig({ bundleMcp: true });
 }
 
 function setCliBackendForPrepareTest(
   params: {
+    authEpochMode?: CliBackendPlugin["authEpochMode"];
     autoSelectAuthProfile?: boolean;
     bundleMcp?: boolean;
     command?: string;
@@ -211,10 +271,12 @@ function setCliBackendForPrepareTest(
         pluginId: params.pluginId ?? "anthropic",
         modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: params.bundleMcp ?? false,
+        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
         ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
         ...(params.autoSelectAuthProfile !== undefined
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
           : {}),
+        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
         ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
           command: params.command ?? "claude",
@@ -234,72 +296,205 @@ function setCliBackendForPrepareTest(
   });
 }
 
-function createSessionFile() {
-  // Prepare tests use canonical OpenClaw session paths because several cases
-  // assert that external or stale transcript paths are ignored.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
-  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
-  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
-  const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "session-test",
-      timestamp: new Date(0).toISOString(),
-      cwd: dir,
-    })}\n`,
-    "utf-8",
-  );
-  return { dir, sessionFile };
-}
-
-function appendTranscriptEntry(
-  sessionFile: string,
-  entry: {
-    id: string;
-    parentId: string | null;
-    timestamp: string;
-    message: unknown;
-  },
-): void {
-  fs.appendFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "message",
-      id: entry.id,
-      parentId: entry.parentId,
-      timestamp: entry.timestamp,
-      message: entry.message,
-    })}\n`,
-    "utf-8",
-  );
+function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
+    resolveRuntimeCliBackends: () => [backend],
+  });
 }
 
 type CliContextBudgetTestCase = {
   name: string;
   provider: string;
-  agentContextTokens?: number;
   expectedContextTokens: number;
   model: string;
   modelAliases?: Record<string, string>;
 };
 
 describe("prepareCliRunContext", () => {
-  it.each<CliContextBudgetTestCase>([
-    {
-      name: "Claude CLI with a selected-agent cap",
-      provider: "claude-cli",
-      agentContextTokens: 80_000,
-      expectedContextTokens: 80_000,
-      model: "claude-opus-4-7",
+  let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  async function withAuthenticatedHistory(
+    provider: string,
+    run: (
+      prepare: (
+        overrides: NonNullable<Parameters<typeof fixture.prepare>[0]>,
+      ) => ReturnType<typeof fixture.prepare>,
+    ) => Promise<void>,
+  ) {
+    const { dir, sessionTarget } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "history-test:account";
+    const credential = {
+      type: "token" as const,
+      provider: provider === "claude-cli" ? "anthropic" : provider,
+      token: "synthetic-history-account",
+    };
+    saveAuthProfileStore({ version: 1, profiles: { [authProfileId]: credential } }, agentDir);
+    const authEpoch = await resolveCliAuthEpoch({ provider, agentDir, authProfileId });
+    const runId = "authenticated-history-fixture";
+    await patchSessionEntryCore(sessionTarget, (entry) => ({ ...entry, activeWriterRunId: runId }));
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-fixture");
+    try {
+      const admittedRunContext = await admission.admit("embedded");
+      const writer = await prepareCliHistoryBoundary(
+        {
+          admittedRunContext,
+          runId,
+          agentDir,
+          provider,
+          model: "test-model",
+          prompt: "seed",
+          workspaceDir: dir,
+          timeoutMs: 1000,
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionFile: sessionTarget.sessionKey,
+          sessionTarget,
+        },
+        { credential },
+      );
+      expect(writer).toBeDefined();
+      await runWithCliHistoryWriter(writer, () =>
+        run((overrides) =>
+          fixture.prepare({
+            ...overrides,
+            provider,
+            agentDir,
+            authProfileId,
+            runId,
+            preparedRunAdmission: admission,
+            sessionKey: sessionTarget.sessionKey,
+            ...(overrides.cliSessionBinding
+              ? {
+                  cliSessionBinding: {
+                    ...overrides.cliSessionBinding,
+                    authProfileId,
+                    authEpoch,
+                    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+                  },
+                }
+              : {}),
+          }),
+        ),
+      );
+    } finally {
+      admission.close();
+    }
+  }
+
+  async function prepareNativeAuthority(
+    capabilities: readonly string[],
+    overrides: Parameters<typeof fixture.prepare>[0] = {},
+  ) {
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const projectNativeToolAuthority = vi.fn((_tools: readonly string[]) => capabilities);
+    const captureNativeToolAuthority = vi.fn((_names: readonly string[] | null) => true);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      mintMcpLoopbackClientGrant,
+      activateMcpLoopbackClientGrantCapture: vi.fn(() => ({ captureNativeToolAuthority })),
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+      projectNativeToolAuthority,
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const context = await fixture.prepare({ provider: "native-cli", ...overrides });
+    const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "native capture");
+    const observe = expectDefined(capture.captureNativeTools, "native tools observer");
+    return {
+      capture,
+      observe,
+      mintMcpLoopbackClientGrant,
+      projectNativeToolAuthority,
+      captureNativeToolAuthority,
+    };
+  }
+
+  it("preserves outer fallback route provenance through CLI admission", async () => {
+    const runId = "run-cli-model-fallback-receipt";
+    const cfg = { logging: { audit: { executionIdentity: true } } } satisfies OpenClawConfig;
+    const preparedRunAdmission = createModelRoutingTestAdmission({
+      cfg,
+      runId,
+      agentId: "main",
+      boundary: "cli-prepare-test",
+    });
+
+    const { decisionWork } = await captureRoutingDecisionWork(() =>
+      fixture.prepare({
+        runId,
+        config: cfg,
+        preparedRunAdmission,
+        model: "mock-2",
+        modelRoutingProvenance: {
+          requestedProvider: "openai",
+          requestedModel: "mock-1",
+          stage: "fallback",
+          fallbackReason: "rate_limit",
+        },
+      }),
+    ).finally(preparedRunAdmission.close);
+
+    expect(decisionWork).toHaveLength(1);
+    expect(decisionWork[0]?.receipt).toMatchObject({
+      action: { summary: "Requested openai/mock-1; selected test-cli/mock-2." },
+      decision: { reasonCode: "rate_limit" },
+    });
+  });
+
+  it.each(["high", "off"] as const)(
+    "passes %s thinking through the CLI backend execution seam",
+    async (thinkLevel) => {
+      const prepareExecution = vi.fn(async () => undefined);
+      setCliBackendForPrepareTest({ prepareExecution });
+
+      await fixture.prepare({ provider: "claude-cli", thinkLevel });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ thinkingLevel: thinkLevel }),
+      );
     },
+  );
+
+  it("uses the prepared model context budget before discovery cache settlement", async () => {
+    const prepareExecution = vi.fn(async () => undefined);
+    setCliBackendForPrepareTest({ prepareExecution });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      modelContextWindow: 400_000,
+      modelContextTokens: 321_000,
+    });
+
+    expect(context.contextWindowInfo?.tokens).toBe(321_000);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokenBudget: 321_000 }),
+    );
+  });
+
+  it.each<CliContextBudgetTestCase>([
     {
       name: "a Claude CLI user alias",
       provider: "claude-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "large",
       modelAliases: { large: "claude-opus-4-7" },
@@ -307,7 +502,6 @@ describe("prepareCliRunContext", () => {
     {
       name: "a Claude CLI-native alias",
       provider: "claude-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "claude-opus-4-7",
       modelAliases: { "claude-opus-4-7": "deployment-large" },
@@ -315,109 +509,139 @@ describe("prepareCliRunContext", () => {
     {
       name: "a generic CLI backend alias",
       provider: "fixture-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "claude-opus-4-7",
     },
   ])("resolves canonical model budgets for $name", async (testCase) => {
-    const { dir, sessionFile } = createSessionFile();
     const prepareExecution = vi.fn(async () => undefined);
     const baseConfig = createCliBackendConfig();
-    try {
-      setCliBackendForPrepareTest({
-        id: testCase.provider,
-        command: testCase.provider === "claude-cli" ? "claude" : testCase.provider,
-        modelProvider: "fixture-anthropic",
-        pluginId: "fixture-plugin",
-        prepareExecution,
-        modelAliases: testCase.modelAliases,
-      });
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: testCase.provider,
-        model: testCase.model,
-        timeoutMs: 1_000,
-        runId: "run-configured-context-budget",
-        config: {
-          ...baseConfig,
-          agents: {
-            ...baseConfig.agents,
-            ...(testCase.agentContextTokens
-              ? { list: [{ id: "main", contextTokens: testCase.agentContextTokens }] }
-              : {}),
-          },
-          models: {
-            providers: {
-              "fixture-anthropic": {
-                baseUrl: "https://api.anthropic.com",
-                contextTokens: 200_000,
-                models: [
-                  {
-                    id: "claude-opus-4-7",
-                    name: "Claude Opus 4.7",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 200_000,
-                    maxTokens: 8_192,
-                    contextTokens: 100_000,
-                  },
-                ],
-              },
-              "collision-provider": {
-                baseUrl: "https://collision.invalid",
-                models: [
-                  {
-                    id: "large",
-                    name: "Unrelated Large",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32_000,
-                    maxTokens: 4_096,
-                    contextTokens: 32_000,
-                  },
-                ],
-              },
-              "claude-cli": {
-                baseUrl: "https://runtime.invalid",
-                models: [
-                  {
-                    id: "large",
-                    name: "Configured Alias Source",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 200_000,
-                    maxTokens: 8_192,
-                    contextTokens: 200_000,
-                  },
-                ],
-              },
+    setCliBackendForPrepareTest({
+      id: testCase.provider,
+      command: testCase.provider === "claude-cli" ? "claude" : testCase.provider,
+      modelProvider: "fixture-anthropic",
+      pluginId: "fixture-plugin",
+      prepareExecution,
+      modelAliases: testCase.modelAliases,
+    });
+    const context = await fixture.prepare({
+      provider: testCase.provider,
+      model: testCase.model,
+      config: {
+        ...baseConfig,
+        agents: baseConfig.agents,
+        models: {
+          providers: {
+            "fixture-anthropic": {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-4-7",
+                  name: "Claude Opus 4.7",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                  contextTokens: 100_000,
+                },
+              ],
+            },
+            "collision-provider": {
+              baseUrl: "https://collision.invalid",
+              models: [
+                {
+                  id: "large",
+                  name: "Unrelated Large",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
+                  contextTokens: 32_000,
+                },
+              ],
+            },
+            "claude-cli": {
+              baseUrl: "https://runtime.invalid",
+              models: [
+                {
+                  id: "large",
+                  name: "Configured Alias Source",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                  contextTokens: 200_000,
+                },
+              ],
             },
           },
-        } satisfies OpenClawConfig,
-      });
+        },
+      } satisfies OpenClawConfig,
+    });
 
-      expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
-      expect(context.contextWindowInfo?.tokens).toBe(testCase.expectedContextTokens);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ contextTokenBudget: testCase.expectedContextTokens }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
+    expect(context.contextWindowInfo?.tokens).toBe(testCase.expectedContextTokens);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokenBudget: testCase.expectedContextTokens }),
+    );
+  });
+
+  it.each([
+    { name: "the session-selected 200k option", selection: "200k", expected: 200_000 },
+    {
+      name: "the declared default option when unselected",
+      selection: undefined,
+      expected: 1_000_000,
+    },
+  ])("caps the context budget with $name from catalog contextWindows", async (testCase) => {
+    const prepareExecution = vi.fn(async () => undefined);
+    setCliBackendForPrepareTest({ prepareExecution });
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-fable-5",
+      config: {},
+      // The run owner carries the selection as a prepared fact; a session entry
+      // alone must not drive it (reply-path regression: selection dropped when
+      // prepare read sessionEntry directly).
+      ...(testCase.selection ? { contextWindow: testCase.selection } : {}),
+      sessionEntry: {
+        sessionId: "cli-session",
+        updatedAt: 0,
+        ...(testCase.selection ? {} : { contextWindow: "200k" }),
+      },
+    });
+
+    expect(context.contextWindowInfo?.tokens).toBe(testCase.expected);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokenBudget: testCase.expected }),
+    );
   });
 
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
+    defaultTestCliBackend = buildDefaultTestCliBackend();
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [],
+      resolveRuntimeCliBackends: () => [defaultTestCliBackend],
     });
     setCliRunnerPrepareTestDeps({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
@@ -430,27 +654,34 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
       revokeMcpLoopbackClientGrant: vi.fn(() => true),
+      resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+      getCliLiveSessionGeneration: vi.fn(() => undefined),
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
+      // Keep preparation off the real plugin-metadata snapshot; catalog-driven
+      // cases inject their own rows.
+      loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
-    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(undefined);
-    mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
-    mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
+    mockBuildActiveVideoGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
+    mockBuildActiveMusicGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
+    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
 
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
+    resetCliRunnerPrepareTestDeps();
     resetCliAuthEpochTestDeps();
     getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();
@@ -461,86 +692,290 @@ describe("prepareCliRunContext", () => {
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
     setActivePluginRegistry(createTestRegistry());
+    setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
-    sessionFileEnvSnapshot?.restore();
-    sessionFileEnvSnapshot = undefined;
+    fixture.cleanup();
+  });
+
+  it("closes owned state handles before removing preparation directories", () => {
+    const sessions = [fixture.session, fixture.createSession()];
+    const ownedState = sessions.map(({ dir }) => ({
+      dir,
+      database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
+    }));
+    const unrelatedDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unrelated-")),
+    );
+    const unrelated = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: unrelatedDir } });
+    const removed: string[] = [];
+    const remove = fs.rmSync;
+    const removal = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const owned = ownedState.find(({ dir }) => dir === target);
+      if (owned) {
+        // Refuse unsafe unlink on the original bug, leaving files intact for finally cleanup.
+        expect(owned.database.db.isOpen, "state handle must close before directory removal").toBe(
+          false,
+        );
+        removed.push(owned.dir);
+      }
+      remove(target, options);
+    });
+    try {
+      fixture.cleanup();
+      expect(removed).toEqual(sessions.map(({ dir }) => dir));
+      for (const { dir } of sessions) {
+        expect(fs.existsSync(dir)).toBe(false);
+      }
+      unrelated.db.exec(
+        "CREATE TEMP TABLE cleanup_probe (value INTEGER); INSERT INTO cleanup_probe VALUES (7);",
+      );
+      expect(unrelated.db.prepare("SELECT value FROM cleanup_probe").get()).toEqual({ value: 7 });
+    } finally {
+      removal.mockRestore();
+      for (const { sessionTarget } of sessions) {
+        closeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+      }
+      for (const { database } of ownedState) {
+        closeOpenClawStateDatabaseByPath(database.path);
+      }
+      fixture.cleanup();
+      closeOpenClawStateDatabaseByPath(unrelated.path);
+      fs.rmSync(unrelatedDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["process", "plugin"] as const)(
+    "carries silent heartbeat outcome in late %s user input without rebinding",
+    async (targetKind) => {
+      const { sessionTarget } = fixture.session;
+      if (targetKind === "plugin") {
+        setRawCliBackendForPrepareTest({
+          ...defaultTestCliBackend,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "run-test",
+        "main",
+        "heartbeat-context-test",
+      );
+      const input = {
+        preparedRunAdmission: admission,
+        sessionKey: sessionTarget.sessionKey,
+        trigger: "user" as const,
+        prompt: "What happened?",
+        transcriptPrompt: "What happened?",
+        currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
+      };
+      try {
+        const before = await fixture.prepare(input);
+        await persistHeartbeatOutcome({
+          ...sessionTarget,
+          runSessionKey: "agent:main:main:heartbeat",
+          occurredAt: 1,
+          response: { outcome: "done", notify: false, summary: "ISOLATED_CLI_OUTCOME_947" },
+        });
+        for (let retry = 0; retry < 2; retry++) {
+          const context = await fixture.prepare(input);
+          expect(context.executionTarget.kind).toBe(targetKind);
+          const visibleInput = [
+            context.params.prompt,
+            context.promptContext?.prependContext,
+            context.promptContext?.appendContext,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          expect(visibleInput.match(/ISOLATED_CLI_OUTCOME_947/g)).toHaveLength(1);
+          expect(context.params.transcriptPrompt).toBe("What happened?");
+          expect(context.systemPrompt).toBe(before.systemPrompt);
+          expect(context.extraSystemPromptHash).toBe(before.extraSystemPromptHash);
+          expect(context.messageToolPolicyHash).toBe(before.messageToolPolicyHash);
+          expect(input.currentInboundContext).toEqual({
+            text: "Quoted reply",
+            resumableText: "Room delta",
+          });
+        }
+        const laterAdmission = prepareSystemAgentRunAdmission(
+          {},
+          "later-user-run",
+          "main",
+          "heartbeat-context-test",
+        );
+        try {
+          const later = await fixture.prepare({
+            ...input,
+            runId: "later-user-run",
+            preparedRunAdmission: laterAdmission,
+          });
+          expect(JSON.stringify([later.params.prompt, later.promptContext])).not.toContain(
+            "ISOLATED_CLI_OUTCOME_947",
+          );
+        } finally {
+          laterAdmission.close();
+        }
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it.each(["heartbeat", "cron", "in-memory", "aborted"] as const)(
+    "does not consume silent heartbeat context for %s CLI preparation",
+    async (kind) => {
+      const { sessionTarget, dir } = fixture.session;
+      await persistHeartbeatOutcome({
+        ...sessionTarget,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "Retained CLI outcome" },
+      });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "run-test",
+        "main",
+        "heartbeat-context-test",
+      );
+      const input = {
+        preparedRunAdmission: admission,
+        sessionKey: sessionTarget.sessionKey,
+        trigger: kind === "heartbeat" || kind === "cron" ? kind : ("user" as const),
+        ...(kind === "in-memory" ? { sessionManager: SessionManager.inMemory(dir) } : {}),
+        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
+      };
+      try {
+        if (kind === "aborted") {
+          await expect(fixture.prepare(input)).rejects.toThrow();
+        } else {
+          const context = await fixture.prepare(input);
+          expect(JSON.stringify([context.params.prompt, context.promptContext])).not.toContain(
+            "Retained CLI outcome",
+          );
+        }
+        expect(
+          (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+        ).toBe("Retained CLI outcome");
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
+    const { sessionTarget } = fixture.session;
+    await persistHeartbeatOutcome({
+      ...sessionTarget,
+      runSessionKey: "agent:main:main:heartbeat",
+      occurredAt: 1,
+      response: { outcome: "done", notify: false, summary: "Keep revoked-owner outcome" },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "revoked-user",
+      "main",
+      "heartbeat-context-test",
+    );
+    const admittedRunContext = await admission.admit("embedded");
+    admission.close();
+    await expect(
+      fixture.prepare({
+        admittedRunContext,
+        runId: "revoked-user",
+        trigger: "user",
+        sessionKey: sessionTarget.sessionKey,
+      }),
+    ).rejects.toThrow("authority");
+    expect(
+      (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+    ).toBe("Keep revoked-owner outcome");
+  });
+
+  it("carries the session-key-derived workspace owner into prepared params", async () => {
+    const { dir } = fixture.session;
+    const arthurWorkspace = path.join(dir, "workspace-arthur");
+    const normalizeConfig = vi.fn((config: CliBackendPlugin["config"]) => config);
+    setRawCliBackendForPrepareTest({ ...defaultTestCliBackend, normalizeConfig });
+    const config = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: path.join(dir, "workspace-main") },
+          { id: "arthur", workspace: arthurWorkspace },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const context = await fixture.prepare({
+      sessionKey: "agent:arthur:main",
+      workspaceDir: arthurWorkspace,
+      config,
+    });
+
+    expect(normalizeConfig).toHaveBeenCalledWith(expect.any(Object), {
+      backendId: "test-cli",
+      agentId: "arthur",
+      config,
+    });
+    expect(context.params.agentId).toBe("arthur");
+    expect(context.workspaceDir).toBe(arthurWorkspace);
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const modelOwnerAgentDir = path.join(dir, "ops-agent");
     const systemAgentDir = path.join(dir, "openclaw-agent");
     const prepareExecution = vi.fn(async () => undefined);
     fs.mkdirSync(modelOwnerAgentDir, { recursive: true });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test-plugin",
-          bundleMcp: false,
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            output: "text",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:openclaw:main",
-        agentId: "openclaw",
-        sessionFile,
-        workspaceDir: dir,
-        agentDir: modelOwnerAgentDir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        authProfileId: "test-cli:ops",
-        timeoutMs: 1_000,
-        runId: "run-test-explicit-agent-dir",
-        config: {
-          agents: {
-            list: [
-              { id: "ops", default: true, agentDir: modelOwnerAgentDir },
-              { id: "openclaw", agentDir: systemAgentDir },
-            ],
-          },
+    const context = await fixture.prepare({
+      sessionKey: "agent:openclaw:main",
+      agentId: "openclaw",
+      agentDir: modelOwnerAgentDir,
+      authProfileId: "test-cli:ops",
+      config: {
+        agents: {
+          list: [
+            { id: "ops", default: true, agentDir: modelOwnerAgentDir },
+            { id: "openclaw", agentDir: systemAgentDir },
+          ],
         },
-      });
+      },
+    });
 
-      expect(context.effectiveAuthProfileId).toBe("test-cli:ops");
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDir: modelOwnerAgentDir,
-          authProfileId: "test-cli:ops",
-        }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.effectiveAuthProfileId).toBe("test-cli:ops");
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: modelOwnerAgentDir,
+        authProfileId: "test-cli:ops",
+      }),
+    );
   });
 
-  it("passes raw refreshed OAuth profile fields to profile-owned CLI preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it("passes expired Gemini CLI OAuth fields to CLI-owned refresh", async () => {
+    const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "google-gemini-cli:user@example.test";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-    }));
+    const resolveApiKeyForProfile = vi.fn(async () => {
+      throw new Error("Gemini CLI OAuth must not enter core refresh");
+    });
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -551,7 +986,7 @@ describe("prepareCliRunContext", () => {
             provider: "google-gemini-cli",
             access: "raw-access-token",
             refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
+            expires: 1,
             projectId: "project-1",
             email: "user@example.test",
           },
@@ -559,176 +994,184 @@ describe("prepareCliRunContext", () => {
       },
       agentDir,
     );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: false,
-          authEpochMode: "profile-only",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       resolveApiKeyForProfile,
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        timeoutMs: 1_000,
-        runId: "run-test-gemini-oauth-raw-profile-fields",
-        authProfileId,
-        onSuccessfulAuthBinding: () => {},
-        config: {},
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      authProfileId,
+      onSuccessfulAuthBinding: () => {},
+      config: {},
+    });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId,
-          authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "raw-access-token",
-            refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
-          }),
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId,
+        authCredential: expect.objectContaining({
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "raw-access-token",
+          refresh: "raw-refresh-token",
+          expires: 1,
         }),
-      );
-      expect(context.authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
-      expect(context.authBindingSkipsLocalCredential).toBe(true);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      }),
+    );
+    expect(context.authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(context.authBindingSkipsLocalCredential).toBe(true);
   });
 
-  it("stages the resolved OAuth fallback profile for Gemini CLI preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it("still materializes selected API keys for Gemini CLI preparation", async () => {
+    const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
-    const legacyProfileId = "google-gemini-cli:default";
-    const resolvedProfileId = "google-gemini-cli:user@example.test";
+    const authProfileId = "google:api-key";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
     const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: resolvedProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
+      apiKey: "resolved-api-key",
+      profileId: authProfileId,
+      profileType: "api_key" as const,
+      provider: "google",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
         version: 1,
         profiles: {
-          [legacyProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "stale-access-token",
-            refresh: "stale-refresh-token",
-            expires: 1_700_000_000_000,
-            email: "legacy@example.test",
-          },
-          [resolvedProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "resolved-access-token",
-            refresh: "resolved-refresh-token",
-            expires: 1_800_000_000_000,
-            projectId: "project-1",
-            email: "user@example.test",
+          [authProfileId]: {
+            type: "api_key",
+            provider: "google",
+            key: "stored-api-key",
           },
         },
       },
       agentDir,
     );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: false,
-          authEpochMode: "profile-only",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       resolveApiKeyForProfile,
     });
 
-    try {
-      await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        timeoutMs: 1_000,
-        runId: "run-test-gemini-oauth-fallback-profile",
-        authProfileId: legacyProfileId,
-        config: {},
-      });
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      authProfileId,
+      config: {},
+    });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId: resolvedProfileId,
-          authCredential: expect.objectContaining({
+    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId,
+        authCredential: expect.objectContaining({
+          type: "api_key",
+          provider: "google",
+          key: "resolved-api-key",
+        }),
+      }),
+    );
+  });
+
+  it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:legacy";
+    const backendError = new CliBackendAuthProfilePreparationError(
+      "Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw.",
+    );
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
             type: "oauth",
             provider: "google-gemini-cli",
-            access: "resolved-access-token",
-            refresh: "resolved-refresh-token",
-            expires: 1_800_000_000_000,
-          }),
-        }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+            access: "expired-access-token",
+            refresh: "",
+            expires: 0,
+          },
+        },
+      },
+      agentDir,
+    );
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution: vi.fn(async () => {
+        throw backendError;
+      }),
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "google-gemini-cli",
+      agentDir,
+      cause: backendError,
+    });
   });
 
   it("selects the configured Gemini CLI OAuth profile when no explicit profile is passed", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "google-gemini-cli:user@example.test";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-    }));
+    const resolveApiKeyForProfile = vi.fn(async () => {
+      throw new Error("Gemini CLI OAuth must not enter core refresh");
+    });
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -747,175 +1190,58 @@ describe("prepareCliRunContext", () => {
       },
       agentDir,
     );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: false,
-          authEpochMode: "profile-only",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       resolveApiKeyForProfile,
     });
 
-    try {
-      await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        timeoutMs: 1_000,
-        runId: "run-test-gemini-oauth-default-profile",
-        config: {
-          auth: {
-            profiles: {
-              [authProfileId]: {
-                provider: "google-gemini-cli",
-                mode: "oauth",
-                email: "user@example.test",
-              },
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      config: {
+        auth: {
+          profiles: {
+            [authProfileId]: {
+              provider: "google-gemini-cli",
+              mode: "oauth",
+              email: "user@example.test",
             },
           },
-        } as OpenClawConfig,
-      });
-
-      expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          profileId: authProfileId,
-          agentDir,
-        }),
-      );
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId,
-          authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "raw-access-token",
-            refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
-          }),
-        }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("stages adopted OAuth credentials for Gemini CLI preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "google-gemini-cli:user@example.test";
-    const prepareExecution = vi.fn(async () => ({
-      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
-    }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-      credential: {
-        type: "oauth" as const,
-        provider: "google-gemini-cli",
-        access: "adopted-access-token",
-        refresh: "adopted-refresh-token",
-        expires: 1_900_000_000_000,
-        projectId: "project-1",
-        email: "user@example.test",
-      },
-    }));
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [authProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "stale-access-token",
-            refresh: "stale-refresh-token",
-            expires: 1_700_000_000_000,
-            projectId: "project-1",
-            email: "user@example.test",
-          },
         },
-      },
-      agentDir,
-    );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: false,
-          authEpochMode: "profile-only",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
-    });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
+      } as OpenClawConfig,
     });
 
-    try {
-      await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        timeoutMs: 1_000,
-        runId: "run-test-gemini-oauth-adopted-credential",
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
         authProfileId,
-        config: {},
-      });
-
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId,
-          authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "adopted-access-token",
-            refresh: "adopted-refresh-token",
-            expires: 1_900_000_000_000,
-          }),
+        authCredential: expect.objectContaining({
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "raw-access-token",
+          refresh: "raw-refresh-token",
+          expires: 1_800_000_000_000,
         }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      }),
+    );
   });
 
-  it("does not expose auth profile credentials to non-Gemini CLI prepare hooks", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it("does not expose auth profile credentials to non-bundled prepare hooks", async () => {
+    const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "test-cli:secret";
     const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
@@ -933,49 +1259,387 @@ describe("prepareCliRunContext", () => {
       },
       agentDir,
     );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test-plugin",
-          bundleMcp: false,
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
 
-    try {
-      await prepareCliRunContext({
-        sessionId: "session-test",
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      authProfileId,
+      config: {},
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId,
+      }),
+    );
+    expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+  });
+
+  it.each(["connected", "missing"] as const)(
+    "requires the exact selected personal CLI credential when its account is %s",
+    async (accountState) => {
+      const { dir } = fixture.session;
+      const agentDir = path.join(dir, "agents", "main", "agent");
+      const databasePath = resolveOpenClawStateSqlitePath();
+      try {
+        const owner = ensureProfileForEmail("cli-owner@example.test");
+        const credential = {
+          type: "token" as const,
+          provider: "anthropic",
+          token: "synthetic-personal-cli-token",
+        };
+        const connected = connectUserModelAccount({
+          ownerProfileId: owner.id,
+          credential,
+          assertCurrent: () => undefined,
+        });
+        const authProfileId =
+          accountState === "connected"
+            ? connected.authProfileId
+            : `personal:${owner.id}:${randomUUID()}`;
+        const prepareExecution = vi.fn(async () => undefined);
+        setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+
+        const preparation = fixture.prepare({
+          agentDir,
+          provider: "claude-cli",
+          model: "sonnet",
+          authProfileId,
+        });
+        if (accountState === "connected") {
+          await preparation;
+          expect(prepareExecution).toHaveBeenCalledWith(
+            expect.objectContaining({ authProfileId, authCredential: credential }),
+          );
+        } else {
+          await expect(preparation).rejects.toThrow(
+            `could not materialize selected auth profile "${authProfileId}"`,
+          );
+          expect(prepareExecution).not.toHaveBeenCalled();
+        }
+        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).not.toHaveProperty(
+          connected.authProfileId,
+        );
+      } finally {
+        closeOpenClawStateDatabaseByPath(databasePath);
+      }
+    },
+  );
+
+  it("persists and forwards a refreshed managed Anthropic OAuth profile", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:openclaw-managed";
+    const prepareExecution = vi.fn(async () => undefined);
+    const refreshedCredential = {
+      type: "oauth" as const,
+      provider: "anthropic",
+      access: "refreshed-access-token",
+      refresh: "refreshed-refresh-token",
+      expires: Date.now() + 60 * 60_000,
+    };
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "stored-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async ({ store }) => {
+      saveAuthProfileStore(
+        {
+          ...store,
+          profiles: {
+            ...store.profiles,
+            [authProfileId]: refreshedCredential,
+          },
+        },
+        agentDir,
+      );
+      return {
+        apiKey: refreshedCredential.access,
+        provider: refreshedCredential.provider,
+        profileId: authProfileId,
+        profileType: refreshedCredential.type,
+        credential: refreshedCredential,
+      };
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId,
+        authCredential: expect.objectContaining({
+          type: "oauth",
+          provider: "anthropic",
+          access: refreshedCredential.access,
+          refresh: refreshedCredential.refresh,
+        }),
+      }),
+    );
+    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[authProfileId]).toEqual(
+      refreshedCredential,
+    );
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: authProfileId,
+        agentDir,
+        allowProfileFallback: false,
+      }),
+    );
+  });
+
+  it.each([
+    {
+      label: "OAuth under the Claude CLI provider",
+      credential: {
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "expired-imported-access",
+        refresh: "imported-refresh",
+        expires: Date.now() - 60_000,
+        email: "owner@example.com",
+      },
+    },
+    {
+      label: "OAuth under the historical Anthropic provider",
+      credential: {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "expired-imported-access",
+        refresh: "imported-refresh",
+        expires: Date.now() - 60_000,
+        email: "owner@example.com",
+      },
+    },
+    {
+      label: "a historical token credential",
+      credential: {
+        type: "token" as const,
+        provider: "anthropic",
+        token: "imported-token",
+        expires: Date.now() - 60_000,
+      },
+    },
+  ])(
+    "runs an imported Claude CLI login stored as $label natively without forwarding a credential",
+    async ({ credential }) => {
+      const { dir } = fixture.session;
+      const agentDir = path.join(dir, "agents", "main", "agent");
+      const authProfileId = "anthropic:claude-cli";
+      const prepareExecution = vi.fn(async () => undefined);
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [authProfileId]: credential,
+          },
+        },
+        agentDir,
+      );
+      setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
+      setCliRunnerPrepareTestDeps({
+        resolveApiKeyForProfile,
+      });
+
+      await fixture.prepare({
         sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-non-gemini-credential-boundary",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
         authProfileId,
         config: {},
       });
 
+      expect(prepareExecution).toHaveBeenCalledTimes(1);
       expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId,
-        }),
+        expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
       );
-      expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not revive a selected managed credential when auth resolution returns null", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:openclaw-managed";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => null),
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+    await expect(preparation).rejects.toThrow(
+      `could not materialize selected auth profile "${authProfileId}"`,
+    );
+    await expect(preparation).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "anthropic",
+      agentDir,
+    });
+    await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an explicit Claude CLI profile with a resolver fallback", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:account-a";
+    const fallbackProfileId = "anthropic:account-b";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-account-a-access",
+            refresh: "account-a-refresh",
+            expires: Date.now() - 60_000,
+          },
+          [fallbackProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "account-b-access",
+            refresh: "account-b-refresh",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => ({
+        apiKey: "account-b-access",
+        provider: "anthropic",
+        profileId: fallbackProfileId,
+        profileType: "oauth",
+        credential: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      })),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow(`resolved as "${fallbackProfileId}"`);
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("surfaces managed profile refresh failures before backend preparation", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:openclaw-managed";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => {
+        throw new Error("OAuth refresh failed. Run claude auth login.");
+      }),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow("Run claude auth login");
+    expect(prepareExecution).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -990,7 +1654,7 @@ describe("prepareCliRunContext", () => {
       expectedAuthProfileId: undefined,
     },
   ])("$name", async (testCase) => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "claude-cli:stored";
     const prepareExecution = vi.fn(async () => ({ env: { TEST_PREPARED_ENV: "1" } }));
@@ -1009,42 +1673,103 @@ describe("prepareCliRunContext", () => {
       agentDir,
     );
 
-    try {
-      setCliBackendForPrepareTest({
-        prepareExecution,
-        autoSelectAuthProfile: testCase.autoSelectAuthProfile,
-      });
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        agentDir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "sonnet",
-        timeoutMs: 1_000,
-        runId: "run-test-environment-only-prepare-hook",
-        config: {
-          auth: {
-            profiles: {
-              [authProfileId]: { provider: "claude-cli", mode: "api_key" },
-            },
+    setCliBackendForPrepareTest({
+      prepareExecution,
+      authEpochMode: "profile-only",
+      autoSelectAuthProfile: testCase.autoSelectAuthProfile,
+    });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      config: {
+        auth: {
+          profiles: {
+            [authProfileId]: { provider: "claude-cli", mode: "api_key" },
           },
         },
-      });
+      },
+    });
 
-      expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
+    );
+  });
+
+  it("keeps bundled Claude secret input on the private prepared runner context", async () => {
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    const prepareExecution = vi.fn(async () => ({
+      env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+      secretInput,
+    }));
+
+    setCliBackendForPrepareTest({
+      prepareExecution: prepareExecution as CliBackendPlugin["prepareExecution"],
+    });
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "sonnet",
+      config: {},
+    });
+
+    expect(context.preparedBackend.secretInput).toBe(secretInput);
+    expect(context.preparedBackend.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+    });
+  });
+
+  it("carries projected network-result capability into the prepared CLI context", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "network-tool-cli",
+      pluginId: "network-tool-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "network-tool-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "none",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "fake_web_tool",
+            label: "Fake web tool",
+            description: "Test network content capability",
+            parameters: Type.Object({}, { additionalProperties: false }),
+            resultContentSource: "network" as const,
+            execute: vi.fn(async () => ({ content: [] })),
+          },
+        ],
+      })),
+    });
+
+    const context = await fixture.prepare({
+      provider: "network-tool-cli",
+      model: "test-model",
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(context.resultContentSourceByToolName?.get("fake_web_tool")).toBe("network");
   });
 
   it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const profileSystemSettingsPath = path.join(dir, "profile-system-settings.json");
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
@@ -1056,24 +1781,19 @@ describe("prepareCliRunContext", () => {
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileSystemSettingsPath,
       },
     }));
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: true,
-          bundleMcpMode: "gemini-system-settings",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: true,
+      bundleMcpMode: "gemini-system-settings",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -1085,16 +1805,10 @@ describe("prepareCliRunContext", () => {
 
     let cleanup: (() => Promise<void>) | undefined;
     try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await fixture.prepare({
         sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
         provider: "google-gemini-cli",
         model: "gemini-3.1-pro-preview",
-        timeoutMs: 1_000,
-        runId: "run-test-gemini-mcp-system-settings",
         config: {},
       });
       cleanup = context.preparedBackend.cleanup;
@@ -1118,57 +1832,35 @@ describe("prepareCliRunContext", () => {
       );
     } finally {
       await cleanup?.();
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("preserves backend staging for queued execution without running it during prepare", async () => {
-    const { dir, sessionFile } = createSessionFile();
     const beforeExecution = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ beforeExecution }));
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test-plugin",
-          bundleMcp: false,
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-staging-thunk",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({});
 
-      expect(prepareExecution).toHaveBeenCalledOnce();
-      expect(beforeExecution).not.toHaveBeenCalled();
-      await context.preparedBackend.beforeExecution?.();
-      expect(beforeExecution).toHaveBeenCalledOnce();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(beforeExecution).not.toHaveBeenCalled();
+    await context.preparedBackend.beforeExecution?.();
+    expect(beforeExecution).toHaveBeenCalledOnce();
   });
 
   it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
-    const { dir, sessionFile } = createSessionFile();
     let generatedSystemSettingsPath: string | undefined;
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
@@ -1181,24 +1873,19 @@ describe("prepareCliRunContext", () => {
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "google-gemini-cli",
-          pluginId: "google",
-          bundleMcp: true,
-          bundleMcpMode: "gemini-system-settings",
-          prepareExecution,
-          config: {
-            command: "gemini",
-            args: ["--prompt", "{prompt}"],
-            output: "json",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: true,
+      bundleMcpMode: "gemini-system-settings",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -1209,32 +1896,21 @@ describe("prepareCliRunContext", () => {
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "agent:main:main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "google-gemini-cli",
-          model: "gemini-3.1-pro-preview",
-          timeoutMs: 1_000,
-          runId: "run-test-gemini-mcp-cleanup-on-auth-failure",
-          config: {},
-        }),
-      ).rejects.toThrow(/no credential material/);
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        config: {},
+      }),
+    ).rejects.toThrow(/no credential material/);
 
-      expect(generatedSystemSettingsPath).toBeTruthy();
-      expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(generatedSystemSettingsPath).toBeTruthy();
+    expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
   });
 
   it("cleans prepared execution resources when auth epoch resolution fails", async () => {
-    const { dir, sessionFile } = createSessionFile();
     const preparedExecutionCleanup = vi.fn(async () => undefined);
     const prepareExecution = vi.fn(async () => ({ cleanup: preparedExecutionCleanup }));
     setCliAuthEpochTestDeps({
@@ -1242,60 +1918,44 @@ describe("prepareCliRunContext", () => {
         throw new Error("auth epoch read failed");
       },
     });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test",
-          bundleMcp: false,
-          authEpochMode: "profile-only",
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            systemPromptArg: "--system-prompt",
-            systemPromptWhen: "first",
-            output: "text",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
     });
 
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "agent:main:main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-prepare-execution-cleanup-on-auth-epoch-failure",
-          authProfileId: "test-cli:profile",
-          config: {},
-        }),
-      ).rejects.toThrow("auth epoch read failed");
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        authProfileId: "test-cli:profile",
+        config: {},
+      }),
+    ).rejects.toThrow("auth epoch read failed");
 
-      expect(prepareExecution).toHaveBeenCalledOnce();
-      expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
   });
 
   it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const tempEnvSnapshot = captureEnv(["TMPDIR", "TMP", "TEMP"]);
     const tempRoot = path.join(dir, "tmp");
     const skillsPluginDir = path.join(dir, "claude-skills-plugin");
     const skillsCleanup = vi.fn(async () => {
       fs.rmSync(skillsPluginDir, { recursive: true, force: true });
     });
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
     fs.mkdirSync(tempRoot, { recursive: true });
     fs.mkdirSync(skillsPluginDir, { recursive: true });
     setTestEnvValue("TMPDIR", tempRoot);
@@ -1311,6 +1971,7 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: ["--plugin-dir", skillsPluginDir],
@@ -1323,34 +1984,25 @@ describe("prepareCliRunContext", () => {
 
     try {
       await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
+        fixture.prepare({
           sessionKey: "agent:main:main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-mid-prepare-cleanup",
           config: createCliBackendConfig({ bundleMcp: true }),
         }),
       ).rejects.toThrow("reference path lookup failed");
 
       expect(skillsCleanup).toHaveBeenCalledOnce();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
       expect(fs.existsSync(skillsPluginDir)).toBe(false);
       expect(
         fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
       ).toEqual([]);
     } finally {
       tempEnvSnapshot.restore();
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
+    fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
       timestamp: new Date(1).toISOString(),
@@ -1363,37 +2015,32 @@ describe("prepareCliRunContext", () => {
       contextFiles: [{ path: "context.md", content: "context" }],
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-    const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
+    const prepareClaudeCliSkillsPluginMock = vi.fn(async () => ({
       args: ["--plugin-dir", "/tmp/claude-skills"],
       cleanup: vi.fn(async () => undefined),
     }));
     const prepareExecution = vi.fn(async () => undefined);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test",
-          bundleMcp: true,
-          bundleMcpMode: "claude-config-file",
-          nativeToolMode: "always-on",
-          sideQuestionToolMode: "disabled",
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            liveSession: "claude-stdio",
-            sessionMode: "always",
-            output: "jsonl",
-            input: "stdin",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "always-on",
+      sideQuestionToolMode: "disabled",
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        liveSession: "claude-stdio",
+        sessionMode: "always",
+        output: "jsonl",
+        input: "stdin",
+      },
     });
     setCliRunnerPrepareTestDeps({
       resolveBootstrapContextForRun,
       ensureMcpLoopbackServer,
-      prepareClaudeCliSkillsPlugin,
+      prepareClaudeCliSkillsPlugin: prepareClaudeCliSkillsPluginMock,
       makeBootstrapWarn: vi.fn(() => () => undefined),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
@@ -1413,18 +2060,12 @@ describe("prepareCliRunContext", () => {
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: "docs", sourcePath: "src" })),
     });
 
-    const context = await prepareCliRunContext({
-      sessionId: "session-test",
+    const context = await fixture.prepare({
       sessionKey: "agent:main:main",
-      sessionFile,
-      workspaceDir: dir,
       config: createCliBackendConfig({ bundleMcp: true }),
       prompt: "side question prompt",
       executionMode: "side-question",
-      provider: "test-cli",
-      model: "test-model",
       timeoutMs: 120_000,
-      runId: "run-side-question",
       extraSystemPrompt: "BTW system prompt",
       disableTools: true,
       cliSessionId: "existing-cli-session",
@@ -1432,7 +2073,7 @@ describe("prepareCliRunContext", () => {
 
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-    expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
+    expect(prepareClaudeCliSkillsPluginMock).not.toHaveBeenCalled();
     expect(mockGetGlobalHookRunner).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "side-question" }),
@@ -1446,7 +2087,6 @@ describe("prepareCliRunContext", () => {
     expect(context.claudeSkillsPluginArgs).toEqual([]);
     expect(context.preparedBackend.backend.sessionMode).toBe("none");
     expect(context.preparedBackend.backend.liveSession).toBeUndefined();
-    expect(context.bootstrapPromptWarningLines).toEqual([]);
     expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
     expect(context.systemPromptReport.tools.entries).toEqual([]);
   });
@@ -1471,30 +2111,25 @@ describe("prepareCliRunContext", () => {
       expectedText: undefined,
     },
   ])("renders $name", async ({ nativeToolMode, transportsSystemPrompt, expectedText }) => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
     const config = {
       agents: { defaults: { workspace: dir } },
     } satisfies OpenClawConfig;
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test",
-          bundleMcp: false,
-          nativeToolMode,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            ...(transportsSystemPrompt ? { systemPromptArg: "--system-prompt" } : {}),
-            systemPromptWhen: "first",
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: false,
+      nativeToolMode,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        ...(transportsSystemPrompt ? { systemPromptArg: "--system-prompt" } : {}),
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
     });
     setCliRunnerPrepareTestDeps({
       isWorkspaceBootstrapPending: vi.fn(async () => true),
@@ -1516,76 +2151,218 @@ describe("prepareCliRunContext", () => {
       })),
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        config,
-        prompt: "Hello",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: `run-bootstrap-${nativeToolMode ?? "limited"}`,
-        trigger: "user",
-        extraSystemPrompt: "stable prompt",
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          extraSystemPromptHash: hashCliSessionText("stable prompt"),
-          cwdHash: hashCliSessionText(dir),
-        },
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config,
+      prompt: "Hello",
+      runId: `run-bootstrap-${nativeToolMode ?? "limited"}`,
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: hashCliSessionText("stable prompt"),
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
 
-      if (expectedText) {
-        expect(context.systemPrompt).toContain("## Bootstrap Pending");
-        expect(context.systemPrompt).toContain(expectedText);
-        if (nativeToolMode === "always-on") {
-          expect(context.systemPrompt).toContain("## " + bootstrapPath);
-          expect(context.systemPrompt).toContain("Complete the first-run ritual");
-          expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([
-            expect.objectContaining({
-              name: "BOOTSTRAP.md",
-              injectedChars: expect.any(Number),
-              truncated: false,
-            }),
-          ]);
-        } else {
-          expect(context.systemPrompt).not.toContain("## " + bootstrapPath);
-          expect(context.systemPrompt).not.toContain("Complete the first-run ritual");
-          expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
-        }
-        expect(context.reusableCliSession).toEqual({
-          mode: "reuse-with-drift",
-          sessionId: "cli-session",
-          drift: { reasons: ["system-prompt"] },
-        });
+    if (expectedText) {
+      expect(context.systemPrompt).toContain("## Bootstrap Pending");
+      expect(context.systemPrompt).toContain(expectedText);
+      if (nativeToolMode === "always-on") {
+        expect(context.systemPrompt).toContain("## " + bootstrapPath);
+        expect(context.systemPrompt).toContain("Complete the first-run ritual");
+        expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([
+          expect.objectContaining({
+            name: "BOOTSTRAP.md",
+            injectedChars: expect.any(Number),
+            truncated: false,
+          }),
+        ]);
       } else {
-        expect(context.systemPrompt).not.toContain("## Bootstrap Pending");
-        expect(context.reusableCliSession).toEqual({
-          mode: "reuse",
-          sessionId: "cli-session",
-        });
+        expect(context.systemPrompt).not.toContain("## " + bootstrapPath);
+        expect(context.systemPrompt).not.toContain("Complete the first-run ritual");
+        expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
       }
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["system-prompt"] },
+      });
+    } else {
+      expect(context.systemPrompt).not.toContain("## Bootstrap Pending");
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "cli-session",
+      });
     }
   });
 
+  it("routes bootstrap truncation notices into the system prompt, not the turn prompt", async () => {
+    const { dir } = fixture.session;
+    const agentsPath = path.join(dir, "AGENTS.md");
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => ({
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md" as const,
+            path: agentsPath,
+            content: "policy ".repeat(100),
+            missing: false,
+          },
+        ],
+        contextFiles: [{ path: agentsPath, content: "policy ".repeat(10) }],
+      })),
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "Hello",
+      runId: "run-bootstrap-truncation-notice",
+      trigger: "user",
+    });
+
+    expect(context.systemPrompt).toContain("## Bootstrap Context Notice");
+    expect(context.systemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(context.params.prompt).toBe("Hello");
+    expect(context.params.prompt).not.toContain("[Bootstrap truncation warning]");
+    expect(context.systemPromptReport.bootstrapTruncation).toMatchObject({
+      warningShown: true,
+      truncatedFiles: 1,
+    });
+  });
+
+  it("drifts a resumed first-only session when truncation starts mid-session", async () => {
+    const { dir } = fixture.session;
+    const agentsPath = path.join(dir, "AGENTS.md");
+    const bootstrapContextFor = (injected: string) => ({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md" as const,
+          path: agentsPath,
+          content: "policy ".repeat(100),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: agentsPath, content: injected }],
+    });
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(100))),
+    });
+    const firstTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn one",
+      runId: "run-truncation-drift-1",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+    });
+    expect(firstTurn.systemPrompt).not.toContain("[Bootstrap truncation warning]");
+    const untruncatedBinding = {
+      sessionId: "cli-session",
+      extraSystemPromptHash: firstTurn.extraSystemPromptHash,
+      cwdHash: hashCliSessionText(dir),
+    };
+
+    // AGENTS.md grows past the bootstrap cap between turns of the same session.
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(10))),
+    });
+    const secondTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn two",
+      runId: "run-truncation-drift-2",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+      cliSessionBinding: untruncatedBinding,
+    });
+
+    expect(secondTurn.systemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(secondTurn.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
+  });
+
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      appendTranscriptEntry(sessionFile, {
-        id: "msg-1",
-        parentId: null,
-        timestamp: new Date(1).toISOString(),
-        message: { role: "user", content: "earlier context", timestamp: 1 },
-      });
-      appendTranscriptEntry(sessionFile, {
-        id: "msg-2",
-        parentId: "msg-1",
-        timestamp: new Date(2).toISOString(),
-        message: {
+    const { dir } = fixture.session;
+    fixture.appendTranscript({
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "earlier context", timestamp: 1 },
+    });
+    fixture.appendTranscript({
+      id: "msg-2",
+      parentId: "msg-1",
+      timestamp: new Date(2).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "earlier reply" }],
+        api: "responses",
+        provider: "test-cli",
+        model: "test-model",
+        usage: createZeroUsageFixture(),
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
+        prependContext: `history:${messages.length}`,
+        systemPrompt: "hook system",
+        prependSystemContext: "prepend system",
+        appendSystemContext: "append system",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    // The hook receives historical messages, while the final prompt receives
+    // only the hook-approved prepend context plus the latest user prompt.
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      runId: "run-test",
+      messageChannel: "telegram",
+      messageProvider: "acp",
+      config: {
+        ...createCliBackendConfig(),
+      },
+    });
+
+    expect(context.params.prompt).toBe("history:2\n\nlatest ask");
+    expect(context.contextEngineTurnPrompt).toBe("latest ask");
+    expect(context.systemPrompt).toBe(
+      `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+    );
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+    const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+      [unknown, unknown]
+    >;
+    expect(beforePromptBuildCalls[0]?.[0]).toEqual({
+      prompt: "latest ask",
+      messages: [
+        { role: "user", content: "earlier context", timestamp: 1 },
+        {
           role: "assistant",
           content: [{ type: "text", text: "earlier reply" }],
           api: "responses",
@@ -1602,103 +2379,48 @@ describe("prepareCliRunContext", () => {
           stopReason: "stop",
           timestamp: 2,
         },
-      });
-      const hookRunner = {
-        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-        runBeforePromptBuild: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
-          prependContext: `history:${messages.length}`,
-          systemPrompt: "hook system",
-          prependSystemContext: "prepend system",
-          appendSystemContext: "append system",
-        })),
-      };
-      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-
-      // The hook receives historical messages, while the final prompt receives
-      // only the hook-approved prepend context plus the latest user prompt.
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        agentId: "main",
-        trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test",
-        messageChannel: "telegram",
-        messageProvider: "acp",
-        config: {
-          ...createCliBackendConfig(),
-        },
-      });
-
-      expect(context.params.prompt).toBe("history:2\n\nlatest ask");
-      expect(context.contextEngineTurnPrompt).toBe("latest ask");
-      expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
-      );
-      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
-      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
-        [unknown, unknown]
-      >;
-      expect(beforePromptBuildCalls[0]?.[0]).toEqual({
-        prompt: "latest ask",
-        messages: [
-          { role: "user", content: "earlier context", timestamp: 1 },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "earlier reply" }],
-            api: "responses",
-            provider: "test-cli",
-            model: "test-model",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: 2,
-          },
-        ],
-      });
-      const hookContext = beforePromptBuildCalls[0]?.[1] as
-        | {
-            runId?: string;
-            agentId?: string;
-            sessionKey?: string;
-            sessionId?: string;
-            workspaceDir?: string;
-            modelProviderId?: string;
-            modelId?: string;
-            messageProvider?: string;
-            trigger?: string;
-            channelId?: string;
-          }
-        | undefined;
-      expect(hookContext?.runId).toBe("run-test");
-      expect(hookContext?.agentId).toBe("main");
-      expect(hookContext?.sessionKey).toBe("agent:main:test");
-      expect(hookContext?.sessionId).toBe("session-test");
-      expect(hookContext?.workspaceDir).toBe(dir);
-      expect(hookContext?.modelProviderId).toBe("test-cli");
-      expect(hookContext?.modelId).toBe("test-model");
-      expect(hookContext?.messageProvider).toBe("acp");
-      expect(hookContext?.trigger).toBe("user");
-      expect(hookContext?.channelId).toBe("telegram");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      ],
+    });
+    const hookContext = beforePromptBuildCalls[0]?.[1] as
+      | {
+          runId?: string;
+          agentId?: string;
+          sessionKey?: string;
+          sessionId?: string;
+          workspaceDir?: string;
+          modelProviderId?: string;
+          modelId?: string;
+          messageProvider?: string;
+          trigger?: string;
+          channelId?: string;
+        }
+      | undefined;
+    expect(hookContext?.runId).toBe("run-test");
+    expect(hookContext?.agentId).toBe("main");
+    expect(hookContext?.sessionKey).toBe("agent:main:test");
+    expect(hookContext?.sessionId).toBe("session-test");
+    expect(hookContext?.workspaceDir).toBe(dir);
+    expect(hookContext?.modelProviderId).toBe("test-cli");
+    expect(hookContext?.modelId).toBe("test-model");
+    expect(hookContext?.messageProvider).toBe("acp");
+    expect(hookContext?.trigger).toBe("user");
+    expect(hookContext?.channelId).toBe("telegram");
   });
 
-  it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
+  it.each([false, true])(
+    "preserves prompt privacy and order with plugin execution %s",
+    async (pluginExecution) => {
+      if (pluginExecution) {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          bundleMcp: false,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
         runBeforePromptBuild: vi.fn(async () => ({
@@ -1710,29 +2432,29 @@ describe("prepareCliRunContext", () => {
 
       // Current inbound metadata is untrusted channel context. It should shape
       // the CLI prompt without contaminating transcript or hook inputs.
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await fixture.prepare({
         sessionKey: "agent:main:test",
         agentId: "main",
         trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
         transcriptPrompt: "latest ask",
         currentInboundContext: {
-          text: "Sender (untrusted metadata):\nsender_id=U123",
+          text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123",
           promptJoiner: " ",
         },
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
         runId: "run-test-context",
-        config: createCliBackendConfig(),
       });
 
+      const logicalPrompt =
+        "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail";
       expect(context.params.prompt).toBe(
-        "Sender (untrusted metadata):\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
+        pluginExecution ? "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask" : logicalPrompt,
       );
+      expect(context.promptContext).toEqual(
+        pluginExecution
+          ? { prependContext: "trusted hook context", appendContext: "trusted hook tail" }
+          : undefined,
+      );
+      expect(context.promptForHooks).toBe(pluginExecution ? logicalPrompt : undefined);
       expect(context.params.transcriptPrompt).toBe("latest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
@@ -1741,33 +2463,23 @@ describe("prepareCliRunContext", () => {
       >;
       const promptBuildParams = beforePromptBuildCalls[0]?.[0] as { prompt?: string } | undefined;
       expect(promptBuildParams?.prompt).toBe("latest ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior room event",
-        timestamp: 1,
-      },
-    });
-    try {
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: makeUserMessage("prior room event", 1),
+      });
       // Room resumes carry compact event text into the CLI prompt but keep the
       // richer room context in OpenClaw history for reseed and audits.
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await prepare({
         sessionKey: "agent:main:test",
         agentId: "main",
         trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
         prompt: "[OpenClaw room event]",
         currentInboundEventKind: "room_event",
         currentInboundContext: {
@@ -1777,10 +2489,6 @@ describe("prepareCliRunContext", () => {
         cliSessionBinding: {
           sessionId: "cli-session",
         },
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-resumable-context",
         config: createCliBackendConfig({
           reseedFromRawTranscriptWhenUncompacted: true,
         }),
@@ -1790,199 +2498,186 @@ describe("prepareCliRunContext", () => {
       expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const hookRunner = {
-        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-        runBeforePromptBuild: vi.fn(async () => ({
-          prependContext: "trusted hook context",
-        })),
-      };
-      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "trusted hook context",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        agentId: "main",
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "foreign reply text",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:slack:dm:U123",
+        sourceChannel: "slack",
+        sourceTool: "sessions_send",
+      },
+      runId: "run-test",
+    });
+
+    expect(context.params.prompt).toMatch(/^\[Inter-session message/);
+    expect(context.params.prompt).toContain("sourceSession=agent:main:slack:dm:U123");
+    expect(context.params.prompt).toContain("isUser=false");
+    expect(context.params.prompt).toContain("trusted hook context");
+    expect(context.params.prompt).toContain("foreign reply text");
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
         trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "foreign reply text",
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:slack:dm:U123",
           sourceChannel: "slack",
           sourceTool: "sessions_send",
         },
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test",
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.params.prompt).toMatch(/^\[Inter-session message/);
-      expect(context.params.prompt).toContain("sourceSession=agent:main:slack:dm:U123");
-      expect(context.params.prompt).toContain("isUser=false");
-      expect(context.params.prompt).toContain("trusted hook context");
-      expect(context.params.prompt).toContain("foreign reply text");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      }),
+    );
   });
 
   it("applies agent_turn_prepare-only context on the CLI path", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const hookRunner = {
-        hasHooks: vi.fn((hookName: string) => hookName === "agent_turn_prepare"),
-        runAgentTurnPrepare: vi.fn(async () => ({
-          prependContext: "turn prepend",
-          appendContext: "turn append",
-        })),
-        runBeforePromptBuild: vi.fn(),
-      };
-      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_turn_prepare"),
+      runAgentTurnPrepare: vi.fn(async () => ({
+        prependContext: "turn prepend",
+        appendContext: "turn append",
+      })),
+      runBeforePromptBuild: vi.fn(),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        agentId: "main",
-        trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-turn-prepare",
-        messageChannel: "telegram",
-        currentChannelId: "chat-1",
-        senderId: "user-456",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      runId: "run-test-turn-prepare",
+      messageChannel: "telegram",
+      currentChannelId: "chat-1",
+      senderId: "user-456",
+    });
 
-      expect(context.params.prompt).toBe("turn prepend\n\nlatest ask\n\nturn append");
-      expect(hookRunner.runAgentTurnPrepare).toHaveBeenCalledTimes(1);
-      const agentTurnPrepareCalls = hookRunner.runAgentTurnPrepare.mock.calls as unknown as Array<
-        [unknown, unknown]
-      >;
-      expect(agentTurnPrepareCalls[0]?.[0]).toEqual({
-        prompt: "latest ask",
-        messages: [],
-        queuedInjections: [],
-      });
-      const turnPrepareContext = agentTurnPrepareCalls[0]?.[1] as
-        | {
-            channel?: string;
-            chatId?: string;
-            runId?: string;
-            senderId?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(turnPrepareContext?.runId).toBe("run-test-turn-prepare");
-      expect(turnPrepareContext?.sessionKey).toBe("agent:main:test");
-      expect(turnPrepareContext?.channel).toBe("telegram");
-      expect(turnPrepareContext?.chatId).toBe("chat-1");
-      expect(turnPrepareContext?.senderId).toBe("user-456");
-      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.params.prompt).toBe("turn prepend\n\nlatest ask\n\nturn append");
+    expect(hookRunner.runAgentTurnPrepare).toHaveBeenCalledTimes(1);
+    const agentTurnPrepareCalls = hookRunner.runAgentTurnPrepare.mock.calls as unknown as Array<
+      [unknown, unknown]
+    >;
+    expect(agentTurnPrepareCalls[0]?.[0]).toEqual({
+      prompt: "latest ask",
+      messages: [],
+      queuedInjections: [],
+    });
+    const turnPrepareContext = agentTurnPrepareCalls[0]?.[1] as
+      | {
+          channel?: string;
+          chatId?: string;
+          runId?: string;
+          senderId?: string;
+          sessionKey?: string;
+        }
+      | undefined;
+    expect(turnPrepareContext?.runId).toBe("run-test-turn-prepare");
+    expect(turnPrepareContext?.sessionKey).toBe("agent:main:test");
+    expect(turnPrepareContext?.channel).toBe("telegram");
+    expect(turnPrepareContext?.chatId).toBe("chat-1");
+    expect(turnPrepareContext?.senderId).toBe("user-456");
+    expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
   });
 
   it("applies before_prompt_build hook context for CLI preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const hookRunner = {
-        hasHooks: vi.fn((_hookName: string) => true),
-        runBeforePromptBuild: vi.fn(async () => ({
-          prependContext: "prompt prepend",
-          systemPrompt: "prompt system",
-          prependSystemContext: "prompt prepend system",
-          appendSystemContext: "prompt append system",
-        })),
-      };
-      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const hookRunner = {
+      hasHooks: vi.fn((_hookName: string) => true),
+      runBeforePromptBuild: vi.fn<HookRunner["runBeforePromptBuild"]>(async () => ({
+        prependContext: "prompt prepend",
+        systemPrompt: "prompt system",
+        prependSystemContext: "prompt prepend system",
+        appendSystemContext: "prompt append system",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-prompt-build",
-        messageChannel: "discord",
-        currentChannelId: "channel:room-1",
-        senderId: "user-789",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({
+      messageChannel: "discord",
+      currentChannelId: "channel:room-1",
+      senderId: "user-789",
+    });
 
-      expect(context.params.prompt).toBe("prompt prepend\n\nlatest ask");
-      expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("prompt prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
-      );
-      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
-      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
-        [unknown, unknown]
-      >;
-      const promptContext = beforePromptBuildCalls[0]?.[1] as
-        | { channel?: string; chatId?: string; senderId?: string }
-        | undefined;
-      expect(promptContext?.channel).toBe("discord");
-      expect(promptContext?.chatId).toBe("room-1");
-      expect(promptContext?.senderId).toBe("user-789");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.params.prompt).toBe("prompt prepend\n\nlatest ask");
+    expect(context.systemPrompt).toBe(
+      `${wrappedPluginSystemContext("prompt prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+    );
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    const promptContext = hookRunner.runBeforePromptBuild.mock.calls[0]?.[1];
+    expect(promptContext?.channel).toBe("discord");
+    expect(promptContext?.chatId).toBe("room-1");
+    expect(promptContext?.senderId).toBe("user-789");
+    expect(promptContext?.inputProvenance).toBeUndefined();
+  });
+
+  it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runAuthorizedPromptBuild: vi.fn(async () => ({
+        prependContext: "authorized memory context",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("run-test"),
+      facts: {
+        runId: "run-test",
+        agentId: "main",
+        ingress: { kind: "system", boundary: "test", state: "present" },
+      },
+    });
+
+    const context = await fixture
+      .prepare({
+        toolAuthorityFingerprint: "turn-authority",
+        preparedRunAdmission,
+      })
+      .finally(preparedRunAdmission.close);
+
+    expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
+    expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "latest ask" }),
+      expect.any(Object),
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: [],
+        assertHostActive: expect.any(Function),
+      },
+    );
   });
 
   it("preserves the base prompt when prompt-build hooks fail", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const hookRunner = {
-        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-        runBeforePromptBuild: vi.fn(async () => {
-          throw new Error("hook exploded");
-        }),
-      };
-      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => {
+        throw new Error("hook exploded");
+      }),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-hook-failure",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({});
 
-      expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toContain(
-        "You are a personal assistant running inside OpenClaw.",
-      );
-      expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
-      expect(context.systemPrompt).not.toContain("hook exploded");
-      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.params.prompt).toBe("latest ask");
+    expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
+    expect(context.systemPrompt).not.toContain("hook exploded");
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
   it("does not allocate a non-legacy context engine before fallible CLI preparation finishes", async () => {
-    const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-prepare-late-engine-${Date.now().toString(36)}`;
     const dispose = vi.fn(async () => {});
     const factory = vi.fn((): ContextEngine => {
@@ -2001,89 +2696,140 @@ describe("prepareCliRunContext", () => {
       }),
     });
 
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-prepare-failure",
-          config: {
-            ...createCliBackendConfig(),
-            plugins: { slots: { contextEngine: engineId } },
-          },
-        }),
-      ).rejects.toThrow("reference path lookup failed");
+    await expect(
+      fixture.prepare({
+        config: {
+          ...createCliBackendConfig(),
+          plugins: { slots: { contextEngine: engineId } },
+        },
+      }),
+    ).rejects.toThrow("reference path lookup failed");
 
-      expect(factory).not.toHaveBeenCalled();
-      expect(dispose).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(factory).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("cleans up prepared CLI backend when context-engine resolution fails", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it.each(["cancelled", "retired", "lookup-failed"] as const)(
+    "rechecks CLI ownership after a delayed media lookup is %s",
+    async (scenario) => {
+      const lookupStarted = createDeferred();
+      const lookup = createDeferred<string | undefined>();
+      const abort = new AbortController();
+      let current = true;
+      const engineId = `cli-media-lookup-${scenario}`;
+      const factory = vi.fn((): ContextEngine => ({
+        info: { id: engineId, name: "CLI media lookup" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+      }));
+      registerTestContextEngine(engineId, factory);
+      const config = createCliBackendConfig({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: [
+            {
+              name: "image_generate",
+              label: "image_generate",
+              description: "image_generate",
+              parameters: Type.Object({}),
+              execute: vi.fn(),
+            },
+          ],
+        })),
+      });
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockImplementation(() => {
+        lookupStarted.resolve();
+        return lookup.promise;
+      });
+      const preparation = fixture.prepare({
+        config: { ...config, plugins: { slots: { contextEngine: engineId } } },
+        sessionKey: "agent:main:test",
+        abortSignal: abort.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("CLI owner retired");
+          }
+        },
+      });
+      const outcome = preparation.then(
+        (context) => ({ prompt: context.params.prompt }),
+        (error: unknown) => ({ error: String(error) }),
+      );
+      await lookupStarted.promise;
+      expect(factory).not.toHaveBeenCalled();
+      if (scenario === "cancelled") {
+        abort.abort(new Error("CLI lookup cancelled"));
+      } else if (scenario === "retired") {
+        current = false;
+      }
+      if (scenario === "lookup-failed") {
+        lookup.reject(new Error("optional media lookup failed"));
+        expect(await outcome).toEqual({ prompt: "latest ask" });
+        expect(factory).toHaveBeenCalledOnce();
+      } else {
+        lookup.resolve("active image task");
+        expect(await outcome).toEqual({
+          error: `Error: ${scenario === "cancelled" ? "CLI lookup cancelled" : "CLI owner retired"}`,
+        });
+        expect(factory).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("cleans up prepared CLI backend when context-engine host validation fails", async () => {
+    installTestPluginRegistry();
+    const engineId = `cli-cleanup-engine-${Date.now().toString(36)}`;
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
-    registerContextEngineForOwner(
-      "legacy",
-      () => {
-        throw new Error("context engine failed");
-      },
-      "core",
-      { allowSameOwnerRefresh: true },
-    );
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test-plugin",
-          bundleMcp: false,
-          prepareExecution,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            systemPromptArg: "--system-prompt",
-            systemPromptWhen: "first",
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
+    registerTestContextEngine(engineId, (): ContextEngine => ({
+      info: {
+        id: engineId,
+        name: "CLI cleanup engine",
+        hostRequirements: {
+          "agent-run": {
+            requiredCapabilities: ["assemble-before-prompt"],
+            unsupportedMessage: "context engine failed",
           },
         },
-      ],
+      },
+      ingest: vi.fn(async () => ({ ingested: true })),
+      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      prepareExecution,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
     });
 
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-context-engine-resolution-failure",
-          config: createCliBackendConfig(),
-        }),
-      ).rejects.toThrow("context engine failed");
+    await expect(
+      fixture.prepare({
+        config: { plugins: { slots: { contextEngine: engineId } } },
+      }),
+    ).rejects.toThrow("context engine failed");
 
-      expect(prepareExecution).toHaveBeenCalledOnce();
-      expect(cleanup).toHaveBeenCalledOnce();
-    } finally {
-      registerLegacyContextEngine();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
-    const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
     registerTestContextEngine(engineId, (): ContextEngine => {
       return {
@@ -2103,32 +2849,20 @@ describe("prepareCliRunContext", () => {
       };
     });
 
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-context-engine-host-compat",
-          config: {
-            ...createCliBackendConfig(),
-            plugins: { slots: { contextEngine: engineId } },
-          },
-        }),
-      ).rejects.toThrow(
-        `Context engine "${engineId}" cannot run operation "agent-run" on CLI backend "test-cli".`,
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await expect(
+      fixture.prepare({
+        config: {
+          ...createCliBackendConfig(),
+          plugins: { slots: { contextEngine: engineId } },
+        },
+      }),
+    ).rejects.toThrow(
+      `Context engine "${engineId}" cannot run operation "agent-run" on CLI backend "test-cli".`,
+    );
   });
 
   it("uses runtime config when resolving the CLI context engine", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const engineId = `cli-runtime-config-engine-${Date.now().toString(36)}`;
     const runtimeAgentDir = path.join(dir, "runtime-agent");
     const runtimeConfig = {
@@ -2147,96 +2881,67 @@ describe("prepareCliRunContext", () => {
     });
     registerTestContextEngine(engineId, factory);
     getRuntimeConfigMock.mockReturnValue(runtimeConfig);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "test-cli",
-          pluginId: "test-plugin",
-          bundleMcp: false,
-          config: {
-            command: "test-cli",
-            args: ["--print"],
-            systemPromptArg: "--system-prompt",
-            systemPromptWhen: "first",
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-runtime-config-context-engine",
-      });
+    const context = await fixture.prepare({
+      config: undefined,
+    });
 
-      expect(context.contextEngine?.info.id).toBe(engineId);
-      expect(context.contextEngineConfig).toBe(runtimeConfig);
-      expect(context.params.config).toBe(runtimeConfig);
-      expect(factory).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDir: runtimeAgentDir,
-          config: runtimeConfig,
-          workspaceDir: dir,
-        }),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.contextEngine?.info.id).toBe(engineId);
+    expect(context.contextEngineConfig).toBe(runtimeConfig);
+    expect(context.params.config).toBe(runtimeConfig);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: runtimeAgentDir,
+        config: runtimeConfig,
+        workspaceDir: dir,
+      }),
+    );
   });
 
   it("uses explicit static prompt text for CLI session reuse hashing", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-static-prompt",
-        extraSystemPrompt: "## Inbound Context\nchannel=telegram",
-        extraSystemPromptStatic: "",
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          cwdHash: hashCliSessionText(dir),
-        },
-        config: createCliBackendConfig(),
-      });
+    const { dir } = fixture.session;
+    const context = await fixture.prepare({
+      extraSystemPrompt: "## Inbound Context\nchannel=telegram",
+      extraSystemPromptStatic: "",
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
 
-      expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
-      expect(context.extraSystemPromptHash).toBeUndefined();
-      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
+    expect(context.extraSystemPromptHash).toBeUndefined();
+    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
 
-  it("invalidates CLI session reuse when explicit message-target policy changes", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-message-policy",
+  it.each([false, true])(
+    "invalidates CLI session reuse when explicit message-target policy changes, stable=%s",
+    async (stable) => {
+      const context = await fixture.prepare({
         sourceReplyDeliveryMode: "message_tool_only",
         requireExplicitMessageTarget: true,
+        ...(stable
+          ? {
+              cliSessionBindingFacts: {
+                sourceReplyDeliveryMode: "message_tool_only" as const,
+                requireExplicitMessageTarget: true,
+              },
+            }
+          : {}),
         cliSessionBinding: {
           sessionId: "cli-session",
           messageToolPolicyHash: hashCliSessionText(
@@ -2246,7 +2951,6 @@ describe("prepareCliRunContext", () => {
             }),
           ),
         },
-        config: createCliBackendConfig(),
       });
 
       expect(context.messageToolPolicyHash).toBeDefined();
@@ -2254,70 +2958,106 @@ describe("prepareCliRunContext", () => {
         mode: "invalidate",
         invalidatedReason: "message-policy",
       });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
+
+  it.each([
+    { trigger: "cron", sessionKey: "agent:main:telegram:group:chat" },
+    { trigger: "heartbeat", sessionKey: "agent:main:main" },
+    { trigger: "heartbeat", sessionKey: "agent:main:subagent:child" },
+  ] as const)(
+    "reuses normal/$trigger/normal CLI bindings for $sessionKey",
+    async ({ trigger, sessionKey }) => {
+      const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
+      const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
+      const binding = {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        messageToolPolicyHash: first.messageToolPolicyHash,
+        promptToolNamesHash: first.promptToolNamesHash,
+        cwdHash: first.cwdHash,
+        mcpConfigHash: first.preparedBackend.mcpConfigHash,
+        mcpResumeHash: first.preparedBackend.mcpResumeHash,
+      };
+      const background = await fixture.prepare({
+        sessionKey,
+        cliSessionBindingFacts,
+        trigger,
+        requireExplicitMessageTarget: true,
+        cliSessionBinding: binding,
+      });
+      const normal = await fixture.prepare({
+        sessionKey,
+        cliSessionBindingFacts,
+        cliSessionBinding: binding,
+      });
+      expect(background.params.requireExplicitMessageTarget).toBe(true);
+      expect(background.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+      expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      if (!sessionKey.includes(":subagent:")) {
+        expect(first.messageToolPolicyHash).toBeUndefined();
+      }
+    },
+  );
 
   it("requires explicit message targets by default for CLI subagents", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:subagent:child",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-subagent-message-policy",
-        sourceReplyDeliveryMode: "message_tool_only",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:subagent:child",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
 
-      expect(context.params.requireExplicitMessageTarget).toBe(true);
-      expect(context.messageToolPolicyHash).toBe(
-        hashCliSessionText(
-          JSON.stringify({
-            sourceReplyDeliveryMode: "message_tool_only",
-            requireExplicitMessageTarget: true,
-          }),
-        ),
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.params.requireExplicitMessageTarget).toBe(true);
+    expect(context.messageToolPolicyHash).toBe(
+      hashCliSessionText(
+        JSON.stringify({
+          sourceReplyDeliveryMode: "message_tool_only",
+          requireExplicitMessageTarget: true,
+        }),
+      ),
+    );
   });
 
-  it("uses cwd for CLI system prompt workspace guidance", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it.each([false, true])("uses admitted CLI repository skills (managed=%s)", async (managed) => {
+    const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
+    const canonicalDir = path.join(dir, "canonical", "packages", "app");
+    const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+    );
     try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
+      const context = await fixture.prepare({
         cwd: taskDir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-cwd-prompt",
-        config: createCliBackendConfig(),
+        ...(managed
+          ? {
+              sessionEntry: {
+                sessionId: fixture.session.sessionTarget.sessionId,
+                updatedAt: Date.now(),
+                worktree: {
+                  id: "task",
+                  branch: "task",
+                  repoRoot: path.join(dir, "canonical"),
+                  canonicalWorkspaceDir: canonicalDir,
+                },
+              },
+            }
+          : {}),
       });
 
       expect(context.cwd).toBe(taskDir);
       expect(context.systemPrompt).toContain(`Working directory: ${taskDir}`);
       expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
+      expect(context.systemPrompt).toContain("<name>task-proof</name>");
+      expect(context.systemPrompt).toContain(path.join(skillDir, "SKILL.md"));
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("passes Telegram channel context into CLI system prompts without core rich guidance", async () => {
-    const { dir, sessionFile } = createSessionFile();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -2333,132 +3073,147 @@ describe("prepareCliRunContext", () => {
       ]),
     );
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-telegram-channel",
-        messageChannel: "telegram",
-        config: createCliBackendConfig(),
+    const context = await fixture.prepare({
+      messageChannel: "telegram",
+    });
+
+    expect(context.systemPrompt).toContain("channel=telegram");
+    expect(context.systemPrompt).not.toContain("Telegram rich ON");
+    expect(context.systemPrompt).not.toContain("Telegram rich OFF");
+  });
+
+  it.each(["group", "channel"] as const)(
+    "uses explicit %s chat type for bundled message-tool etiquette with an opaque session key",
+    async (chatType) => {
+      const context = await fixture.prepare({
+        config: createBundledMessageToolConfig(),
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+        sourceReplyDeliveryMode: "message_tool_only",
       });
 
-      expect(context.systemPrompt).toContain("channel=telegram");
-      expect(context.systemPrompt).not.toContain("Telegram rich ON");
-      expect(context.systemPrompt).not.toContain("Telegram rich OFF");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+    },
+  );
+
+  it.each([undefined, "user", "cron", "heartbeat"] as const)(
+    "keeps heartbeat scheduler instructions out of CLI system prompts: %s",
+    async (trigger) => {
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { heartbeat: { every: "30m" } } } },
+        sessionKey: "agent:main:main",
+        trigger,
+      });
+
+      expect(context.systemPrompt).not.toContain("## Heartbeats");
+      expect(context.systemPrompt).not.toContain("Heartbeat poll;");
+    },
+  );
+
+  it.each([
+    {
+      name: "prefers current-turn metadata",
+      chatType: "group" as const,
+      sessionEntryChatType: "direct" as const,
+      expectedChatType: "group" as const,
+    },
+    {
+      name: "falls back to stored session metadata",
+      chatType: undefined,
+      sessionEntryChatType: "channel" as const,
+      expectedChatType: "channel" as const,
+    },
+  ])("$name for bootstrap and prompt preparation", async (testCase) => {
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun });
+
+    const context = await fixture.prepare({
+      config: createBundledMessageToolConfig(),
+      sessionKey: "agent:main:opaque:binding",
+      chatType: testCase.chatType,
+      sessionEntry: {
+        sessionId: "stored-session",
+        updatedAt: 0,
+        chatType: testCase.sessionEntryChatType,
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ chatType: testCase.expectedChatType }),
+    );
+    expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
   });
 
   it("ignores volatile prompt text when static prompt text matches", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-volatile-prompt",
-        extraSystemPrompt: `## Inbound Context\nchannel=heartbeat\n\n${staticPrompt}`,
-        extraSystemPromptStatic: staticPrompt,
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          extraSystemPromptHash: hashCliSessionText(staticPrompt),
-          cwdHash: hashCliSessionText(dir),
-        },
-        config: createCliBackendConfig(),
-      });
+    const { dir } = fixture.session;
+    const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
+    const context = await fixture.prepare({
+      extraSystemPrompt: `## Inbound Context\nchannel=heartbeat\n\n${staticPrompt}`,
+      extraSystemPromptStatic: staticPrompt,
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: hashCliSessionText(staticPrompt),
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
 
-      expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
-      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
 
   it("soft-resumes content drift and surfaces a per-turn drift note", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        currentInboundContext: {
-          text: "Conversation info (untrusted metadata):\nchannel=telegram",
-        },
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-soft-resume-drift-note",
-        extraSystemPrompt: "new stable prompt",
-        extraSystemPromptStatic: "new stable prompt",
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
-          cwdHash: hashCliSessionText(dir),
-        },
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse-with-drift",
+    const { dir } = fixture.session;
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      currentInboundContext: {
+        text: "Conversation info: ⟦openclaw:ctx⟧\nchannel=telegram",
+      },
+      extraSystemPrompt: "new stable prompt",
+      extraSystemPromptStatic: "new stable prompt",
+      cliSessionBinding: {
         sessionId: "cli-session",
-        drift: { reasons: ["system-prompt"] },
-      });
-      expect(context.openClawHistoryPrompt).toBeUndefined();
-      expect(context.params.prompt).toContain(
-        "OpenClaw resumed this CLI session after prompt content changed.",
-      );
-      expect(context.params.prompt).toContain("changed=system-prompt");
-      expect(context.params.prompt).toContain("latest ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+        extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
+
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(context.openClawHistoryPrompt).toBeUndefined();
+    expect(context.params.prompt).toContain(
+      "OpenClaw resumed this CLI session after prompt content changed.",
+    );
+    expect(context.params.prompt).toContain("changed=system-prompt");
+    expect(context.params.prompt).toContain("latest ask");
   });
 
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-soft-resume-unsupported-backend",
-        extraSystemPrompt: "new stable prompt",
-        extraSystemPromptStatic: "new stable prompt",
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
-          cwdHash: hashCliSessionText(dir),
-        },
-        config: createCliBackendConfig({ systemPromptWhen: "never" }),
-      });
+    const { dir } = fixture.session;
+    const context = await fixture.prepare({
+      extraSystemPrompt: "new stable prompt",
+      extraSystemPromptStatic: "new stable prompt",
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+        cwdHash: hashCliSessionText(dir),
+      },
+      config: createCliBackendConfig({ systemPromptWhen: "never" }),
+    });
 
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "system-prompt",
-      });
-      expect(context.params.prompt).not.toContain(
-        "OpenClaw resumed this CLI session after prompt content changed.",
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.reusableCliSession).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "system-prompt",
+    });
+    expect(context.params.prompt).not.toContain(
+      "OpenClaw resumed this CLI session after prompt content changed.",
+    );
   });
 
   it.each([
@@ -2477,197 +3232,13 @@ describe("prepareCliRunContext", () => {
   ] as const)(
     "reuses CLI session bindings across new inbound messages with stable binding facts for $name",
     async ({ stableMode, staticPrompt, expectedStrongPrompt }) => {
-      const { dir, sessionFile } = createSessionFile();
-      try {
-        const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-          port: 31783,
-          ownerToken: "loopback-owner-token",
-          nonOwnerToken: "loopback-non-owner-token",
-        }));
-        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-          agentId: "main",
-          tools: [
-            {
-              name: "message",
-              label: "Message",
-              description: "Send a message",
-              parameters: { type: "object", properties: {} },
-              execute: vi.fn(),
-            },
-          ],
-        }));
-        setCliRunnerPrepareTestDeps({
-          getActiveMcpLoopbackRuntime,
-          resolveMcpLoopbackScopedTools,
-        });
-        const cliSessionBindingFacts = {
-          extraSystemPromptStatic: staticPrompt,
-          sourceReplyDeliveryMode: stableMode,
-        };
-        const first = await prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "first ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-stable-binding-facts-a",
-          extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
-          sourceReplyDeliveryMode: "message_tool_only",
-          currentMessageId: "msg-1",
-          cliSessionBindingFacts,
-          config: createCliBackendConfig({ bundleMcp: true }),
-        });
-        const second = await prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "second ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-stable-binding-facts-b",
-          extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
-          sourceReplyDeliveryMode: stableMode,
-          currentMessageId: "msg-2",
-          cliSessionBindingFacts,
-          cliSessionBinding: {
-            sessionId: "cli-session",
-            extraSystemPromptHash: first.extraSystemPromptHash,
-            messageToolPolicyHash: first.messageToolPolicyHash,
-            promptToolNamesHash: first.promptToolNamesHash,
-            cwdHash: hashCliSessionText(dir),
-          },
-          config: createCliBackendConfig({ bundleMcp: true }),
-        });
-
-        expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
-        expect(first.messageToolPolicyHash).toBeDefined();
-        expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
-        expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
-        expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-        if (expectedStrongPrompt) {
-          expect(first.systemPrompt).toContain(
-            "Current source visible reply MUST use `message(action=send)`",
-          );
-        } else {
-          expect(first.systemPrompt).toContain(
-            "Current-session final text normally routes to source",
-          );
-          expect(first.systemPrompt).toContain(
-            "If turn says final private, visible output uses `message(action=send)`",
-          );
-        }
-        expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const baseGroupCtx = {
-        ChatType: "group",
-        Provider: "telegram",
-        BotUsername: "SirPinchALotBot",
-      } as const;
-      const mentionedStaticPrompt = [
-        buildGroupChatContext({
-          sessionCtx: {
-            ...baseGroupCtx,
-            ExplicitlyMentionedBot: true,
-          },
-          sourceReplyDeliveryMode: "automatic",
-          silentReplyPolicy: "allow",
-          silentToken: "NO_REPLY",
-        }),
-        buildGroupIntro({
-          defaultActivation: "mention",
-        }),
-      ].join("\n\n");
-      const unmentionedStaticPrompt = [
-        buildGroupChatContext({
-          sessionCtx: {
-            ...baseGroupCtx,
-            ExplicitlyMentionedBot: false,
-          },
-          sourceReplyDeliveryMode: "automatic",
-          silentReplyPolicy: "allow",
-          silentToken: "NO_REPLY",
-        }),
-        buildGroupIntro({
-          defaultActivation: "mention",
-        }),
-      ].join("\n\n");
-      expect(unmentionedStaticPrompt).toBe(mentionedStaticPrompt);
-
-      const first = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:group:chat123",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "first ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-mention-binding-a",
-        extraSystemPrompt: [
-          "The incoming message explicitly mentions your channel identity @SirPinchALotBot.",
-          mentionedStaticPrompt,
-        ].join("\n\n"),
-        sourceReplyDeliveryMode: "automatic",
-        cliSessionBindingFacts: {
-          extraSystemPromptStatic: mentionedStaticPrompt,
-          sourceReplyDeliveryMode: "automatic",
-        },
-        config: createCliBackendConfig(),
-      });
-      const second = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:group:chat123",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "second ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-mention-binding-b",
-        extraSystemPrompt: unmentionedStaticPrompt,
-        sourceReplyDeliveryMode: "automatic",
-        cliSessionBindingFacts: {
-          extraSystemPromptStatic: unmentionedStaticPrompt,
-          sourceReplyDeliveryMode: "automatic",
-        },
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          extraSystemPromptHash: first.extraSystemPromptHash,
-          messageToolPolicyHash: first.messageToolPolicyHash,
-          cwdHash: hashCliSessionText(dir),
-        },
-        config: createCliBackendConfig(),
-      });
-
-      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
-      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
+      const { dir } = fixture.session;
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }));
-      const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
         agentId: "main",
         tools: [
           {
@@ -2677,76 +3248,34 @@ describe("prepareCliRunContext", () => {
             parameters: { type: "object", properties: {} },
             execute: vi.fn(),
           },
-          ...(scope.senderIsOwner === false
-            ? []
-            : [
-                {
-                  name: "gateway",
-                  label: "Gateway",
-                  description: "Manage the gateway",
-                  parameters: { type: "object", properties: {} },
-                  execute: vi.fn(),
-                },
-              ]),
         ],
       }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
         resolveMcpLoopbackScopedTools,
       });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "native-cli",
-            pluginId: "native-plugin",
-            bundleMcp: true,
-            bundleMcpMode: "claude-config-file",
-            config: {
-              command: "native-cli",
-              args: ["--print"],
-              systemPromptArg: "--system-prompt",
-              systemPromptWhen: "first",
-              output: "text",
-              input: "arg",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
       const cliSessionBindingFacts = {
-        extraSystemPromptStatic: "group:telegram:group:message_tool_only",
-        sourceReplyDeliveryMode: "message_tool_only" as const,
+        extraSystemPromptStatic: staticPrompt,
+        sourceReplyDeliveryMode: stableMode,
       };
-      const first = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:group:chat123",
-        sessionFile,
-        workspaceDir: dir,
+      const config = createCliBackendConfig({ bundleMcp: true });
+      const first = await fixture.prepare({
+        config,
+        sessionKey: "main",
         prompt: "first ask",
-        provider: "native-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-owner-tool-scope-a",
-        extraSystemPrompt: "volatile owner turn",
-        currentMessageId: "owner-message",
-        senderIsOwner: true,
+        requireExplicitMessageTarget: true,
+        extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentMessageId: "msg-1",
         cliSessionBindingFacts,
-        config: createCliBackendConfig({ bundleMcp: true }),
       });
-      const second = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:group:chat123",
-        sessionFile,
-        workspaceDir: dir,
+      const second = await fixture.prepare({
+        config,
+        sessionKey: "main",
         prompt: "second ask",
-        provider: "native-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-owner-tool-scope-b",
-        extraSystemPrompt: "volatile non-owner turn",
-        currentMessageId: "non-owner-message",
-        senderIsOwner: false,
+        extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
+        sourceReplyDeliveryMode: stableMode,
+        currentMessageId: "msg-2",
         cliSessionBindingFacts,
         cliSessionBinding: {
           sessionId: "cli-session",
@@ -2757,60 +3286,234 @@ describe("prepareCliRunContext", () => {
           mcpConfigHash: first.preparedBackend.mcpConfigHash,
           mcpResumeHash: first.preparedBackend.mcpResumeHash,
         },
-        config: createCliBackendConfig({ bundleMcp: true }),
       });
 
-      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(2);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          senderIsOwner: true,
-          currentMessageId: undefined,
-          sourceReplyDeliveryMode: "message_tool_only",
+          context: expect.objectContaining({ requireExplicitMessageTarget: true }),
         }),
       );
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          senderIsOwner: false,
-          currentMessageId: undefined,
-          sourceReplyDeliveryMode: "message_tool_only",
+          context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
         }),
       );
-      expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
-      expect(second.reusableCliSession).toEqual({
-        mode: "reuse-with-drift",
-        sessionId: "cli-session",
-        drift: { reasons: ["prompt-tools"] },
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+      expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+      expect(first.messageToolPolicyHash).toBeDefined();
+      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+      if (expectedStrongPrompt) {
+        expect(first.systemPrompt).toContain(
+          "Current source visible reply MUST use `message(action=send)`",
+        );
+      } else {
+        expect(first.systemPrompt).toContain(
+          "Current-session final text normally routes to source",
+        );
+        expect(first.systemPrompt).toContain(
+          "If turn says final private, visible output uses `message(action=send)`",
+        );
+      }
+      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    },
+  );
 
-  it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior no-compaction ask",
-        timestamp: 1,
+  it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
+    const { dir } = fixture.session;
+    const baseGroupCtx = {
+      ChatType: "group",
+      Provider: "telegram",
+      BotUsername: "SirPinchALotBot",
+    } as const;
+    const mentionedStaticPrompt = [
+      buildGroupChatContext({
+        sessionCtx: {
+          ...baseGroupCtx,
+          ExplicitlyMentionedBot: true,
+        },
+        sourceReplyDeliveryMode: "automatic",
+        silentReplyPolicy: "allow",
+        silentToken: "NO_REPLY",
+      }),
+      buildGroupIntro({
+        defaultActivation: "mention",
+      }),
+    ].join("\n\n");
+    const unmentionedStaticPrompt = [
+      buildGroupChatContext({
+        sessionCtx: {
+          ...baseGroupCtx,
+          ExplicitlyMentionedBot: false,
+        },
+        sourceReplyDeliveryMode: "automatic",
+        silentReplyPolicy: "allow",
+        silentToken: "NO_REPLY",
+      }),
+      buildGroupIntro({
+        defaultActivation: "mention",
+      }),
+    ].join("\n\n");
+    expect(unmentionedStaticPrompt).toBe(mentionedStaticPrompt);
+
+    const first = await fixture.prepare({
+      sessionKey: "agent:main:telegram:group:chat123",
+      prompt: "first ask",
+      extraSystemPrompt: [
+        "The incoming message explicitly mentions your channel identity @SirPinchALotBot.",
+        mentionedStaticPrompt,
+      ].join("\n\n"),
+      sourceReplyDeliveryMode: "automatic",
+      cliSessionBindingFacts: {
+        extraSystemPromptStatic: mentionedStaticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+      },
+    });
+    const second = await fixture.prepare({
+      sessionKey: "agent:main:telegram:group:chat123",
+      prompt: "second ask",
+      extraSystemPrompt: unmentionedStaticPrompt,
+      sourceReplyDeliveryMode: "automatic",
+      cliSessionBindingFacts: {
+        extraSystemPromptStatic: unmentionedStaticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        messageToolPolicyHash: first.messageToolPolicyHash,
+        cwdHash: hashCliSessionText(dir),
       },
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-raw-reseed-opt-in",
+    expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+    expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+  });
+
+  it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
+    const { dir } = fixture.session;
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "Send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        ...(scope.context.senderIsOwner === false
+          ? []
+          : [
+              {
+                name: "gateway",
+                label: "Gateway",
+                description: "Manage the gateway",
+                parameters: { type: "object", properties: {} },
+                execute: vi.fn(),
+              },
+            ]),
+      ],
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      resolveMcpLoopbackScopedTools,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    const cliSessionBindingFacts = {
+      extraSystemPromptStatic: "group:telegram:group:message_tool_only",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+    };
+    const first = await fixture.prepare({
+      sessionKey: "agent:main:telegram:group:chat123",
+      prompt: "first ask",
+      provider: "native-cli",
+      extraSystemPrompt: "volatile owner turn",
+      currentMessageId: "owner-message",
+      senderIsOwner: true,
+      cliSessionBindingFacts,
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+    const second = await fixture.prepare({
+      sessionKey: "agent:main:telegram:group:chat123",
+      prompt: "second ask",
+      provider: "native-cli",
+      extraSystemPrompt: "volatile non-owner turn",
+      currentMessageId: "non-owner-message",
+      senderIsOwner: false,
+      cliSessionBindingFacts,
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        messageToolPolicyHash: first.messageToolPolicyHash,
+        promptToolNamesHash: first.promptToolNamesHash,
+        cwdHash: hashCliSessionText(dir),
+        mcpConfigHash: first.preparedBackend.mcpConfigHash,
+        mcpResumeHash: first.preparedBackend.mcpResumeHash,
+      },
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          senderIsOwner: true,
+          currentMessageId: "owner-message",
+          sourceReplyDeliveryMode: undefined,
+        }),
+      }),
+    );
+    expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          senderIsOwner: false,
+          currentMessageId: "non-owner-message",
+          sourceReplyDeliveryMode: undefined,
+        }),
+      }),
+    );
+    expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
+    expect(second.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["prompt-tools"] },
+    });
+  });
+
+  it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: makeUserMessage("prior no-compaction ask", 1),
+      });
+
+      const context = await prepare({
         extraSystemPrompt: "changed stable prompt",
         extraSystemPromptStatic: "changed stable prompt",
         cliSessionBinding: {
@@ -2829,34 +3532,20 @@ describe("prepareCliRunContext", () => {
       });
       expect(context.openClawHistoryPrompt).toContain("prior no-compaction ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("prepares opted-in raw-tail history for session-expired retry without disabling native resume", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior resumable ask",
-        timestamp: 1,
-      },
-    });
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: makeUserMessage("prior resumable ask", 1),
+      });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-session-expired-reseed-opt-in",
+      const context = await prepare({
         cliSessionBinding: {
           sessionId: "cli-session",
           cwdHash: hashCliSessionText(dir),
@@ -2869,18 +3558,42 @@ describe("prepareCliRunContext", () => {
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.openClawHistoryPrompt).toContain("prior resumable ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
-  it("applies direct-run prepend system context helpers on the CLI path", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-        "active image task",
-      );
-      mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
+  it.each([false, true])(
+    "keeps media progress in current-turn context with plugin execution %s",
+    async (pluginExecution) => {
+      const config = createCliBackendConfig({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: ["image_generate", "video_generate"].map((name) => ({
+            name,
+            label: name,
+            description: name,
+            parameters: Type.Object({}),
+            execute: vi.fn(),
+          })),
+        })),
+      });
+      if (pluginExecution) {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          bundleMcp: true,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      mockBuildActiveVideoGenerationTaskPromptContextForSession.mockResolvedValue(
         "active video task",
       );
       const hookRunner = {
@@ -2892,311 +3605,324 @@ describe("prepareCliRunContext", () => {
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        trigger: "user",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-prepend-helper",
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.systemPrompt).toBe(
-        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}active image task\n\nactive video task\n\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
+      const prepareTurn = () =>
+        fixture.prepare({
+          sessionKey: "agent:main:test",
+          trigger: "user",
+          config,
+          prompt: "latest ask",
+          transcriptPrompt: "latest ask",
+        });
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(
+        "image task queued",
       );
+      const first = await prepareTurn();
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockResolvedValue(
+        "image task running",
+      );
+      const second = await prepareTurn();
+
+      expect(second.systemPrompt).toBe(first.systemPrompt);
+      expect(second.systemPrompt).toBe(
+        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+      );
+      const carrier = [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "## Media Generation Tasks",
+        "image task running",
+        "active video task",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+      expect(second.params.prompt).toBe(
+        pluginExecution ? "latest ask" : `latest ask\n\n${carrier}`,
+      );
+      expect(second.promptContext).toEqual(
+        pluginExecution ? { appendContext: carrier } : undefined,
+      );
+      expect(second.params.transcriptPrompt).toBe("latest ask");
+      expect(second.contextEngineTurnPrompt).toBe("latest ask");
       expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
+        "main",
       );
       expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
+        "main",
       );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("skips bundle MCP preparation when tools are disabled", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }));
-      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-        ensureMcpLoopbackServer,
-        createMcpLoopbackServerConfig,
-      });
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer,
+      createMcpLoopbackServerConfig,
+    });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-disable-tools",
-        config: createCliBackendConfig({ bundleMcp: true }),
-        disableTools: true,
-      });
+    const context = await fixture.prepare({
+      config: createCliBackendConfig({ bundleMcp: true }),
+      disableTools: true,
+    });
 
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
-      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
-      expect(context.preparedBackend.env).toBeUndefined();
-      expect(context.preparedBackend.backend.args).toEqual(["--print"]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+    expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+    expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
+    expect(context.preparedBackend.env).toBeUndefined();
+    expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+  });
+
+  it("binds the exact late prepared admission to the CLI MCP grant", async () => {
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const bindMcpLoopbackClientGrantAdmission = vi.fn(() => true);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      bindMcpLoopbackClientGrantAdmission,
+    });
+    const preparedRunAdmission = createTestPreparedRunAdmission("run-prepared-mcp");
+
+    const context = await fixture.prepare({
+      runId: "run-prepared-mcp",
+      preparedRunAdmission,
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(context.params.admittedRunContext.operationalRunInstance).toBe(
+      preparedRunAdmission.operationalRunInstance,
+    );
+    expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
+      token: "loopback-token",
+      runtimeOwnerToken: "loopback-owner-token",
+      admittedRunContext: context.params.admittedRunContext,
+    });
   });
 
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      registerTestMemoryPromptBuilder(({ availableTools }) =>
-        availableTools.has("memory_search")
-          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
-          : [],
-      );
-      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }));
-      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-      const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-      const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-        agentId: "main",
-        tools: [
-          {
-            name: "memory_search",
-            label: "Memory Search",
-            description: "Search memory",
-            parameters: { type: "object", properties: {} },
-            execute: vi.fn(),
-          },
-        ],
-      }));
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-        ensureMcpLoopbackServer,
-        createMcpLoopbackServerConfig,
-        activateMcpLoopbackClientGrantCapture,
-        deactivateMcpLoopbackClientGrantCapture,
-        mintMcpLoopbackClientGrant,
-        revokeMcpLoopbackClientGrant,
-        resolveMcpLoopbackScopedTools,
-      });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "native-cli",
-            pluginId: "native-plugin",
-            bundleMcp: true,
-            bundleMcpMode: "claude-config-file",
-            config: {
-              command: "native-cli",
-              args: ["--print"],
-              systemPromptArg: "--system-prompt",
-              systemPromptWhen: "first",
-              output: "text",
-              input: "arg",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-      const baselineContext = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "main",
-        agentId: "worker",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "native-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-loopback-prompt-tools-baseline",
-        config: createCliBackendConfig({ bundleMcp: true }),
-      });
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "main",
-        agentId: "worker",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "native-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-loopback-prompt-tools",
-        config: createCliBackendConfig({ bundleMcp: true }),
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          promptToolNamesHash: "old-tool-surface",
-          ...(baselineContext.preparedBackend.mcpConfigHash
-            ? { mcpConfigHash: baselineContext.preparedBackend.mcpConfigHash }
-            : {}),
-          ...(baselineContext.preparedBackend.mcpResumeHash
-            ? { mcpResumeHash: baselineContext.preparedBackend.mcpResumeHash }
-            : {}),
+    const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
+      target: "personal",
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+      bind: vi.fn(),
+      invoke: vi.fn(),
+    };
+    registerTestMemoryPromptBuilder(({ availableTools }) =>
+      availableTools.has("memory_search")
+        ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+        : [],
+    );
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+    const activateMcpLoopbackClientGrantCapture = vi.fn(() => ({
+      captureNativeToolAuthority: vi.fn((_names: readonly string[] | null) => true),
+    }));
+    const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "memory_search",
+          label: "Memory Search",
+          description: "Search memory",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
         },
-      });
-
-      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
-        cfg: expect.any(Object),
-        sessionKey: "agent:worker:main",
-        runtimePolicySessionKey: undefined,
-        agentId: "worker",
-        messageProvider: undefined,
-        clientCaps: undefined,
-        currentChannelId: undefined,
-        currentThreadTs: undefined,
-        currentMessageId: undefined,
-        currentInboundAudio: undefined,
-        accountId: undefined,
-        inboundEventKind: undefined,
-        sourceReplyDeliveryMode: undefined,
-        taskSuggestionDeliveryMode: undefined,
-        requireExplicitMessageTarget: false,
-        senderIsOwner: false,
-        nodeExecAllowed: true,
-        modelProvider: "native-cli",
-        modelId: "test-model",
-        execSession: undefined,
-        execOverrides: undefined,
-        bashElevated: undefined,
-        trigger: undefined,
-        approvalReviewerDeviceId: undefined,
-        channelContext: undefined,
-        senderName: undefined,
-        senderUsername: undefined,
-        senderE164: undefined,
-        groupId: undefined,
-        groupChannel: undefined,
-        groupSpace: undefined,
-        spawnedBy: undefined,
-      });
-      expect(context.systemPrompt).toContain("## Memory Recall");
-      expect(context.systemPrompt).toContain("tools=memory_search");
-      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
-        "memory_search",
-      ]);
-      expect(context.promptToolNamesHash).toBe(
-        hashCliSessionText(JSON.stringify(["memory_search"])),
-      );
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse-with-drift",
+      ],
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer,
+      createMcpLoopbackServerConfig,
+      activateMcpLoopbackClientGrantCapture,
+      deactivateMcpLoopbackClientGrantCapture,
+      mintMcpLoopbackClientGrant,
+      revokeMcpLoopbackClientGrant,
+      resolveMcpLoopbackScopedTools,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    const baselineContext = await fixture.prepare({
+      sessionKey: "main",
+      agentId: "worker",
+      provider: "native-cli",
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+    const context = await fixture.prepare({
+      sessionKey: "main",
+      agentId: "worker",
+      provider: "native-cli",
+      runId: "run-test-loopback-prompt-tools",
+      skillLibraryAuthoring,
+      config: createCliBackendConfig({ bundleMcp: true }),
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:worker:discord:group:ops",
+        ownerAccountId: "default",
+      },
+      cliSessionBinding: {
         sessionId: "cli-session",
-        drift: { reasons: ["prompt-tools"] },
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+        promptToolNamesHash: "old-tool-surface",
+        ...(baselineContext.preparedBackend.mcpConfigHash
+          ? { mcpConfigHash: baselineContext.preparedBackend.mcpConfigHash }
+          : {}),
+        ...(baselineContext.preparedBackend.mcpResumeHash
+          ? { mcpResumeHash: baselineContext.preparedBackend.mcpResumeHash }
+          : {}),
+      },
+    });
+
+    const projected = resolveMcpLoopbackScopedTools.mock.calls.at(-1)?.[0];
+    const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
+    expect(projected).toBeDefined();
+    expect(grantContext).toBeDefined();
+    const {
+      cfg: projectedConfig,
+      authProfileStore,
+      authProfileStoreAgentDir,
+      skillLibraryAuthoring: projectedAuthoring,
+      context: projectedContext,
+    } = expectDefined(projected, "projected tool context");
+    expect(projectedConfig).toEqual(expect.any(Object));
+    expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+    expect(authProfileStoreAgentDir).toEqual(expect.any(String));
+    expect(projectedContext).toEqual(grantContext);
+    expect(projectedAuthoring).toBe(skillLibraryAuthoring);
+    expect(mintMcpLoopbackClientGrant).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skillLibraryAuthoring }),
+    );
+    expect(grantContext).not.toHaveProperty("skillWorkshop.libraryAuthoring");
+    expect(projectedContext).toMatchObject({
+      sessionKey: "agent:worker:main",
+      sessionId: expect.any(String),
+      runId: "run-test-loopback-prompt-tools",
+      workspaceDir: expect.any(String),
+      modelProvider: "native-cli",
+      modelId: "test-model",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:worker:discord:group:ops",
+        ownerAccountId: "default",
+      },
+    });
+    expect(context.systemPrompt).toContain("## Memory Recall");
+    expect(context.systemPrompt).toContain("tools=memory_search");
+    expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
+      "memory_search",
+    ]);
+    expect(context.promptToolNamesHash).toBe(hashCliSessionText(JSON.stringify(["memory_search"])));
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["prompt-tools"] },
+    });
   });
 
   it("fails bundled MCP preparation when the loopback runtime is unavailable", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      registerTestMemoryPromptBuilder(({ availableTools }) =>
-        availableTools.has("memory_search")
-          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
-          : [],
-      );
-      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
-      const ensureMcpLoopbackServer = vi.fn(async () => {
-        throw new Error("loopback unavailable");
-      });
-      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-        agentId: "main",
-        tools: [
-          {
-            name: "memory_search",
-            label: "Memory Search",
-            description: "Search memory",
-            parameters: { type: "object", properties: {} },
-            execute: vi.fn(),
-          },
-        ],
-      }));
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-        ensureMcpLoopbackServer,
-        createMcpLoopbackServerConfig,
-        resolveMcpLoopbackScopedTools,
-      });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "native-cli",
-            pluginId: "native-plugin",
-            bundleMcp: true,
-            bundleMcpMode: "claude-config-file",
-            config: {
-              command: "native-cli",
-              args: ["--print"],
-              systemPromptArg: "--system-prompt",
-              systemPromptWhen: "first",
-              output: "text",
-              input: "arg",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "agent:main:test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "native-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-loopback-prompt-tools-fallback",
-          config: createCliBackendConfig({ bundleMcp: true }),
-        }),
-      ).rejects.toThrow(/loopback unavailable/);
+    registerTestMemoryPromptBuilder(({ availableTools }) =>
+      availableTools.has("memory_search")
+        ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+        : [],
+    );
+    const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+    const ensureMcpLoopbackServer = vi.fn(async () => {
+      throw new Error("loopback unavailable");
+    });
+    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "memory_search",
+          label: "Memory Search",
+          description: "Search memory",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ],
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer,
+      createMcpLoopbackServerConfig,
+      resolveMcpLoopbackScopedTools,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "native-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:test",
+        provider: "native-cli",
+        config: createCliBackendConfig({ bundleMcp: true }),
+      }),
+    ).rejects.toThrow(/loopback unavailable/);
 
-      expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
-      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(1);
-      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
-      expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
+    expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(1);
+    expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+    expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
   });
 
-  it("binds current turn context into the bundle MCP client grant", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
+  it.each(["main", "worker"])(
+    "binds current turn context into the bundle MCP client grant with explicit %s owner",
+    async (explicitAgentId) => {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }));
-      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const activateMcpLoopbackClientGrantCapture = vi.fn(() => ({
+        captureNativeToolAuthority: vi.fn((_names: readonly string[] | null) => true),
+      }));
       const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const transferMcpLoopbackClientGrant = vi.fn(() => true);
       const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
       const revokeMcpLoopbackClientGrant = vi.fn(() => true);
       const resolveMcpLoopbackScopedTools = vi.fn(() => ({
@@ -3213,49 +3939,34 @@ describe("prepareCliRunContext", () => {
       }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
-        ensureMcpLoopbackServer,
-        createMcpLoopbackServerConfig,
         activateMcpLoopbackClientGrantCapture,
         deactivateMcpLoopbackClientGrantCapture,
+        transferMcpLoopbackClientGrant,
         mintMcpLoopbackClientGrant,
         revokeMcpLoopbackClientGrant,
         resolveMcpLoopbackScopedTools,
       });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "native-cli",
-            pluginId: "native-plugin",
-            bundleMcp: true,
-            bundleMcpMode: "codex-config-overrides",
-            config: {
-              command: "native-cli",
-              args: ["--print"],
-              input: "arg",
-              sessionMode: "existing",
-            },
-          },
-        ],
+      setRawCliBackendForPrepareTest({
+        id: "native-cli",
+        pluginId: "native-plugin",
+        bundleMcp: true,
+        bundleMcpMode: "codex-config-overrides",
+        config: {
+          command: "native-cli",
+          args: ["--print"],
+          input: "arg",
+          sessionMode: "existing",
+        },
       });
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await fixture.prepare({
         sessionKey: "agent:main:telegram:group:chat123",
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        agentId: "worker",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
+        agentId: explicitAgentId,
         provider: "native-cli",
         modelProvider: "anthropic",
-        model: "test-model",
-        timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
-        config: createCliBackendConfig(),
         sessionEntry: {
           execHost: "node",
-          execSecurity: "allowlist",
-          execAsk: "on-miss",
           execNode: "mac-a",
         } as never,
         execOverrides: {
@@ -3276,6 +3987,7 @@ describe("prepareCliRunContext", () => {
         messageChannel: "telegram",
         messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
+        pinnedWidgetAuthoring: true,
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
@@ -3306,13 +4018,16 @@ describe("prepareCliRunContext", () => {
         context: {
           sessionKey: "agent:main:telegram:group:chat123",
           runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-          agentId: "worker",
+          runtimePolicyAgentId: "worker",
+          agentId: "main",
           sessionId: "session-test",
           runId: "run-test-room-event-tools",
+          workspaceDir: context.workspaceDir,
           modelProvider: "anthropic",
           modelId: "test-model",
-          messageProvider: "discord",
+          messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
+          pinnedWidgetAuthoring: true,
           currentChannelId: "telegram:-100123:topic:42",
           currentThreadTs: "42",
           currentMessageId: "reply-message-1",
@@ -3326,8 +4041,6 @@ describe("prepareCliRunContext", () => {
           nodeExecAllowed: true,
           execSession: {
             execHost: "node",
-            execSecurity: "allowlist",
-            execAsk: "on-miss",
             execNode: "mac-a",
           },
           execOverrides: {
@@ -3358,55 +4071,74 @@ describe("prepareCliRunContext", () => {
           spawnedBy: "agent:main:telegram:group:parent",
         },
         runtimeOwnerToken: "loopback-owner-token",
+        admittedRunContext: context.params.admittedRunContext,
+        bindQuestionAnswerAuthority: expect.any(Function),
+        toolAuth: {
+          agentDir: expect.any(String),
+          store: expect.objectContaining({ version: 1, profiles: {} }),
+        },
       });
+      expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
+      context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
       context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
       context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+      expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
+        sourceToken: "loopback-token",
+        targetToken: "stable-loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+      });
       expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-        token: "loopback-token",
+        token: "stable-loopback-token",
         runtimeOwnerToken: "loopback-owner-token",
         captureKey: "capture-test",
       });
       expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-        token: "loopback-token",
+        token: "stable-loopback-token",
         runtimeOwnerToken: "loopback-owner-token",
         captureKey: "capture-test",
       });
+      context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
-          clientCaps: ["tool-events", "inline-widgets"],
-          taskSuggestionDeliveryMode: "gateway",
-          requireExplicitMessageTarget: true,
-          senderIsOwner: false,
-          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-          agentId: "worker",
-          modelProvider: "anthropic",
-          modelId: "test-model",
-          execOverrides: {
-            host: "node",
-            security: "allowlist",
-            ask: "always",
-            node: "mac-b",
-          },
-          bashElevated: {
-            enabled: true,
-            allowed: true,
-            defaultLevel: "full",
-            fullAccessAvailable: false,
-            fullAccessBlockedReason: "runtime",
-          },
-          channelContext: {
-            sender: { id: "canonical-sender" },
-            chat: { id: "chat-1" },
-          },
-          senderName: "Canonical Name",
-          senderUsername: "canonical-user",
-          senderE164: "+15551234567",
-          messageProvider: "discord",
-          groupId: "chat123",
-          groupChannel: "ops",
-          groupSpace: "workspace-a",
-          spawnedBy: "agent:main:telegram:group:parent",
+          context: expect.objectContaining({
+            clientCaps: ["tool-events", "inline-widgets"],
+            pinnedWidgetAuthoring: true,
+            taskSuggestionDeliveryMode: "gateway",
+            requireExplicitMessageTarget: true,
+            senderIsOwner: false,
+            runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+            runtimePolicyAgentId: "worker",
+            agentId: "main",
+            modelProvider: "anthropic",
+            modelId: "test-model",
+            execOverrides: {
+              host: "node",
+              security: "allowlist",
+              ask: "always",
+              node: "mac-b",
+            },
+            bashElevated: {
+              enabled: true,
+              allowed: true,
+              defaultLevel: "full",
+              fullAccessAvailable: false,
+              fullAccessBlockedReason: "runtime",
+            },
+            channelContext: {
+              sender: { id: "canonical-sender" },
+              chat: { id: "chat-1" },
+            },
+            senderName: "Canonical Name",
+            senderUsername: "canonical-user",
+            senderE164: "+15551234567",
+            messageProvider: "telegram",
+            groupId: "chat123",
+            groupChannel: "ops",
+            groupSpace: "workspace-a",
+            spawnedBy: "agent:main:telegram:group:parent",
+          }),
         }),
       );
       expect(context.systemPrompt).toContain(
@@ -3414,15 +4146,938 @@ describe("prepareCliRunContext", () => {
       );
       expect(context.systemPrompt).not.toContain("current source is default target");
       await context.preparedBackend.cleanup?.();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
+    },
+  );
+
+  it("enables gateway delivery capture for Claude-style JSONL bundle MCP", async () => {
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+    });
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+    });
+
+    expect(context.mcpDeliveryCapture).toBe(true);
+    expect(context.preparedBackend.env).toMatchObject({
+      OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+    });
+  });
+
+  it("keeps native authority pending until the activated runtime reports its tools", async () => {
+    const {
+      capture,
+      observe,
+      mintMcpLoopbackClientGrant,
+      projectNativeToolAuthority,
+      captureNativeToolAuthority,
+    } = await prepareNativeAuthority(["read", "exec"]);
+
+    expect(
+      mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.nativeCronCreatorToolAllowlist,
+    ).toBeNull();
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    expect(captureNativeToolAuthority).not.toHaveBeenCalled();
+    capture.activate("native-capture");
+    observe(["Read", "Bash"]);
+
+    expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(["Read", "Bash"]);
+    expect(captureNativeToolAuthority.mock.calls).toEqual([[null], [["read", "exec"]]]);
+  });
+
+  it.each([
+    {
+      name: "host selection",
+      observed: ["Read", "Bash", "Write"],
+      selected: ["Read"],
+      projected: ["Read"],
+      capabilities: ["read"],
+    },
+    {
+      name: "native removal",
+      observed: ["Read"],
+      selected: ["Read", "Bash"],
+      projected: ["Read"],
+      capabilities: ["read"],
+    },
+    {
+      name: "observed empty surface",
+      observed: [],
+      selected: undefined,
+      projected: [],
+      capabilities: [],
+    },
+    {
+      name: "host empty surface",
+      observed: ["Read", "Bash"],
+      selected: [],
+      projected: [],
+      capabilities: [],
+    },
+  ])(
+    "bounds native authority by $name",
+    async ({ observed, selected, projected, capabilities }) => {
+      const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+        await prepareNativeAuthority(
+          capabilities,
+          selected === undefined
+            ? {}
+            : { cliToolAvailability: { native: selected, openClaw: ["message"] } },
+        );
+      capture.activate("native-capture");
+      observe(observed);
+
+      expect(projectNativeToolAuthority).toHaveBeenCalledExactlyOnceWith(projected);
+      expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(capabilities);
+    },
+  );
+
+  it("does not project native authority for a node-placed Claude CLI run", async () => {
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const projectNativeToolAuthority = vi.fn(() => ["read", "exec"]);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+      projectNativeToolAuthority,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await fixture.prepare({
+      provider: "claude-cli",
+      sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+      cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
+    });
+
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    // Node placement disables bundled MCP, so no loopback grant exists to carry authority.
+    expect(mintMcpLoopbackClientGrant).not.toHaveBeenCalled();
+  });
+
+  it("drops web_search from observed native authority when disabled for the run", async () => {
+    const { capture, observe, captureNativeToolAuthority } = await prepareNativeAuthority(
+      ["read", "web_fetch", "web_search"],
+      { toolOverrides: { webSearch: false } },
+    );
+    capture.activate("native-capture");
+    observe(["Read", "WebFetch", "WebSearch"]);
+
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(["read", "web_fetch"]);
+  });
+
+  it.each([
+    { name: "missing", tools: undefined },
+    { name: "null", tools: null },
+    { name: "scalar", tools: "Read" },
+    { name: "mixed", tools: ["Read", 7] },
+  ])("clears native authority before rejecting a $name runtime snapshot", async ({ tools }) => {
+    const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+      await prepareNativeAuthority(["read"]);
+    capture.activate("native-capture");
+    observe(["Read"]);
+    projectNativeToolAuthority.mockClear();
+
+    expect(() => observe(tools)).toThrow("invalid tool list");
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
+    expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+  });
+
+  it("clears native authority before rejecting a non-canonical backend projection", async () => {
+    const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+      await prepareNativeAuthority(["read"]);
+    capture.activate("native-capture");
+    observe(["Read"]);
+    projectNativeToolAuthority.mockReturnValue(["Bash"]);
+
+    expect(() => observe(["Read", "Bash"])).toThrow('non-canonical native capability "Bash"');
+    expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each(["unactivated", "stale"] as const)(
+    "rejects native authority updates while capture is %s",
+    async (state) => {
+      const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
+        await prepareNativeAuthority(["read"]);
+      if (state === "stale") {
+        capture.activate("native-capture");
+        observe(["Read"]);
+        captureNativeToolAuthority.mockReturnValue(false);
+        projectNativeToolAuthority.mockClear();
+      }
+
+      expect(() => observe(["Read", "Bash"])).toThrow("capture is no longer active");
+      expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed with upgrade guidance when a backend cannot enforce a runtime toolsAllow", async () => {
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+    });
+
+    const run = fixture.prepare({
+      config: createCliBackendConfig({ bundleMcp: true }),
+      toolsAllow: ["read", "web_search"],
+    });
+    await expect(run).rejects.toThrow(
+      `CLI backend "test-cli" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
+    );
+
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+  });
+
+  it("materializes runtime toolsAllow for selectable backends without bundle MCP", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: McpProjectionParams) => ({
+      agentId: "main",
+      tools: ["write", "apply_patch"].map((name) => ({ name })),
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
+
+    const originalToolsAllow = ["write"];
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      sessionKey: "agent:main:main",
+      modelProvider: "policy-provider",
+      model: "policy-model",
+      senderIsOwner: false,
+      clientCaps: ["original-client"],
+      toolsAllow: originalToolsAllow,
+    });
+    const bindQuestionAuthority = expectDefined(
+      context.bindQuestionAnswerAuthority,
+      "question authority",
+    );
+    const questionAuthority = bindQuestionAuthority(() => {});
+    originalToolsAllow.push("exec");
+    const caller = {
+      senderIsOwner: false,
+      disableTools: false,
+      clientCaps: ["original-client"],
+      toolsAllow: ["write"],
+      traceAuthorized: false,
+    };
+    expect(context.params.toolsAllow).toBeUndefined();
+    expect(() => questionAuthority.assertCaller(caller)).not.toThrow();
+    expect(() => questionAuthority.assertCaller({ ...caller, toolsAllow: undefined })).toThrow(
+      "caller policy",
+    );
+    expect(() => questionAuthority.assertCaller({ ...caller, clientCaps: [] })).toThrow(
+      "caller policy",
+    );
+
+    expect(context.params.cliToolAvailability).toEqual({
+      native: [],
+      openClaw: ["write", "apply_patch"],
+    });
+    expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ toolsAllow: ["write"] }) }),
+    );
+  });
+
+  it.each([
+    "direct-with-placeholder",
+    "reply-owned",
+    "creator-closed",
+    "caller-retired",
+    "request-cancelled",
+    "retained-after-exit",
+  ] as const)("binds prepared %s native questions to the actual CLI creator", async (mode) => {
+    const config = { tools: { exec: { security: "full", ask: "off" } } } satisfies OpenClawConfig;
+    const runId = `native-question-${mode}`;
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      runId,
+      "main",
+      "native-question-proof",
+    );
+    const sourceAbort = new AbortController();
+    const requestAbort = new AbortController();
+    let callerCurrent = true;
+    const promptDelivered = createDeferred();
+    const nativeToolCallId = `native-input-${mode}`;
+    const questionId = `${nativeToolCallId}:0`;
+    const request = {
+      toolName: "AskUserQuestion",
+      toolCallId: nativeToolCallId,
+      abortSignal: requestAbort.signal,
+      questions: [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Continue?",
+          isOther: true,
+          options: [{ label: "Continue" }, { label: "Stop" }],
+        },
+      ],
+    };
+    let retainedRequest: CliBackendExecuteContext["requestUserInput"] | undefined;
+    let nativeAnswer: Awaited<ReturnType<CliBackendExecuteContext["requestUserInput"]>> | undefined;
+    const execute: CliBackendExecute = async function* (execution) {
+      retainedRequest = execution.requestUserInput;
+      expect(execution.modelId).toBe("creator-model");
+      if (mode !== "retained-after-exit") {
+        nativeAnswer = await execution.requestUserInput(request);
+      }
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "completed",
+        session_id: "native-session",
+      };
+    };
+    setRawCliBackendForPrepareTest({
+      id: "native-question-cli",
+      pluginId: "native-question-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+      prepareExecution: async () => ({ execute }),
+      config: {
+        command: "/bin/sh",
+        args: [],
+        input: "stdin",
+        output: "jsonl",
+        sessionMode: "existing",
+      },
+    });
+    const session = fixture.session;
+    const original = {
+      sessionId: session.sessionTarget.sessionId,
+      sessionKey: session.sessionTarget.sessionKey,
+      sessionFile: session.sessionFile,
+      workspaceDir: session.dir,
+      cwd: session.dir,
+      agentId: "main",
+      provider: "native-question-cli",
+      modelProvider: "question-policy",
+      model: "creator-model",
+      config,
+      messageProvider: "webchat",
+      senderIsOwner: false,
+      clientCaps: ["creator-client"],
+      approvalReviewerDeviceId: "creator-reviewer",
+      cliToolAvailability: { native: ["AskUserQuestion"], openClaw: [] },
+    };
+    const sourceRoute = { provider: original.modelProvider, model: original.model };
+    const caller = {
+      senderIsOwner: false,
+      disableTools: false,
+      messageProvider: "webchat",
+      clientCaps: ["creator-client"],
+      approvalReviewerDeviceId: "creator-reviewer",
+      traceAuthorized: mode === "reply-owned",
+    };
+    let sourceOperation: ReplyOperation | undefined;
+    let answeringPlaceholder: ReplyOperation | undefined;
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      if (mode === "reply-owned") {
+        sourceOperation = createReplyOperation({
+          sessionId: original.sessionId,
+          sessionKey: original.sessionKey,
+          resetTriggered: false,
+        });
+        sourceOperation.bindToolAuthoritySnapshot(
+          prepareReplyToolAuthority({
+            run: { ...original, provider: sourceRoute.provider, traceAuthorized: true },
+          }),
+        );
+      }
+      const toolAuthorityFingerprint = sourceOperation?.bindToolAuthorityRoute(sourceRoute);
+      const context = await fixture.prepare({
+        ...original,
+        runId,
+        timeoutMs: 10_000,
+        preparedRunAdmission: admission,
+        abortSignal: sourceAbort.signal,
+        assertCurrent: () => {
+          if (!callerCurrent) {
+            throw new Error("original CLI caller retired");
+          }
+        },
+        replyOperation: sourceOperation,
+        toolAuthorityFingerprint,
+        onPartialReply: async () => promptDelivered.resolve(),
+      });
+      cleanup = context.preparedBackend.cleanup;
+      sourceOperation?.setPhase("running");
+      const target = context.executionTarget;
+      if (target.kind !== "plugin") {
+        throw new Error("Expected the prepared native plugin execution target");
+      }
+      await withQuestionGateway(async (gateway) => {
+        // This suite normally stubs runtime config; the shared peer owns the exact test port.
+        getRuntimeConfigMock.mockImplementation(() =>
+          expectDefined(getRuntimeConfigSnapshot(), "isolated question Gateway config"),
+        );
+        const processRun = executePluginOwnedProcess({
+          context,
+          execute: target.execute,
+          executionCommand: "/bin/sh",
+          executionArgs: [],
+          env: { PATH: "/bin:/usr/bin" },
+          prompt: context.params.prompt,
+          useResume: false,
+          noOutputTimeoutMs: 5_000,
+          consumeStdout: () => {},
+        });
+        void processRun.catch(() => undefined);
+        try {
+          if (mode === "retained-after-exit") {
+            await processRun;
+            const invoke = expectDefined(retainedRequest, "retained native input callback");
+            await expect(invoke(request)).resolves.toMatchObject({ status: "cancelled" });
+            expect(gateway.requests).toHaveLength(0);
+            return;
+          }
+          await Promise.race([
+            promptDelivered.promise,
+            processRun.then(() => {
+              throw new Error("Native process ended before its question was presented");
+            }),
+          ]);
+          if (mode === "direct-with-placeholder") {
+            // A later answer can own a different next-turn model; it is not this question's creator.
+            answeringPlaceholder = createReplyOperation({
+              sessionId: original.sessionId,
+              sessionKey: original.sessionKey,
+              resetTriggered: false,
+            });
+            const nextRoute = { provider: "next-policy", model: "next-model" };
+            answeringPlaceholder.bindToolAuthoritySnapshot(
+              prepareReplyToolAuthority({
+                run: { ...original, ...nextRoute, clientCaps: [] },
+              }),
+            );
+            answeringPlaceholder.bindToolAuthorityRoute(nextRoute);
+            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+          }
+          const answer = () =>
+            claimPendingAgentQuestionAnswerFromCaller({
+              sessionKey: original.sessionKey,
+              text: "Continue",
+              caller,
+              assertSourceCurrent: () => {},
+            });
+          if (mode === "creator-closed") {
+            admission.close();
+            await expect(answer()).rejects.toThrow("no longer active");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            requestAbort.abort();
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+          } else if (mode === "caller-retired") {
+            callerCurrent = false;
+            await expect(answer()).rejects.toThrow("original CLI caller retired");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            // A late Gateway answer cannot revive the retired native caller.
+            gateway.manager.resolve(questionId, { answers: { choice: ["Continue"] } });
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+            expect(sourceAbort.signal.aborted).toBe(false);
+            expect(requestAbort.signal.aborted).toBe(false);
+            expect(
+              getAdmittedRunDelegatedAuthority(context.params.admittedRunContext),
+            ).toBeDefined();
+          } else if (mode === "request-cancelled") {
+            requestAbort.abort();
+            await processRun;
+            expect(nativeAnswer).toMatchObject({ status: "cancelled" });
+            await expect(answer()).resolves.toBe(false);
+            await expect(gateway.manager.waitAnswer(questionId)).resolves.toMatchObject({
+              status: "cancelled",
+            });
+          } else {
+            await expect(
+              claimPendingAgentQuestionAnswerFromCaller({
+                sessionKey: original.sessionKey,
+                text: "Continue",
+                caller: { ...caller, clientCaps: [] },
+                assertSourceCurrent: () => {},
+              }),
+            ).rejects.toThrow("caller policy");
+            expect(
+              gateway.requests.filter((frame) => frame.method === "question.resolve"),
+            ).toHaveLength(0);
+            await expect(answer()).resolves.toBe(true);
+            await processRun;
+            expect(nativeAnswer).toEqual({ status: "answered", answers: { choice: ["Continue"] } });
+            if (sourceOperation) {
+              expect(sourceOperation.toolAuthorityRoute).toEqual(sourceRoute);
+            }
+          }
+        } finally {
+          requestAbort.abort();
+          sourceAbort.abort();
+          await processRun.catch(() => undefined);
+        }
+      });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      requestAbort.abort();
+      sourceAbort.abort();
+      answeringPlaceholder?.complete();
+      sourceOperation?.complete();
+      admission.close();
+      await cleanup?.();
     }
   });
 
-  it("enables gateway delivery capture for Claude-style JSONL bundle MCP", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
+  it("translates disableTools into an exact empty cap for selectable backends", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+  });
+
+  it("lets disableTools override a selectable backend toolsAllow projection", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+      toolsAllow: ["write"],
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+  });
+
+  it.each([false, true])(
+    "preserves preparation refusal after cleanup (fails=%s)",
+    async (fails) => {
+      const cleanup = vi.fn(async () => {
+        if (fails) {
+          throw new Error("preparation cleanup failed");
+        }
+      });
+      const prepareExecution = vi.fn(async () => ({ cleanup }));
+      setRawCliBackendForPrepareTest({
+        id: "settings-cli",
+        pluginId: "settings-plugin",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "settings-cli",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
+
+      const cleanupScope = createAgentCleanupScope();
+      await expect(
+        cleanupScope.run(() =>
+          fixture.prepare({
+            provider: "settings-cli",
+            disableTools: true,
+            oneShotCliRun: true,
+          }),
+        ),
+      ).rejects.toThrow(
+        "did not enforce exact per-run tool availability during execution preparation",
+      );
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
+      );
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");
+    },
+  );
+
+  it("still rejects disableTools when a selectable backend cannot enforce an exact cap", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      nativeToolMode: "selectable",
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "selectable-cli",
+        disableTools: true,
+      }),
+    ).rejects.toThrow(
+      "CLI backend selectable-cli cannot run with tools disabled because it exposes native tools",
+    );
+  });
+
+  it("accepts a positive prepared-execution enforcement acknowledgement", async () => {
+    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+    setRawCliBackendForPrepareTest({
+      id: "settings-cli",
+      pluginId: "settings-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "settings-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "settings-cli",
+      cliToolAvailability: { native: [], openClaw: [] },
+    });
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+    await context.preparedBackend.cleanup?.();
+  });
+
+  it("privately forwards isolated-completion system prompts to bundled preparation", async () => {
+    const { dir } = fixture.session;
+    const prepareExecution = vi.fn(async () => ({
+      isolatedCompletionEnforced: true as const,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "jsonl",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await fixture.prepare({
+      provider: "google-gemini-cli",
+      executionMode: "side-question",
+      isolatedCompletion: true,
+      extraSystemPrompt: "Return only valid JSON.",
+      cliToolAvailability: { native: [], openClaw: [] },
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolatedCompletionCwd: dir,
+        isolatedCompletionModelId: "test-model",
+        isolatedCompletionPrompt: "latest ask",
+        isolatedCompletionSystemPrompt: "Return only valid JSON.",
+      }),
+    );
+  });
+
+  it("rejects a CLI backend that does not adopt isolated completion", async () => {
+    const cleanup = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({
+      cleanup,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "external-cli",
+      pluginId: "external",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "external-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "none",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "external-cli",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    ).rejects.toMatchObject({
+      code: "unsupported",
+      message:
+        'CLI backend "external-cli" does not support isolated completion; OpenClaw did not start the run.',
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "projects node-placed Claude availability with Workshop enabled=%s",
+    async (workshopEnabled) => {
+      const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: vi.fn(),
+        invoke: vi.fn(),
+      };
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "skill_workshop",
+            label: "Skill Workshop",
+            description: "Manage skills",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
+      const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
+
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+        cliToolAvailability: { native: ["Read"], openClaw: ["message", "skill_workshop"] },
+        ...(workshopEnabled ? { skillLibraryAuthoring } : {}),
+      });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAvailability: { native: ["Read"], openClaw: ["skill_workshop"] },
+        }),
+      );
+      expect(context.params.cliToolAvailability).toEqual({
+        native: ["Read"],
+        openClaw: ["skill_workshop"],
+      });
+      if (workshopEnabled) {
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            skillLibraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
+          }),
+        );
+        expect(context.nodeSkillWorkshop?.name).toBe("skill_workshop");
+        expect(context.systemPromptReport.tools.entries.map((tool) => tool.name)).toContain(
+          "skill_workshop",
+        );
+      } else {
+        expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
+        expect(context.nodeSkillWorkshop).toBeUndefined();
+      }
+      await context.preparedBackend.cleanup?.();
+    },
+  );
+
+  it("finalizes prompt guidance after backend message-tool projection", async () => {
+    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const finalizePromptForResolvedTools = vi.fn(
+      ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+        `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
+    );
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+      finalizePromptForResolvedTools,
+    });
+
+    expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+      prompt: "latest ask",
+      messageToolAvailable: false,
+    });
+    expect(context.params.prompt).toContain("message-tool-available:false");
+    expect(context.params.transcriptPrompt).toBe("latest ask");
+    await context.preparedBackend.cleanup?.();
+  });
+
+  it.each([
+    {
+      name: "materializes exact availability when the caller did not provide it",
+      cliToolAvailability: undefined,
+      hookToolsAllow: ["read"],
+      projectedToolNames: ["read", "message"],
+    },
+    {
+      name: "keeps existing CLI availability as the upper bound",
+      cliToolAvailability: { native: [], openClaw: ["read", "message"] },
+      hookToolsAllow: ["read", "write"],
+      projectedToolNames: ["read", "message", "write"],
+    },
+  ])(
+    "applies before_prompt_build tool filtering before CLI guidance and submission: $name",
+    async ({ cliToolAvailability, hookToolsAllow, projectedToolNames }) => {
+      const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: hookToolsAllow })),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(() => ({
           port: 31783,
@@ -3430,121 +5085,98 @@ describe("prepareCliRunContext", () => {
           nonOwnerToken: "loopback-non-owner-token",
         })),
         createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+        mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
       });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: true,
-            bundleMcpMode: "claude-config-file",
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              jsonlDialect: "claude-stream-json",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-claude-delivery-capture",
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.mcpDeliveryCapture).toBe(true);
-      expect(context.preparedBackend.env).toMatchObject({
-        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }));
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-      });
-
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-tools-allow",
-          config: createCliBackendConfig({ bundleMcp: true }),
-          toolsAllow: ["read", "web_search"],
-        }),
-      ).rejects.toThrow(
-        "CLI backend test-cli cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy",
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+          `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
       );
 
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        ...(cliToolAvailability ? { cliToolAvailability } : {}),
+        finalizePromptForResolvedTools,
+      });
+
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      expect(hookRunner.runBeforePromptBuild.mock.invocationCallOrder[0]).toBeLessThan(
+        prepareExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(context.params.cliToolAvailability).toEqual({
+        native: [],
+        openClaw: ["read"],
+      });
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAvailability: { native: [], openClaw: ["read"] },
+        }),
+      );
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual(["read"]);
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+        prompt: "latest ask",
+        messageToolAvailable: false,
+      });
+      expect(context.params.prompt).toContain("message-tool-available:false");
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      await context.preparedBackend.cleanup?.();
+    },
+  );
+
+  it("fails closed when a prompt hook restricts an always-on CLI backend", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: ["read"] })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(fixture.prepare({ provider: "test-cli" })).rejects.toThrow(
+      'CLI backend "test-cli" cannot enforce before_prompt_build tool restrictions',
+    );
   });
 
-  it("translates runtime toolsAllow through a selectable backend and bounds its MCP grant", async () => {
-    const { dir, sessionFile } = createSessionFile();
+  it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
-    const resolveRuntimeToolAvailability = vi.fn(() => ({
-      mcp: [
-        "mcp__openclaw__read",
-        "mcp__openclaw__write",
-        "mcp__openclaw__edit",
-        "mcp__openclaw__apply_patch",
-        "mcp__openclaw__exec",
-        "mcp__openclaw__browser",
-        "mcp__openclaw__image",
-      ],
-    }));
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          pluginId: "anthropic",
-          bundleMcp: true,
-          bundleMcpMode: "claude-config-file",
-          nativeToolMode: "selectable",
-          resolveExecutionArgs,
-          resolveRuntimeToolAvailability,
-          config: {
-            command: "claude",
-            args: ["--print"],
-            output: "jsonl",
-            jsonlDialect: "claude-stream-json",
-            input: "stdin",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: McpProjectionParams) => ({
+      agentId: "main",
+      tools: ["write", "apply_patch"].map((name) => ({ name })),
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
@@ -3555,142 +5187,91 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackPolicyTools,
     });
 
     let cleanup: (() => Promise<void>) | undefined;
     try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await fixture.prepare({
         sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
         provider: "claude-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-runtime-tools-allow",
-        config: createCliBackendConfig(),
-        toolsAllow: ["group:fs", "exec", "browser", "image"],
+        toolsAllow: ["write"],
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "default",
+        },
       });
       cleanup = context.preparedBackend.cleanup;
 
-      expect(resolveRuntimeToolAvailability).toHaveBeenCalledWith({
-        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "browser", "image"],
-      });
       expect(context.params.toolsAllow).toBeUndefined();
       expect(context.params.cliToolAvailability).toEqual({
         native: [],
-        mcp: [
-          "mcp__openclaw__read",
-          "mcp__openclaw__write",
-          "mcp__openclaw__edit",
-          "mcp__openclaw__apply_patch",
-          "mcp__openclaw__exec",
-          "mcp__openclaw__browser",
-          "mcp__openclaw__image",
-        ],
+        openClaw: ["write", "apply_patch"],
       });
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual([
-        "read",
         "write",
-        "edit",
         "apply_patch",
-        "exec",
-        "browser",
-        "image",
       ]);
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "default",
+      });
+      expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({
+            toolsAllow: ["write"],
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "account",
+              ownerSessionKey: "agent:main:discord:group:ops",
+              ownerAccountId: "default",
+            },
+          }),
+        }),
+      );
+      const projected = resolveMcpLoopbackPolicyTools.mock.calls[0]?.[0];
+      const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
+      const {
+        context: { toolsAllow: projectedPolicy, ...projectedTrustedContext },
+        authProfileStore,
+        authProfileStoreAgentDir,
+      } = expectDefined(projected, "projected tool context");
+      const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
+      expect(projectedPolicy).toEqual(["write"]);
+      expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+      expect(authProfileStoreAgentDir).toEqual(expect.any(String));
+      expect(grantedTools).toEqual(["write", "apply_patch"]);
+      expect(projectedTrustedContext).toEqual(grantTrustedContext);
     } finally {
       await cleanup?.();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects a backend that expands runtime toolsAllow beyond the requested grant", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          pluginId: "anthropic",
-          bundleMcp: true,
-          bundleMcpMode: "claude-config-file",
-          nativeToolMode: "selectable",
-          resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-          resolveRuntimeToolAvailability: () => ({
-            mcp: ["mcp__openclaw__read", "mcp__openclaw__exec"],
-          }),
-          config: {
-            command: "claude",
-            args: ["--print"],
-            output: "jsonl",
-            jsonlDialect: "claude-stream-json",
-            input: "stdin",
-            sessionMode: "existing",
-          },
-        },
-      ],
-    });
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-    });
-
-    try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionKey: "agent:main:main",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "claude-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-runtime-tools-expansion",
-          config: createCliBackendConfig(),
-          toolsAllow: ["read"],
-        }),
-      ).rejects.toThrow(
-        "CLI backend claude-cli expanded runtime toolsAllow outside the requested OpenClaw MCP grant: mcp__openclaw__exec",
-      );
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("bounds the loopback grant to the selectable MCP tool allowlist", async () => {
-    const { dir, sessionFile } = createSessionFile();
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          pluginId: "anthropic",
-          bundleMcp: true,
-          bundleMcpMode: "claude-config-file",
-          nativeToolMode: "selectable",
-          resolveExecutionArgs,
-          config: {
-            command: "claude",
-            args: ["--print"],
-            output: "jsonl",
-            jsonlDialect: "claude-stream-json",
-            input: "stdin",
-            sessionMode: "existing",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
@@ -3706,16 +5287,9 @@ describe("prepareCliRunContext", () => {
 
     let cleanup: (() => Promise<void>) | undefined;
     try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await fixture.prepare({
         sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
         provider: "claude-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-loopback-tools-allow",
         config: {
           ...createCliBackendConfig(),
           mcp: {
@@ -3726,13 +5300,12 @@ describe("prepareCliRunContext", () => {
         },
         cliToolAvailability: {
           native: [],
-          mcp: ["mcp__openclaw__memory_search", "mcp__openclaw__memory_get", "mcp__other__thing"],
+          openClaw: ["memory_search", "memory_get"],
         },
       });
       cleanup = context.preparedBackend.cleanup;
 
-      // Foreign-server entries are not loopback-governed; the grant carries
-      // only the gateway tool names the run may reach.
+      // The grant carries exactly the canonical gateway tool names.
       const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
       expect(grantContext?.toolsAllow).toEqual(["memory_search", "memory_get"]);
 
@@ -3741,358 +5314,678 @@ describe("prepareCliRunContext", () => {
       const args = context.preparedBackend.backend.args ?? [];
       const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
       const rawBundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
-        mcpServers?: Record<string, unknown>;
+        mcpServers?: Record<string, { timeout?: number }>;
       };
       expect(Object.keys(rawBundle.mcpServers ?? {})).toEqual(["openclaw"]);
+      expect(rawBundle.mcpServers?.openclaw?.timeout).toBe(3_610_000);
     } finally {
       await cleanup?.();
-      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an existing user MCP timeout beside the generated Claude loopback", async () => {
+    const userMcpConfigPath = path.join(fixture.session.dir, "user-mcp.json");
+    fs.writeFileSync(
+      userMcpConfigPath,
+      JSON.stringify({
+        mcpServers: {
+          localUser: {
+            type: "http",
+            url: "http://127.0.0.1:43119/mcp",
+            timeout: 12_345,
+          },
+        },
+      }),
+    );
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "claude",
+        args: ["--print"],
+        resumeArgs: ["--resume", "{sessionId}"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    let mergedCleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "claude-cli",
+        config: createCliBackendConfig(),
+      });
+      cleanup = context.preparedBackend.cleanup;
+      expect(context.params.cliToolAvailability).toBeUndefined();
+      const args = context.preparedBackend.backend.args ?? [];
+      const generatedConfigPath = expectDefined(
+        args[args.indexOf("--mcp-config") + 1],
+        "generated Claude MCP config path",
+      );
+      const generatedConfig = JSON.parse(
+        fs.readFileSync(generatedConfigPath, "utf-8"),
+      ) as NonNullable<Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"]>;
+      expect(generatedConfig.mcpServers.openclaw?.timeout).toBe(3_610_000);
+
+      const merged = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "claude",
+          args: ["--print", "--mcp-config", userMcpConfigPath],
+          resumeArgs: ["--resume", "{sessionId}", "--mcp-config", userMcpConfigPath],
+        },
+        workspaceDir: fixture.session.dir,
+        additionalConfig: generatedConfig,
+      });
+      mergedCleanup = merged.cleanup;
+      const mergedArgs = merged.backend.args ?? [];
+      const mcpConfigPath = expectDefined(
+        mergedArgs[mergedArgs.indexOf("--mcp-config") + 1],
+        "merged Claude MCP config path",
+      );
+      const readConfig = () =>
+        JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
+          mcpServers?: Record<string, { headers?: Record<string, string>; timeout?: number }>;
+        };
+
+      expect(readConfig().mcpServers).toMatchObject({
+        openclaw: { timeout: 3_610_000 },
+        localUser: { timeout: 12_345 },
+      });
+
+      await prepareCliBundleMcpCaptureAttempt({
+        mode: "claude-config-file",
+        backend: merged.backend,
+        env: merged.env,
+        captureKey: "attempt-timeout-proof",
+      });
+
+      expect(readConfig().mcpServers).toMatchObject({
+        openclaw: {
+          timeout: 3_610_000,
+          headers: { "x-openclaw-cli-capture-key": "attempt-timeout-proof" },
+        },
+        localUser: { timeout: 12_345 },
+      });
+    } finally {
+      await mergedCleanup?.();
+      await cleanup?.();
     }
   });
 
   it("serves only the openclaw MCP server for ring-zero runs", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
-      const resolveExecutionArgs = vi.fn(
-        (context: {
-          baseArgs: readonly string[];
-          toolAvailability?: { native: readonly string[]; mcp: readonly string[] };
-        }) => [
-          ...context.baseArgs,
-          "--tools",
-          context.toolAvailability?.native.join(",") ?? "default",
-          "--allowedTools",
-          context.toolAvailability?.mcp.join(",") ?? "",
-        ],
-      );
-      setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: true,
-            bundleMcpMode: "claude-config-file",
-            nativeToolMode: "selectable",
-            resolveExecutionArgs,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              resumeArgs: ["--print", "--resume", "{sessionId}"],
-              output: "jsonl",
-              jsonlDialect: "claude-stream-json",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
+    const { dir, sessionFile, sessionTarget } = fixture.session;
+    const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+    const resolveExecutionArgs = vi.fn(
+      (context: {
+        baseArgs: readonly string[];
+        toolAvailability?: { native: readonly string[]; openClaw: readonly string[] };
+      }) => [
+        ...context.baseArgs,
+        "--tools",
+        context.toolAvailability?.native.join(",") ?? "default",
+        "--allowedTools",
+        context.toolAvailability?.openClaw.join(",") ?? "",
+      ],
+    );
+    setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        resumeArgs: ["--print", "--resume", "{sessionId}"],
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
 
-      const params: RunCliAgentParams & { systemAgentTool: SystemAgentToolOptions } = {
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-openclaw-mcp",
-        config: createCliBackendConfig(),
-        systemAgentTool: { surface: "cli" },
-        cliToolAvailability: {
-          native: [],
-          mcp: ["mcp__openclaw__openclaw"],
-        },
-      };
-      const context = await prepareCliRunContext(params);
-
-      // Ring-zero runs never touch the loopback surface (no message tools).
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-      expect(context.mcpDeliveryCapture).toBeUndefined();
-      const args = context.preparedBackend.backend.args ?? [];
-      expect(args).toContain("--strict-mcp-config");
-      expect(args).not.toContain("--tools");
-      expect(args).not.toContain("--allowedTools");
-      expect(context.preparedBackend.backend.resumeArgs).toEqual(
-        expect.arrayContaining(["--strict-mcp-config"]),
-      );
-      expect(resolveExecutionArgs).not.toHaveBeenCalled();
-      expect(context.params.cliToolAvailability).toEqual({
+    const params: RunCliAgentParams & { systemAgentTool: SystemAgentToolOptions } = {
+      admittedRunContext: createTestAdmittedRunContext("run-test-openclaw-mcp"),
+      sessionId: "session-test",
+      sessionFile,
+      sessionTarget,
+      workspaceDir: dir,
+      prompt: "latest ask",
+      provider: "claude-cli",
+      model: "test-model",
+      timeoutMs: 1_000,
+      runId: "run-test-openclaw-mcp",
+      config: createCliBackendConfig(),
+      systemAgentTool: { surface: "cli" },
+      cliToolAvailability: {
         native: [],
-        mcp: ["mcp__openclaw__openclaw"],
-      });
-      const mcpConfigPath = expectDefined(
-        args[args.indexOf("--mcp-config") + 1],
-        'args[args.indexOf("--mcp-config") + 1] test invariant',
-      );
-      const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
-        mcpServers?: Record<string, { env?: Record<string, string> }>;
-      };
-      expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
-      expect(raw.mcpServers?.openclaw?.env).toMatchObject({
-        OPENCLAW_TOOLS_MCP_TOOLS: "openclaw",
-        OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE: "cli",
-      });
+        openClaw: ["openclaw"],
+      },
+    };
+    const context = await prepareCliRunContext(params);
 
-      await context.preparedBackend.cleanup?.();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    // Ring-zero runs never touch the loopback surface (no message tools).
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    expect(context.mcpDeliveryCapture).toBeUndefined();
+    const args = context.preparedBackend.backend.args ?? [];
+    expect(args).toContain("--strict-mcp-config");
+    expect(args).not.toContain("--tools");
+    expect(args).not.toContain("--allowedTools");
+    expect(context.preparedBackend.backend.resumeArgs).toEqual(
+      expect.arrayContaining(["--strict-mcp-config"]),
+    );
+    expect(resolveExecutionArgs).not.toHaveBeenCalled();
+    expect(context.params.cliToolAvailability).toEqual({
+      native: [],
+      openClaw: ["openclaw"],
+    });
+    const mcpConfigPath = expectDefined(
+      args[args.indexOf("--mcp-config") + 1],
+      'args[args.indexOf("--mcp-config") + 1] test invariant',
+    );
+    const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
+    expect(raw.mcpServers?.openclaw?.env).toMatchObject({
+      OPENCLAW_TOOLS_MCP_TOOLS: "openclaw",
+      OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE: "cli",
+    });
+
+    await context.preparedBackend.cleanup?.();
   });
 
   it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }));
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-      });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "native-cli",
-            pluginId: "native-plugin",
-            bundleMcp: true,
-            bundleMcpMode: "codex-config-overrides",
-            nativeToolMode: "always-on",
-            config: {
-              command: "native-cli",
-              args: ["exec", "--sandbox", "workspace-write"],
-              resumeArgs: ["exec", "resume", "{sessionId}"],
-              output: "jsonl",
-              input: "arg",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "native-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-disable-native-tools",
-          config: createCliBackendConfig(),
-          disableTools: true,
-        }),
-      ).rejects.toThrow(
-        "CLI backend native-cli cannot run with tools disabled because it exposes native tools",
-      );
-
-      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("drops the claude-cli sessionId when the on-disk transcript is missing (#77011)", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      setCliBackendForPrepareTest();
-      const transcriptCheck = vi.fn(async () => false);
-      const orphanCheck = vi.fn(async () => true);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "follow-up",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-77011-missing",
-        cliSessionBinding: { sessionId: "stale-claude-sid" },
-        cliSessionId: "stale-claude-sid",
-        config: createCliBackendConfig(),
-      });
-
-      expect(transcriptCheck).toHaveBeenCalledWith({
-        sessionId: "stale-claude-sid",
-        workspaceDir: dir,
-      });
-      expect(orphanCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "missing-transcript",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior claude-cli ask",
-        timestamp: 1,
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+    });
+    setRawCliBackendForPrepareTest({
+      id: "native-cli",
+      pluginId: "native-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "codex-config-overrides",
+      nativeToolMode: "always-on",
+      config: {
+        command: "native-cli",
+        args: ["exec", "--sandbox", "workspace-write"],
+        resumeArgs: ["exec", "resume", "{sessionId}"],
+        output: "jsonl",
+        input: "arg",
+        sessionMode: "existing",
       },
     });
-    try {
-      setCliBackendForPrepareTest({
-        reseedFromRawTranscriptWhenUncompacted: true,
-      });
-      const transcriptCheck = vi.fn(async () => false);
-      const orphanCheck = vi.fn(async () => false);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-missing-transcript-reseed",
-        cliSessionBinding: { sessionId: "stale-claude-sid" },
-        cliSessionId: "stale-claude-sid",
-        config: createCliBackendConfig(),
-      });
+    await expect(
+      fixture.prepare({
+        provider: "native-cli",
+        disableTools: true,
+      }),
+    ).rejects.toThrow(
+      "CLI backend native-cli cannot run with tools disabled because it exposes native tools",
+    );
 
-      // Candidate is invalidated (no native --resume) yet reseed still fires:
-      // prepare hands the prior OpenClaw conversation forward as history.
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "missing-transcript",
-      });
-      expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
-      expect(context.openClawHistoryPrompt).toContain("latest ask");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "drops the claude-cli sessionId when the on-disk transcript is missing (#77011)",
+      sessionId: "stale-claude-sid",
+      hasContent: false,
+      hasOrphan: true,
+      withCwdHash: false,
+      checksTranscript: true,
+      checksOrphan: false,
+      expected: { mode: "invalidate", invalidatedReason: "missing-transcript" },
+    },
+    {
+      name: "invalidates orphaned claude-cli transcripts during run preparation",
+      sessionId: "orphaned-claude-sid",
+      hasContent: true,
+      hasOrphan: true,
+      withCwdHash: true,
+      checksTranscript: true,
+      checksOrphan: true,
+      expected: { mode: "invalidate", invalidatedReason: "orphaned-tool-use" },
+    },
+    {
+      name: "keeps auth-boundary invalidation ahead of orphaned transcript checks",
+      sessionId: "orphaned-claude-sid",
+      authProfileId: "anthropic:old-profile",
+      hasContent: true,
+      hasOrphan: true,
+      withCwdHash: true,
+      checksTranscript: false,
+      checksOrphan: false,
+      expected: { mode: "invalidate", invalidatedReason: "auth-profile" },
+    },
+    {
+      name: "keeps the claude-cli sessionId when the on-disk transcript is present",
+      sessionId: "live-claude-sid",
+      hasContent: true,
+      hasOrphan: false,
+      withCwdHash: true,
+      checksTranscript: true,
+      checksOrphan: true,
+      expected: { mode: "reuse", sessionId: "live-claude-sid" },
+    },
+  ])("$name", async (testCase) => {
+    const { dir } = fixture.session;
+    setCliBackendForPrepareTest();
+    const transcriptCheck = vi.fn(async () => testCase.hasContent);
+    const orphanCheck = vi.fn(async () => testCase.hasOrphan);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+    });
+    const cliSessionBinding = {
+      sessionId: testCase.sessionId,
+      ...(testCase.withCwdHash ? { cwdHash: hashCliSessionText(dir) } : {}),
+      ...(testCase.authProfileId ? { authProfileId: testCase.authProfileId } : {}),
+    };
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "follow-up",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding,
+      cliSessionId: testCase.sessionId,
+    });
+
+    const transcriptArgs = { sessionId: testCase.sessionId, workspaceDir: dir };
+    if (testCase.checksTranscript) {
+      expect(transcriptCheck).toHaveBeenCalledWith(transcriptArgs);
+    } else {
+      expect(transcriptCheck).not.toHaveBeenCalled();
+    }
+    if (testCase.checksOrphan) {
+      expect(orphanCheck).toHaveBeenCalledWith(transcriptArgs);
+    } else {
+      expect(orphanCheck).not.toHaveBeenCalled();
+    }
+    expect(context.reusableCliSession).toEqual(testCase.expected);
+  });
+
+  it("preserves a Claude native-control resume when the local transcript is absent", async () => {
+    setCliBackendForPrepareTest();
+    const transcriptCheck = vi.fn(async () => false);
+    const orphanCheck = vi.fn(async () => true);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "/compact",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "native-claude-session" },
+      cliSessionId: "native-claude-session",
+      controlOperation: "compact",
+    });
+
+    expect(transcriptCheck).not.toHaveBeenCalled();
+    expect(orphanCheck).not.toHaveBeenCalled();
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "native-claude-session",
+    });
+  });
+
+  it.each(["test:a", "test:b"])(
+    "authorizes history after successful replacement and later clear: %s",
+    async (account) => {
+      const { dir, sessionTarget } = fixture.session;
+      const agentDir = path.join(dir, "agents", "main", "agent");
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "test:a": { type: "token", provider: "test-cli", token: "synthetic-account-a" },
+            "test:b": { type: "token", provider: "test-cli", token: "synthetic-account-b" },
+          },
+        },
+        agentDir,
+      );
+      const inputs: string[] = [];
+      let turn = 0;
+      const execute: CliBackendExecute = async function* (execution) {
+        inputs.push(execution.prompt);
+        const sessionId = "native-" + ++turn;
+        yield { type: "system", subtype: "init", session_id: sessionId };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "completed",
+          session_id: sessionId,
+        };
+      };
+      setRawCliBackendForPrepareTest({
+        id: "test-cli",
+        pluginId: "test-plugin",
+        authEpochMode: "profile-only",
+        autoSelectAuthProfile: false,
+        prepareExecution: async () => ({ execute }),
+        parseJsonlEvent: (line) => {
+          const event = JSON.parse(line);
+          return event.type === "result"
+            ? { kind: "result", text: event.result, sessionId: event.session_id }
+            : null;
+        },
+        config: {
+          command: "/bin/sh",
+          args: [],
+          resumeArgs: ["--resume", "{sessionId}"],
+          input: "stdin",
+          output: "jsonl",
+          sessionMode: "existing",
+          sessionIdFields: ["session_id"],
+          reseedFromRawTranscriptWhenUncompacted: true,
+        },
+      });
+      const runTurn = async (authProfileId: string, prompt: string) => {
+        const entry = expectDefined(loadSessionEntryReadOnly(sessionTarget), "session");
+        const binding = getCliSessionBinding(entry, "test-cli");
+        const runId = "history-proof-" + turn;
+        await patchSessionEntryCore(sessionTarget, (current) => ({
+          ...current,
+          activeWriterRunId: runId,
+        }));
+        const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-proof");
+        try {
+          const recorder = createUserTurnTranscriptRecorder({
+            input: { text: prompt, idempotencyKey: runId },
+            target: { ...sessionTarget, sessionEntry: loadSessionEntryReadOnly(sessionTarget) },
+          });
+          const context = await fixture.prepare({
+            agentDir,
+            authProfileId,
+            prompt,
+            runId,
+            preparedRunAdmission: admission,
+            userTurnTranscriptRecorder: recorder,
+            persistAssistantTranscript: true,
+            storePath: sessionTarget.storePath,
+            expectedWriterRunId: runId,
+            sessionKey: sessionTarget.sessionKey,
+            cliSessionBinding: binding,
+          });
+          const { runPreparedCliAgent } = await import("../cli-runner.js");
+          const result = await runPreparedCliAgent(context);
+          expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBeDefined();
+          expect(context.effectiveAuthProfileId).toBe(authProfileId);
+          expect(recorder.hasPersisted()).toBe(true);
+          await patchSessionEntryCore(sessionTarget, (current) => {
+            applyCliSessionBindingResult(current, "test-cli", result.meta.agentMeta);
+            return current;
+          });
+        } finally {
+          admission.close();
+        }
+      };
+      await runTurn("test:a", "account A private history");
+      await runTurn(account, "replacement turn");
+      expect(inputs.at(-1)).not.toContain("account A private history");
+      const entry = expectDefined(loadSessionEntryReadOnly(sessionTarget), "replacement");
+      expect(getCliSessionBinding(entry, "test-cli")?.authProfileId).toBe(account);
+      clearCliSession(entry, "test-cli");
+      replaceSessionEntrySync(sessionTarget, entry);
+      await runTurn(account, "recovery");
+      expect(inputs.at(-1)).toContain("recovery");
+      if (account === "test:a") {
+        expect(inputs.at(-1)).toContain("account A private history");
+      } else {
+        expect(inputs.at(-1)).not.toContain("account A private history");
+      }
+    },
+  );
+
+  it("does not replay the already-admitted current user turn during fresh CLI recovery", async () => {
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "prior",
+        parentId: null,
+        timestamp: "2020-01-01T00:00:00.000Z",
+        message: { role: "user", content: "prior task", timestamp: 1 },
+      });
+      const { sessionTarget } = fixture.session;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "latest ask", idempotencyKey: "recovery-current-turn" },
+        target: {
+          ...sessionTarget,
+          sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.persistApproved();
+      expect(recorder.getAdmissionReceipt()).toBeDefined();
+      setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
+      const context = await prepare({
+        provider: "claude-cli",
+        model: "opus",
+        userTurnTranscriptRecorder: recorder,
+      });
+      expect(context.openClawHistoryPrompt).toContain("User: prior task");
+      expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
+    });
+  });
+
+  it.each([true, false])(
+    "redelivers prior conversation to a fresh CLI session (previous binding: %s)",
+    async (hasBinding) => {
+      await withAuthenticatedHistory("claude-cli", async (prepare) => {
+        const recoveredAt = "2020-01-02T03:04:05.000Z";
+        fixture.appendTranscript({
+          id: "msg-1",
+          parentId: null,
+          timestamp: recoveredAt,
+          message: makeUserMessage("prior claude-cli ask", 1),
+        });
+        fixture.appendTranscript({
+          id: "result-1",
+          parentId: "msg-1",
+          timestamp: "2020-01-02T03:04:06.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            isError: false,
+            content: [{ type: "text", text: "Archive created at /tmp/example-backup.tar" }],
+            timestamp: 2,
+          },
+        });
+        fixture.appendTranscript({
+          id: "result-2",
+          parentId: "result-1",
+          timestamp: "2020-01-02T03:04:07.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "exec",
+            isError: true,
+            content: [{ type: "text", text: "Upload failed: destination unavailable" }],
+            timestamp: 3,
+          },
+        });
+        setCliBackendForPrepareTest({
+          reseedFromRawTranscriptWhenUncompacted: true,
+        });
+        const transcriptCheck = vi.fn(async () => false);
+        const orphanCheck = vi.fn(async () => false);
+        setCliRunnerPrepareTestDeps({
+          claudeCliSessionTranscriptHasContent: transcriptCheck,
+          claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        });
+
+        const context = await prepare({
+          sessionKey: "agent:main:telegram:direct:peer",
+          provider: "claude-cli",
+          model: "opus",
+          cliSessionBinding: hasBinding ? { sessionId: "stale-claude-sid" } : undefined,
+          cliSessionId: hasBinding ? "stale-claude-sid" : undefined,
+        });
+
+        // Candidate is invalidated (no native --resume) yet reseed still fires:
+        // prepare hands the prior OpenClaw conversation forward as history.
+        expect(context.reusableCliSession).toEqual(
+          hasBinding
+            ? { mode: "invalidate", invalidatedReason: "missing-transcript" }
+            : { mode: "none" },
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          `[${recoveredAt}] User: prior claude-cli ask`,
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Tool result (exec): Archive created at /tmp/example-backup.tar",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Tool result (exec) [error]: Upload failed: destination unavailable",
+        );
+        expect(context.openClawHistoryPrompt).not.toContain(
+          "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Recovered history may be stale; verify current and time-sensitive facts before acting.",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "<next_user_message>\nlatest ask\n</next_user_message>",
+        );
+      });
+    },
+  );
+
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
+    fixture.appendTranscript({
       id: "msg-node-1",
       parentId: null,
       timestamp: new Date(1).toISOString(),
       message: { role: "user", content: "gateway-only history", timestamp: 1 },
     });
-    try {
-      setCliBackendForPrepareTest({
-        bundleMcp: true,
-        liveSession: true,
-        reseedFromRawTranscriptWhenUncompacted: true,
-      });
-      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-      const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
-        args: ["--plugin-dir", "/tmp/gateway-skills"],
-        cleanup: vi.fn(async () => undefined),
-      }));
-      const transcriptCheck = vi.fn(async () => false);
-      const orphanCheck = vi.fn(async () => false);
-      setCliRunnerPrepareTestDeps({
-        ensureMcpLoopbackServer,
-        prepareClaudeCliSkillsPlugin,
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
+    const prepareExecution = vi.fn(async () => ({
+      env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+      secretInput: {
+        fd: 3,
+        fingerprint: "selected-node-token-fingerprint",
+        createData: () => Buffer.from("selected-node-token"),
+      },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+    }));
+    setCliBackendForPrepareTest({
+      bundleMcp: true,
+      liveSession: true,
+      prepareExecution,
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const prepareClaudeCliSkillsPluginMock = vi.fn(async () => ({
+      args: ["--plugin-dir", "/tmp/gateway-skills"],
+      cleanup: vi.fn(async () => undefined),
+    }));
+    const transcriptCheck = vi.fn(async () => false);
+    const orphanCheck = vi.fn(async () => false);
+    setCliRunnerPrepareTestDeps({
+      ensureMcpLoopbackServer,
+      prepareClaudeCliSkillsPlugin: prepareClaudeCliSkillsPluginMock,
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+    });
 
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "claude-cli",
-          model: "opus",
-          timeoutMs: 1_000,
-          runId: "run-node-claude-missing-placement",
-          sessionEntry: { execHost: "node" } as never,
-          config: createCliBackendConfig(),
-        }),
-      ).rejects.toThrow("node-placed Claude CLI session is missing execNode");
-      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:catalog-adopt:claude:node",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
+    await expect(
+      fixture.prepare({
         provider: "claude-cli",
         model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-node-claude-prepare",
-        cliSessionBinding: {
-          sessionId: "node-source-session",
-          forceReuse: true,
-          forkNextResume: true,
-        },
-        cliSessionId: "node-source-session",
-        sessionEntry: {
-          execHost: "node",
-          execNode: "node-a",
-          execCwd: "/work/on-node",
-        } as never,
-        skillsSnapshot: {
-          prompt: "GATEWAY_ONLY_SKILL_PATH=/tmp/gateway-skill/SKILL.md",
-          skills: [],
-          resolvedSkills: [],
-        },
-        config: createCliBackendConfig(),
-      });
+        sessionEntry: { execHost: "node" } as never,
+      }),
+    ).rejects.toThrow("node-placed Claude CLI session is missing execNode");
+    expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
 
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse",
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:catalog-adopt:claude:node",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: {
         sessionId: "node-source-session",
-      });
-      // The reseed prompt is gateway-built text, so node placement keeps the
-      // backend's raw-transcript reseed semantics for fresh-retry paths.
-      expect(context.openClawHistoryPrompt).toContain("gateway-only history");
-      expect(context.claudeSkillsPluginArgs).toEqual([]);
-      expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
-      expect(context.mcpDeliveryCapture).toBeUndefined();
-      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-      expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
-      expect(transcriptCheck).not.toHaveBeenCalled();
-      expect(orphanCheck).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+        forceReuse: true,
+        forkNextResume: true,
+      },
+      cliSessionId: "node-source-session",
+      sessionEntry: {
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
+      } as never,
+      skillsSnapshot: {
+        prompt: "GATEWAY_ONLY_SKILL_PATH=/tmp/gateway-skill/SKILL.md",
+        skills: [],
+        resolvedSkills: [],
+      },
+    });
+
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "node-source-session",
+    });
+    // The reseed prompt is gateway-built text, so node placement keeps the
+    // backend's raw-transcript reseed semantics for fresh-retry paths.
+    // A borrowed native handle cannot authorize unverified durable history.
+    expect(context.openClawHistoryPrompt).toBeUndefined();
+    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
+    expect(context.mcpDeliveryCapture).toBeUndefined();
+    expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+    expect(prepareClaudeCliSkillsPluginMock).not.toHaveBeenCalled();
+    expect(transcriptCheck).not.toHaveBeenCalled();
+    expect(orphanCheck).not.toHaveBeenCalled();
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(context.preparedBackend.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+    });
+    expect(context.preparedBackend.secretInput?.fingerprint).toBe(
+      "selected-node-token-fingerprint",
+    );
+    expect(context.preparedBackend.backend.clearEnv).toEqual(
+      expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
+    );
   });
 
   it("keeps a warm claude-cli binding when its managed stdio child is still live", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-warm-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "earlier warm context",
-        timestamp: 1,
-      },
-    });
-    try {
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      fixture.appendTranscript({
+        id: "msg-warm-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: makeUserMessage("earlier warm context", 1),
+      });
       setCliBackendForPrepareTest({
         liveSession: true,
         reseedFromRawTranscriptWhenUncompacted: true,
@@ -4103,31 +5996,25 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         claudeCliSessionTranscriptHasContent: transcriptCheck,
         claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-        getClaudeLiveSessionGenerationForOwner: getLiveSessionGeneration,
+        getCliLiveSessionGeneration: getLiveSessionGeneration,
       });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
+      const context = await prepare({
         sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
         prompt: "warm follow-up",
         provider: "claude-cli",
         model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-warm-live-follow-up",
         cliSessionBinding: { sessionId: "warm-claude-sid" },
         cliSessionId: "warm-claude-sid",
-        config: createCliBackendConfig(),
       });
 
       expect(getLiveSessionGeneration).toHaveBeenCalledWith({
         backendId: "claude-cli",
         agentAccountId: undefined,
-        agentId: undefined,
-        authProfileId: undefined,
+        agentId: "main",
+        authProfileId: "history-test:account",
         sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
+        sessionKey: "agent:main:main",
       });
       expect(transcriptCheck).toHaveBeenCalledWith({
         sessionId: "warm-claude-sid",
@@ -4138,351 +6025,181 @@ describe("prepareCliRunContext", () => {
         mode: "reuse",
         sessionId: "warm-claude-sid",
       });
+      expect(context.params.agentId).toBe("main");
       expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
       expect(context.openClawHistoryPrompt).toContain("earlier warm context");
       expect(context.openClawHistoryPrompt).toContain("warm follow-up");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("disables Claude live transport while preserving native transcript resume", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      setCliBackendForPrepareTest({ liveSession: true });
-      const transcriptCheck = vi.fn(async () => true);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
-      });
+    setCliBackendForPrepareTest({ liveSession: true });
+    const transcriptCheck = vi.fn(async () => true);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+    });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:openclaw:main",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "approve the proposal",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-openclaw-process-per-turn",
-        cliSessionBinding: { sessionId: "native-claude-sid" },
-        config: createCliBackendConfig(),
-        disableCliLiveSession: true,
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:openclaw:main",
+      prompt: "approve the proposal",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "native-claude-sid" },
+      disableCliLiveSession: true,
+    });
 
-      expect(context.preparedBackend.backend.liveSession).toBeUndefined();
-      expect(context.preparedBackend.backend.sessionMode).toBe("existing");
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse",
-        sessionId: "native-claude-sid",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.preparedBackend.backend.liveSession).toBeUndefined();
+    expect(context.preparedBackend.backend.sessionMode).toBe("existing");
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "native-claude-sid",
+    });
   });
 
   it("ignores stored CLI session candidates when the backend disables sessions", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      setCliBackendForPrepareTest({
-        sessionMode: "none",
-        reseedFromRawTranscriptWhenUncompacted: true,
-      });
-      const transcriptCheck = vi.fn(async () => false);
-      const orphanCheck = vi.fn(async () => false);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
+    setCliBackendForPrepareTest({
+      sessionMode: "none",
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+    const transcriptCheck = vi.fn(async () => false);
+    const orphanCheck = vi.fn(async () => false);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+    });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "stateless ask",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-stateless-cli",
-        cliSessionBinding: { sessionId: "stale-claude-sid" },
-        cliSessionId: "stale-claude-sid",
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "stateless ask",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "stale-claude-sid" },
+      cliSessionId: "stale-claude-sid",
+    });
 
-      expect(context.reusableCliSession).toEqual({ mode: "none" });
-      expect(transcriptCheck).not.toHaveBeenCalled();
-      expect(orphanCheck).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("invalidates orphaned claude-cli transcripts during run preparation", async () => {
-    const { dir, sessionFile } = createSessionFile();
-
-    try {
-      setCliBackendForPrepareTest();
-      const transcriptCheck = vi.fn(async () => true);
-      const orphanCheck = vi.fn(async () => true);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "follow-up",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-orphan-tool-use",
-        cliSessionBinding: {
-          sessionId: "orphaned-claude-sid",
-          cwdHash: hashCliSessionText(dir),
-        },
-        cliSessionId: "orphaned-claude-sid",
-        config: createCliBackendConfig(),
-      });
-
-      expect(transcriptCheck).toHaveBeenCalledWith({
-        sessionId: "orphaned-claude-sid",
-        workspaceDir: dir,
-      });
-      expect(orphanCheck).toHaveBeenCalledWith({
-        sessionId: "orphaned-claude-sid",
-        workspaceDir: dir,
-      });
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "orphaned-tool-use",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps auth-boundary invalidation ahead of orphaned transcript checks", async () => {
-    const { dir, sessionFile } = createSessionFile();
-
-    try {
-      setCliBackendForPrepareTest();
-      const transcriptCheck = vi.fn(async () => true);
-      const orphanCheck = vi.fn(async () => true);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "follow-up",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-orphan-auth-boundary",
-        cliSessionBinding: {
-          sessionId: "orphaned-claude-sid",
-          authProfileId: "anthropic:old-profile",
-          cwdHash: hashCliSessionText(dir),
-        },
-        cliSessionId: "orphaned-claude-sid",
-        config: createCliBackendConfig(),
-      });
-
-      expect(transcriptCheck).not.toHaveBeenCalled();
-      expect(orphanCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "auth-profile",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps the claude-cli sessionId when the on-disk transcript is present", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      setCliBackendForPrepareTest();
-      const transcriptCheck = vi.fn(async () => true);
-      const orphanCheck = vi.fn(async () => false);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "follow-up",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-77011-present",
-        cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(dir) },
-        cliSessionId: "live-claude-sid",
-        config: createCliBackendConfig(),
-      });
-
-      expect(transcriptCheck).toHaveBeenCalledWith({
-        sessionId: "live-claude-sid",
-        workspaceDir: dir,
-      });
-      expect(orphanCheck).toHaveBeenCalledWith({
-        sessionId: "live-claude-sid",
-        workspaceDir: dir,
-      });
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse",
-        sessionId: "live-claude-sid",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(transcriptCheck).not.toHaveBeenCalled();
+    expect(orphanCheck).not.toHaveBeenCalled();
   });
 
   it("checks claude-cli transcript content under the resolved cwd", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = fixture.session;
     const taskDir = path.join(dir, "task");
     fs.mkdirSync(taskDir, { recursive: true });
-    try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              resumeArgs: ["--resume", "{sessionId}"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-      const transcriptCheck = vi.fn(async () => true);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:telegram:direct:peer",
-        sessionFile,
-        workspaceDir: dir,
-        cwd: taskDir,
-        prompt: "follow-up",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-77011-cwd",
-        cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(taskDir) },
-        cliSessionId: "live-claude-sid",
-        config: createCliBackendConfig(),
-      });
-
-      expect(transcriptCheck).toHaveBeenCalledWith({
-        sessionId: "live-claude-sid",
-        workspaceDir: taskDir,
-      });
-      expect(context.reusableCliSession).toEqual({
-        mode: "reuse",
-        sessionId: "live-claude-sid",
-      });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("renders CLI skills from sandbox-readable paths instead of persisted host snapshots", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
-    const hostSkillPath = `${hostSkillDir}/SKILL.md`;
-    const materializedWorkspace = path.join(dir, "state", "sandbox-skills");
-    const materializedSkillDir = path.join(materializedWorkspace, "skills", "gog");
-    const materializedSkillPath = path.join(materializedSkillDir, "SKILL.md");
-    fs.mkdirSync(materializedSkillDir, { recursive: true });
-    fs.writeFileSync(
-      materializedSkillPath,
-      [
-        "---",
-        "name: gog",
-        "description: Read Gmail safely.",
-        "---",
-        "",
-        "Use the Gmail tools before answering mail questions.",
-      ].join("\n"),
-      "utf-8",
-    );
-    ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
-      workspaceDir: dir,
-      containerWorkdir: "/workspace",
-      skillsWorkspaceDir: materializedWorkspace,
-      workspaceAccess: "rw",
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: false,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        resumeArgs: ["--resume", "{sessionId}"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const transcriptCheck = vi.fn(async () => true);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
     });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:sandboxed-user",
-        agentId: "main",
-        sessionFile,
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      cwd: taskDir,
+      prompt: "follow-up",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(taskDir) },
+      cliSessionId: "live-claude-sid",
+    });
+
+    expect(transcriptCheck).toHaveBeenCalledWith({
+      sessionId: "live-claude-sid",
+      workspaceDir: taskDir,
+    });
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "live-claude-sid",
+    });
+  });
+
+  it.each(["agent:main:sandboxed-user", "global"])(
+    "renders sandbox-readable CLI skills for the prepared owner of %s",
+    async (sessionKey) => {
+      const { dir } = fixture.session;
+      const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
+      const hostSkillPath = `${hostSkillDir}/SKILL.md`;
+      const materializedWorkspace = path.join(dir, "state", "sandbox-skills");
+      const materializedSkillDir = path.join(materializedWorkspace, "skills", "gog");
+      const materializedSkillPath = path.join(materializedSkillDir, "SKILL.md");
+      fs.mkdirSync(materializedSkillDir, { recursive: true });
+      fs.writeFileSync(
+        materializedSkillPath,
+        [
+          "---",
+          "name: gog",
+          "description: Read Gmail safely.",
+          "---",
+          "",
+          "Use the Gmail tools before answering mail questions.",
+        ].join("\n"),
+        "utf-8",
+      );
+      ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
         workspaceDir: dir,
-        prompt: "are there any unread emails",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-sandbox-cli-skill-prompt",
-        config: createCliBackendConfig(),
-        skillsSnapshot: {
-          prompt: [
-            "<available_skills>",
-            "  <skill>",
-            "    <name>gog</name>",
-            "    <description>Read Gmail safely.</description>",
-            `    <location>${hostSkillPath}</location>`,
-            "  </skill>",
-            "</available_skills>",
-          ].join("\n"),
-          skills: [{ name: "gog" }],
-          resolvedSkills: [
-            {
-              name: "gog",
-              description: "Read Gmail safely.",
-              filePath: hostSkillPath,
-              baseDir: hostSkillDir,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: materializedWorkspace,
+        workspaceAccess: "rw",
+      });
+
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
+      };
+      const skillsSnapshot: SkillSnapshot = {
+        prompt: [
+          "<available_skills>",
+          "  <skill>",
+          "    <name>gog</name>",
+          "    <description>Read Gmail safely.</description>",
+          `    <location>${hostSkillPath}</location>`,
+          "  </skill>",
+          "</available_skills>",
+        ].join("\n"),
+        skills: [{ name: "gog" }],
+        resolvedSkills: [
+          {
+            name: "gog",
+            description: "Read Gmail safely.",
+            filePath: hostSkillPath,
+            baseDir: hostSkillDir,
+            source: "openclaw-bundled",
+            sourceInfo: {
+              path: hostSkillPath,
               source: "openclaw-bundled",
-              sourceInfo: {
-                path: hostSkillPath,
-                source: "openclaw-bundled",
-                scope: "project",
-                origin: "top-level",
-                baseDir: hostSkillDir,
-              },
-              disableModelInvocation: false,
+              scope: "project",
+              origin: "top-level",
+              baseDir: hostSkillDir,
             },
-          ],
-        },
+            disableModelInvocation: false,
+          },
+        ],
+      };
+      const context = await fixture.prepare({
+        config,
+        sessionKey,
+        agentId: "main",
+        prompt: "are there any unread emails",
+        skillsSnapshot,
       });
 
       expect(ensureSandboxWorkspaceForSessionMock).toHaveBeenCalledWith({
-        config: createCliBackendConfig(),
-        sessionKey: "agent:main:sandboxed-user",
+        config,
+        agentId: "main",
+        sessionKey,
         workspaceDir: dir,
+        skillsSnapshot,
       });
       expect(context.systemPrompt).toContain(
         "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
@@ -4492,96 +6209,93 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPromptReport.skills.entries).toEqual([
         { name: "gog", blockChars: expect.any(Number) },
       ]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
+
+  it("lazily rebuilds an unsafe modern skills snapshot for a non-sandbox CLI run", async () => {
+    const { dir } = fixture.session;
+    for (const name of ["cold-skill", "healthy-skill"]) {
+      const skillDir = path.join(dir, "skills", name);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\n`,
+        "utf-8",
+      );
     }
+    const snapshot = buildSkillSnapshot(dir, {
+      bundledSkillsDir: path.join(dir, "missing-bundled-skills"),
+      managedSkillsDir: path.join(dir, "missing-managed-skills"),
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    const context = await fixture.prepare({
+      skillsSnapshot: {
+        ...snapshot,
+        prompt: `${snapshot.prompt}\n<available_skills></available_skills>`,
+      },
+    });
+
+    expect(context.systemPrompt).not.toContain("cold-skill/SKILL.md");
+    expect(context.systemPrompt).toContain("healthy-skill/SKILL.md");
   });
 
-  it("omits Claude CLI prompt skills when the native skills plugin can carry them", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const skillDir = path.join(dir, "skills", "weather");
-    fs.mkdirSync(skillDir, { recursive: true });
-    const skillFilePath = path.join(skillDir, "SKILL.md");
-    fs.writeFileSync(
-      skillFilePath,
-      [
-        "---",
-        "name: weather",
-        "description: Use weather tools for forecasts.",
-        "---",
-        "",
-        "Read forecast data before replying.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
+  it.each([
+    {
+      name: "omits prompt skills when the native skills plugin can carry them",
+      materialized: true,
+      pluginResult: "args",
+      expectsPromptSkills: false,
+    },
+    {
+      name: "keeps prompt skills when the snapshot has no materialized plugin skills",
+      materialized: false,
+      pluginResult: "default",
+      expectsPromptSkills: true,
+    },
+    {
+      name: "keeps prompt skills when plugin materialization produces no args",
+      materialized: true,
+      pluginResult: "empty",
+      expectsPromptSkills: true,
+    },
+  ])("handles Claude CLI skills: $name", async (testCase) => {
+    const { dir } = fixture.session;
+    const skill = createWeatherSkillFixture(dir, testCase.materialized);
+    setCliBackendForPrepareTest({ id: "claude-cli", pluginId: "anthropic" });
+    if (testCase.pluginResult !== "default") {
+      const pluginDir = path.join(dir, "openclaw-skills");
       setCliRunnerPrepareTestDeps({
         prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
-          args: ["--plugin-dir", path.join(dir, "openclaw-skills")],
+          args: testCase.pluginResult === "args" ? ["--plugin-dir", pluginDir] : [],
           cleanup: vi.fn(async () => undefined),
-          pluginDir: path.join(dir, "openclaw-skills"),
+          ...(testCase.pluginResult === "args" ? { pluginDir } : {}),
         })),
       });
+    }
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-claude-plugin-skills-prompt",
-        config: createCliBackendConfig(),
-        skillsSnapshot: {
-          prompt: [
-            "<available_skills>",
-            "  <skill>",
-            "    <name>weather</name>",
-            "    <description>Use weather tools for forecasts.</description>",
-            `    <location>${skillFilePath}</location>`,
-            "  </skill>",
-            "</available_skills>",
-          ].join("\n"),
-          skills: [{ name: "weather" }],
-          resolvedSkills: [
-            {
-              name: "weather",
-              description: "Use weather tools for forecasts.",
-              filePath: skillFilePath,
-              baseDir: skillDir,
-              source: "test",
-              sourceInfo: {
-                path: skillDir,
-                source: "test",
-                scope: "project",
-                origin: "top-level",
-                baseDir: skillDir,
-              },
-              disableModelInvocation: false,
-            },
-          ],
-        },
-      });
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "opus",
+      skillsSnapshot: skill.snapshot,
+    });
 
+    if (testCase.expectsPromptSkills) {
+      expect(context.systemPrompt).toContain("<available_skills>");
+      expect(context.systemPrompt).toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.preparedBackend.claimLiveSessionResources).toBeUndefined();
+    } else {
       expect(context.systemPrompt).not.toContain("<available_skills>");
       expect(context.systemPrompt).not.toContain("<name>weather</name>");
       expect(context.systemPromptReport.skills.promptChars).toBe(0);
@@ -4589,412 +6303,520 @@ describe("prepareCliRunContext", () => {
         "--plugin-dir",
         path.join(dir, "openclaw-skills"),
       ]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      expect(context.preparedBackend.claimLiveSessionResources).toEqual(expect.any(Function));
     }
   });
 
-  it("keeps Claude CLI prompt skills when the snapshot has no materialized plugin skills", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const missingSkillDir = path.join(dir, "skills", "missing");
-    const missingSkillFilePath = path.join(missingSkillDir, "SKILL.md");
+  it("isolates claimed native skills from later turns while cleaning each turn's MCP and auth", async () => {
+    const { dir } = fixture.session;
+    const skill = createWeatherSkillFixture(dir, true);
+    const preparedExecutionCleanup = vi.fn(async () => undefined);
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    setCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      prepareExecution: async () => ({ cleanup: preparedExecutionCleanup }),
+    });
+    setCliRunnerPrepareTestDeps({
+      prepareClaudeCliSkillsPlugin,
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      revokeMcpLoopbackClientGrant,
+    });
 
-    try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-claude-plugin-skills-prompt-fallback",
-        config: createCliBackendConfig(),
-        skillsSnapshot: {
-          prompt: [
-            "<available_skills>",
-            "  <skill>",
-            "    <name>weather</name>",
-            "    <description>Use weather tools for forecasts.</description>",
-            `    <location>${missingSkillFilePath}</location>`,
-            "  </skill>",
-            "</available_skills>",
-          ].join("\n"),
-          skills: [{ name: "weather" }],
-          resolvedSkills: [
-            {
-              name: "weather",
-              description: "Use weather tools for forecasts.",
-              filePath: missingSkillFilePath,
-              baseDir: missingSkillDir,
-              source: "test",
-              sourceInfo: {
-                path: missingSkillDir,
-                source: "test",
-                scope: "project",
-                origin: "top-level",
-                baseDir: missingSkillDir,
-              },
-              disableModelInvocation: false,
-            },
-          ],
-        },
-      });
-
-      expect(context.systemPrompt).toContain("<available_skills>");
-      expect(context.systemPrompt).toContain("<name>weather</name>");
-      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
-      expect(context.claudeSkillsPluginArgs).toEqual([]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "opus",
+      skillsSnapshot: skill.snapshot,
+      sessionKey: "agent:main:main",
+      runId: "native-skill-turn-one",
+    });
+    const pluginDir = context.claudeSkillsPluginArgs[1];
+    if (!pluginDir) {
+      throw new Error("Expected materialized skill plugin");
     }
-  });
-
-  it("keeps Claude CLI prompt skills when plugin materialization produces no args", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    const skillDir = path.join(dir, "skills", "weather");
-    fs.mkdirSync(skillDir, { recursive: true });
-    const skillFilePath = path.join(skillDir, "SKILL.md");
-    fs.writeFileSync(
-      skillFilePath,
-      [
-        "---",
-        "name: weather",
-        "description: Use weather tools for forecasts.",
-        "---",
-        "",
-        "Read forecast data before replying.",
-      ].join("\n"),
-      "utf-8",
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
     );
+    expect(manifest).toMatchObject({ name: "openclaw-skills", skills: "./skills" });
+    const skillPath = path.join(pluginDir, "skills", "weather", "SKILL.md");
+    expect(fs.readFileSync(skillPath, "utf8")).toContain("Read forecast data before replying.");
 
+    const releaseSkills = context.preparedBackend.claimLiveSessionResources?.();
+    expect(releaseSkills).toEqual(expect.any(Function));
+    expect(context.preparedBackend.claimLiveSessionResources?.()).toBeUndefined();
     try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
-      setCliRunnerPrepareTestDeps({
-        prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
-          args: [],
-          cleanup: vi.fn(async () => undefined),
-        })),
-      });
+      await context.preparedBackend.cleanup?.();
+      expect(fs.existsSync(skillPath)).toBe(true);
+      expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
+      const nextTurn = await fixture.prepare({
         provider: "claude-cli",
         model: "opus",
-        timeoutMs: 1_000,
-        runId: "run-claude-plugin-skills-prompt-materialization-fallback",
-        config: createCliBackendConfig(),
-        skillsSnapshot: {
-          prompt: [
-            "<available_skills>",
-            "  <skill>",
-            "    <name>weather</name>",
-            "    <description>Use weather tools for forecasts.</description>",
-            `    <location>${skillFilePath}</location>`,
-            "  </skill>",
-            "</available_skills>",
-          ].join("\n"),
-          skills: [{ name: "weather" }],
-          resolvedSkills: [
-            {
-              name: "weather",
-              description: "Use weather tools for forecasts.",
-              filePath: skillFilePath,
-              baseDir: skillDir,
-              source: "test",
-              sourceInfo: {
-                path: skillDir,
-                source: "test",
-                scope: "project",
-                origin: "top-level",
-                baseDir: skillDir,
-              },
-              disableModelInvocation: false,
-            },
-          ],
-        },
+        skillsSnapshot: skill.snapshot,
+        sessionKey: "agent:main:main",
+        runId: "native-skill-turn-two",
       });
+      const unusedPluginDir = nextTurn.claudeSkillsPluginArgs[1];
+      expect(unusedPluginDir).toEqual(expect.any(String));
+      expect(unusedPluginDir).not.toBe(pluginDir);
+      expect(fs.existsSync(unusedPluginDir ?? "")).toBe(true);
 
-      expect(context.systemPrompt).toContain("<available_skills>");
-      expect(context.systemPrompt).toContain("<name>weather</name>");
-      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
-      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      await nextTurn.preparedBackend.cleanup?.();
+      expect(fs.existsSync(unusedPluginDir ?? "")).toBe(false);
+      expect(fs.existsSync(skillPath)).toBe(true);
+      expect(preparedExecutionCleanup).toHaveBeenCalledTimes(2);
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await releaseSkills?.();
+    }
+    expect(fs.existsSync(pluginDir)).toBe(false);
+  });
+
+  it("keeps empty caller memory authoritative beside a borrowed compacted target", async () => {
+    const { dir, sessionTarget } = fixture.session;
+    const durable = SessionManager.open(sessionTarget, dir);
+    durable.appendMessage({ role: "user", content: "BORROWED_PREFIX", timestamp: 1 });
+    const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 2));
+    durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
+    durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 3 });
+    durable.flushPendingPersistence();
+    expect(SessionManager.open(sessionTarget).buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "BORROWED_SUMMARY" },
+      { content: "BORROWED_RETAINED" },
+      { content: "BORROWED_TAIL" },
+    ]);
+    const sessionManager = SessionManager.inMemory(dir);
+    const before = structuredClone(sessionManager.getEntries());
+    const runBeforePromptBuild = vi.fn(async (_event: { messages: unknown[] }) => undefined);
+    mockGetGlobalHookRunner.mockReturnValue({
+      hasHooks: (name: string) => name === "before_prompt_build",
+      runBeforePromptBuild,
+    } as never);
+
+    const context = await fixture.prepare({
+      sessionManager,
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
+      storePath: sessionTarget.storePath,
+      expectedLifecycleRevision: "borrowed-revision",
+      expectedWriterRunId: "borrowed-writer",
+      lifecycleGeneration: "owned-lifecycle-generation",
+    });
+    try {
+      expect.soft(runBeforePromptBuild.mock.calls[0]?.[0].messages).toEqual([]);
+      expect.soft(context.hadSessionFile).toBe(false);
+      expect.soft(context.openClawHistoryPrompt).toBeUndefined();
+      expect.soft(context.params.sessionManager).toBe(sessionManager);
+      expect.soft(context.params.lifecycleGeneration).toBe("owned-lifecycle-generation");
+      expect.soft(context.params.sessionTarget).toBeUndefined();
+      expect.soft(context.params.storePath).toBeUndefined();
+      expect.soft(context.params.expectedLifecycleRevision).toBeUndefined();
+      expect.soft(context.params.expectedWriterRunId).toBeUndefined();
+      expect.soft(context.params.sessionFile).toBe(`in-memory:${sessionManager.getSessionId()}`);
+      expect.soft(sessionManager.getEntries()).toEqual(before);
+    } finally {
+      await context.preparedBackend.cleanup?.();
     }
   });
 
   it("does not probe the transcript for non-claude-cli providers", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const transcriptCheck = vi.fn(async () => false);
-      setCliRunnerPrepareTestDeps({
-        claudeCliSessionTranscriptHasContent: transcriptCheck,
-      });
+    const { dir } = fixture.session;
+    const transcriptCheck = vi.fn(async () => false);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+    });
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-77011-other-provider",
-        cliSessionBinding: { sessionId: "test-cli-sid", cwdHash: hashCliSessionText(dir) },
-        config: createCliBackendConfig(),
-      });
+    const context = await fixture.prepare({
+      cliSessionBinding: { sessionId: "test-cli-sid", cwdHash: hashCliSessionText(dir) },
+    });
 
-      expect(transcriptCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "test-cli-sid" });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(transcriptCheck).not.toHaveBeenCalled();
+    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "test-cli-sid" });
   });
 
-  it("uses a larger automatic reseed history cap for Claude CLI", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
+  it.each([
+    "empty",
+    "compacted",
+    "raw",
+    "absent-target",
+    "blocked",
+    "cancelled",
+    "foreign-maintenance",
+  ] as const)(
+    "isolates %s caller memory through outer normalization and real CLI execution",
+    async (scenario) => {
+      const { dir, sessionTarget: fixtureTarget } = fixture.session;
+      const sessionTarget =
+        scenario === "absent-target"
+          ? { ...fixtureTarget, storePath: path.join(dir, "absent", "openclaw-agent.sqlite") }
+          : fixtureTarget;
+      const durable = SessionManager.open(fixtureTarget, dir);
+      const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 1));
+      durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
+      durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 2 });
+      durable.flushPendingPersistence();
+      const eventsBefore = loadTranscriptEventsSync(fixtureTarget);
+      const entryBefore = loadSessionEntryReadOnly(fixtureTarget);
+      const sessionManager = SessionManager.inMemory(dir);
+      if (scenario === "raw" || scenario === "compacted") {
+        const kept = sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
+        if (scenario === "compacted") {
+          sessionManager.appendCompaction("OWNED_SUMMARY", kept, 1000);
+        }
+        sessionManager.appendMessage({ role: "user", content: "OWNED_TAIL", timestamp: 2 });
+      }
+      const memoryBefore = structuredClone(sessionManager.getEntries());
+      const outgoing: CliBackendExecuteContext[] = [];
+      const cleanup = vi.fn(async () => undefined);
+      const abortController = new AbortController();
+      const backend: CliBackendPlugin = {
+        ...buildDefaultTestCliBackend(),
+        subscriptionAuthDispatch: true,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
+        resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+        autoSelectAuthProfile: false,
+        config: {
+          command: "/bin/echo",
+          args: [],
+          resumeArgs: ["--resume", "{sessionId}"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+          reseedFromRawTranscriptWhenUncompacted: true,
+        },
+        prepareExecution: async () => ({
+          cleanup,
+          async *execute(input) {
+            outgoing.push(input);
+            if (scenario === "cancelled") {
+              abortController.abort();
+              throw new Error("synthetic cancellation");
+            }
+            yield {
+              type: "result",
+              subtype: "success",
+              result: "owned answer",
+              session_id: "native-owned",
+            };
           },
-        ],
-      });
-
-      const summaryMarker = "RESEED_SUMMARY_MARKER_KEEP";
-      const padding = "x".repeat(40_000);
-      fs.appendFileSync(
-        sessionFile,
-        `${JSON.stringify({
-          type: "compaction",
-          summary: `${summaryMarker} ${padding}`,
-        })}\n`,
-        "utf-8",
-      );
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "claude-haiku-3-5",
-        timeoutMs: 1_000,
-        runId: "run-auto-claude-reseed-history-chars",
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.openClawHistoryPrompt).toBeDefined();
-      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
-      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the plan-safe Claude CLI cap before mapping canonical models to CLI aliases", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-              modelAliases: {
-                "claude-opus-4-8": "opus",
+        }),
+      };
+      const builder = installTestPluginRegistry();
+      builder.registry.cliBackends.push({ backend, pluginId: "test-cli-plugin", source: "test" });
+      setRawCliBackendForPrepareTest({ ...backend, pluginId: "test-cli-plugin" });
+      const engineId = `cli-memory-${scenario}`;
+      const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+        bootstrapped: true,
+      }));
+      const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => undefined);
+      const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
+      registerTestContextEngine(engineId, () => ({
+        info: { id: engineId, name: "Caller memory test" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        bootstrap,
+        afterTurn,
+        maintain,
+      }));
+      const runBeforePromptBuild = vi.fn(async (_event: { messages: unknown[] }) => undefined);
+      const runBeforeAgentRun = vi.fn(async () =>
+        scenario === "blocked"
+          ? {
+              decision: {
+                outcome: "block",
+                reason: "private synthetic reason",
+                message: "synthetic block",
               },
+              pluginId: "owner-test",
+            }
+          : undefined,
+      );
+      mockGetGlobalHookRunner.mockReturnValue({
+        hasHooks: (name: string) => name === "before_prompt_build" || name === "before_agent_run",
+        runBeforePromptBuild,
+        runBeforeAgentRun,
+      } as never);
+      const { runEmbeddedAgent: runEmbeddedAgentImpl } =
+        await import("../embedded-agent-runner/run.js");
+      const runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentImpl);
+      const runId = `memory-cli-${scenario}`;
+      const maintenance = await import("../embedded-agent-runner/context-engine-maintenance.js");
+      const releaseMaintenance = createDeferred();
+      const maintenanceStarted = createDeferred();
+      const borrowedWait = createDeferred();
+      let maintenanceJoined: Promise<void> | undefined;
+      let waitSpy:
+        | MockInstance<typeof maintenance.waitForDeferredTurnMaintenanceForSession>
+        | undefined;
+      if (scenario === "foreign-maintenance") {
+        await maintenance.runContextEngineMaintenance({
+          contextEngine: {
+            info: {
+              id: "foreign-maintenance",
+              name: "Foreign durable maintenance",
+              turnMaintenanceMode: "background",
+            },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain: async () => {
+              maintenanceStarted.resolve();
+              await releaseMaintenance.promise;
+              return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
             },
           },
-        ],
-      });
+          sessionId: fixtureTarget.sessionId,
+          sessionKey: fixtureTarget.sessionKey,
+          sessionTarget: fixtureTarget,
+          sessionFile: fixtureTarget.sessionKey,
+          reason: "turn",
+          config: {},
+          onDeferredMaintenance: (promise) => {
+            maintenanceJoined = promise;
+          },
+        });
+        await maintenanceStarted.promise;
+        const wait = maintenance.waitForDeferredTurnMaintenanceForSession;
+        waitSpy = vi
+          .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
+          .mockImplementation((key) => {
+            borrowedWait.resolve();
+            return wait(key);
+          });
+      }
+      let run: ReturnType<typeof runEmbeddedAgent> | undefined;
+      try {
+        run = runEmbeddedAgent({
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionTarget: {
+            ...sessionTarget,
+            expectedLifecycleRevision: "borrowed-revision",
+            expectedWriterRunId: "borrowed-writer",
+          },
+          sessionFile: sessionTarget.sessionKey,
+          sessionManager,
+          sessionPersistence: "detached",
+          agentId: "main",
+          workspaceDir: dir,
+          config: { plugins: { slots: { contextEngine: engineId } } },
+          prompt: "owned next ask",
+          provider: "test-cli",
+          model: "test-model",
+          runId,
+          timeoutMs: 1000,
+          abortSignal: abortController.signal,
+          cliBackendDispatch: "subscription-auth",
+          toolsAllow: ["read"],
+        });
+        if (scenario === "foreign-maintenance") {
+          const outcome = await Promise.race([
+            run.then(() => "completed"),
+            borrowedWait.promise.then(() => "borrowed-wait"),
+          ]);
+          expect(outcome).toBe("completed");
+          expect(waitSpy).not.toHaveBeenCalled();
+        }
+        if (scenario === "cancelled") {
+          await expect(run).rejects.toThrow();
+        } else {
+          const result = await run;
+          expect(result.payloads?.[0]?.text).toContain(
+            scenario === "blocked" ? "synthetic block" : "owned answer",
+          );
+          expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+        }
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+        expect(JSON.stringify(runBeforePromptBuild.mock.calls)).not.toContain("BORROWED_");
+        expect(loadTranscriptEventsSync(fixtureTarget)).toEqual(eventsBefore);
+        expect(loadSessionEntryReadOnly(fixtureTarget)).toEqual(entryBefore);
+        for (const input of [
+          ...bootstrap.mock.calls.map(([event]) => event),
+          ...afterTurn.mock.calls.map(([event]) => event),
+          ...maintain.mock.calls.map(([event]) => event),
+        ]) {
+          expect(input.sessionTarget).toBeUndefined();
+          expect(input.sessionFile).toBe(`in-memory:${sessionManager.getSessionId()}`);
+          expect(input.runtimeContext?.sessionTarget).toBeUndefined();
+        }
+        if (scenario === "raw" || scenario === "compacted") {
+          expect(bootstrap).toHaveBeenCalledOnce();
+          const finalized = afterTurn.mock.calls[0]?.[0];
+          expect(finalized?.prePromptMessageCount).toBe(scenario === "compacted" ? 3 : 2);
+          expect(JSON.stringify(finalized?.messages)).toContain("OWNED_RETAINED");
+          expect(JSON.stringify(finalized?.messages)).toContain("OWNED_TAIL");
+          expect(JSON.stringify(finalized?.messages)).not.toContain("BORROWED_");
+        } else {
+          expect(bootstrap).not.toHaveBeenCalled();
+        }
+        if (scenario === "blocked") {
+          expect(outgoing).toHaveLength(0);
+          expect(JSON.stringify(sessionManager.getEntries())).toContain("synthetic block");
+          expect(JSON.stringify(sessionManager.getEntries())).not.toContain(
+            "private synthetic reason",
+          );
+        } else {
+          expect(outgoing).toHaveLength(1);
+          expect(outgoing[0]?.prompt).not.toContain("BORROWED_");
+          expect(outgoing[0]?.useResume).toBe(false);
+          expect(sessionManager.getEntries()).toEqual(memoryBefore);
+          if (scenario === "compacted" || scenario === "raw") {
+            expect(outgoing[0]?.prompt).toContain("OWNED_RETAINED");
+            expect(outgoing[0]?.prompt).toContain("OWNED_TAIL");
+          } else {
+            expect(outgoing[0]?.prompt).toBe("owned next ask");
+          }
+        }
+        if (scenario === "absent-target") {
+          expect(fs.existsSync(path.dirname(sessionTarget.storePath))).toBe(false);
+        }
+        if (scenario === "raw") {
+          // System-agent callers deliberately retain their own native binding beside memory.
+          const context = await fixture.prepare({
+            sessionManager,
+            cliSessionBinding: { sessionId: "native-owned", cwdHash: hashCliSessionText(dir) },
+          });
+          expect(context.openClawHistoryPrompt).toContain("OWNED_RETAINED");
+          const { runPreparedCliAgent } = await import("../cli-runner.js");
+          await withTestRunAdmission(context.params, (admittedRunContext) =>
+            runPreparedCliAgent({
+              ...context,
+              params: { ...context.params, admittedRunContext },
+            }),
+          );
+          expect(outgoing.at(-1)).toMatchObject({
+            useResume: true,
+            sessionId: "native-owned",
+            prompt: "latest ask",
+          });
+          expect(sessionManager.getEntries()).toEqual(memoryBefore);
+        }
+      } finally {
+        releaseMaintenance.resolve();
+        await maintenanceJoined;
+        await run?.catch(() => undefined);
+        waitSpy?.mockRestore();
+      }
+    },
+  );
 
-      const summaryMarker = "RESEED_ALIAS_SUMMARY_MARKER_KEEP";
-      const padding = "x".repeat(40_000);
-      fs.appendFileSync(
-        sessionFile,
-        `${JSON.stringify({
-          type: "compaction",
-          summary: `${summaryMarker} ${padding}`,
-        })}\n`,
-        "utf-8",
+  it.each([
+    {
+      name: "uses a larger automatic reseed history cap for Claude CLI",
+      provider: "claude-cli",
+      model: "claude-haiku-3-5",
+      marker: "RESEED_SUMMARY_MARKER_KEEP",
+      padding: 40_000,
+      expectsTruncation: false,
+    },
+    {
+      name: "uses the plan-safe Claude CLI cap before mapping canonical models to CLI aliases",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      modelAliases: { "claude-opus-4-8": "opus" },
+      marker: "RESEED_ALIAS_SUMMARY_MARKER_KEEP",
+      padding: 40_000,
+      expectsTruncation: false,
+    },
+    {
+      name: "keeps the default reseed history cap for non-Claude CLI backends",
+      provider: "test-cli",
+      model: "test-model",
+      marker: "RESEED_SUMMARY_MARKER_DEFAULT",
+      padding: 20_000,
+      expectsTruncation: true,
+    },
+  ])("$name", async (testCase) => {
+    await withAuthenticatedHistory(testCase.provider, async (prepare) => {
+      const { dir, sessionTarget } = fixture.session;
+      if (testCase.provider === "claude-cli") {
+        setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
+      }
+      const manager = SessionManager.open(sessionTarget, dir);
+      const firstKeptEntryId = manager.appendMessage(makeUserMessage("RESEED_RETAINED_PREFIX", 1));
+      manager.appendCompaction(
+        `${testCase.marker} ${"x".repeat(testCase.padding)}`,
+        firstKeptEntryId,
+        100_000,
       );
+      manager.flushPendingPersistence();
 
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "claude-cli",
-        model: "claude-opus-4-8",
-        timeoutMs: 1_000,
-        runId: "run-auto-claude-alias-reseed-history-chars",
-        config: createCliBackendConfig(),
+      const context = await prepare({
+        provider: testCase.provider,
+        model: testCase.model,
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
-      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
-      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps the default reseed history cap for non-Claude CLI backends", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    try {
-      const summaryMarker = "RESEED_SUMMARY_MARKER_DEFAULT";
-      const padding = "x".repeat(20_000);
-      fs.appendFileSync(
-        sessionFile,
-        `${JSON.stringify({
-          type: "compaction",
-          summary: `${summaryMarker} ${padding}`,
-        })}\n`,
-        "utf-8",
-      );
-
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-default-reseed-history-chars",
-        config: createCliBackendConfig(),
-      });
-
-      expect(context.openClawHistoryPrompt).toBeDefined();
-      expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+      expect(context.openClawHistoryPrompt).toContain("RESEED_RETAINED_PREFIX");
+      if (testCase.expectsTruncation) {
+        expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+      } else {
+        expect(context.openClawHistoryPrompt).toContain(testCase.marker);
+        expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+      }
+    });
   });
 
   it("uses the automatic Claude CLI cap through the raw-tail reseed path", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          pluginId: "anthropic",
-          bundleMcp: false,
-          config: {
-            command: "claude",
-            args: ["--print"],
-            output: "jsonl",
-            input: "stdin",
-            sessionMode: "existing",
-            reseedFromRawTranscriptWhenUncompacted: true,
-          },
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: false,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+          reseedFromRawTranscriptWhenUncompacted: true,
         },
-      ],
-    });
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
-    });
-    const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
-    const padding = "x".repeat(8_000);
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
-    });
-    appendTranscriptEntry(sessionFile, {
-      id: "msg-2",
-      parentId: "msg-1",
-      timestamp: new Date(2).toISOString(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: `${recentMarker} ${padding}` }],
-        api: "responses",
-        provider: "test-cli",
-        model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      });
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+      });
+      const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
+      const padding = "x".repeat(8_000);
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
+      });
+      fixture.appendTranscript({
+        id: "msg-2",
+        parentId: "msg-1",
+        timestamp: new Date(2).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${recentMarker} ${padding}` }],
+          api: "responses",
+          provider: "test-cli",
+          model: "test-model",
+          usage: createZeroUsageFixture(),
+          stopReason: "stop",
+          timestamp: 2,
         },
-        stopReason: "stop",
-        timestamp: 2,
-      },
-    });
+      });
 
-    try {
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
+      const context = await prepare({
         provider: "claude-cli",
         model: "claude-haiku-3-5",
-        timeoutMs: 1_000,
-        runId: "run-raw-reseed-cap-override",
         cliSessionBinding: { sessionId: "cli-session", cwdHash: hashCliSessionText(dir) },
-        config: createCliBackendConfig(),
       });
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
@@ -5002,9 +6824,7 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toContain(recentMarker);
       expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
       expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

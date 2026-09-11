@@ -12,6 +12,7 @@ import {
   readCodexAppServerClientRuntimeArtifact,
   validateCodexAppServerRuntimeArtifact,
 } from "./runtime-artifact.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function startOptions(
   command: string,
@@ -51,10 +52,49 @@ async function captureBinding(params: {
     before,
     startOptions: params.options,
     spawnIdentity: identity,
-    runtimeIdentity: { serverVersion: "0.144.1", userAgent: "codex-test" },
+    runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION, userAgent: "codex-test" },
   });
   bindCodexAppServerRuntimeArtifact(client, binding);
   return { binding, client };
+}
+
+async function createNpmLauncherFixture(root: string) {
+  const packageRoot = path.join(root, "node_modules", "@openai", "codex");
+  const launcher = path.join(packageRoot, "bin", "codex.js");
+  const platform = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const triple = `${arch === "arm64" ? "aarch64" : "x86_64"}-${platform === "darwin" ? "apple-darwin" : "unknown-linux-musl"}`;
+  const nativePackage = path.join(
+    packageRoot,
+    "node_modules",
+    "@openai",
+    `codex-${platform}-${arch}`,
+  );
+  const native = path.join(nativePackage, "vendor", triple, "bin", "codex");
+  const binDir = path.join(root, "bin");
+  await Promise.all([
+    fs.mkdir(path.dirname(launcher), { recursive: true }),
+    fs.mkdir(path.dirname(native), { recursive: true }),
+    fs.mkdir(binDir),
+  ]);
+  await Promise.all([
+    fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@openai/codex", bin: { codex: "bin/codex.js" } }),
+    ),
+    fs.writeFile(
+      path.join(nativePackage, "package.json"),
+      JSON.stringify({ name: `@openai/codex-${platform}-${arch}` }),
+    ),
+    fs.writeFile(launcher, "#!/usr/bin/env node\n"),
+    fs.writeFile(native, "native-v1"),
+    fs.writeFile(path.join(binDir, "node"), "node-v1"),
+  ]);
+  await fs.chmod(launcher, 0o755);
+  await fs.chmod(path.join(binDir, "node"), 0o755);
+  const command = path.join(binDir, "codex");
+  await fs.symlink(launcher, command);
+  return { command, launcher, native, binDir };
 }
 
 describe("Codex app-server runtime artifact", () => {
@@ -73,6 +113,69 @@ describe("Codex app-server runtime artifact", () => {
       await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
     });
   });
+
+  it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+    ["resolved-managed", "package-entrypoint"],
+    ["config", "absolute"],
+    ["env", "path"],
+    ["config", "relative"],
+  ] as const)(
+    "binds the official npm launcher selected by %s via %s",
+    async (source, selection) => {
+      await withTempDir("openclaw-codex-npm-artifact-", async (root) => {
+        const { command, launcher, native, binDir } = await createNpmLauncherFixture(root);
+        const options = startOptions(
+          selection === "package-entrypoint"
+            ? launcher
+            : selection === "path"
+              ? "codex"
+              : selection === "relative"
+                ? "bin/codex"
+                : command,
+          {
+            commandSource: source,
+            cwd: root,
+            env: { PATH: binDir },
+          },
+        );
+        const { binding } = await captureBinding({ options });
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+        await fs.writeFile(native, "native-v2");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      });
+    },
+  );
+
+  it("attests the sanitized environment when the host injects a runtime loader path", async () => {
+    await withTempDir("openclaw-codex-runtime-sanitized-env-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "native-v1");
+      const options = startOptions(command, {
+        env: { NODE_PATH: "/ambient/node_modules", LD_PRELOAD: "/ambient/inject.so" },
+      });
+
+      await expect(captureBinding({ options })).resolves.toMatchObject({
+        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
+      });
+    });
+  });
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["custom.js", "node_modules/.bin/custom", "node_modules/@openai/codex/bin/custom.js"])(
+    "rejects an unrecognized configured script at %s",
+    async (relativePath) => {
+      await withTempDir("openclaw-codex-custom-artifact-", async (root) => {
+        await createNpmLauncherFixture(root);
+        const command = path.join(root, relativePath);
+        await fs.mkdir(path.dirname(command), { recursive: true });
+        await fs.writeFile(command, "#!/usr/bin/env node\n");
+        await expect(captureBinding({ options: startOptions(command) })).rejects.toThrow(
+          "cannot attest a custom script launcher",
+        );
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "resolves relative launch paths and shebang targets from the spawn cwd",
@@ -210,7 +313,7 @@ describe("Codex app-server runtime artifact", () => {
           before,
           startOptions: options,
           spawnIdentity: identity,
-          runtimeIdentity: { serverVersion: "0.144.1" },
+          runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION },
         }),
       ).rejects.toThrow("changed during startup");
     });
@@ -242,14 +345,36 @@ describe("Codex app-server runtime artifact", () => {
     ).rejects.toThrow("WebSocket attestation is unsupported");
   });
 
-  it("fails closed when spawn environment can inject runtime code", async () => {
-    const options = startOptions("codex", { env: { NODE_OPTIONS: "--require=/tmp/inject.js" } });
+  it.each([
+    ["preload", "--require=/tmp/super-secret-inject.js", "--require"],
+    ["mixed safe and unsafe", "--no-warnings --import=/tmp/inject.mjs", "--import"],
+    ["module resolution", "--preserve-symlinks", "--preserve-symlinks"],
+    ["debugger", "--inspect=127.0.0.1:9229", "--inspect"],
+    ["unknown", "--future-node-option", "--future-node-option"],
+    ["invalid boolean value", "--no-warnings=true", "--no-warnings"],
+  ])("fails closed for %s NODE_OPTIONS", async (_label, nodeOptions, option) => {
+    const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
+    const capture = captureCodexAppServerRuntimeArtifactBeforeStart({
+      startOptions: options,
+      spawnIdentity: spawnIdentity(options),
+    });
+
+    await expect(capture).rejects.toThrow(`cannot attest NODE_OPTIONS option ${option}`);
+    await expect(capture).rejects.not.toThrow("super-secret-inject.js");
+  });
+
+  it.each([
+    ["unterminated quote", '--no-warnings "'],
+    ["trailing quoted escape", '--no-warnings "\\'],
+    ["tab delimiter", "--no-warnings\t--trace-warnings"],
+  ])("fails closed for malformed Node tokenization: %s", async (_label, nodeOptions) => {
+    const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
     await expect(
       captureCodexAppServerRuntimeArtifactBeforeStart({
         startOptions: options,
         spawnIdentity: spawnIdentity(options),
       }),
-    ).rejects.toThrow("injected runtime environment: NODE_OPTIONS");
+    ).rejects.toThrow("cannot safely parse NODE_OPTIONS");
   });
 
   it("allows bounded Node resource and warning options", async () => {
@@ -262,6 +387,32 @@ describe("Codex app-server runtime artifact", () => {
             "--max-old-space-size=4096 --no-warnings --disable-warning=ExperimentalWarning",
         },
       });
+
+      await expect(captureBinding({ options })).resolves.toMatchObject({
+        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
+      });
+    });
+  });
+
+  it.each([
+    [
+      "Discord network workaround",
+      "--dns-result-order=ipv4first --no-network-family-autoselection",
+    ],
+    [
+      "separate values and underscore aliases",
+      "--dns_result_order ipv6first --network_family_autoselection",
+    ],
+    ["quoted Node syntax", '"--dns-result-order=verbatim" "" --no-warnings'],
+    ["network attempt timeout", "--network-family-autoselection-attempt-timeout=250"],
+    ["proxy and platform trust", "--use-env-proxy --use-system-ca"],
+    ["bundled trust", "--use-bundled-ca"],
+    ["OpenSSL trust", "--use-openssl-ca"],
+  ])("allows bounded %s NODE_OPTIONS", async (_label, nodeOptions) => {
+    await withTempDir("openclaw-codex-runtime-node-options-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "native-v1");
+      const options = startOptions(command, { env: { NODE_OPTIONS: nodeOptions } });
 
       await expect(captureBinding({ options })).resolves.toMatchObject({
         binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
@@ -340,6 +491,30 @@ describe("Codex app-server runtime artifact", () => {
         fingerprint,
       }),
     ).resolves.toBe(false);
+  });
+
+  it("binds the native executable behind a Windows forwarder independently of path sort order", async () => {
+    await withTempDir("openclaw-codex-runtime-exe-shim-", async (root) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const nativeDir = path.join(root, "z-runtime");
+      const command = path.join(root, "a-launch.cmd");
+      const host = path.join(nativeDir, "codex-code-mode-host.exe");
+      await fs.mkdir(nativeDir);
+      await Promise.all([
+        fs.writeFile(command, '@ECHO off\r\n"%~dp0\\z-runtime\\codex.exe" %*\r\n'),
+        fs.writeFile(path.join(nativeDir, "codex.exe"), "native-v1"),
+        fs.writeFile(host, "host-v1"),
+      ]);
+      try {
+        Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+        const { binding } = await captureBinding({ options: startOptions(command) });
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+        await fs.writeFile(host, "host-v2");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+      }
+    });
   });
 
   it("rejects packages beyond the bounded directory depth", async () => {

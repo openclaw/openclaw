@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -7,6 +8,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -131,6 +133,32 @@ class SettingsScreensTest {
     assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Offline", gatewayStatusLabel("Offline", isConnected = false))
+    assertEquals("Cannot reach gateway", gatewayStatusLabel("Gateway error: offline", isConnected = false))
+  }
+
+  @Test
+  fun gatewayStatusLabelPreservesPartialConnectivity() {
+    assertEquals(
+      "Connected (node offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = true,
+          statusText = "Connected (node offline)",
+          problem = null,
+        ),
+      ),
+    )
+    assertEquals(
+      "Connected (operator offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = false,
+          statusText = "Connected (operator offline)",
+          problem = null,
+        ),
+      ),
+    )
   }
 
   @Test
@@ -325,6 +353,13 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun usageRefreshStaysVisibleBetweenIncompleteRetries() {
+    assertTrue(usageRefreshVisible(requestRefreshing = true, summaryRefreshing = false))
+    assertTrue(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = true))
+    assertFalse(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = false))
+  }
+
+  @Test
   fun approvalCardShowsTheWholeMonospacedCommandBeforeStackedActions() {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")
@@ -347,13 +382,13 @@ class SettingsScreensTest {
   @Test
   fun terminalNoticeRendersAsStandaloneDismissibleBannerRegardlessOfRemainingCards() {
     val source = settingsScreensSource()
-    // Terminal outcomes retire their card before the notice publishes, so any
+    // Terminal outcomes publish their notice with the card retired, so any
     // card-scoped or empty-inbox-only rendering hides losing outcomes whenever
     // another approval card remains visible.
     assertFalse(source.contains("execApprovalNoticeForCard"))
     assertFalse(source.contains("execApprovalEmptyInboxNotice"))
     val screenStart = source.indexOf("private fun ApprovalsSettingsScreen(")
-    val bannerCall = source.indexOf("execApprovalsNotice?.let", screenStart)
+    val bannerCall = source.indexOf("inbox.notice?.let", screenStart)
     val listPanelCall = source.indexOf("ExecApprovalsPanel(", screenStart)
     assertTrue(screenStart >= 0 && bannerCall > screenStart && listPanelCall > bannerCall)
 
@@ -394,6 +429,16 @@ class SettingsScreensTest {
     // Discovered gateways surface inside Add Gateway with a per-row connect.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
     assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+  }
+
+  @Test
+  fun accentSwatchDescriptionsNameDefaultAndEveryColor() {
+    val descriptions =
+      (listOf<Long?>(null) + appearanceAccentPalette).map(::appearanceAccentSwatchDescription)
+
+    assertEquals(appearanceAccentPalette.size + 1, descriptions.toSet().size)
+    assertEquals("Accent color, Default", descriptions.first())
+    assertTrue(descriptions.drop(1).all { it.startsWith("Accent color, #") })
   }
 
   private fun settingsScreensSource(): String {

@@ -1,16 +1,25 @@
 // Control UI chat domain owns pure slash command rules.
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
-import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
+import {
+  buildBuiltinChatCommands,
+  shouldForwardModelCommandToServer,
+} from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { ChatCommandDefinition } from "../../../../src/auto-reply/commands-registry.types.js";
+import {
+  isModelIndependentDirectiveCommand,
+  resolveReplyDirectiveCommand,
+} from "../../../../src/auto-reply/reply/directive-handling.parse.js";
+import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 type SlashCommandTier = "essential" | "standard" | "power";
-type ChatIconName = string;
 
 export type SlashCommandDef = {
   key: string;
@@ -19,16 +28,23 @@ export type SlashCommandDef = {
   description: string;
   descriptionKey?: string;
   args?: string;
-  icon?: ChatIconName;
+  icon?: IconName;
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
+  /** Whether a multi-word argument may execute from an inline prose position. */
+  allowsInlineMultiWordArgs?: boolean;
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
+  source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
+  skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -38,14 +54,24 @@ type CommandLike = {
   name: string;
   aliases?: string[];
   description: string;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   args?: Array<{
     name: string;
     required?: boolean;
     choices?: LocalArgChoice[];
   }>;
+  formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
   tier?: string;
+  source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
+  skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
+
+export function executesInlineImmediately(command: SlashCommandDef): boolean {
+  return command.source !== "skill";
+}
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
 const MAX_REMOTE_COMMANDS = 500;
@@ -56,13 +82,14 @@ const MAX_REMOTE_NAME_LENGTH = 200;
 const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
 const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
-const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
+const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   help: "book",
   status: "barChart",
   usage: "barChart",
   export: "download",
   export_session: "download",
   tools: "terminal",
+  dashboard: "layoutDashboard",
   skill: "zap",
   commands: "book",
   new: "plus",
@@ -80,6 +107,8 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
   steer: "send",
   tts: "volume2",
 };
+
+const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
   "help",
@@ -107,6 +136,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    modelIndependent: "always",
     tier: "standard",
   },
   {
@@ -118,6 +148,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    modelIndependent: "no-args",
     tier: "power",
   },
 ];
@@ -189,8 +220,9 @@ function formatArgs(command: CommandLike): string | undefined {
     .join(" ");
 }
 
-function choiceToValue(choice: LocalArgChoice): string {
-  return typeof choice === "string" ? choice : choice.value;
+function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
+  const value = typeof choice === "string" ? choice : choice.value;
+  return command.formatArgs?.({ [argName]: value }) ?? value;
 }
 
 function getArgOptions(command: CommandLike): string[] | undefined {
@@ -198,7 +230,9 @@ function getArgOptions(command: CommandLike): string[] | undefined {
   if (!firstArg) {
     return undefined;
   }
-  const options = firstArg.choices?.map(choiceToValue).filter(Boolean);
+  const options = firstArg.choices
+    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .filter(Boolean);
   return options?.length ? options : undefined;
 }
 
@@ -219,7 +253,7 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): ChatIconName | undefined {
+function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
@@ -239,18 +273,29 @@ function toSlashCommand(
   if (!name) {
     return null;
   }
+  const resolvedSource = command.source ?? (source === "local" ? "native" : undefined);
   return {
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
     description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
-    descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key],
+    ...(COMMAND_DESCRIPTION_KEYS[command.key]
+      ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
+      : {}),
     args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
+    modelIndependent: command.modelIndependent,
     argOptions: getArgOptions(command),
+    allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
+    ...(resolvedSource ? { source: resolvedSource } : {}),
+    ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
+    ...(command.skillModelVisible !== undefined
+      ? { skillModelVisible: command.skillModelVisible }
+      : {}),
+    ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
 }
 
@@ -310,6 +355,31 @@ function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
     });
 }
 
+function normalizeClientPresentation(
+  value: unknown,
+): NonNullable<CommandEntry["clientPresentation"]> | undefined {
+  const presentation = asRecord(value);
+  if (
+    !presentation ||
+    Object.keys(presentation).length !== 2 ||
+    !Object.hasOwn(presentation, "when") ||
+    !Object.hasOwn(presentation, "action") ||
+    presentation.when !== "no-arguments"
+  ) {
+    return undefined;
+  }
+  const action = asRecord(presentation.action);
+  if (
+    !action ||
+    Object.keys(action).length !== 1 ||
+    !Object.hasOwn(action, "kind") ||
+    action.kind !== "device-pairing"
+  ) {
+    return undefined;
+  }
+  return { when: "no-arguments", action: { kind: "device-pairing" } };
+}
+
 function buildLocalSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
     .map((command) => ({
@@ -317,11 +387,13 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
       name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
       aliases: command.textAliases,
       description: command.description,
+      modelIndependent: command.modelIndependent,
       args: command.args?.map((arg) => ({
         name: arg.name,
         required: arg.required,
         choices: Array.isArray(arg.choices) ? arg.choices : undefined,
       })),
+      formatArgs: command.formatArgs,
       category: command.category,
       tier: command.tier,
     }))
@@ -381,6 +453,18 @@ function normalizeCommandEntry(
     description: clampText(entry.description, MAX_REMOTE_DESCRIPTION_LENGTH),
     ...(args.length > 0 ? { args } : {}),
     category: typeof entry.category === "string" ? entry.category : undefined,
+    source:
+      entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
+        ? entry.source
+        : undefined,
+    skillDisplayName:
+      typeof entry.skillDisplayName === "string"
+        ? clampText(entry.skillDisplayName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
+        : undefined,
+    skillModelVisible:
+      typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
+    clientPresentation:
+      entry.source === "plugin" ? normalizeClientPresentation(entry.clientPresentation) : undefined,
   };
 }
 
@@ -442,20 +526,46 @@ const TIER_ORDER: Record<SlashCommandTier, number> = {
   power: 2,
 };
 
+const NON_MATCHING_COMMAND_RANK = 4;
+
+function getSlashCommandRelevance(command: SlashCommandDef, filter: string): number {
+  const names = [command.name, ...(command.aliases ?? [])].map(normalizeLowercaseStringOrEmpty);
+  if (names.some((name) => name === filter)) {
+    return 0;
+  }
+  if (names.some((name) => name.startsWith(filter))) {
+    return 1;
+  }
+  if (names.some((name) => name.includes(filter))) {
+    return 2;
+  }
+  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
+    ? 3
+    : NON_MATCHING_COMMAND_RANK;
+}
+
 export function getSlashCommandCompletions(
   filter: string,
-  options?: { showAll?: boolean },
+  options?: {
+    showAll?: boolean;
+    inlineOnly?: boolean;
+    allowImmediateInlineCommands?: boolean;
+  },
 ): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const showAll = options?.showAll ?? false;
-  let commands = lower
+  let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
-        (cmd) =>
-          cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
-          normalizeLowercaseStringOrEmpty(getSlashCommandDescription(cmd)).includes(lower),
+        (command) =>
+          (command.source === "skill" && command.skillModelVisible === true) ||
+          (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
     : SLASH_COMMANDS;
+  commands = lower
+    ? commands.filter(
+        (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
+      )
+    : commands;
 
   // When no filter text and not explicitly showing all, hide "power" tier commands
   if (!lower && !showAll) {
@@ -463,7 +573,12 @@ export function getSlashCommandCompletions(
   }
 
   return commands.toSorted((a, b) => {
-    // Sort by tier first (essential → standard → power)
+    if (lower) {
+      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
+      if (relevance !== 0) {
+        return relevance;
+      }
+    }
     const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
     const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
     if (aTier !== bTier) {
@@ -474,20 +589,78 @@ export function getSlashCommandCompletions(
     if (ai !== bi) {
       return ai - bi;
     }
-    if (lower) {
-      const aExact = a.name.startsWith(lower) ? 0 : 1;
-      const bExact = b.name.startsWith(lower) ? 0 : 1;
-      if (aExact !== bExact) {
-        return aExact - bExact;
-      }
-    }
     return 0;
   });
 }
 
-/** Count of commands hidden by tier filtering (for "Show N more" UI). */
-export function getHiddenCommandCount(): number {
-  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
+export type InlineSlashCompletion = {
+  query: string;
+  start: number;
+  end: number;
+  inline: boolean;
+  skillOnly?: boolean;
+  argumentStart?: number;
+};
+
+/** Finds the slash token being edited at the caret, including inside normal prose. */
+export function findInlineSlashCompletion(
+  text: string,
+  caret = text.length,
+): InlineSlashCompletion | null {
+  const boundedCaret = Math.max(0, Math.min(caret, text.length));
+  const prefix = text.slice(0, boundedCaret);
+  const match = prefix.match(/(?:^|\s)\/([^\s/:]*)(:?)$/u);
+  if (!match || match.index === undefined) {
+    return null;
+  }
+  const slashOffset = match[0].indexOf("/");
+  const start = match.index + slashOffset;
+  if (text[start + 1] === "/") {
+    return null;
+  }
+  let end = boundedCaret;
+  while (end < text.length && !/\s/u.test(text[end] ?? "")) {
+    end += 1;
+  }
+  const query = match[1] ?? "";
+  if (!/^[^\s/:]*$/u.test(query)) {
+    return null;
+  }
+  return {
+    query,
+    start,
+    end,
+    inline:
+      text.slice(0, start).trim().length > 0 ||
+      text.slice(end).trim().length > 0 ||
+      match[2] === ":",
+    ...(match[2] === ":" ? { skillOnly: true } : {}),
+  };
+}
+
+export function getSkillDisplayName(command: SlashCommandDef): string {
+  return command.skillDisplayName?.trim() || command.name;
+}
+
+export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
+  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const normalized = lower.replace(/[\s_]+/gu, "-");
+  return SLASH_COMMANDS.filter(
+    (command) => command.source === "skill" && command.skillModelVisible === true,
+  )
+    .filter((command) => {
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayLookup = displayName.replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      return (
+        !lower ||
+        displayName.includes(lower) ||
+        displayLookup.includes(normalized) ||
+        commandLookup.startsWith(normalized) ||
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+      );
+    })
+    .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));
 }
 
 type ParsedSlashCommand = {
@@ -525,4 +698,32 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   }
 
   return { command, args };
+}
+
+/** Stop and approval controls must remain usable while transcript admission is held. */
+export function isChatControlCommand(text: string): boolean {
+  const key = parseSlashCommand(text)?.command.key;
+  return normalizeLowercaseStringOrEmpty(text.trim()) === "/stop" || key === "approve";
+}
+
+export function isModelIndependentChatCommand(text: string): boolean {
+  const parsed = parseSlashCommand(text);
+  if (!parsed) {
+    return false;
+  }
+  const policy = parsed.command.modelIndependent;
+  if (policy === "directive") {
+    const name = resolveReplyDirectiveCommand(parsed.command.key);
+    return (
+      name !== undefined &&
+      ((name === "model" && !shouldForwardModelCommandToServer(parsed.args)) ||
+        isModelIndependentDirectiveCommand(name, parsed.args))
+    );
+  }
+  return (
+    policy === "always" ||
+    (policy === "no-args"
+      ? parsed.args === ""
+      : typeof policy === "function" && policy(parsed.args))
+  );
 }

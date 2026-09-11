@@ -3,11 +3,13 @@ import { refreshOnboardRecommendationsCommand } from "../commands/onboard-recomm
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
-  OnboardingRecommendationMatch,
   OnboardingRecommendationsRecord,
   OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
-import type { SetupAppRecommendationsResult } from "../system-agent/setup-app-recommendations.js";
+import type {
+  SetupAppRecommendationsResult,
+  SetupAppScanPhase,
+} from "../system-agent/setup-app-recommendations.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
 
@@ -200,7 +202,7 @@ describe("setupAppRecommendations", () => {
     const log = vi.fn();
     const prompter = createPrompter();
 
-    refreshOnboardRecommendationsCommand(runtime, { clear });
+    refreshOnboardRecommendationsCommand({}, runtime, { clear });
     await setupAppRecommendations({
       config: {},
       prompter,
@@ -380,6 +382,68 @@ describe("setupAppRecommendations", () => {
     expect(writeOffer).not.toHaveBeenCalled();
   });
 
+  it("updates progress as recommendation scan phases advance", async () => {
+    const prompter = createPrompter();
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    vi.mocked(prompter.progress).mockReturnValue(progress);
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
+          onPhase?.({
+            kind: "candidates",
+            appCount: 4,
+            sampleLabels: ["alpha", "Bravo", "Echo"],
+          });
+          onPhase?.({ kind: "matching", appCount: 4 });
+          return recommendationResult();
+        }),
+        ...storeDeps(),
+      },
+    });
+
+    expect(progress.update).toHaveBeenNthCalledWith(
+      1,
+      "Found 4 apps — searching plugins and skills for alpha, Bravo, Echo…",
+    );
+    expect(progress.update).toHaveBeenNthCalledWith(
+      2,
+      "Asking your model to pick the best matches…",
+    );
+  });
+
+  it("uses singular progress copy for one installed app", async () => {
+    const prompter = createPrompter();
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    vi.mocked(prompter.progress).mockReturnValue(progress);
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
+          onPhase?.({ kind: "candidates", appCount: 1, sampleLabels: ["Chat"] });
+          return recommendationResult();
+        }),
+        ...storeDeps(),
+      },
+    });
+
+    expect(progress.update).toHaveBeenCalledWith(
+      "Found 1 app — searching plugins and skills for Chat…",
+    );
+  });
+
   it("never preselects third-party ClawHub skills even when model-recommended", async () => {
     const result = recommendationResult();
     result.matches[1] = {
@@ -395,7 +459,10 @@ describe("setupAppRecommendations", () => {
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
-      deps: { recommend: vi.fn(async () => result), ...store },
+      deps: {
+        recommend: vi.fn(async () => result),
+        ...store,
+      },
     });
     expect(prompter.multiselect).toHaveBeenCalledWith(
       expect.objectContaining({ initialValues: ["recommendation:0"] }),
@@ -479,60 +546,7 @@ describe("setupAppRecommendations", () => {
   });
 
   it("reoffers a failed install and consumes it after a successful retry", async () => {
-    const storeState: { current: OnboardingRecommendationsRecord | null } = { current: null };
-    let now = 0;
-    const writeOffer = vi.fn(
-      (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
-        now += 1;
-        storeState.current = {
-          inventoryHash: "hash",
-          matches: [...params.matches],
-          offeredAt: now,
-          acceptedAt: params.answered ? now : null,
-          updatedAt: now,
-        };
-        return storeState.current;
-      },
-    );
-    const acknowledgeStored = vi.fn(
-      (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
-        if (
-          !storeState.current ||
-          (params.expected &&
-            (params.expected.inventoryHash !== storeState.current.inventoryHash ||
-              params.expected.updatedAt !== storeState.current.updatedAt))
-        ) {
-          return null;
-        }
-        now += 1;
-        storeState.current = { ...storeState.current, acceptedAt: now, updatedAt: now };
-        return storeState.current;
-      },
-    );
-    const updatePendingStored = vi.fn(
-      ({
-        matches,
-        expected,
-      }: {
-        matches: readonly OnboardingRecommendationMatch[];
-        expected: OnboardingRecommendationsRecord;
-      }) => {
-        if (
-          !storeState.current ||
-          expected.inventoryHash !== storeState.current.inventoryHash ||
-          expected.updatedAt !== storeState.current.updatedAt
-        ) {
-          return null;
-        }
-        now += 1;
-        storeState.current = {
-          ...storeState.current,
-          matches: [...matches],
-          updatedAt: now,
-        };
-        return storeState.current;
-      },
-    );
+    const store = storeDeps();
     const recommend = vi.fn(async () => recommendationResult());
     const installSkill = vi
       .fn()
@@ -550,11 +564,7 @@ describe("setupAppRecommendations", () => {
     const deps = {
       recommend,
       installSkill,
-      readStored: () => storeState.current,
-      writeOffer,
-      acknowledgeStored,
-      updatePendingStored,
-      deferOfferToBootstrap: () => false,
+      ...store,
     };
 
     await setupAppRecommendations({
@@ -567,7 +577,7 @@ describe("setupAppRecommendations", () => {
       deps,
     });
 
-    expect(storeState.current).toMatchObject({
+    expect(store.readStored()).toMatchObject({
       acceptedAt: null,
       matches: [expect.objectContaining({ candidateId: "@demo-owner/chat-skill" })],
     });
@@ -584,8 +594,8 @@ describe("setupAppRecommendations", () => {
 
     expect(recommend).toHaveBeenCalledOnce();
     expect(installSkill).toHaveBeenCalledTimes(2);
-    expect(acknowledgeStored).toHaveBeenCalledOnce();
-    expect(storeState.current?.acceptedAt).toBeTypeOf("number");
+    expect(store.acknowledgeStored).toHaveBeenCalledOnce();
+    expect(store.readStored()?.acceptedAt).toBeTypeOf("number");
   });
 
   it("consumes an exact installed skill left pending by an interrupted run", async () => {

@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
-import type { SwarmStructuredOutputState } from "../subagent-registry.types.js";
+import type { SwarmStructuredOutputState } from "../subagents/registry/subagent-registry.types.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -14,7 +14,7 @@ function formatSchemaError(errors: Array<{ text: string }>): string {
     .join("; ");
 }
 
-function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
+export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
   const state = states.get(runId);
   return state ? structuredClone(state) : undefined;
 }
@@ -22,7 +22,7 @@ function readSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | 
 export function consumeSwarmStructuredOutput(
   runId: string,
 ): SwarmStructuredOutputState | undefined {
-  const state = readSwarmStructuredOutput(runId);
+  const state = peekSwarmStructuredOutput(runId);
   states.delete(runId);
   return state;
 }
@@ -56,18 +56,29 @@ export function createStructuredOutputTool(params: {
   return {
     label: "Structured Output",
     name: "structured_output",
+    // Per-run collector contract: must be callable without discovery, and its
+    // schema-dump description would only pollute the search index.
+    catalogMode: "direct-only",
     displaySummary: "Record the collector result.",
     description: `Call exactly once as {"result": ...}, where result matches this JSON Schema: ${requestedSchema}`,
     // Runtime argument validation must reach execute so invalid attempts consume
-    // the durable one-retry budget. The requested schema remains model-visible above.
-    parameters: Type.Object({ result: Type.Unknown() }, { additionalProperties: false }),
+    // the durable one-retry budget. Providers still require every tool property to
+    // declare a JSON type before they will send the request.
+    parameters: Type.Object(
+      {
+        result: Type.Unsafe({
+          type: ["object", "array", "string", "number", "boolean", "null"],
+        }),
+      },
+      { additionalProperties: false },
+    ),
     execute: async (_toolCallId, args) => {
       const prior = states.get(params.runId);
       if (prior?.structured !== undefined) {
         throw new ToolInputError("structured_output already recorded for this run");
       }
       if (prior && prior.invalidAttempts >= 2) {
-        return jsonResult({ status: "rejected", schemaError: prior.schemaError });
+        return jsonResult({ status: "rejected", success: false, schemaError: prior.schemaError });
       }
       let validation: ReturnType<typeof validateJsonSchemaValue>;
       try {
@@ -93,19 +104,7 @@ export function createStructuredOutputTool(params: {
           `structured_output validation failed: ${schemaError}. Retry once with a corrected final result.`,
         );
       }
-      return jsonResult({ status: "rejected", schemaError });
+      return jsonResult({ status: "rejected", success: false, schemaError });
     },
   };
-}
-
-const testing = {
-  readSwarmStructuredOutput,
-  reset() {
-    states.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.structuredOutputToolTestApi")] =
-    { testing };
 }

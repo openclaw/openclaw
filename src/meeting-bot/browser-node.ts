@@ -1,10 +1,9 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
-  MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
   MeetingPlatformAdapter,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 
 type BrowserProxyResult = { result?: unknown };
@@ -173,18 +172,4 @@ export async function callMeetingBrowserProxyOnNode(
     scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw, params.adapter);
-}
-
-export function createMeetingBrowserNodeCaller(params: {
-  runtime: PluginRuntime;
-  adapter: NodeAdapter;
-  nodeId: string;
-}): MeetingBrowserRequestCaller {
-  return async (request) =>
-    await callMeetingBrowserProxyOnNode({
-      runtime: params.runtime,
-      adapter: params.adapter,
-      nodeId: params.nodeId,
-      ...request,
-    });
 }

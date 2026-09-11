@@ -1,56 +1,61 @@
+import {
+  buildControlUiResourcePath,
+  parseControlUiResourcePath,
+} from "../../../src/gateway/control-ui-resource-routes.js";
+import {
+  buildControlUiUserAvatarPath,
+  canonicalizeControlUiUserAvatarPath,
+} from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
+import { fnv1aUtf16 } from "./fnv1a.ts";
+import { takeGraphemes } from "./graphemes.ts";
+import { readAvatarGatewayContext } from "./identity-avatar-context.ts";
 
 // NOTE: this is sender-controlled metadata. It must never carry the trusted
 // gateway origin — that comes only from the app connection via
 // setAvatarGatewayOrigin().
-export type IdentityAvatarInput = SenderIdentity & {
-  profileAvatarUrl?: string;
-};
+export type IdentityAvatarInput = SenderIdentity;
 
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
-let appGatewayOrigin: string | null = null;
-
-function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
-    return null;
-  }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
-}
-
-/** Records the connected gateway URL so avatar routes resolve to its origin. */
-export function setAvatarGatewayOrigin(gatewayUrl: string | null | undefined): void {
-  appGatewayOrigin = toHttpOrigin(gatewayUrl);
-}
-
-// Mirrors the server's user-profiles-http-path matcher. Sender metadata may
-// point only at this image route, never another gateway endpoint.
-const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
-
 /**
- * Returns a browser-safe avatar URL, or null. Only the canonical
- * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
- * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
- * the browser cache-busts a replaced avatar. Since avatars now render as plain
- * <img> with no attached credentials, a varied query cannot amplify any
- * client cache — the browser bounds it. Relative paths resolve against the
- * trusted gateway origin; absolute URLs must match that origin.
+ * Trust only canonical user and agent image routes on the connected Gateway.
+ * Keep revision queries for cache invalidation, drop fragments, and apply the
+ * mount once: agent URLs arrive already prefixed, unlike user-profile URLs.
  */
-function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
+export function resolveTrustedAvatarUrl(
+  value: string,
+  gatewayOrigin: string | null,
+  resourceBasePath = readAvatarGatewayContext().resourceBasePath,
+): string | null {
   try {
-    const parsed = new URL(value, ORIGIN_PROBE);
-    if (!USER_AVATAR_PATHNAME.test(parsed.pathname)) {
+    let parsed = new URL(value, ORIGIN_PROBE);
+    const devGateway = configuredUiDevGateway();
+    if (devGateway) {
+      // User-profile routes can omit the Gateway mount; add it before the transport prefix.
+      const gatewayBasePath = new URL(devGateway.gatewayUrl).pathname.replace(/\/$/u, "");
+      const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, gatewayBasePath);
+      if (userPath) {
+        parsed.pathname = `${gatewayBasePath}${userPath}`;
+      }
+      const avatarUrl =
+        parsed.origin === ORIGIN_PROBE ? `${parsed.pathname}${parsed.search}` : parsed.href;
+      parsed = new URL(uiDevGatewayResourceUrl(avatarUrl), ORIGIN_PROBE);
+    }
+    const relativeRoute = parsed.origin === ORIGIN_PROBE;
+    const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, resourceBasePath);
+    const agentPath = parseControlUiResourcePath("agentAvatar", parsed.pathname, resourceBasePath);
+    const pathname = userPath
+      ? `${resourceBasePath}${userPath}`
+      : agentPath.matched && agentPath.value
+        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentPath.value)
+        : null;
+    if (!pathname) {
       return null;
     }
-    const suffix = parsed.pathname + parsed.search;
-    if (parsed.origin === ORIGIN_PROBE) {
+    const suffix = `${pathname}${parsed.search}`;
+    if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
     return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
@@ -61,22 +66,12 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
 
 export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
-  | { kind: "gravatar"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
 function initialsFromLabel(label: string): string {
   const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
-  const initials = words.map((word) => Array.from(word)[0] ?? "").join("");
+  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
   return initials.toUpperCase() || "?";
-}
-
-function stableColorSeed(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
 }
 
 export function resolveAvatarInitials(
@@ -87,7 +82,7 @@ export function resolveAvatarInitials(
   return {
     kind: "initials",
     initials: initialsFromLabel(label),
-    colorSeed: stableColorSeed(id || label),
+    colorSeed: fnv1aUtf16(id || label),
   };
 }
 
@@ -101,34 +96,37 @@ export function resolveIdentityHue(input: IdentityAvatarInput): number {
 }
 
 /**
- * Resolves a trusted gateway avatar route, else deterministic initials.
- * Gravatar is served by the gateway inside the profile avatar route itself, so
- * the client never constructs a Gravatar URL — it only ever renders the
- * canonical /api/users/<id>/avatar endpoint or falls back to initials.
+ * Resolve a Gateway user/agent avatar, else deterministic initials. Remote
+ * sources (including Gravatar) remain Gateway-owned, never browser fetches.
  */
-// User-profile ids are crypto UUIDs. Chat sender metadata carries only the id
-// (the prompt-visible envelope stays free of URLs), so a UUID-shaped sender id
-// is the signal to resolve the canonical avatar route for it client-side.
-const PROFILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
 export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
+  const identity = input.identity;
+  if (identity && identity.type !== "profile" && identity.type !== "agent") {
+    return resolveAvatarInitials(input);
+  }
   // Trusted origin comes only from the app connection, never from `input`.
-  const gatewayOrigin = appGatewayOrigin;
+  const { origin: gatewayOrigin, resourceBasePath } = readAvatarGatewayContext();
 
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   if (profileAvatarUrl) {
-    const trusted = toTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
-    if (trusted) {
+    const trusted = resolveTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
+    // A trusted image route does not change a typed participant's namespace.
+    if (
+      trusted &&
+      (!identity ||
+        parseControlUiResourcePath(
+          identity.type === "agent" ? "agentAvatar" : "userAvatar",
+          new URL(trusted, ORIGIN_PROBE).pathname,
+          resourceBasePath,
+        ).matched)
+    ) {
       return { kind: "profile", url: trusted };
     }
   }
 
-  // Sender metadata without an explicit route: a profile-id sender still has a
-  // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
-  const id = input.id?.trim();
-  if (id && PROFILE_ID_RE.test(id)) {
-    const trusted = toTrustedAvatarUrl(
-      `/api/users/${encodeURIComponent(id)}/avatar`,
+  if (identity?.type === "profile") {
+    const trusted = resolveTrustedAvatarUrl(
+      buildControlUiUserAvatarPath(identity.id),
       gatewayOrigin,
     );
     if (trusted) {

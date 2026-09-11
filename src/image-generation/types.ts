@@ -4,7 +4,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
-/** Binary image asset returned by an image-generation provider. */
+/** Non-empty binary image asset returned by an image-generation provider. */
 export type GeneratedImageAsset = {
   buffer: Buffer;
   mimeType: string;
@@ -15,7 +15,7 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
-export type ImageGenerationQuality = "low" | "medium" | "high" | "auto";
+export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
@@ -113,8 +113,11 @@ type ImageGenerationGeometryCapabilities = {
 
 type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
+  qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
   formats?: ImageGenerationOutputFormat[];
+  formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
   backgrounds?: ImageGenerationBackground[];
+  backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
 };
 
 export type ImageGenerationNormalization = {

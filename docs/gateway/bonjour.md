@@ -23,11 +23,11 @@ If the node and gateway are on different networks, multicast mDNS can't cross th
 ```json5
 {
   gateway: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true, domain: "openclaw.internal" } },
+  discovery: { wideArea: { domain: "openclaw.internal" } },
 }
 ```
 
-`discovery.wideArea.domain` also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when unset.
+Setting `discovery.wideArea.domain` enables Gateway wide-area publishing. The `OPENCLAW_WIDE_AREA_DOMAIN` environment variable supplies a default for CLI discovery and DNS setup; it does not enable Gateway publishing by itself.
 
 ### One-time DNS server setup (gateway host, macOS only)
 
@@ -82,7 +82,6 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 | `gatewayTls=1`                | Only when TLS is enabled.                                                      |
 | `gatewayTlsSha256=<sha256>`   | Only when TLS is enabled and a fingerprint is available.                       |
 | `gatewayDirectReachable=1`    | Only when the gateway is directly reachable (not only via a relay/proxy path). |
-| `canvasPort=<port>`           | Only when the canvas host is enabled; currently the same as `gatewayPort`.     |
 | `tailnetDns=<magicdns>`       | mDNS full mode only; optional hint when Tailnet is available.                  |
 | `sshPort=<port>`              | Full mode only; omitted in minimal and off modes.                              |
 | `cliPath=<path>`              | Full mode only; omitted in minimal and off modes.                              |
@@ -117,9 +116,9 @@ The gateway writes a rolling log file (printed on startup as `gateway log file: 
 - `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 
-OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log, as are transient `ENODEV` MDNS socket warnings that occur when a network interface (for example a short-lived Docker bridge) is removed between the responder's interface polls.
 
-When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution and do not indicate duplicate OCM supervision.
+When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
 
@@ -141,11 +140,16 @@ openclaw plugins enable bonjour
 
 When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata to publish; the same mode controls optional TXT hints in wide-area DNS-SD records. Modes:
 
-| Mode                | Behavior                                                                                                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                                                 |
-| `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                                                  |
-| `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish the minimal beacon when `discovery.wideArea.enabled` is true. |
+| Mode                | Behavior                                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                            |
+| `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                             |
+| `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish when `discovery.wideArea.domain` is set. |
+
+Mode changes hot-apply without restarting the Gateway or disconnecting clients.
+The discovery owner stops the prior advertisements before publishing the new
+mode. Reducing disclosure also updates TXT hints in any configured wide-area
+DNS-SD zone. Changing the mode does not enable a disabled Bonjour plugin.
 
 ## When to disable Bonjour
 
@@ -237,3 +241,4 @@ macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bon
 
 - Discovery policy and transport selection: [Discovery](/gateway/discovery)
 - Node pairing + approvals: [Gateway pairing](/gateway/pairing)
+- Wide-area DNS-SD setup helper: [`openclaw dns`](/cli/dns)

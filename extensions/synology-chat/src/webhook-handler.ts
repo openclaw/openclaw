@@ -15,6 +15,7 @@ import {
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
 import {
   validateToken,
@@ -147,40 +148,6 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
   // invalid-token limiter handles client identity; this guard only bounds work
   // already accepted for the Synology account route.
   return account.accountId;
-}
-
-/** Read the full request body as a string. */
-async function readBody(
-  req: IncomingMessage,
-  timeoutMs = PREAUTH_BODY_TIMEOUT_MS,
-): Promise<
-  | { ok: true; body: string }
-  | {
-      ok: false;
-      statusCode: number;
-      error: string;
-    }
-> {
-  try {
-    const body = await readRequestBodyWithLimit(req, {
-      maxBytes: PREAUTH_MAX_BODY_BYTES,
-      timeoutMs,
-    });
-    return { ok: true, body };
-  } catch (err) {
-    if (isRequestBodyLimitError(err)) {
-      return {
-        ok: false,
-        statusCode: err.statusCode,
-        error: requestBodyErrorToText(err.code),
-      };
-    }
-    return {
-      ok: false,
-      statusCode: 400,
-      error: "Invalid request body",
-    };
-  }
 }
 
 function firstNonEmptyString(value: unknown): string | undefined {
@@ -354,6 +321,9 @@ function parsePayload(
   };
 }
 
+const SYNOLOGY_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const SYNOLOGY_WEBHOOK_ACCEPTED_VALUE = "durable";
+
 /** Send a JSON response. */
 function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
@@ -404,16 +374,36 @@ async function parseWebhookPayloadRequest(params: {
 }): Promise<
   { ok: false } | { ok: true; payload: SynologyWebhookPayload; rawEvent: SynologyWebhookRawEvent }
 > {
-  const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
-  if (!bodyResult.ok) {
-    params.log?.error("Failed to read request body", bodyResult.error);
-    respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
+  let body: string;
+  try {
+    body = await readRequestBodyWithLimit(params.req, {
+      maxBytes: PREAUTH_MAX_BODY_BYTES,
+      timeoutMs:
+        params.bodyTimeoutMs === undefined ? PREAUTH_BODY_TIMEOUT_MS : params.bodyTimeoutMs,
+      // Defer destruction so the rejection owner can flush its response before closing.
+      destroyOnLimit: false,
+    });
+  } catch (err) {
+    const limited = isRequestBodyLimitError(err);
+    const error = limited ? requestBodyErrorToText(err.code) : "Invalid request body";
+    params.log?.error("Failed to read request body", error);
+    if (limited) {
+      await sendHttpRequestRejection(
+        params.req,
+        params.res,
+        err.statusCode,
+        JSON.stringify({ error }),
+        "application/json",
+      );
+      return { ok: false };
+    }
+    respondJson(params.res, 400, { error });
     return { ok: false };
   }
 
   let raw: ReturnType<typeof parseRawEvent>;
   try {
-    raw = parseRawEvent(params.req, bodyResult.body);
+    raw = parseRawEvent(params.req, body);
   } catch (err) {
     params.log?.warn("Failed to parse webhook payload", err);
     respondJson(params.res, 400, { error: "Invalid request body" });
@@ -565,12 +555,14 @@ async function resolveSynologyReplyDeliveryUserId(params: {
 async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
-}): Promise<boolean> {
+  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
+}) {
   const auth = await authorizeUserForDmWithIngress({
     accountId: params.account.accountId,
     userId: params.payload.user_id,
     dmPolicy: params.account.dmPolicy,
     allowedUserIds: params.account.allowedUserIds,
+    contextBinding: params.contextBinding,
   });
   if (!auth.senderAccess.allowed) {
     throw new SynologyIngressPermanentError(
@@ -578,7 +570,7 @@ async function authorizeClaimedSynologyWebhook(params: {
       `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
     );
   }
-  return auth.senderAccess.allowed;
+  return auth;
 }
 
 export async function processSynologyWebhookIngressEvent(params: {
@@ -598,10 +590,15 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const commandAuthorized = await authorizeClaimedSynologyWebhook({
-    account: params.account,
-    payload,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await authorizeClaimedSynologyWebhook({
+      account: params.account,
+      payload,
+      contextBinding,
+    });
+  const channelIngress = await resolveChannelIngress();
   const body = sanitizeSynologyWebhookText(payload);
   if (!body) {
     return;
@@ -618,12 +615,15 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
+      channelIngress,
+      resolveChannelIngress,
+      messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
-      commandAuthorized,
+      commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },
     params.lifecycle,
@@ -684,6 +684,9 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       respondJson(res, 400, { error: admitted.message });
       return;
     }
+    // Only a durably admitted event is acknowledged here; mark the ack so
+    // proxies can distinguish it from other responses (same marker as #104407).
+    res.setHeader(SYNOLOGY_WEBHOOK_ACCEPTED_HEADER, SYNOLOGY_WEBHOOK_ACCEPTED_VALUE);
     respondNoContent(res);
   };
 }

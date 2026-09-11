@@ -2,14 +2,17 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { killProcessTree } from "../process/kill-tree.js";
+import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -21,7 +24,10 @@ import {
   type WindowsListeningPidsResult,
 } from "./windows-port-pids.js";
 
-const SPAWN_TIMEOUT_MS = 2000;
+// macOS lsof needs seconds on hosts with many mounted volumes; keep that
+// allowance separate so process and ancestor probes retain their tighter bound.
+const INITIAL_LSOF_TIMEOUT_MS = 5000;
+const PROCESS_INSPECTION_TIMEOUT_MS = 2000;
 const STALE_SIGTERM_WAIT_MS = 600;
 const STALE_SIGKILL_WAIT_MS = 400;
 /**
@@ -31,7 +37,7 @@ const STALE_SIGKILL_WAIT_MS = 400;
  * `systemctl restart`). Without this wait the new process races the dying
  * process for the port and systemd enters an EADDRINUSE restart loop.
  *
- * POLL_SPAWN_TIMEOUT_MS is intentionally much shorter than SPAWN_TIMEOUT_MS
+ * POLL_SPAWN_TIMEOUT_MS is intentionally much shorter than the initial scan
  * so that a single slow or hung lsof invocation does not consume the entire
  * polling budget. At 400 ms per call, up to five independent lsof attempts
  * fit within PORT_FREE_TIMEOUT_MS = 2000 ms, each with a definitive outcome.
@@ -49,21 +55,24 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
-const sleepSyncOverride: ((ms: number) => void) | null = null;
-const dateNowOverride: (() => number) | null = null;
-const parentPidOverride: (() => number) | null = null;
 
-function getTimeMs(): number {
-  return dateNowOverride ? dateNowOverride() : Date.now();
+/** Terminate externally discovered stale gateway processes and allow cleanup to settle. */
+export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
+  const targets = Array.from(
+    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
+  );
+  for (const pid of targets) {
+    killProcessTree(pid, { graceMs: 300 });
+  }
+  if (targets.length > 0) {
+    await sleep(500);
+  }
+  return targets;
 }
 
 function sleepSync(ms: number): void {
   const timeoutMs = Math.max(0, Math.floor(ms));
   if (timeoutMs <= 0) {
-    return;
-  }
-  if (sleepSyncOverride) {
-    sleepSyncOverride(timeoutMs);
     return;
   }
   try {
@@ -75,10 +84,6 @@ function sleepSync(ms: number): void {
       // Best-effort fallback when Atomics.wait is unavailable.
     }
   }
-}
-
-function getParentPid(): number {
-  return parentPidOverride ? parentPidOverride() : process.ppid;
 }
 
 /**
@@ -154,9 +159,11 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * `/proc/<pid>/status` payloads) — there is no reachable override for
  * runtime callers to mutate.
  */
-export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
+export function getSelfAndAncestorPidsSync(
+  spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
+): Set<number> {
   const pids = new Set<number>([process.pid]);
-  const immediateParent = getParentPid();
+  const immediateParent = process.ppid;
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
@@ -202,7 +209,7 @@ function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: numbe
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
  * a virtual-filesystem access (no disk I/O, no external process), wrapped
  * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
- * with the caller's spawn timeout. Windows only uses the in-memory direct
+ * with the process-inspection timeout. Windows only uses the in-memory direct
  * parent from `process.ppid`.
  */
 function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
@@ -295,7 +302,7 @@ function parsePidsFromLsofOutput(
  * `getSelfAndAncestorPidsSync`).
  */
 function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: number): number[] {
-  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
+  const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
@@ -309,7 +316,7 @@ function filterVerifiedWindowsGatewayPidsResult(
   processArgsResult: (pid: number) => WindowsProcessArgsResult,
   protectedPid?: number,
 ): WindowsListeningPidsResult {
-  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
+  const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   const verified: number[] = [];
   for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
@@ -327,6 +334,8 @@ function filterVerifiedWindowsGatewayPidsResult(
 }
 
 type CleanStaleGatewayProcessesOptions = {
+  /** Reassert effect authority after blocking probes and before every signal. */
+  assertCurrent?: () => void;
   protectedPid?: number;
   // Resolve only after listener enumeration so supervisor respawns captured by
   // that snapshot cannot be mistaken for stale processes. Throw to skip cleanup.
@@ -364,7 +373,8 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(
 
 function findGatewayPidsOnPortWithProtectedPidSync(
   port: number,
-  spawnTimeoutMs: number,
+  lsofTimeoutMs: number,
+  processInspectionTimeoutMs: number,
   options?: CleanStaleGatewayProcessesOptions,
 ): number[] {
   if (process.platform === "win32") {
@@ -374,8 +384,9 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
+    env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
-    timeout: spawnTimeoutMs,
+    timeout: lsofTimeoutMs,
   });
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
@@ -404,7 +415,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   }
   return parsePidsFromLsofOutput(
     res.stdout,
-    spawnTimeoutMs,
+    processInspectionTimeoutMs,
     resolveProtectedPidAfterEnumeration(options),
   );
 }
@@ -413,11 +424,14 @@ function findGatewayPidsOnPortWithProtectedPidSync(
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
-export function findGatewayPidsOnPortSync(
-  port: number,
-  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
-): number[] {
-  return findGatewayPidsOnPortWithProtectedPidSync(port, spawnTimeoutMs);
+export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number): number[] {
+  // An explicit timeout keeps the existing contract: it bounds every child
+  // process used by this probe. Only the default path splits slow lsof from ps.
+  return findGatewayPidsOnPortWithProtectedPidSync(
+    port,
+    spawnTimeoutMs ?? INITIAL_LSOF_TIMEOUT_MS,
+    spawnTimeoutMs ?? PROCESS_INSPECTION_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -448,6 +462,7 @@ function pollPortOnce(port: number): PollResult {
   try {
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: POLL_SPAWN_TIMEOUT_MS,
     });
@@ -505,12 +520,13 @@ function pollPortOnceWindows(port: number): PollResult {
  * On Unix: sends SIGTERM, waits briefly, then SIGKILL for survivors.
  * On Windows: uses taskkill (graceful first, then /F for force-kill).
  */
-function terminateStaleProcessesSync(pids: number[]): number[] {
+function terminateStaleProcessesSync(pids: number[], assertCurrent?: () => void): number[] {
   if (process.platform === "win32") {
-    return terminateStaleProcessesWindows(pids);
+    return terminateStaleProcessesWindows(pids, assertCurrent);
   }
   const killed: number[] = [];
   for (const pid of pids) {
+    assertCurrent?.();
     if (trySignalStaleProcess(pid, "SIGTERM")) {
       killed.push(pid);
     }
@@ -521,6 +537,7 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
     if (isProcessAlive(pid)) {
+      assertCurrent?.();
       trySignalStaleProcess(pid, "SIGKILL");
     }
   }
@@ -546,7 +563,7 @@ function trySignalStaleProcess(pid: number, signal: NodeJS.Signals): boolean {
  * Windows-specific process termination using taskkill.
  * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
  */
-function terminateStaleProcessesWindows(pids: number[]): number[] {
+function terminateStaleProcessesWindows(pids: number[], assertCurrent?: () => void): number[] {
   const taskkillPath = path.win32.join(
     getWindowsInstallRoots().systemRoot,
     "System32",
@@ -554,6 +571,7 @@ function terminateStaleProcessesWindows(pids: number[]): number[] {
   );
   const killed: number[] = [];
   for (const pid of pids) {
+    assertCurrent?.();
     const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -569,6 +587,7 @@ function terminateStaleProcessesWindows(pids: number[]): number[] {
       killed.push(pid);
       continue;
     }
+    assertCurrent?.();
     const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -612,8 +631,8 @@ function isProcessAlive(pid: number): boolean {
  *   - Wall-clock deadline exceeded                               → log warning, proceed anyway
  */
 function waitForPortFreeSync(port: number): void {
-  const deadline = getTimeMs() + PORT_FREE_TIMEOUT_MS;
-  while (getTimeMs() < deadline) {
+  const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const result = pollPortOnce(port);
     if (result.free === true) {
       return;
@@ -657,14 +676,19 @@ export function cleanStaleGatewayProcessesSync(
             waitForPortFreeSync(port);
             return [];
           })()
-        : findGatewayPidsOnPortWithProtectedPidSync(port, SPAWN_TIMEOUT_MS, options);
+        : findGatewayPidsOnPortWithProtectedPidSync(
+            port,
+            INITIAL_LSOF_TIMEOUT_MS,
+            PROCESS_INSPECTION_TIMEOUT_MS,
+            options,
+          );
     if (stalePids.length === 0) {
       return [];
     }
     restartLog.warn(
       `killing ${stalePids.length} stale gateway process(es) before restart: ${stalePids.join(", ")}`,
     );
-    const killed = terminateStaleProcessesSync(stalePids);
+    const killed = terminateStaleProcessesSync(stalePids, options?.assertCurrent);
     // Wait for the port to be released before returning — called unconditionally
     // even when `killed` is empty (all pids were already dead before SIGTERM).
     // A process can exit before our signal arrives yet still leave its socket

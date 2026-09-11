@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import {
   ChannelGroupEntrySchema,
-  ChannelMentionPatternsSchemas,
+  buildCatchallMultiAccountChannelSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildJsonChannelConfigSchema,
@@ -38,16 +38,6 @@ describe("channel config composition", () => {
 
     expect(schema.safeParse({ topic: true, allowFrom: ["U1"] }).success).toBe(true);
     expect(schema.safeParse({ skills: ["search"] }).success).toBe(false);
-  });
-
-  it("keeps canonical mention policy while allowing IRC array sugar", () => {
-    const canonical = ChannelMentionPatternsSchemas.canonical;
-    const arraySugar = ChannelMentionPatternsSchemas.stringArray;
-
-    expect(canonical.safeParse({ mode: "allow", denyIn: ["room"] }).success).toBe(true);
-    expect(canonical.safeParse(["openclaw"]).success).toBe(false);
-    expect(arraySugar.safeParse(["openclaw"]).success).toBe(true);
-    expect(arraySugar.safeParse({ mode: "deny", allowIn: ["#bots"] }).success).toBe(false);
   });
 
   it("applies one shared refinement to root and account entries", () => {
@@ -92,22 +82,41 @@ describe("channel config composition", () => {
     ).resolves.toMatchObject({ success: false });
   });
 
-  it("preserves distinct account input and output types", () => {
-    const account = z.object({ port: z.string().transform((value) => Number(value)) });
-    const schema = buildMultiAccountChannelSchema(account);
-    const rootOnlyInput: z.input<typeof schema> = { port: "80" };
+  it.each(["record", "catchall"] as const)(
+    "preserves root and account transforms and catchalls with %s accounts",
+    (mode) => {
+      const account = z
+        .object({ port: z.string().transform((value) => Number(value)) })
+        .catchall(z.string());
+      const schema =
+        mode === "record"
+          ? buildMultiAccountChannelSchema(account)
+          : buildCatchallMultiAccountChannelSchema(account);
+      const rootOnlyInput: z.input<typeof schema> = { port: "80", custom: "root" };
 
-    expectTypeOf<z.input<typeof schema>["accounts"]>().toEqualTypeOf<
-      Record<string, { port: string }> | undefined
-    >();
-    expectTypeOf<z.output<typeof schema>["accounts"]>().toEqualTypeOf<
-      Record<string, { port: number }> | undefined
-    >();
-    expect(schema.parse(rootOnlyInput).port).toBe(80);
-    expect(
-      schema.parse({ ...rootOnlyInput, accounts: { work: { port: "443" } } }).accounts?.work?.port,
-    ).toBe(443);
-  });
+      type AccountInput = NonNullable<z.input<typeof schema>["accounts"]>[string];
+      type AccountOutput = NonNullable<z.output<typeof schema>["accounts"]>[string];
+      expectTypeOf<AccountInput["port"]>().toEqualTypeOf<string>();
+      expectTypeOf<AccountOutput["port"]>().toEqualTypeOf<number>();
+      expectTypeOf<AccountInput["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<AccountOutput["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<z.input<typeof schema>["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<z.output<typeof schema>["custom"]>().toEqualTypeOf<string>();
+      expect(schema.parse(rootOnlyInput)).toEqual({ port: 80, custom: "root" });
+      expect(
+        schema.parse({
+          ...rootOnlyInput,
+          defaultAccount: "work",
+          accounts: { work: { port: "443", custom: "account" } },
+        }),
+      ).toEqual({
+        port: 80,
+        custom: "root",
+        defaultAccount: "work",
+        accounts: { work: { port: 443, custom: "account" } },
+      });
+    },
+  );
 });
 
 describe("buildChannelConfigSchema", () => {

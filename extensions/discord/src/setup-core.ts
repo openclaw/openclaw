@@ -1,11 +1,17 @@
 // Discord plugin module implements setup core behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import {
+  createAccountScopedAllowFromSection,
+  createAccountScopedGroupAccessSection,
   createSetupTranslator,
   createStandardChannelSetupStatus,
   defineTokenCredential,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+  setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -13,15 +19,6 @@ import {
   inspectDiscordSetupAccount,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createAccountScopedAllowFromSection,
-  createAccountScopedGroupAccessSection,
-  createLegacyCompatChannelDmPolicy,
-  parseMentionOrPrefixedId,
-  patchChannelConfigForAccount,
-  setSetupChannelEnabled,
-} from "./setup-runtime-helpers.js";
-
 const t = createSetupTranslator();
 
 const channel = "discord" as const;
@@ -114,9 +111,18 @@ export function createDiscordSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const discordDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
+  const discordDmPolicy = createChannelDmPolicy({
     label: "Discord",
     channel,
+    resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
+    buildPatch: ({ account, policy, allowFrom }) => ({
+      dmPolicy: policy,
+      ...(allowFrom === undefined ? {} : { allowFrom }),
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    }),
     promptAllowFrom: handlers.promptAllowFrom,
   });
 

@@ -3,8 +3,8 @@
  */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
@@ -69,9 +69,15 @@ export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
+  expectedQuiet?: boolean;
   trigger?: EmbeddedRunTrigger;
   runTimeoutOverrideMs?: number;
 }): number {
+  if (params.expectedQuiet) {
+    // Expected-quiet controls have no earlier liveness signal; the caller's
+    // overall operation timeout remains their authoritative execution budget.
+    return params.timeoutMs;
+  }
   const hasExplicitRunTimeout =
     typeof params.runTimeoutOverrideMs === "number" &&
     Number.isFinite(params.runTimeoutOverrideMs) &&

@@ -14,6 +14,12 @@ const CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS = 2_000;
 const CDP_TARGET_NAVIGATION_RESULT_POLL_MS = 50;
 const CDP_TARGET_NAVIGATION_STABILITY_MS = 250;
 
+type CdpGetFrameTreeSend = (
+  method: "Page.getFrameTree",
+  params?: undefined,
+  sessionId?: string,
+) => Promise<unknown>;
+
 type CdpFrameTreeResult = {
   frameTree?: {
     frame?: {
@@ -40,6 +46,18 @@ function readCommittedFrameUrl(
   }
   const fragment = typeof frame?.urlFragment === "string" ? frame.urlFragment.trim() : "";
   return url ? `${url}${fragment}` : undefined;
+}
+
+/** Read the browser-owned loader identity for the committed main-frame document. */
+export async function readCdpMainFrameDocumentIdentity(
+  send: CdpGetFrameTreeSend,
+  sessionId?: string,
+): Promise<string | undefined> {
+  const frameTree = (await send("Page.getFrameTree", undefined, sessionId).catch(
+    () => null,
+  )) as CdpFrameTreeResult | null;
+  const loaderId = frameTree?.frameTree?.frame?.loaderId;
+  return typeof loaderId === "string" && loaderId.trim() ? `cdp:${loaderId.trim()}` : undefined;
 }
 
 async function waitForCdpNavigationResult(
@@ -131,7 +149,7 @@ export async function waitForCdpCommittedNavigationUrl(opts: {
   signal?: AbortSignal;
   timeouts?: CdpActionTimeouts;
 }): Promise<string | undefined> {
-  await assertCdpEndpointAllowed(opts.wsUrl, opts.cdpPolicy, {
+  const pinned = await assertCdpEndpointAllowed(opts.wsUrl, opts.cdpPolicy, {
     source: "discovered",
     configuredUrl: opts.configuredCdpUrl,
   });
@@ -148,6 +166,7 @@ export async function waitForCdpCommittedNavigationUrl(opts: {
         commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS,
         handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs,
         handshakeRetries: 0,
+        lookup: pinned?.lookup,
       },
     );
   } catch {

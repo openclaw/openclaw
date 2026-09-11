@@ -2,20 +2,48 @@
  * Codex app-server agent harness registration and lazy runtime boundaries.
  */
 import type {
-  AgentHarness,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
+  AgentHarnessV2,
+  AgentHarnessNativeCompaction,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
+import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
+import { codexBuildSymbol } from "./src/build-state.js";
+import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
-const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
+// Same versioned slot shared-client.ts writes; a bare name would let this harness call
+// another build's disposer after an in-process plugin update.
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
+  "openclaw.codexAppServerClientDisposer",
+);
+// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
+// either have no Codex-native equivalent or are enforced by the harness. Keep
+// the list positive and conservative: an omitted tool isolates the native surface.
+const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
+  "web_fetch",
+  "x_search",
+  "memory_search",
+  "memory_get",
+  "dashboard",
+  "canvas",
+  "show_widget",
+  "message",
+  "heartbeat_respond",
+  "automations",
+  "gateway",
+  "skill_workshop",
+  "image_generate",
+  "music_generate",
+  "video_generate",
+  "tts",
+] as const;
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -26,10 +54,16 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
-type CodexAppServerAgentHarness = AgentHarness & {
-  compactAfterContextEngine?(
-    params: AgentHarnessCompactParams,
-  ): Promise<AgentHarnessCompactResult | undefined>;
+type CodexAppServerAgentHarnessOptions = {
+  id?: string;
+  label?: string;
+  providerIds?: Iterable<string>;
+  pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
+  resolveConfig?: () => OpenClawConfig | undefined;
+  runtime?: PluginRuntime;
+  bindingStore: CodexAppServerBindingStore;
+  sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
 
 async function disposeSharedCodexAppServerClients(): Promise<void> {
@@ -45,17 +79,9 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
  */
-export function createCodexAppServerAgentHarness(options: {
-  id?: string;
-  label?: string;
-  providerIds?: Iterable<string>;
-  pluginConfig?: unknown;
-  resolvePluginConfig?: () => unknown;
-  resolveConfig?: () => OpenClawConfig | undefined;
-  runtime?: PluginRuntime;
-  bindingStore: CodexAppServerBindingStore;
-  sessionCatalogControl?: CodexSessionCatalogControl;
-}): AgentHarness {
+export function createCodexAppServerAgentHarness(
+  options: CodexAppServerAgentHarnessOptions,
+): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(
@@ -63,19 +89,66 @@ export function createCodexAppServerAgentHarness(options: {
       id.trim().toLowerCase(),
     ),
   );
-  const sessionCatalogControl = options.sessionCatalogControl;
+  const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
-  const harness: CodexAppServerAgentHarness = {
+  let modelCatalog:
+    | ReturnType<
+        typeof import("./src/app-server/model-catalog.js").createCodexAppServerModelCatalog
+      >
+    | undefined;
+  let disposed = false;
+  const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
+    resolvePluginConfigObject(config, "codex") ??
+    options.resolvePluginConfig?.() ??
+    options.pluginConfig;
+  const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    conversationToolPolicySupport: "exact",
+    conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
-    ...(sessionCatalogControl && sessionRuntime
+    resolveSessionRuntimeOwnership: (params) => {
+      const assertCurrent = () => {
+        params.assertCurrent();
+        if (disposed) {
+          throw new Error("Codex agent harness is disposed");
+        }
+      };
+      assertCurrent();
+      const identity = sessionBindingIdentity(params);
+      let binding = options.bindingStore.read(identity);
+      if (!binding) {
+        // Read host lineage only after a miss; a current binding must not trigger host I/O.
+        const previousSessionId = params.readPreviousSessionId?.();
+        binding = previousSessionId
+          ? options.bindingStore.read({ ...identity, sessionId: previousSessionId })
+          : undefined;
+      }
+      assertCurrent();
+      return binding?.preserveNativeModel === true
+        ? {
+            model: "native",
+            auth: binding.connectionScope === "supervision" ? "native" : "host",
+            ...(binding.model?.trim() && binding.modelProvider
+              ? { modelRef: { provider: binding.modelProvider, model: binding.model } }
+              : {}),
+          }
+        : undefined;
+    },
+    ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {
             upstreamKinds: ["codex-app-server"] as const,
@@ -84,7 +157,7 @@ export function createCodexAppServerAgentHarness(options: {
                 await import("./src/app-server/upstream-session-fork.js");
               return await forkCodexUpstreamSession(params, {
                 bindingStore: options.bindingStore,
-                control: sessionCatalogControl,
+                controlFactory: sessionCatalogControlFactory,
                 harnessRuntimeId,
                 resolveConfig: options.resolveConfig,
                 runtime: sessionRuntime,
@@ -93,6 +166,26 @@ export function createCodexAppServerAgentHarness(options: {
           },
         }
       : {}),
+    taskHistory: {
+      taskKinds: ["codex-native"],
+      read: async (params) => {
+        const { readCodexNativeSubagentHistory } =
+          await import("./src/app-server/native-subagent-history.js");
+        const assertCurrent = () => {
+          params.assertCurrent();
+          if (disposed) {
+            throw new Error("Agent harness is disposed");
+          }
+        };
+        return readCodexNativeSubagentHistory(
+          { ...params, assertCurrent },
+          {
+            bindingStore: options.bindingStore,
+            pluginConfig: resolveAttemptPluginConfig(params.cfg),
+          },
+        );
+      },
+    },
     authBinding: {
       fingerprint: async (params) => {
         const { fingerprintCodexAppServerAuthBinding } =
@@ -113,6 +206,22 @@ export function createCodexAppServerAgentHarness(options: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    loadModelCatalog: async (params) => {
+      const { createCodexAppServerModelCatalog } =
+        await import("./src/app-server/model-catalog.js");
+      if (disposed) {
+        return [];
+      }
+      modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
+      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
+    },
+    readModelCatalogReadiness: (params) =>
+      modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    loadMcpToolCatalog: async (params) => {
+      const { loadCodexEffectiveMcpCatalog } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
@@ -125,10 +234,24 @@ export function createCodexAppServerAgentHarness(options: {
         return {
           supported: false,
           reason: "Codex cannot reproduce authored request transport overrides",
+          fallbackRuntime: "openclaw",
         };
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      // Codex owns discovery and auth for new first-party models. Only trust that
+      // native account when no authored transport or host credential is involved.
+      const nativeAccountOwnsUnobservedModel =
+        provider === "openai" &&
+        ctx.requestedRuntime === "codex" &&
+        Boolean(ctx.modelId?.trim()) &&
+        (preparedAuth === undefined || preparedAuth.source === "harness") &&
+        preparedAuth?.mode === undefined &&
+        preparedAuth?.requirement === undefined &&
+        ctx.modelProvider?.api === undefined &&
+        ctx.modelProvider?.baseUrl === undefined &&
+        ctx.modelProvider?.azureApiVersion === undefined &&
+        ctx.modelProvider?.request === undefined;
       if (runtimePolicy) {
         const compatible = runtimePolicy.compatibleIds.some(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
@@ -139,7 +262,7 @@ export function createCodexAppServerAgentHarness(options: {
             reason: "Codex cannot reproduce the prepared provider route",
           };
         }
-      } else if (ctx.modelProvider && provider !== "codex") {
+      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
         return {
           supported: false,
           reason: "provider route compatibility with Codex is not declared",
@@ -173,10 +296,131 @@ export function createCodexAppServerAgentHarness(options: {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
-      return runCodexAppServerAttempt(params, {
-        bindingStore: options.bindingStore,
+      const {
+        planCodexCyberEscalation,
+        readCodexCyberAttemptVerdict,
+        recordCodexCyberTargetUnavailable,
+        reserveCodexCyberProbe,
+        resolveCodexCyberFailoverConfig,
+      } = await import("./src/app-server/cyber-failover.js");
+      const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
+      const pluginConfig = resolveAttemptPluginConfig(params.config);
+      // The attempt resolves its turn model from runtimeModelId, so escalation
+      // reroutes one turn without touching the session's stored selection.
+      const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
+      const runAttemptOnModel = (model: string, isRetry = false) =>
+        runCodexAppServerAttempt(
+          // The refused attempt already mirrored this prompt; a retry must not
+          // write a second copy of it into the transcript.
+          isRetry ? { ...params, suppressNextUserMessagePersistence: true } : params,
+          {
+            bindingStore: options.bindingStore,
+            pluginConfig,
+            runtime: sessionRuntime,
+            runtimeModelId: model,
+            nativeHookRelay: { enabled: true },
+          },
+        );
+
+      const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
+      // Authorization is per authenticated workspace, so every lookup and record
+      // below is scoped to this attempt's agent and auth profile.
+      const workspace = { agentId: params.agentId, authProfileId: params.authProfileId };
+      const result = await runAttemptOnModel(attemptModel);
+      const refusal = readCodexCyberAttemptVerdict(result);
+      if (!refusal.cyberRefused) {
+        return result;
+      }
+      const plan = planCodexCyberEscalation({
+        config: cyberFailover,
+        currentModel: attemptModel,
+        replaySafe: refusal.replaySafe,
+        workspace,
+      });
+      if (plan.kind !== "escalate") {
+        // A known workspace-level denial is worth stating; without it these
+        // turns show only the generic block and never learn why nothing helped.
+        if (plan.reason === "target_unavailable") {
+          await emitCodexCyberNotice(params, {
+            state: "unavailable",
+            model: attemptModel,
+            fallbackModel: cyberFailover.model,
+          });
+        }
+        return result;
+      }
+      const releaseProbe = reserveCodexCyberProbe({ model: plan.model, workspace });
+      let escalated: Awaited<ReturnType<typeof runCodexAppServerAttempt>>;
+      try {
+        escalated = await runAttemptOnModel(plan.model, /*isRetry*/ true);
+      } finally {
+        releaseProbe();
+      }
+      // Catalog presence never proves entitlement, so the retry itself is the
+      // only evidence. Remember a denial for the workspace: each repeat costs
+      // the transport's full reconnect ladder.
+      const outcome = readCodexCyberAttemptVerdict(escalated);
+      if (outcome.unavailable) {
+        recordCodexCyberTargetUnavailable({
+          model: plan.model,
+          workspace,
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+      }
+      // Announce only the two outcomes this owner can state truthfully. A turn
+      // Daybreak also refused keeps the projector's own block, and any other
+      // failure surfaces through its normal terminal error.
+      if (outcome.answered || outcome.unavailable) {
+        await emitCodexCyberNotice(params, {
+          state: outcome.answered ? "escalated" : "unavailable",
+          model: attemptModel,
+          fallbackModel: plan.model,
+        });
+      }
+      // Preserve the fallback's result identity for effects, tool progress, or
+      // interruption; its receipts and continuation ownership must reach the runner.
+      if (
+        outcome.unavailable &&
+        outcome.replaySafe &&
+        escalated.terminal.kind === "failed" &&
+        escalated.toolMetas.length === 0
+      ) {
+        return result;
+      }
+      return escalated;
+    },
+    runIsolatedCompletionV2: async (params) => {
+      if (params.authorization.owner === "host") {
+        const { runHostPreparedIsolatedCompletion } =
+          await import("openclaw/plugin-sdk/simple-completion-runtime");
+        return runHostPreparedIsolatedCompletion(params);
+      }
+      const { runCodexIsolatedCompletion } =
+        await import("./src/app-server/isolated-completion.js");
+      return runCodexIsolatedCompletion(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        nativeHookRelay: { enabled: true },
+      });
+    },
+    runIsolatedCompletion: async (params) => {
+      const { runHostPreparedIsolatedCompletion } =
+        await import("openclaw/plugin-sdk/simple-completion-runtime");
+      // Keep the deprecated V1 contract on its exact host-prepared transport.
+      // V2 owns native Codex auth and zero-tool attestation above.
+      return runHostPreparedIsolatedCompletion({
+        ...params,
+        authorization: {
+          owner: "host",
+          model: params.model,
+          auth: params.auth,
+          sourceAuthFingerprint: params.sourceAuthFingerprint,
+        },
+      });
+    },
+    finalizeSettledTurn: async (params) => {
+      const { runCodexSettledTurnFinalization } =
+        await import("./src/app-server/settled-turn-finalizer.js");
+      return runCodexSettledTurnFinalization(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
     runSideQuestion: async (params) => {
@@ -184,6 +428,8 @@ export function createCodexAppServerAgentHarness(options: {
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtime: sessionRuntime,
+        runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -194,42 +440,73 @@ export function createCodexAppServerAgentHarness(options: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
-    compactAfterContextEngine: async (params) => {
-      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      return maybeCompactCodexAppServerSession(params, {
-        bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        allowNonManualNativeRequest: true,
-      });
+    withSessionDeletion: async (params, run) => {
+      const { withCodexAppServerSessionDeletion } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
     },
     reset: async (params) => {
-      if (params.sessionId) {
-        const { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity } =
-          await import("./src/app-server/session-binding.js");
+      if (params.sessionId && params.reason !== "deleted") {
+        const [
+          { reclaimCurrentCodexSessionGeneration },
+          { retireCodexAppServerSessionGeneration },
+        ] = await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
         const identity = sessionBindingIdentity({
           agentId: params.agentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         });
-        let retired = await options.bindingStore.retireSessionGeneration(identity);
-        if (retired === "conflict") {
+        const resetGeneration = () =>
+          retireCodexAppServerSessionGeneration({
+            bindingStore: options.bindingStore,
+            identity,
+            mode: "reset",
+          });
+        let reset = await resetGeneration();
+        if (reset === "conflict") {
           const reclaimed = await reclaimCurrentCodexSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
             config: options.resolveConfig?.(),
           });
           if (reclaimed) {
-            retired = await options.bindingStore.retireSessionGeneration(identity);
+            reset = await resetGeneration();
           }
         }
-        if (retired === "conflict") {
+        if (reset === "conflict") {
           throw new Error(
             `Codex binding generation changed before session ${params.sessionId} could reset`,
           );
         }
       }
     },
-    dispose: disposeSharedCodexAppServerClients,
+    dispose: async () => {
+      disposed = true;
+      modelCatalog?.dispose();
+      await disposeSharedCodexAppServerClients();
+    },
   };
   return harness;
+}
+
+/** Creates the private native-compaction bridge registered in host-owned capability state. */
+export function createCodexAppServerNativeCompaction(
+  options: Pick<
+    CodexAppServerAgentHarnessOptions,
+    "bindingStore" | "pluginConfig" | "resolvePluginConfig"
+  >,
+): AgentHarnessNativeCompaction {
+  return async (params) => {
+    const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+    return maybeCompactCodexAppServerSession(params, {
+      bindingStore: options.bindingStore,
+      pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
+      allowNonManualNativeRequest: true,
+      nativeCompactionRequest: params.nativeCompactionRequest,
+    });
+  };
 }

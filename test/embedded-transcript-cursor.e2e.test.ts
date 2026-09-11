@@ -1,12 +1,16 @@
 // E2E: ordinary embedded Gateway turns preserve raw transcript cursor continuity.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -14,7 +18,7 @@ import {
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "cursor-settlement/cursor-settlement";
-const SESSION_KEY = "agent:main:cursor-settlement-e2e";
+const SESSION_KEY = "agent:main:main";
 const GATEWAY_TOKEN_OPTION = "token";
 
 type MockModelServer = {
@@ -32,7 +36,7 @@ afterEach(async () => {
 
 describe("embedded transcript cursor settlement", () => {
   it(
-    "resumes a public raw cursor after a real append-only Gateway turn",
+    "resumes a public raw cursor across /new and the next Gateway turn",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const modelServer = await startMockModelServer();
@@ -40,7 +44,10 @@ describe("embedded transcript cursor settlement", () => {
       const instance = await createOpenClawTestInstance({
         name: "embedded-transcript-cursor",
         config: createTestConfig(modelServer.baseUrl),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -55,6 +62,10 @@ describe("embedded transcript cursor settlement", () => {
         await runAgentTurn(client, instance, "first cursor turn");
         const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
         const sessionId = await waitForSessionId(storePath);
+        expect(
+          listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
+          instance.logs(),
+        ).toEqual([SESSION_KEY]);
         const target = { agentId: "main", sessionId, sessionKey: SESSION_KEY, storePath };
         const bootstrap = await readSessionTranscriptRawDelta({
           ...target,
@@ -67,7 +78,14 @@ describe("embedded transcript cursor settlement", () => {
         }
         expect(bootstrap.hasMore).toBe(false);
 
-        await runAgentTurn(client, instance, "second cursor turn");
+        const reset = await runAgentTurn(client, instance, "/new");
+        expect(
+          (reset as { result?: { meta?: { agentMeta?: { sessionId?: string } } } }).result?.meta
+            ?.agentMeta?.sessionId,
+          instance.logs(),
+        ).toBe(sessionId);
+        expect(await waitForSessionId(storePath), instance.logs()).toBe(sessionId);
+        await runAgentTurn(client, instance, "post-reset cursor turn");
         const resumed = await readSessionTranscriptRawDelta({
           ...target,
           cursor: bootstrap.cursor,
@@ -80,8 +98,16 @@ describe("embedded transcript cursor settlement", () => {
           throw new Error(`expected resumed page, got ${resumed.kind}`);
         }
         expect(resumed.hasMore).toBe(false);
+        expect(
+          resumed.events.some(
+            (row) =>
+              row.event &&
+              typeof row.event === "object" &&
+              (row.event as { type?: unknown }).type === "reset",
+          ),
+        ).toBe(true);
         const messageTexts = resumed.events.flatMap((row) => readMessageText(row.event));
-        expect(messageTexts).toContain("second cursor turn");
+        expect(messageTexts).toContain("post-reset cursor turn");
         expect(messageTexts).toContain("cursor settlement response 2");
         expect(messageTexts).not.toContain("first cursor turn");
         expect(messageTexts).not.toContain("cursor settlement response 1");
@@ -135,7 +161,7 @@ async function runAgentTurn(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   instance: OpenClawTestInstance,
   message: string,
-): Promise<void> {
+): Promise<{ runId?: string; status?: string }> {
   const requestedRunId = randomUUID();
   const started = await client.request<{ runId?: string; status?: string }>("agent", {
     sessionKey: SESSION_KEY,
@@ -143,6 +169,9 @@ async function runAgentTurn(
     deliver: false,
     idempotencyKey: requestedRunId,
   });
+  if (started.status === "ok") {
+    return started;
+  }
   expect(started.status).toBe("accepted");
   const completed = await client.request<{ error?: unknown; status?: string }>(
     "agent.wait",
@@ -150,6 +179,7 @@ async function runAgentTurn(
     { timeoutMs: 125_000 },
   );
   expect(completed.status, `${JSON.stringify(completed)}\n${instance.logs()}`).toBe("ok");
+  return started;
 }
 
 async function waitForSessionId(storePath: string): Promise<string> {
@@ -206,8 +236,12 @@ async function startMockModelServer(): Promise<MockModelServer> {
       }
       await drainRequest(request);
       responseCount += 1;
-      writeModelResponse(response, responseCount);
-    })().catch((error) => {
+      writeOpenAiResponsesText(response, {
+        text: `cursor settlement response ${responseCount}`,
+        messageId: `cursor-settlement-message-${responseCount}`,
+        responseId: `cursor-settlement-response-${responseCount}`,
+      });
+    })().catch((error: unknown) => {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: String(error) } }));
     });
@@ -233,57 +267,6 @@ async function startMockModelServer(): Promise<MockModelServer> {
 
 async function drainRequest(request: IncomingMessage): Promise<void> {
   for await (const chunk of request) {
-    // Consume the body before replying so the embedded transport completes cleanly.
     void chunk;
   }
-}
-
-function writeModelResponse(response: ServerResponse, sequence: number): void {
-  const text = `cursor settlement response ${sequence}`;
-  const message = {
-    type: "message",
-    id: `cursor-settlement-message-${sequence}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `cursor-settlement-response-${sequence}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
 }

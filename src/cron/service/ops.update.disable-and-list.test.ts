@@ -1,22 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  noopLogger,
+  createCronRegressionState,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { add, list, update } from "./ops.js";
-import { createCronServiceState } from "./state.js";
+import { add, update } from "./ops-mutations.js";
+import { list } from "./ops-read.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-disable-list-" });
 
 describe("cron service ops: disable + list round-trip", () => {
   it("keeps a disabled job available to --all and restores it after enable", async () => {
     const { storePath } = fixtures.makeStorePath();
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
 

@@ -1,5 +1,9 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { Value } from "typebox/value";
+import {
+  SessionObserverDigestSchema,
+  type SessionObserverDigest,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -15,6 +19,7 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
+import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -37,8 +42,6 @@ type NarrationSubscription = {
 
 type PendingSubscription = {
   agentId: string | null;
-  connectionIdentity: object;
-  source: SessionCapability;
   operationId: symbol;
 };
 
@@ -60,6 +63,10 @@ export type SidebarNarrationSyncInput = {
   agentId: string;
 };
 
+// TRANSITIONAL(marker-retirement): live narration strips inline markers because
+// streamed drafts still carry them mid-run; persisted data is already clean.
+// Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
+// default flips to "message_tool".
 function normalizeSidebarNarrationText(text: string): string | null {
   const displayText = stripSuppressedControlReplyToken(
     stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
@@ -91,10 +98,6 @@ function trailingInternalDelimiterPrefix(text: string): string {
   return "";
 }
 
-function rowIsRunning(row: SidebarRecentSession): boolean {
-  return row.hasActiveRun || row.status === "running";
-}
-
 function rowRecency(row: SidebarRecentSession): number {
   return row.startedAt ?? row.updatedAt ?? 0;
 }
@@ -113,12 +116,10 @@ export class SidebarSessionNarrationController {
   private connectionIdentity: object | null = null;
   private connected = false;
   private enabled = false;
-  private openSessionKey = "";
   private agentId = "main";
   private desiredKeys = new Set<string>();
   private subscriptions = new Map<string, NarrationSubscription>();
   private pendingSubscriptions = new Map<string, PendingSubscription>();
-  private deferredSubscriptions = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
   private internalRuntimeBlockDepth = new Map<string, number>();
   private internalRuntimeDelimiterTails = new Map<string, string>();
   // Chars of the FULL cumulative assistant stream consumed so far, per session.
@@ -140,53 +141,47 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
-    const previousOpenSessionKey = this.openSessionKey;
     const connectionChanged = this.connectionIdentity !== input.connectionIdentity;
     const sourceChanged = this.source !== input.source;
     const disconnected = !input.connected || !input.connectionIdentity || !input.source;
     if (connectionChanged || sourceChanged || disconnected) {
-      // A replaced or closed socket already discarded its server-side set.
-      // Never send cleanup through a new connection for ownership from the old one.
-      this.resetSubscriptions({ unsubscribe: !connectionChanged && this.connected });
+      this.resetSubscriptions();
     }
 
     this.source = input.source;
     this.connectionIdentity = input.connectionIdentity;
     this.connected = input.connected;
     this.enabled = input.enabled;
-    this.openSessionKey = input.openSessionKey.trim();
     this.agentId = normalizeAgentId(input.agentId);
 
     if (disconnected || !input.enabled) {
       this.desiredKeys = new Set();
-      this.resetSubscriptions({ unsubscribe: !disconnected });
+      this.resetSubscriptions();
       this.clearAllLines();
       return;
     }
 
-    const candidates = input.rows
-      .map((row, index) => ({ row, index }))
-      .filter(
-        ({ row }) => rowIsRunning(row) && !areUiSessionKeysEquivalent(row.key, this.openSessionKey),
-      )
-      .toSorted(
-        (left, right) => rowRecency(right.row) - rowRecency(left.row) || left.index - right.index,
-      )
-      .slice(0, SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT);
-    const nextDesired = new Set(candidates.map(({ row }) => row.key));
+    const openSessionKey = input.openSessionKey.trim();
+    const nextDesired = new Set<string>();
+    let backgroundSubscriptions = 0;
+    for (const row of input.rows
+      .filter((candidate) => candidate.hasActiveRun)
+      .toSorted((left, right) => rowRecency(right) - rowRecency(left))) {
+      const open = areUiSessionKeysEquivalent(row.key, openSessionKey);
+      if (!open && backgroundSubscriptions >= SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT) {
+        continue;
+      }
+      nextDesired.add(row.key);
+      if (!open) {
+        backgroundSubscriptions += 1;
+      }
+    }
 
     for (const key of this.desiredKeys) {
       if (nextDesired.has(key)) {
         continue;
       }
-      // The chat pane and sidebar share a per-connection Set, not a refcount.
-      // Hand an opening row to chat without deleting the subscription it now owns.
-      const ownedAgentId =
-        this.subscriptions.get(key)?.subscription.agentId ??
-        this.pendingSubscriptions.get(key)?.agentId ??
-        null;
-      const handedToChat = this.subscriptionScopeMatchesOpenChat(key, ownedAgentId);
-      this.releaseKey(key, { unsubscribe: !handedToChat });
+      this.releaseKey(key);
     }
 
     this.desiredKeys = nextDesired;
@@ -198,13 +193,12 @@ export class SidebarSessionNarrationController {
         (this.subscriptions.has(key) && ownedAgentId !== targetAgentId) ||
         (this.pendingSubscriptions.has(key) && pendingAgentId !== targetAgentId)
       ) {
-        this.releaseKey(key, { unsubscribe: true });
+        this.releaseKey(key);
       }
       if (this.subscriptions.has(key) || this.pendingSubscriptions.has(key)) {
         continue;
       }
-      const chatJustReleased = areUiSessionKeysEquivalent(key, previousOpenSessionKey);
-      this.scheduleSubscription(key, chatJustReleased);
+      void this.subscribeKey(key);
     }
   }
 
@@ -227,34 +221,16 @@ export class SidebarSessionNarrationController {
 
   disconnect(): void {
     this.desiredKeys = new Set();
-    this.resetSubscriptions({ unsubscribe: this.connected });
+    this.resetSubscriptions();
     this.clearAllLines();
     this.connected = false;
   }
 
-  private scheduleSubscription(key: string, defer: boolean): void {
-    if (!defer) {
-      void this.subscribeKey(key);
-      return;
-    }
-    if (this.deferredSubscriptions.has(key)) {
-      return;
-    }
-    // Chat unsubscribes during the same Lit update. Queueing this request makes
-    // the wire order unsubscribe -> subscribe when a running row leaves chat.
-    const timer = globalThis.setTimeout(() => {
-      this.deferredSubscriptions.delete(key);
-      void this.subscribeKey(key);
-    }, 0);
-    this.deferredSubscriptions.set(key, timer);
-  }
-
   private async subscribeKey(key: string): Promise<void> {
     const source = this.source;
-    const connectionIdentity = this.connectionIdentity;
     if (
       !source ||
-      !connectionIdentity ||
+      !this.connectionIdentity ||
       !this.connected ||
       !this.enabled ||
       !this.desiredKeys.has(key)
@@ -263,40 +239,24 @@ export class SidebarSessionNarrationController {
     }
     const operationId = Symbol(key);
     const agentId = this.subscriptionAgentId(key);
-    this.pendingSubscriptions.set(key, { agentId, connectionIdentity, operationId, source });
+    this.pendingSubscriptions.set(key, { agentId, operationId });
     try {
       const subscription = await source.subscribeMessages(key, {
         agentId: agentId ?? undefined,
       });
       const pending = this.pendingSubscriptions.get(key);
-      if (pending?.operationId !== operationId || pending.source !== source) {
-        const completedAgentId = subscription.agentId ?? null;
-        const replacementOwnsSameScope =
-          this.desiredKeys.has(key) &&
-          (this.subscriptions.get(key)?.subscription.agentId === completedAgentId ||
-            this.pendingSubscriptions.get(key)?.agentId === completedAgentId ||
-            (this.deferredSubscriptions.has(key) &&
-              this.subscriptionAgentId(key) === completedAgentId));
-        if (
-          !replacementOwnsSameScope &&
-          connectionIdentity === this.connectionIdentity &&
-          !this.subscriptionScopeMatchesOpenChat(key, completedAgentId)
-        ) {
-          await source.unsubscribeMessages(subscription).catch(() => undefined);
-        }
+      if (pending?.operationId !== operationId) {
+        await source.unsubscribeMessages(subscription).catch(() => undefined);
         return;
       }
       this.pendingSubscriptions.delete(key);
       if (
         source !== this.source ||
-        connectionIdentity !== this.connectionIdentity ||
         !this.connected ||
         !this.enabled ||
         !this.desiredKeys.has(key)
       ) {
-        if (!this.subscriptionScopeMatchesOpenChat(key, subscription.agentId ?? null)) {
-          await source.unsubscribeMessages(subscription).catch(() => undefined);
-        }
+        await source.unsubscribeMessages(subscription).catch(() => undefined);
         return;
       }
       this.subscriptions.set(key, { source, subscription });
@@ -312,36 +272,20 @@ export class SidebarSessionNarrationController {
     return isUiGlobalSessionKey(key) ? this.agentId : null;
   }
 
-  private subscriptionScopeMatchesOpenChat(key: string, agentId: string | null): boolean {
-    if (!areUiSessionKeysEquivalent(key, this.openSessionKey)) {
-      return false;
-    }
-    return !isUiGlobalSessionKey(key) || agentId === this.subscriptionAgentId(key);
-  }
-
-  private releaseKey(key: string, options: { unsubscribe: boolean }): void {
-    const deferred = this.deferredSubscriptions.get(key);
-    if (deferred) {
-      globalThis.clearTimeout(deferred);
-      this.deferredSubscriptions.delete(key);
-    }
+  private releaseKey(key: string): void {
     this.pendingSubscriptions.delete(key);
     const owned = this.subscriptions.get(key);
     this.subscriptions.delete(key);
-    if (owned && options.unsubscribe) {
+    if (owned) {
       void owned.source.unsubscribeMessages(owned.subscription).catch(() => undefined);
     }
     this.clearLine(key);
   }
 
-  private resetSubscriptions(options: { unsubscribe: boolean }): void {
-    const keys = new Set([
-      ...this.subscriptions.keys(),
-      ...this.pendingSubscriptions.keys(),
-      ...this.deferredSubscriptions.keys(),
-    ]);
+  private resetSubscriptions(): void {
+    const keys = new Set([...this.subscriptions.keys(), ...this.pendingSubscriptions.keys()]);
     for (const key of keys) {
-      this.releaseKey(key, options);
+      this.releaseKey(key);
     }
   }
 
@@ -604,14 +548,13 @@ export class SidebarSessionNarrationController {
     ) {
       return;
     }
+    const digest = { ...record, runId };
+    if (!Value.Check(SessionObserverDigestSchema, digest)) {
+      return;
+    }
     this.observeRun(key, runId);
-    const digest = { ...record, runId } as unknown as SessionObserverDigest;
     const previous = this.observerDigests.get(key);
-    if (
-      previous &&
-      (previous.revision > digest.revision ||
-        (previous.revision === digest.revision && previous.updatedAt >= digest.updatedAt))
-    ) {
+    if (previous && pickFreshestObserverDigest(previous, digest) === previous) {
       return;
     }
     this.clearNarration(key);

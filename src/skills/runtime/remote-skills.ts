@@ -1,14 +1,16 @@
 import type { NodeSkillDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
-import { computeSkillPromptVersion } from "../loading/skill-version.js";
+import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
   frontmatter: ParsedSkillFrontmatter;
+  contentHash: string;
 };
 
 type RemoteSkillNode = {
@@ -42,7 +44,7 @@ function prepareNodeSkills(
   const prepared: PreparedNodeSkill[] = [];
   for (const skill of skills) {
     try {
-      const frontmatter = parseFrontmatter(skill.content);
+      const frontmatter = parseSkillFrontmatter(skill.content);
       if (
         frontmatter.name?.trim() !== skill.name ||
         frontmatter.description?.trim() !== skill.description
@@ -50,28 +52,13 @@ function prepareNodeSkills(
         log.warn(`dropped node skill with mismatched frontmatter: ${nodeId}/${skill.name}`);
         continue;
       }
-      prepared.push({ ...skill, frontmatter });
+      prepared.push({ ...skill, frontmatter, contentHash: sha256Hex(skill.content) });
     } catch (error) {
       const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
       log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;
-}
-
-function sameSkills(
-  left: readonly PreparedNodeSkill[],
-  right: readonly PreparedNodeSkill[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (skill, index) =>
-        skill.name === right[index]?.name &&
-        skill.description === right[index]?.description &&
-        skill.content === right[index]?.content,
-    )
-  );
 }
 
 export function recordRemoteSkillNodeInfo(node: {
@@ -111,7 +98,14 @@ export function replaceRemoteNodeSkills(params: {
   const changed =
     !existing?.connected ||
     existing.displayName !== params.displayName ||
-    !sameSkills(existing.skills, nextSkills);
+    !areOrderedArraysEqual(
+      existing.skills,
+      nextSkills,
+      (previous, next) =>
+        previous.name === next.name &&
+        previous.description === next.description &&
+        previous.content === next.content,
+    );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,
     connId: existing?.connId,
@@ -234,9 +228,9 @@ export function mergeRemoteNodeSkillEntries(
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
         readContent: skill.content,
+        contentHash: skill.contentHash,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
-        promptVersion: computeSkillPromptVersion(skill.content),
         source: "openclaw-node",
         sourceInfo: createSyntheticSourceInfo(filePath, {
           source: "openclaw-node",

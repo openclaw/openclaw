@@ -1,4 +1,5 @@
 // Format Docs tests cover the docs formatter helper process spawning.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +9,12 @@ import {
   formatDocs,
   resolveOxfmtInvocation,
   runOxfmt,
-} from "../../scripts/format-docs.mjs";
+} from "../../scripts/format-docs.mts";
+import {
+  checkMintlifyAccordionIndentation,
+  repairMintlifyAccordionIndentation,
+} from "../../scripts/lib/mintlify-accordion.mjs";
+import { outputTail } from "../../scripts/lib/output-tail.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -20,6 +26,34 @@ function writeDocsFixture(root: string): void {
 }
 
 describe("format-docs", () => {
+  it.each([
+    ["backtick fence", "```md", null, "```"],
+    ["tilde fence", "~~~md", null, "~~~"],
+    ["shorter nested fence", "````md", "```json", "````"],
+    ["different fence marker", "```md", "~~~", "```"],
+    ["suffixed closing marker", "~~~md", "~~~json", "~~~"],
+    ["nonbreaking-space suffix", "```md", "```\u00a0", "```"],
+    ["longer closing marker", "~~~md", null, "~~~~~\t"],
+    ["unclosed fence", "```md", null, null],
+  ])("preserves examples in a %s while repairing real components", (_label, open, inner, close) => {
+    const literal = [open, inner, "<Note>", "- literal item", "  </Note>", close]
+      .filter((line) => line !== null)
+      .join("\n");
+    const component =
+      "<Note>\n- real item\n  </Note>\n\n  <ParamField>\n  field body\n  </ParamField>";
+    const repairedComponent =
+      "<Note>\n- real item\n\n</Note>\n\n<ParamField>\n  field body\n</ParamField>";
+    const source = `${component}\n\n${literal}\n${close ? `\n${component}\n` : ""}`;
+    const expected = `${repairedComponent}\n\n${literal}\n${close ? `\n${repairedComponent}\n` : ""}`;
+
+    const repaired = repairMintlifyAccordionIndentation(source);
+
+    expect(repaired).toBe(expected);
+    expect(checkMintlifyAccordionIndentation(literal)).toEqual([]);
+    expect(checkMintlifyAccordionIndentation(repaired)).toEqual([]);
+    expect(repairMintlifyAccordionIndentation(repaired)).toBe(repaired);
+  });
+
   it("wraps the Windows oxfmt.cmd shim through cmd.exe", () => {
     const invocation = resolveOxfmtInvocation(["--write", "docs\\guide.mdx"], {
       comSpec: "C:\\Windows\\System32\\cmd.exe",
@@ -96,12 +130,38 @@ describe("format-docs", () => {
     );
   });
 
+  it("keeps real formatter failure tails UTF-8 safe", () => {
+    const root = createTempDir("openclaw-format-docs-utf8-tail-");
+    let message = "";
+
+    try {
+      runOxfmt(
+        ["README.md"],
+        { repoRoot: root },
+        {
+          existsSync: () => false,
+          spawnSync: () =>
+            spawnSync(
+              process.execPath,
+              ["-e", 'process.stderr.write("你好" + "x".repeat(16_380)); process.exitCode = 1'],
+              { encoding: "utf8", maxBuffer: 1024 * 1024, shell: false, timeout: 5_000 },
+            ),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/oxfmt failed:[\s\S]*exit status: 1[\s\S]*stderr tail:\n好x/u);
+    expect(message).not.toContain("�");
+  });
+
   it("uses repository paths in write mode and temporary paths in check mode", () => {
     const root = createTempDir("openclaw-format-docs-mode-");
     writeDocsFixture(root);
     const oxfmtFileArgs: string[][] = [];
 
-    const spawnSync = (command: string, args: string[]) => {
+    const runCommandSync = (command: string, args: string[]) => {
       if (command === "git") {
         return {
           status: 0,
@@ -122,7 +182,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });
@@ -136,7 +196,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });
@@ -150,5 +210,21 @@ describe("format-docs", () => {
     expect(chunkFilesForCommand(["docs/very-long-name.md"], ["--write"], 1)).toEqual([
       ["docs/very-long-name.md"],
     ]);
+  });
+});
+
+describe("outputTail UTF-8 safety", () => {
+  it("skips leading continuation bytes when the retained byte window splits a multibyte character", () => {
+    // "你好" (6 bytes) + 16380 x's = 16386 bytes, exceeding the 16 KiB cap.
+    // subarray(-16384) starts at byte 2 = 0xA0 (continuation of 你).
+    const bigText = "你好" + "x".repeat(16380);
+    const result = outputTail(bigText, 16 * 1024);
+    expect(result).not.toContain("�");
+    // The continuation byte is skipped; the tail starts with "好".
+    expect(result).toMatch(/^好x/);
+  });
+
+  it("passes through output that fits within the tail budget", () => {
+    expect(outputTail("hello world", 16 * 1024)).toBe("hello world");
   });
 });

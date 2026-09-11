@@ -2,7 +2,10 @@ import { vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
 
@@ -40,16 +43,21 @@ export function event(params: {
 
 export function modelMessage(value: Record<string, unknown>) {
   return {
-    stopReason: "stop",
-    content: [{ type: "text", text: JSON.stringify(value) }],
+    text: JSON.stringify(value),
+    provider: "openai",
+    model: "gpt-test",
+    owner: { kind: "harness", id: "openclaw" },
   };
 }
 
 export function preparedModel() {
   return {
-    selection: { provider: "openai", modelId: "gpt-test", agentDir: "/tmp/agent" },
-    model: { provider: "openai", id: "gpt-test", maxTokens: 8_192 },
-    auth: { apiKey: "test-api-key", mode: "api-key" },
+    config: cfg,
+    provider: "openai",
+    model: "gpt-test",
+    outputTextPolicy: "strict-visible" as const,
+    agentId: "main",
+    agentDir: "/tmp/agent",
   };
 }
 
@@ -76,7 +84,11 @@ export async function flushObserver(): Promise<void> {
 }
 
 export function createHarness(options?: {
+  setTimeoutFn?: SessionObserverDeps["setTimeoutFn"];
+  clearTimeoutFn?: SessionObserverDeps["clearTimeoutFn"];
   subscribe?: boolean;
+  broadSubscribe?: boolean;
+  visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
   persistDigest?: ReturnType<typeof vi.fn>;
@@ -86,8 +98,12 @@ export function createHarness(options?: {
   resolveUtilityModelRef?: ReturnType<typeof vi.fn>;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   if (options?.subscribe !== false) {
     subscribers.subscribe("conn-1", "agent:main:session-1")?.commit();
+  }
+  if (options?.broadSubscribe) {
+    sessionEventSubscribers.subscribe("conn-1");
   }
   const prepareModel = options?.prepareModel ?? vi.fn(async () => preparedModel());
   const completeModel =
@@ -104,8 +120,11 @@ export function createHarness(options?: {
   const readSession =
     options?.readSession ?? vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
   const observer = createSessionObserver({
+    setTimeoutFn: options?.setTimeoutFn,
+    clearTimeoutFn: options?.clearTimeoutFn,
     getConfig: () => options?.config ?? cfg,
     subscribers,
+    sessionEventSubscribers,
     broadcastToConnIds,
     resolveUtilityModelRef: (options?.resolveUtilityModelRef ??
       (() =>
@@ -117,15 +136,26 @@ export function createHarness(options?: {
     readSession: readSession as never,
     persistDigest: persistDigest as never,
   });
+  if ((options?.subscribe !== false || options?.broadSubscribe) && options?.visible !== false) {
+    declareObserverVisibility(observer);
+  }
   return {
     observer,
     subscribers,
+    sessionEventSubscribers,
     prepareModel,
     completeModel,
     broadcastToConnIds,
     persistDigest,
     readSession,
   };
+}
+
+export function declareObserverVisibility(
+  observer: ReturnType<typeof createSessionObserver>,
+  connId = "conn-1",
+): void {
+  observer.setConnectionVisibility(connId, true);
 }
 
 export function startAndAddToolNotes(

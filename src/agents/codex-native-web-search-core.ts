@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
@@ -101,6 +101,7 @@ export function hasAvailableCodexAuth(params: {
 
 /** Resolves whether native search is active or why managed search should remain. */
 export function resolveCodexNativeSearchActivation(params: {
+  webSearchEnabled?: boolean;
   config?: OpenClawConfig;
   modelProvider?: string;
   modelApi?: string;
@@ -120,7 +121,8 @@ export function resolveCodexNativeSearchActivation(params: {
   senderE164?: string | null;
   agentDir?: string;
 }): CodexNativeSearchActivation {
-  const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
+  const globalWebSearchEnabled =
+    params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false;
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
   const hasRequiredAuth =
@@ -255,6 +257,7 @@ export function patchCodexNativeWebSearchPayload(params: {
 
 /** Returns whether the managed OpenClaw web-search tool should be hidden. */
 export function shouldSuppressManagedWebSearchTool(params: {
+  webSearchEnabled?: boolean;
   config?: OpenClawConfig;
   modelProvider?: string;
   modelApi?: string;

@@ -1,6 +1,5 @@
 // Shared Zod leaves for bundled channel messaging configuration.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
-import { ChannelMentionPatternsSchemas } from "../channels/plugins/config-schema.js";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import {
@@ -8,22 +7,63 @@ import {
   ChannelHeartbeatVisibilitySchema,
 } from "./zod-schema.channels.js";
 import {
+  BlockStreamingChunkSchema,
   ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingBlockSchema,
   ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ReplyToModeSchema,
+  TextChunkModeSchema,
 } from "./zod-schema.core.js";
+
+export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+export const ChannelStreamingPreviewSchema = z
+  .object({
+    chunk: BlockStreamingChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+export const ChannelStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+    commentary: z.boolean().optional(),
+    narration: z.boolean().optional(),
+  })
+  .strict();
+export const ChannelPreviewStreamingConfigSchema = z
+  .object({
+    mode: UnifiedStreamingModeSchema.optional(),
+    chunkMode: TextChunkModeSchema.optional(),
+    preview: ChannelStreamingPreviewSchema.optional(),
+    progress: ChannelStreamingProgressSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
 
 const CommonCapabilitiesSchema = z.array(z.string()).optional();
 const CommonIdListSchema = z.array(z.union([z.string(), z.number()])).optional();
 const CommonDefaultToSchema = z.string().optional();
-const CommonMentionPatternsSchema = ChannelMentionPatternsSchemas.canonical.optional();
+const CommonMentionPatternsSchema = MentionPatternsPolicySchema.optional();
 const CommonStreamingSchema = ChannelDeliveryStreamingConfigSchema.optional();
 const CommonMediaMaxMbSchema = z.number().positive().optional();
 const CommonReplyToModeSchema = ReplyToModeSchema.optional();
+
+// Defaults belong only to the channel root: materializing them on an account
+// shadows explicit root policy, while removing them entirely can fail open.
+const ChannelAccountPolicyDefaults = {
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+};
 
 type CommonChannelAccountShapeOptions<
   TCapabilities extends ZodTypeAny = typeof CommonCapabilitiesSchema,
@@ -35,9 +75,6 @@ type CommonChannelAccountShapeOptions<
   TMediaMaxMb extends ZodTypeAny = typeof CommonMediaMaxMbSchema,
   TReplyToMode extends ZodTypeAny = typeof CommonReplyToModeSchema,
 > = {
-  useDefaults?: boolean;
-  dmPolicyDefault?: boolean;
-  groupPolicyDefault?: boolean;
   omit?: readonly CommonChannelAccountField[];
   capabilities?: TCapabilities;
   allowFrom?: TAllowFrom;
@@ -76,17 +113,11 @@ function createCommonChannelAccountShape<
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
-    dmPolicy:
-      options.useDefaults || options.dmPolicyDefault
-        ? DmPolicySchema.optional().default("pairing")
-        : DmPolicySchema.optional(),
+    dmPolicy: DmPolicySchema.optional(),
     allowFrom: (options.allowFrom ?? CommonIdListSchema) as TAllowFrom,
     defaultTo: (options.defaultTo ?? CommonDefaultToSchema) as TDefaultTo,
     groupAllowFrom: (options.groupAllowFrom ?? CommonIdListSchema) as TGroupAllowFrom,
-    groupPolicy:
-      options.useDefaults || options.groupPolicyDefault
-        ? GroupPolicySchema.optional().default("allowlist")
-        : GroupPolicySchema.optional(),
+    groupPolicy: GroupPolicySchema.optional(),
     mentionPatterns: (options.mentionPatterns ?? CommonMentionPatternsSchema) as TMentionPatterns,
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
@@ -94,7 +125,7 @@ function createCommonChannelAccountShape<
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     streaming: (options.streaming ?? CommonStreamingSchema) as TStreaming,
-    heartbeat: ChannelHeartbeatVisibilitySchema,
+    heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
     mediaMaxMb: (options.mediaMaxMb ?? CommonMediaMaxMbSchema) as TMediaMaxMb,
@@ -105,8 +136,8 @@ function createCommonChannelAccountShape<
 type CommonChannelAccountShape = ReturnType<typeof createCommonChannelAccountShape>;
 type CommonChannelAccountField = keyof CommonChannelAccountShape;
 
-/** Build shared channel account leaves while preserving channel-specific omissions and schemas. */
-export function buildCommonChannelAccountShape<
+/** Build optional account leaves and separate root-only policy defaults. */
+export function buildChannelAccountSchemaParts<
   TCapabilities extends ZodTypeAny = typeof CommonCapabilitiesSchema,
   TAllowFrom extends z.ZodType<Array<string | number> | undefined> = typeof CommonIdListSchema,
   TDefaultTo extends z.ZodType<string | number | undefined> = typeof CommonDefaultToSchema,
@@ -142,9 +173,10 @@ export function buildCommonChannelAccountShape<
 ) {
   const shape = createCommonChannelAccountShape(options);
   const omitted = new Set<CommonChannelAccountField>(options.omit ?? []);
-  return Object.fromEntries(
+  const accountShape = Object.fromEntries(
     Object.entries(shape).filter(([key]) => !omitted.has(key as CommonChannelAccountField)),
   ) as Omit<typeof shape, TOmit[number]>;
+  return { accountShape, rootPolicyShape: ChannelAccountPolicyDefaults };
 }
 
 export const ChannelDangerouslyAllowNameMatchingSchema = z.boolean().optional();

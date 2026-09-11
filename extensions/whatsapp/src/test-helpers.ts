@@ -10,7 +10,6 @@ import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
-const SOURCE_CONFIG_KEY = Symbol.for("openclaw:testSourceConfigMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -28,22 +27,12 @@ const DEFAULT_CONFIG = {
 if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
-if (!(globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY]) {
-  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
-}
-
 export function setLoadConfigMock(fn: unknown) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = typeof fn === "function" ? fn : () => fn;
 }
 
-export function setRuntimeConfigSourceSnapshotMock(fn: unknown) {
-  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] =
-    typeof fn === "function" ? fn : () => fn;
-}
-
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
-  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
 }
 
 function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
@@ -67,14 +56,6 @@ function loadConfigMock() {
     return getter();
   }
   return DEFAULT_CONFIG;
-}
-
-function loadRuntimeConfigSourceSnapshotMock() {
-  const getter = (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY];
-  if (typeof getter === "function") {
-    return getter();
-  }
-  return loadConfigMock();
 }
 
 async function updateLastRouteMock(params: {
@@ -445,7 +426,6 @@ function resolveChannelGroupRequireMentionMock(params: {
 
 vi.mock("./auto-reply/config.runtime.js", () => ({
   getRuntimeConfig: loadConfigMock,
-  getRuntimeConfigSourceSnapshot: loadRuntimeConfigSourceSnapshotMock,
   loadConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
   loadSessionStore: loadSessionStoreMock,
@@ -475,23 +455,6 @@ vi.mock("./inbound/runtime-api.js", () => ({
     size: _buf.length,
     contentType,
   })),
-}));
-
-vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
-  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
-  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
-  getAgentScopedMediaLocalRoots: () => [] as string[],
-  jidToE164: normalizePhoneLikeToE164,
-  logVerbose: (_msg: string) => undefined,
-  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
-  resolveChunkMode: () => undefined,
-  resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
-  resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-  resolveMarkdownTableMode: () => undefined,
-  resolveSendableOutboundReplyParts: resolveSendableOutboundReplyPartsMock,
-  resolveTextChunkLimit: () => 64_000,
-  shouldLogVerbose: () => false,
-  toLocationContext: toLocationContextMock,
 }));
 
 vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
@@ -538,7 +501,6 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     const first = params.allowFrom?.[0];
     return first ? params.normalizeEntry(first) : null;
   },
-  resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: true }),
   resolveSendableOutboundReplyParts: resolveSendableOutboundReplyPartsMock,
   resolveTextChunkLimit: () => 64_000,
   shouldComputeCommandAuthorized: () => false,
@@ -629,19 +591,6 @@ vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
 
 vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
   formatInboundEnvelope: formatInboundEnvelopeMock,
-  resolveMessagePrefix: (
-    cfg: {
-      channels?: { whatsapp?: { messagePrefix?: string; allowFrom?: string[] } };
-    },
-    _agentId: string,
-    params?: { configured?: string; hasAllowFrom?: boolean },
-  ) => {
-    const configured = params?.configured ?? cfg.channels?.whatsapp?.messagePrefix;
-    if (configured !== undefined) {
-      return configured;
-    }
-    return params?.hasAllowFrom === true ? "" : "[openclaw]";
-  },
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({

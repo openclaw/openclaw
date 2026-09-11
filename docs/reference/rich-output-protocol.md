@@ -31,7 +31,34 @@ Do not emit text commands for attachments from tools, plugins, streaming blocks,
 Legacy final-reply text may still be normalized for compatibility, but this is not a general plugin/tool protocol.
 </Warning>
 
-Plain Markdown image syntax (`![alt](url)`) stays text by default. Channels that want Markdown images treated as media replies opt in at their outbound adapter; Telegram does this so `![alt](url)` becomes a media attachment.
+## Legacy `MEDIA:` lines
+
+Legacy final assistant replies can still attach local media with a plain
+standalone `MEDIA:` line. The parser only recognizes lines whose trimmed text
+starts with `MEDIA:` outside Markdown wrappers and code fences.
+
+Valid legacy final reply:
+
+```text
+Here is the generated image.
+
+MEDIA:/workspace/image.png
+```
+
+These remain ordinary text and do not attach media:
+
+```text
+**MEDIA:/workspace/image.png**
+`MEDIA:/workspace/image.png`
+Here is your image: MEDIA:/workspace/image.png
+```
+
+Prefer structured `mediaUrl` / `mediaUrls` fields for tools, plugins, browser
+output, streaming blocks, and message actions.
+
+Plain Markdown image syntax stays text by default. Channels that intentionally
+map Markdown image replies to media attachments opt in at their outbound
+adapter; Telegram does this so `![alt](url)` can still become a media reply.
 
 When block streaming is enabled, media must ride on structured payload fields. If the same media URL appears in a streamed block and again in the final assistant payload, OpenClaw delivers it once and strips the duplicate from the final payload.
 
@@ -45,7 +72,7 @@ When block streaming is enabled, media must ride on structured payload fields. I
 
 Rules:
 
-- `[view ...]` is no longer valid for new output.
+- `[view ...]` is not valid for new output. `[embed ...]` replaced it in 2026.4.11 ([#64104](https://github.com/openclaw/openclaw/pull/64104)).
 - Embed shortcodes render only in the assistant message surface.
 - Only URL-backed embeds render; use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes do not render.
@@ -74,5 +101,5 @@ The normalized/stored assistant content block is a structured `canvas` item:
 
 ## Related
 
-- [RPC adapters](/reference/rpc)
+- [Hosted embeds](/web/control-ui/chat#hosted-embeds) - how the Control UI renders `[embed ...]` and its iframe sandbox policy
 - [Typebox](/concepts/typebox)

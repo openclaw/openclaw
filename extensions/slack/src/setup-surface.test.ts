@@ -1,3 +1,4 @@
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 // Slack tests cover setup surface plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -6,11 +7,10 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   runSetupWizardPrepare,
-  runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackSetupWizardBase, slackSetupAdapter } from "./setup-core.js";
+import { createSlackSetupWizardBase, slackSetupContract } from "./setup-core.js";
 import { buildSlackSetupLines } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({
@@ -53,61 +53,30 @@ function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): s
   return call[0];
 }
 
-describe("slackSetupWizard.finalize", () => {
-  it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
-    const confirm = vi.fn(async () => true);
-
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      prompter: createTestWizardPrompter({
-        confirm: confirm as WizardPrompter["confirm"],
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(confirm).toHaveBeenCalledWith({
-      message: "Enable Slack interactive replies (buttons/selects) for agent responses?",
-      initialValue: true,
-    });
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(true);
-  });
-
-  it("auto-enables interactive replies for quickstart defaults without prompting", async () => {
-    const confirm = vi.fn(async () => false);
-
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      options: { quickstartDefaults: true },
-      prompter: createTestWizardPrompter({
-        confirm: confirm as WizardPrompter["confirm"],
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(true);
-  });
-});
-
 describe("slackSetupWizard.prepare", () => {
   it("keeps the manifest out of framed intro note lines", () => {
     const lines = buildSlackSetupLines();
 
     expect(lines.join("\n")).not.toContain("Manifest (JSON):");
     expect(lines.join("\n")).not.toContain('"display_information"');
-    expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
+    expect(lines).toContain("3) Socket Mode: enable it and create an app-level token (xapp-...)");
+  });
+
+  it("gives HTTP bot setup signing guidance without a Socket Mode manifest", async () => {
+    const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
+    const note = vi.fn(async () => {});
+
+    await runSetupWizardPrepare({
+      prepare: slackSetupWizard.prepare,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: createTestWizardPrompter({ plain, note }),
+    });
+
+    const instructions = requireFirstStringArg(note, "Slack HTTP setup instructions");
+    expect(instructions).toContain("Signing Secret");
+    expect(instructions).toContain("public HTTPS Request URL");
+    expect(note).toHaveBeenCalledWith(instructions, "Channel setup");
+    expect(plain).not.toHaveBeenCalled();
   });
 
   it("prints the manifest as plain JSON when Slack is not configured", async () => {
@@ -141,8 +110,8 @@ describe("slackSetupWizard.prepare", () => {
           messages_tab_enabled: true,
           messages_tab_read_only_enabled: false,
         },
-        assistant_view: {
-          assistant_description: "OpenClaw connects Slack assistant threads to OpenClaw agents.",
+        agent_view: {
+          agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
           suggested_prompts: [
             {
               title: "What can you do?",
@@ -201,8 +170,9 @@ describe("slackSetupWizard.prepare", () => {
           bot_events: [
             "app_home_opened",
             "app_mention",
-            "assistant_thread_context_changed",
-            "assistant_thread_started",
+            "app_context_changed",
+            "agent_session_stopped",
+            "agent_session_title_changed",
             "channel_rename",
             "member_joined_channel",
             "member_left_channel",
@@ -233,7 +203,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -247,7 +217,7 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
@@ -278,7 +248,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -292,13 +262,93 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "test-user-token",
       signingSecret: "test-signing-secret",
     });
     expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
     expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+  });
+
+  it("collects a signing secret instead of an app token for HTTP bot identity", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "");
+    vi.stubEnv("SLACK_APP_TOKEN", "");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["bot"],
+      textValues: ["test-bot-token", "test-signing-secret"],
+    });
+    const configure = createSetupWizardAdapter({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          defaultAccountId: () => "default",
+        },
+        setupContract: slackSetupContract,
+      } as never,
+      wizard: credentialOnlySlackSetupWizard,
+    }).configure;
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      mode: "http",
+      botToken: "test-bot-token",
+      signingSecret: "test-signing-secret",
+    });
+    expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack bot token (xoxb-...)", "Enter Slack signing secret"]);
+  });
+
+  it("does not use the Socket Mode environment shortcut for HTTP bot setup", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-env-test");
+    vi.stubEnv("SLACK_APP_TOKEN", "xapp-env-test");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["bot"],
+      confirmValues: [true],
+      textValues: ["test-signing-secret"],
+    });
+    const configure = createSetupWizardAdapter({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          defaultAccountId: () => "default",
+        },
+        setupContract: slackSetupContract,
+      } as never,
+      wizard: credentialOnlySlackSetupWizard,
+    }).configure;
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      mode: "http",
+      signingSecret: "test-signing-secret",
+    });
+    expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
+    expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(queued.confirm).toHaveBeenCalledTimes(1);
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack signing secret"]);
   });
 
   it("continues user setup after preserving a user-token SecretRef", async () => {
@@ -315,7 +365,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -331,7 +381,7 @@ describe("slackSetupWizard.prepare", () => {
         channels: {
           slack: {
             accounts: {
-              work: { identity: "user", userToken: userTokenRef },
+              work: { postAs: "user", userToken: userTokenRef },
             },
           },
         },
@@ -341,7 +391,7 @@ describe("slackSetupWizard.prepare", () => {
     });
 
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
-      identity: "user",
+      postAs: "user",
       userToken: userTokenRef,
       appToken: "test-app-token",
     });
@@ -351,7 +401,7 @@ describe("slackSetupWizard.prepare", () => {
     { name: "new setup", cfg: {} as OpenClawConfig },
     {
       name: "switch from user identity",
-      cfg: { channels: { slack: { identity: "user" } } } as OpenClawConfig,
+      cfg: { channels: { slack: { postAs: "user" } } } as OpenClawConfig,
     },
   ])("keeps bot identity implicit for $name", async ({ cfg }) => {
     vi.stubEnv("SLACK_BOT_TOKEN", "");
@@ -368,7 +418,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -388,7 +438,7 @@ describe("slackSetupWizard.prepare", () => {
     expect(JSON.stringify(result.cfg.channels?.slack)).toBe(
       '{"enabled":true,"botToken":"test-bot-token","appToken":"test-app-token"}',
     );
-    expect(result.cfg.channels?.slack).not.toHaveProperty("identity");
+    expect(result.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
   it("keeps a named bot override when the channel default is user identity", async () => {
@@ -404,7 +454,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -414,7 +464,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-user-app-token",
             accounts: {
@@ -427,10 +477,10 @@ describe("slackSetupWizard.prepare", () => {
       options: { secretInputMode: "plaintext" as const },
     });
 
-    expect(result.cfg.channels?.slack?.identity).toBe("user");
+    expect(result.cfg.channels?.slack?.postAs).toBe("user");
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
       enabled: true,
-      identity: "bot",
+      postAs: "bot",
       botToken: "test-bot-token",
       appToken: "test-app-token",
     });
@@ -444,7 +494,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -459,7 +509,7 @@ describe("slackSetupWizard.prepare", () => {
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
-    expect(result?.cfg.channels?.slack).not.toHaveProperty("identity");
+    expect(result?.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
   it("does not print the manifest after Slack credentials are configured", async () => {
@@ -477,57 +527,17 @@ describe("slackSetupWizard.prepare", () => {
 });
 
 describe("slackSetupWizard.dmPolicy", () => {
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      slackSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            slack: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  dmPolicy: "allowlist",
-                  botToken: "xoxb-alerts",
-                  appToken: "xapp-alerts",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "alerts",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(slackSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.slack.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
-    });
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = slackSetupWizard.dmPolicy?.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: slackSetupWizard.dmPolicy!,
+    cases: [
       {
-        channels: {
-          slack: {
-            allowFrom: ["U123"],
-            accounts: {
-              alerts: {
-                botToken: "xoxb-alerts",
-                appToken: "xapp-alerts",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "alerts",
-    );
-
-    expect(next?.channels?.slack?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+        name: "Slack named accounts",
+        channel: "slack",
+        accountId: "alerts",
+        accountConfig: { botToken: "xoxb-alerts", appToken: "xapp-alerts" },
+        inheritedAllowFrom: ["U123"],
+      },
+    ],
   });
 });
 
@@ -540,7 +550,7 @@ describe("slackSetupWizard.status", () => {
     {
       name: "Socket Mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         userToken: "test-user-token",
         appToken: "test-app-token",
       },
@@ -548,7 +558,7 @@ describe("slackSetupWizard.status", () => {
     {
       name: "HTTP mode",
       slack: {
-        identity: "user" as const,
+        postAs: "user" as const,
         mode: "http" as const,
         userToken: "test-user-token",
         signingSecret: "test-signing-secret",

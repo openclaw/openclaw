@@ -1,20 +1,22 @@
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ocPathSegment } from "./policy-state-helpers.js";
+import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
-// Policy plugin tool posture evidence.
-import { POLICY_TOOL_GROUPS } from "./tool-policy-conformance.js";
+
+type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicyToolPostureEvidence[] {
-  const globalTools = isRecord(cfg.tools) ? cfg.tools : {};
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const globalTools = asNonArrayRecord(cfg.tools);
+  const agents = asNonArrayRecord(cfg.agents);
+  const defaults = asNonArrayRecord(agents.defaults);
+  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicyToolPostureEvidence[] = [];
   pushToolPostureEvidence(entries, {
     id: "tools",
@@ -27,22 +29,20 @@ export function scanPolicyToolPosture(
     inheritedSourceBase: "oc://openclaw.config/tools",
   });
 
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((agent, index) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
+    const agent = configured.value;
     if (!isRecord(agent)) {
       return;
     }
-    const agentId =
-      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
     pushToolPostureEvidence(entries, {
-      id: agentId ?? `agent-${index}`,
+      id: configured.agentId,
       scope: "agent",
-      agentId,
-      tools: isRecord(agent.tools) ? agent.tools : {},
+      agentId: configured.agentId,
+      tools: asNonArrayRecord(agent.tools),
       inheritedTools: globalTools,
-      sandbox: isRecord(agent.sandbox) ? agent.sandbox : {},
+      sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
-      sourceBase: `oc://openclaw.config/agents/list/#${index}/tools`,
+      sourceBase: `${configured.sourceBase}/tools`,
       inheritedSourceBase: "oc://openclaw.config/tools",
     });
   });
@@ -83,8 +83,8 @@ function pushToolPostureEvidence(
 }
 
 function pushToolFsPosture(entries: PolicyToolPostureEvidence[], params: ToolPostureParams): void {
-  const localFs = isRecord(params.tools.fs) ? params.tools.fs : {};
-  const inheritedFs = isRecord(params.inheritedTools.fs) ? params.inheritedTools.fs : {};
+  const localFs = asNonArrayRecord(params.tools.fs);
+  const inheritedFs = asNonArrayRecord(params.inheritedTools.fs);
   const localWorkspaceOnly = readBoolean(localFs.workspaceOnly);
   const inheritedWorkspaceOnly = readBoolean(inheritedFs.workspaceOnly);
   pushToolPostureValue(entries, params, {
@@ -100,8 +100,8 @@ function pushToolExecPosture(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
 ): void {
-  const localExec = isRecord(params.tools.exec) ? params.tools.exec : {};
-  const inheritedExec = isRecord(params.inheritedTools.exec) ? params.inheritedTools.exec : {};
+  const localExec = asNonArrayRecord(params.tools.exec);
+  const inheritedExec = asNonArrayRecord(params.inheritedTools.exec);
   const localHost = readString(localExec.host);
   const inheritedHost = readString(inheritedExec.host);
   const host = localHost ?? inheritedHost ?? "auto";
@@ -115,28 +115,69 @@ function pushToolExecPosture(
 
   const localSecurity = readString(localExec.security);
   const inheritedSecurity = readString(inheritedExec.security);
+  const localAsk = readString(localExec.ask);
+  const inheritedAsk = readString(inheritedExec.ask);
+  const localMode = readExecMode(localExec.mode);
+  const inheritedMode = readExecMode(inheritedExec.mode);
   // Config conformance intentionally ignores exec-approvals.json runtime/operator state.
   const sandboxMode = readString(params.sandbox.mode) ?? readString(params.inheritedSandbox.mode);
   const sandboxCanApply = sandboxMode === "all";
+  const defaultSecurity =
+    host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full";
+  const selectedMode =
+    localMode === undefined
+      ? inheritedMode === undefined
+        ? undefined
+        : { value: inheritedMode, inherited: true }
+      : { value: localMode, inherited: false };
+  const modePosture =
+    selectedMode === undefined
+      ? undefined
+      : {
+          ...selectedMode,
+          // A selected mode owns both posture fields, so the resolver ignores legacy inputs.
+          ...resolveExecModePolicy({
+            mode: selectedMode.value,
+            security: "full",
+            ask: "off",
+          }),
+        };
+  const securityUsesMode =
+    modePosture?.inherited === false ||
+    (localSecurity === undefined && modePosture?.inherited === true);
+  const security =
+    modePosture?.inherited === false
+      ? modePosture.security
+      : (localSecurity ?? modePosture?.security ?? inheritedSecurity ?? defaultSecurity);
   pushToolPostureValue(entries, params, {
     suffix: "exec/security",
+    sourceSuffix: securityUsesMode ? "exec/mode" : undefined,
     kind: "execSecurity",
-    value:
-      localSecurity ??
-      inheritedSecurity ??
-      (host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full"),
-    explicit: localSecurity !== undefined || inheritedSecurity !== undefined,
-    inherited: localSecurity === undefined && inheritedSecurity !== undefined,
+    value: security,
+    explicit:
+      modePosture !== undefined || localSecurity !== undefined || inheritedSecurity !== undefined,
+    inherited:
+      modePosture?.inherited === true
+        ? localSecurity === undefined
+        : localSecurity === undefined && inheritedSecurity !== undefined,
   });
 
-  const localAsk = readString(localExec.ask);
-  const inheritedAsk = readString(inheritedExec.ask);
+  const askUsesMode =
+    modePosture?.inherited === false || (localAsk === undefined && modePosture?.inherited === true);
+  const ask =
+    modePosture?.inherited === false
+      ? modePosture.ask
+      : (localAsk ?? modePosture?.ask ?? inheritedAsk ?? "off");
   pushToolPostureValue(entries, params, {
     suffix: "exec/ask",
+    sourceSuffix: askUsesMode ? "exec/mode" : undefined,
     kind: "execAsk",
-    value: localAsk ?? inheritedAsk ?? "off",
-    explicit: localAsk !== undefined || inheritedAsk !== undefined,
-    inherited: localAsk === undefined && inheritedAsk !== undefined,
+    value: ask,
+    explicit: modePosture !== undefined || localAsk !== undefined || inheritedAsk !== undefined,
+    inherited:
+      modePosture?.inherited === true
+        ? localAsk === undefined
+        : localAsk === undefined && inheritedAsk !== undefined,
   });
 }
 
@@ -144,7 +185,7 @@ function pushToolElevatedPosture(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
 ): void {
-  const localElevated = isRecord(params.tools.elevated) ? params.tools.elevated : {};
+  const localElevated = asNonArrayRecord(params.tools.elevated);
   const inheritedElevated = isRecord(params.inheritedTools.elevated)
     ? params.inheritedTools.elevated
     : {};
@@ -162,7 +203,7 @@ function pushToolElevatedPosture(
       (localEnabled === undefined && inheritedEnabled !== undefined),
   });
 
-  const localAllowFrom = isRecord(localElevated.allowFrom) ? localElevated.allowFrom : {};
+  const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
   const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
     ? inheritedElevated.allowFrom
     : {};
@@ -202,6 +243,7 @@ function pushToolPostureValue(
   params: ToolPostureParams,
   entry: {
     readonly suffix: string;
+    readonly sourceSuffix?: string;
     readonly kind: PolicyToolPostureEvidence["kind"];
     readonly value: boolean | string | undefined;
     readonly explicit: boolean;
@@ -211,12 +253,26 @@ function pushToolPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),
     explicit: entry.explicit,
   });
+}
+
+function readExecMode(value: unknown): ExecMode | undefined {
+  const mode = readString(value)?.toLowerCase();
+  switch (mode) {
+    case "deny":
+    case "allowlist":
+    case "ask":
+    case "auto":
+    case "full":
+      return mode;
+    default:
+      return undefined;
+  }
 }
 
 function pushToolPostureList(
@@ -270,7 +326,7 @@ export const AGENT_WORKSPACE_POLICY_TOOLS = [
 
 export const IMPLICIT_DEFAULT_ACCOUNT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   discord: ["token"],
-  googlechat: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+  googlechat: ["serviceAccount", "serviceAccountFile"],
   imessage: ["cliPath", "dbPath"],
   "qa-channel": ["baseUrl"],
   qqbot: ["appId", "clientSecret", "clientSecretFile"],
@@ -305,36 +361,4 @@ function readStringOrNumberArray(value: unknown): readonly string[] {
     }
   }
   return entries;
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
-}
-
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
-}
-
-export function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
 }

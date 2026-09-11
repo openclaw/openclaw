@@ -1,6 +1,6 @@
 // Provider operation retry helpers run retryable provider operations with backoff.
 import { sleepWithAbort } from "../infra/backoff.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
 
 export type ProviderOperationRetryStage = "read" | "poll" | "download" | "create";
@@ -95,13 +95,6 @@ function readErrorCode(error: unknown): string | undefined {
   }
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
-}
-
-function readErrorCause(error: unknown): unknown {
-  if (typeof error !== "object" || error === null) {
-    return undefined;
-  }
-  return (error as { cause?: unknown }).cause;
 }
 
 // Provider reads get one bounded retry for negative DNS responses. Gateway
@@ -249,16 +242,26 @@ export async function executeProviderOperationWithRetry<T>(params: {
   stage: ProviderOperationRetryStage;
   operation: () => Promise<T>;
   retry?: TransientProviderRetryConfig;
+  signal?: AbortSignal;
 }): Promise<T> {
   const retryConfig = providerOperationRetryConfig(params.stage, params.retry);
-  const retryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const resolvedRetryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const retrySignal =
+    params.signal && resolvedRetryOptions?.signal
+      ? AbortSignal.any([params.signal, resolvedRetryOptions.signal])
+      : (params.signal ?? resolvedRetryOptions?.signal);
+  const retryOptions = resolvedRetryOptions
+    ? { ...resolvedRetryOptions, ...(retrySignal ? { signal: retrySignal } : {}) }
+    : undefined;
   const maxAttempts = resolveTransientProviderAttempts(retryOptions);
   let lastError: unknown;
 
   for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
+    retrySignal?.throwIfAborted();
     try {
       return await params.operation();
     } catch (error) {
+      retrySignal?.throwIfAborted();
       lastError = error;
       const message = formatErrorMessage(error);
       if (

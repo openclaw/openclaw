@@ -61,30 +61,14 @@ async function resolveBotUserId(
   return userId;
 }
 
-export async function addMattermostReaction(params: {
-  cfg: OpenClawConfig;
-  postId: string;
-  emojiName: string;
-  accountId?: string | null;
-  authorizedTarget?: string;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
-}): Promise<Result> {
+export async function addMattermostReaction(params: ReactionParams): Promise<Result> {
   return runMattermostReaction(params, {
     action: "add",
     mutation: createReaction,
   });
 }
 
-export async function removeMattermostReaction(params: {
-  cfg: OpenClawConfig;
-  postId: string;
-  emojiName: string;
-  accountId?: string | null;
-  authorizedTarget?: string;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
-}): Promise<Result> {
+export async function removeMattermostReaction(params: ReactionParams): Promise<Result> {
   return runMattermostReaction(params, {
     action: "remove",
     mutation: deleteReaction,

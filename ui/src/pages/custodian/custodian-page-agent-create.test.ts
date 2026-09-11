@@ -7,13 +7,16 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
   newAgentIntent: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -21,8 +24,9 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -34,7 +38,9 @@ function createContext(request: ReturnType<typeof vi.fn>) {
     lastError: null,
     lastErrorCode: null,
   };
-  const setSessionKey = vi.fn();
+  const calls: string[] = [];
+  const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
+  const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
   const gateway = {
     snapshot,
     connection: {
@@ -55,16 +61,32 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   });
   const context = {
     gateway,
-    agents: { refreshList },
+    agents: {
+      state: {
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "main", model: { primary: "openai/gpt-5.5" } },
+            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+          ],
+        },
+      },
+      refreshList,
+      subscribe: () => () => undefined,
+    },
+    agentSelection: { state: { selectedId: "main" }, set: setAgent },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
-  return { context, refreshList, setSessionKey };
+  return { calls, context, refreshList, setAgent, setSessionKey };
 }
 
 async function mountPage(context: ApplicationContext): Promise<TestCustodianPage> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = false;
   page.newAgentIntent = true;
   provider.append(page);
@@ -75,7 +97,7 @@ async function mountPage(context: ApplicationContext): Promise<TestCustodianPage
 
 describe("custodian new-agent flow", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {
@@ -96,6 +118,21 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
+  it("does not misreport limited access as an outdated Gateway", async () => {
+    const request = vi.fn();
+    const { context } = createContext(request);
+    context.gateway.snapshot.hello = {
+      ...context.gateway.snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+
+    const page = await mountPage(context);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("refreshes the roster and opens the created agent hatch session", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -104,14 +141,36 @@ describe("custodian new-agent flow", () => {
       agentDraft: "hatch",
       agentId: "researcher",
     });
-    const { context, refreshList, setSessionKey } = createContext(request);
+    const { calls, context, refreshList, setAgent, setSessionKey } = createContext(request);
     await mountPage(context);
 
     await waitForFast(() => expect(context.navigate).toHaveBeenCalledOnce());
     expect(refreshList).toHaveBeenCalledOnce();
+    expect(setAgent).toHaveBeenCalledWith("researcher");
     expect(setSessionKey).toHaveBeenCalledWith("agent:researcher:main");
+    expect(calls).toEqual(["agent:researcher", "session:agent:researcher:main"]);
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Aresearcher%3Amain&draft=Wake%20up%2C%20my%20friend!",
+      pathname: "/chat/researcher",
+      search: "?draft=Wake%20up%2C%20my%20friend!",
     });
+  });
+
+  it("hands model-account setup to the existing human Profile controls", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Open Settings → Profile → Connected accounts to connect your account.",
+      action: "none",
+      handoff: { kind: "model-accounts" },
+    });
+    const { context, refreshList, setAgent, setSessionKey } = createContext(request);
+    const client = context.gateway.snapshot.client;
+    await mountPage(context);
+
+    await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("profile"));
+    expect(context.gateway.snapshot.client).toBe(client);
+    expect(refreshList).not.toHaveBeenCalled();
+    expect(setAgent).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.chat"]);
   });
 });

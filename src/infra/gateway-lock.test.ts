@@ -15,16 +15,16 @@ import {
   readActiveGatewayLockIdentity,
   readActiveGatewayLockPort,
 } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
-let fixtureRoot = "";
 const realNow = Date.now.bind(Date);
 
-function resolveTestLockDir() {
-  return path.join(fixtureRoot, "__locks");
+function resolveTestLockDir(env: NodeJS.ProcessEnv) {
+  return path.join(resolveStateDir(env), "__locks");
 }
 
 async function makeEnv() {
@@ -51,7 +51,7 @@ async function acquireForTest(
     sleep: async (ms) => {
       await nativeSleep(ms);
     },
-    lockDir: resolveTestLockDir(),
+    lockDir: resolveTestLockDir(env),
     ...opts,
   });
 }
@@ -68,13 +68,12 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const configHash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const canonicalStateDir = fsSync.realpathSync.native(path.resolve(stateDir));
-  const stateHash = createHash("sha256").update(canonicalStateDir).digest("hex").slice(0, 8);
-  const lockDir = resolveTestLockDir();
+  const lockDir = resolveTestLockDir(env);
+  fsSync.mkdirSync(lockDir, { recursive: true });
   return {
     lockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    stateLockPath: path.join(lockDir, "gateway.state.lock"),
   };
 }
 
@@ -95,16 +94,6 @@ function createLockPayload(params: {
   };
 }
 
-function mockProcStatRead(params: { onProcRead: () => string }) {
-  const readFileSync = fsSync.readFileSync;
-  return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-    if (filePath === `/proc/${process.pid}/stat`) {
-      return params.onProcRead();
-    }
-    return readFileSync(filePath as never, encoding as never) as never;
-  });
-}
-
 async function writeLockFile(
   env: NodeJS.ProcessEnv,
   params: { startTime: number; createdAt?: string } = { startTime: 111 },
@@ -117,14 +106,6 @@ async function writeLockFile(
   });
   await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
   return { lockPath, configPath };
-}
-
-function createEaccesProcStatSpy() {
-  return mockProcStatRead({
-    onProcRead: () => {
-      throw new Error("EACCES");
-    },
-  });
 }
 
 function createPortProbeConnectionSpy(result: "connect" | "refused") {
@@ -151,7 +132,7 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
 
 describe("gateway lock", () => {
   beforeAll(async () => {
-    fixtureRoot = await fixtureRootTracker.setup();
+    await fixtureRootTracker.setup();
   });
 
   beforeEach(() => {
@@ -164,7 +145,6 @@ describe("gateway lock", () => {
 
   afterAll(async () => {
     await fixtureRootTracker.cleanup();
-    fixtureRoot = "";
   });
 
   afterEach(() => {
@@ -277,7 +257,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -297,35 +277,41 @@ describe("gateway lock", () => {
     const firstLock = expectGatewayLock(await acquireForTest(env, options));
     const firstConfigPayload = JSON.parse(await fs.readFile(firstLock.lockPath, "utf8")) as {
       ownerId?: string;
+      cronOwnerProjection?: string;
     };
     const firstStatePayload = JSON.parse(await fs.readFile(firstLock.stateLockPath, "utf8")) as {
       ownerId?: string;
+      cronOwnerProjection?: string;
     };
     const firstIdentity = await readActiveGatewayLockIdentity({
       env,
-      lockDir: resolveTestLockDir(),
+      lockDir: resolveTestLockDir(env),
       platform: "darwin",
       readProcessCmdline: options.readProcessCmdline,
     });
     expect(firstConfigPayload.ownerId).toBe(firstStatePayload.ownerId);
+    expect(firstConfigPayload.cronOwnerProjection).toBe("dynamic-default-v1");
+    expect(firstStatePayload.cronOwnerProjection).toBe("dynamic-default-v1");
     await firstLock.release();
 
     const secondLock = expectGatewayLock(await acquireForTest(env, options));
     try {
       const secondIdentity = await readActiveGatewayLockIdentity({
         env,
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
         platform: "darwin",
         readProcessCmdline: options.readProcessCmdline,
       });
       expect(firstIdentity).toMatchObject({
         pid: process.pid,
         ownerId: expect.any(String),
+        cronOwnerProjection: "dynamic-default-v1",
         port: 48789,
       });
       expect(secondIdentity).toMatchObject({
         pid: process.pid,
         ownerId: expect.any(String),
+        cronOwnerProjection: "dynamic-default-v1",
         port: 48789,
       });
       expect(secondIdentity?.ownerId).not.toBe(firstIdentity?.ownerId);
@@ -354,7 +340,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -383,7 +369,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env: envB,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(envB),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -465,21 +451,63 @@ describe("gateway lock", () => {
     }
   });
 
-  it("ignores active-port metadata when the lock owner cannot be verified", async () => {
-    const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-
-    await expect(
-      readActiveGatewayLockPort({
+  it.each([
+    { state: "missing", file: "config", expected: "absent" },
+    { state: "dead", file: "config", expected: "absent" },
+    { state: "other role", file: "state", expected: "absent" },
+    { state: "active", file: "state", expected: "active" },
+    { state: "missing port", file: "config", expected: "unavailable" },
+    ...["config", "state"].flatMap((file) =>
+      ["corrupt", "unreadable", "unknown owner"].map((state) => ({
+        state,
+        file,
+        expected: "unavailable",
+      })),
+    ),
+  ])(
+    "preserves strict lock inspection for $state $file locks without changing discovery",
+    async ({ state, file, expected }) => {
+      const env = await makeEnv();
+      const { lockPath, stateLockPath, configPath } = resolveLockPath(env);
+      const target = file === "state" ? stateLockPath : lockPath;
+      if (state !== "missing") {
+        const payload = createLockPayload({
+          configPath,
+          startTime: 111,
+          ...(state !== "missing port" ? { port: 48789 } : {}),
+          ...(state === "other role" ? { role: "sqlite-maintenance" as const } : {}),
+        });
+        await fs.writeFile(target, state === "corrupt" ? "{" : JSON.stringify(payload));
+      }
+      if (state === "unreadable") {
+        const readFile = fs.readFile;
+        vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+          if (filePath === target) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return readFile(filePath, options);
+        });
+      }
+      const options = {
         env,
-        lockDir: resolveTestLockDir(),
-        platform: "darwin",
-        readProcessCmdline: () => null,
-      }),
-    ).resolves.toBeUndefined();
-  });
+        lockDir: resolveTestLockDir(env),
+        platform: "linux" as const,
+        readProcessStartTime: () => (state === "dead" ? 222 : null),
+        readProcessCmdline: () => (state === "unknown owner" ? null : ["openclaw-gateway"]),
+      };
+      await expect(readActiveGatewayLockPort(options)).resolves.toBe(
+        expected === "active" ? 48789 : undefined,
+      );
+      const strict = readActiveGatewayLockIdentity({ ...options, requireInspection: true });
+      if (expected === "unavailable") {
+        await expect(strict).rejects.toBeInstanceOf(GatewayLockError);
+      } else if (expected === "active") {
+        await expect(strict).resolves.toMatchObject({ pid: process.pid, port: 48789 });
+      } else {
+        await expect(strict).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
     const env = await makeEnv();
@@ -532,7 +560,7 @@ describe("gateway lock", () => {
     expect(acquired).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.reason).toBeInstanceOf(GatewayLockError);
-    await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+    await fs.access(stateLockPath);
 
     const acquiredResult = acquired[0];
     if (!acquiredResult) {
@@ -543,23 +571,70 @@ describe("gateway lock", () => {
     await nextLock.release();
   });
 
+  it("continues honoring the legacy lifetime coordinator", async () => {
+    const env = await makeEnv();
+    const { stateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
+    const coordinator = openNodeSqliteDatabase(`${stateLockPath}.sqlite`);
+    coordinator.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    try {
+      await expect(acquireForTest(env, { timeoutMs: 15 })).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      coordinator.exec("ROLLBACK");
+      coordinator.close();
+    }
+
+    await expectGatewayLock(await acquireForTest(env)).release();
+  });
+
+  it("preserves a fresh gateway lock that replaces the stale reclaim candidate", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { configPath, stateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
+    await fs.writeFile(
+      stateLockPath,
+      JSON.stringify(createLockPayload({ configPath, startTime: 111 })),
+      "utf8",
+    );
+    const replacement = {
+      ...createLockPayload({ configPath, startTime: 333 }),
+      ownerId: "replacement-owner",
+    };
+    let startTimeReads = 0;
+
+    await expect(
+      acquireForTest(env, {
+        platform: "linux",
+        timeoutMs: 25,
+        readProcessStartTime: () => {
+          startTimeReads += 1;
+          if (startTimeReads === 2) {
+            fsSync.writeFileSync(stateLockPath, JSON.stringify(replacement), "utf8");
+          }
+          return startTimeReads >= 3 ? 333 : 222;
+        },
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject(replacement);
+  });
+
   it("keeps lock on linux when proc access fails unless stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
     await writeLockFile(env);
-    const spy = createEaccesProcStatSpy();
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
       staleMs: 10_000,
       platform: "linux",
+      readProcessStartTime: () => null,
       readProcessCmdline: () => null,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     await expect(fs.access(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-
-    spy.mockRestore();
   });
 
   it("keeps a verified maintenance owner when process start identity is unavailable", async () => {
@@ -578,26 +653,22 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      await expect(
-        acquireForTest(env, {
-          timeoutMs: 15,
-          staleMs: 0,
-          platform: "linux",
-          readProcessCmdline: () => [
-            "node",
-            "/srv/openclaw/openclaw.mjs",
-            "doctor",
-            "--state-sqlite",
-            "compact",
-          ],
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 15,
+        staleMs: 0,
+        platform: "linux",
+        readProcessStartTime: () => null,
+        readProcessCmdline: () => [
+          "node",
+          "/srv/openclaw/openclaw.mjs",
+          "doctor",
+          "--state-sqlite",
+          "compact",
+        ],
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("reclaims a maintenance lock when its live pid belongs to another process", async () => {
@@ -615,18 +686,14 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      const lock = await acquireForTest(env, {
-        platform: "linux",
-        readProcessCmdline: () => ["node", "worker.js"],
-        timeoutMs: 80,
-      });
-      await expectGatewayLock(lock).release();
-    } finally {
-      spy.mockRestore();
-    }
+    const lock = await acquireForTest(env, {
+      platform: "linux",
+      readProcessStartTime: () => null,
+      readProcessCmdline: () => ["node", "worker.js"],
+      timeoutMs: 80,
+    });
+    await expectGatewayLock(lock).release();
   });
 
   it("reclaims a Windows maintenance lock when the pid creation time changed", async () => {
@@ -697,23 +764,19 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      await expect(
-        acquireForTest(env, {
-          platform: "linux",
-          readProcessCmdline: () => null,
-          staleMs: 10_000,
-          timeoutMs: 15,
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(
+      acquireForTest(env, {
+        platform: "linux",
+        readProcessStartTime: () => null,
+        readProcessCmdline: () => null,
+        staleMs: 10_000,
+        timeoutMs: 15,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
-  it("ages out an old maintenance owner with unreadable process identity", async () => {
+  it("keeps an old maintenance owner when its live identity is unreadable", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
@@ -729,26 +792,22 @@ describe("gateway lock", () => {
       ),
       "utf8",
     );
-    const spy = createEaccesProcStatSpy();
 
-    try {
-      const lock = await acquireForTest(env, {
+    await expect(
+      acquireForTest(env, {
         platform: "linux",
+        readProcessStartTime: () => null,
         readProcessCmdline: () => null,
         staleMs: 0,
         timeoutMs: 80,
-      });
-      await expectGatewayLock(lock).release();
-    } finally {
-      spy.mockRestore();
-    }
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
   });
 
   it("keeps lock when fs.stat fails until payload is stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     await writeLockFile(env);
-    const procSpy = createEaccesProcStatSpy();
     const statSpy = vi
       .spyOn(fs, "stat")
       .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
@@ -757,11 +816,11 @@ describe("gateway lock", () => {
       timeoutMs: 20,
       staleMs: 10_000,
       platform: "linux",
+      readProcessStartTime: () => null,
       readProcessCmdline: () => null,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
-    procSpy.mockRestore();
     statSpy.mockRestore();
   });
 
@@ -794,6 +853,7 @@ describe("gateway lock", () => {
         platform: "darwin",
         port: 18789,
         readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+        readProcessStartTime: () => 111,
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
@@ -820,8 +880,9 @@ describe("gateway lock", () => {
           sleepDelays.push(ms);
           now = 10;
         },
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
         readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+        readProcessStartTime: () => 111,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -835,19 +896,19 @@ describe("gateway lock", () => {
       await acquireGatewayLock({
         allowInTests: true,
         env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
       }),
     );
 
     try {
       expect(lock.lockPath).toBe(stateLockPath);
-      await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+      await fs.access(stateLockPath);
       await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         acquireGatewayLock({
           allowInTests: true,
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
           timeoutMs: 15,
@@ -862,7 +923,7 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
       env: { ...env, VITEST: "1" },
-      lockDir: resolveTestLockDir(),
+      lockDir: resolveTestLockDir(env),
     });
     expect(lock).toBeNull();
   });
@@ -878,7 +939,7 @@ describe("gateway lock", () => {
         pollIntervalMs: 2,
         now: () => 8_640_000_000_000_001,
         sleep: async () => {},
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
       }),
     );
 
@@ -905,7 +966,7 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
-  it("closes handle and removes lock file when writeFile fails after open succeeds", async () => {
+  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
@@ -930,7 +991,9 @@ describe("gateway lock", () => {
     });
 
     expect(close).toHaveBeenCalledTimes(1);
-    await expect(fs.access(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
+    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
+    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
 
     openSpy.mockRestore();
   });
@@ -1036,6 +1099,7 @@ describe("gateway lock", () => {
       platform: "darwin",
       port: 18789,
       readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
+      readProcessStartTime: () => 111,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 

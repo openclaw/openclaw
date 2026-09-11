@@ -61,6 +61,8 @@ export type CommonChannelMessagingConfig<
   /** Delivery streaming config: chunk mode plus block streaming controls. */
   streaming?: TStreaming;
   /** Heartbeat visibility settings for this channel. */
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
+  /** @deprecated Doctor-only legacy input. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
@@ -91,9 +93,6 @@ export type ChannelBotInteractionConfig<TAllowBots = boolean | "mentions"> = {
 export type ChannelReadReceiptConfig = {
   sendReadReceipts?: boolean;
 };
-
-export type ChannelMentionPatternsConfig<TArraySugar extends boolean = false> =
-  TArraySugar extends true ? string[] : MentionPatternsPolicyConfig;
 
 export type ChannelReactionConfig<
   TNotification = never,

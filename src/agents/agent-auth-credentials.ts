@@ -4,13 +4,19 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import type {
+  PreparedAgentCredentialMode,
+  PreparedAgentCredentialModes,
+} from "./agent-auth-credential-modes.js";
+import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { ApiKeyCredential, AuthStorageData } from "./sessions/auth-storage.js";
 
 // Converts auth-profile credentials into the compact credential map consumed by
 // agent runtimes. Secret refs can be represented by markers without reading
 // secret values.
-type AgentApiKeyCredential = { type: "api_key"; key: string };
+type AgentApiKeyCredential = ApiKeyCredential;
 type AgentOAuthCredential = {
   type: "oauth";
   access: string;
@@ -28,6 +34,49 @@ type ResolveAgentCredentialMapOptions = {
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
+
+/** Records only credential modes whose secret material is usable by a prepared runtime owner. */
+export function resolveUsableAgentCredentialModes(
+  credentials: Readonly<AuthStorageData>,
+): PreparedAgentCredentialModes {
+  const modes: Record<string, PreparedAgentCredentialMode> = {};
+  for (const [rawProvider, credential] of Object.entries(credentials)) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    if (
+      credential.type === "api_key" &&
+      credential.key &&
+      credential.key !== AGENT_SECRET_REF_CONFIGURED_MARKER
+    ) {
+      const native = credential.nativeAuth;
+      if (!native || normalizeProviderId(native.runtime) === provider) {
+        modes[provider] = native
+          ? Object.freeze({
+              source: "native",
+              mode: native.mode === "api-key" ? "api_key" : native.mode,
+            })
+          : "api_key";
+      }
+    } else if (
+      credential.type === "token" &&
+      credential.token &&
+      (credential.expires === undefined || credential.expires > Date.now())
+    ) {
+      modes[provider] = "token";
+    } else if (
+      credential.type === "oauth" &&
+      !isOAuthRefreshFence(credential) &&
+      credential.access &&
+      credential.refresh &&
+      credential.expires > 0
+    ) {
+      modes[provider] = "oauth";
+    }
+  }
+  return Object.freeze(modes);
+}
 
 function hasConfiguredSecretRef(value: unknown): boolean {
   return coerceSecretRef(value) !== null;
@@ -71,6 +120,9 @@ function convertAuthProfileCredentialToAgent(
   }
 
   if (cred.type === "oauth") {
+    if (isOAuthRefreshFence(cred)) {
+      return null;
+    }
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);

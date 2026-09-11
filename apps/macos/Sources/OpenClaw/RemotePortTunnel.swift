@@ -2,6 +2,7 @@ import Foundation
 import Network
 import OpenClawKit
 import OSLog
+import Subprocess
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -17,69 +18,62 @@ final class RemotePortTunnel: @unchecked Sendable {
         let identity: String
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
+        let preferredLocalPort: UInt16?
+
+        init(
+            target: CommandResolver.SSHParsedTarget,
+            identity: String,
+            remotePort: Int,
+            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+            preferredLocalPort: UInt16? = nil)
+        {
+            self.target = target
+            self.identity = identity
+            self.remotePort = remotePort
+            self.hostKeyPolicy = hostKeyPolicy
+            self.preferredLocalPort = preferredLocalPort
+        }
     }
 
-    let process: Process
     let localPort: UInt16?
-    private let stderrHandle: FileHandle?
+    var isRunning: Bool {
+        self.process.isRunning
+    }
+
+    let processIdentifier: pid_t
+
+    private let process: ManagedProcess
+    private let stderrReader: PipeReadStream
     private let guardianReceipt: PortGuardian.Record
 
-    private final class StderrCapture: @unchecked Sendable {
-        private let lock = NSLock()
-        private var text = ""
-        private let limit = 4096
-
-        func append(_ chunk: String) {
-            let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            if !self.text.isEmpty {
-                self.text += "\n"
-            }
-            self.text += trimmed
-            if self.text.count > self.limit {
-                self.text = String(self.text.suffix(self.limit))
-            }
-        }
-
-        func snapshot() -> String {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return self.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
     private init(
-        process: Process,
+        process: ManagedProcess,
+        processIdentifier: pid_t,
         localPort: UInt16?,
-        stderrHandle: FileHandle?,
+        stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {
         self.process = process
+        self.processIdentifier = processIdentifier
         self.localPort = localPort
-        self.stderrHandle = stderrHandle
+        self.stderrReader = stderrReader
         self.guardianReceipt = guardianReceipt
     }
 
     deinit {
-        Self.cleanupStderr(self.stderrHandle)
+        self.stderrReader.close()
         let receipt = self.guardianReceipt
-        guard self.process.isRunning else {
-            Task { await PortGuardian.shared.removeRecord(receipt) }
-            return
-        }
         // deinit cannot wait. Leave the receipt durable until a later sweep proves
         // the child exited; deleting it after TERM alone can orphan a resistant SSH.
         Task { await PortGuardian.shared.relinquishRecord(receipt) }
-        self.process.terminate()
+        self.process.requestTermination()
     }
 
-    func terminate() {
-        Self.terminateAndWait(self.process)
-        Self.cleanupStderr(self.stderrHandle)
-        let receipt = self.guardianReceipt
-        Task { await PortGuardian.shared.removeRecord(receipt) }
+    func terminate() async {
+        await self.process.terminate()
+        await self.stderrReader.finish()
+        // Finish retiring this receipt before a replacement spawn reserves the ledger.
+        await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
     static func configuration(remotePort: Int) throws -> Configuration {
@@ -99,11 +93,22 @@ final class RemotePortTunnel: @unchecked Sendable {
             defaultRemotePort: remotePort,
             for: sshHost,
             root: root) ?? remotePort
+        // Named profiles reserve their startup port; an explicit config preference can still change live.
+        let preferredLocalPort = OpenClawConfigFile.gatewayPort(root: root)
+            .flatMap(UInt16.init(exactly:))
+            .map { port in
+                UInt16(GatewayEnvironment.resolvedGatewayPort(
+                    environment: ProcessInfo.processInfo.environment,
+                    configPort: Int(port),
+                    storedPort: 0,
+                    profile: .current))
+            }
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePort: resolvedRemotePort,
-            hostKeyPolicy: settings.sshHostKeyPolicy)
+            hostKeyPolicy: settings.sshHostKeyPolicy,
+            preferredLocalPort: preferredLocalPort)
     }
 
     static func create(
@@ -131,42 +136,28 @@ final class RemotePortTunnel: @unchecked Sendable {
             identity: configuration.identity,
             options: options)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = args
-        process.environment = CommandResolver.sshEnvironment()
-
         let pipe = Pipe()
-        process.standardError = pipe
         let stderrHandle = pipe.fileHandleForReading
-        let stderrCapture = StderrCapture()
+        let stderrWriter = pipe.fileHandleForWriting
+        let stderrCapture = PipeTextCapture(characterLimit: 4096, retention: .tail)
 
-        // Consume stderr so ssh cannot block if it logs.
-        stderrHandle.readabilityHandler = { handle in
-            let data = handle.readSafely(upToCount: 64 * 1024)
-            guard !data.isEmpty else {
-                // EOF (or read failure): stop monitoring to avoid spinning on a closed pipe.
-                Self.cleanupStderr(handle)
-                return
-            }
-            guard let line = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !line.isEmpty
-            else { return }
-            stderrCapture.append(line)
+        defer { try? stderrHandle.close() }
+        let consumeStderr: @Sendable (Data, Bool) -> Void = { data, atEOF in
+            let line = stderrCapture.append(data, atEOF: atEOF)
+            guard !line.isEmpty else { return }
             Self.logger.error("ssh tunnel stderr: \(line, privacy: .public)")
         }
-        process.terminationHandler = { _ in
-            Self.cleanupStderr(stderrHandle)
-        }
-
+        let stderrReader = try PipeReadStream(
+            handle: stderrHandle,
+            onData: { consumeStderr($0, false) },
+            onClose: { consumeStderr(Data(), true) })
         let spawnPreparation: PortGuardian.SpawnPreparation
         do {
             // Legacy reconciliation can inspect many live processes. Complete it
             // before spawn so a crash during migration cannot orphan this SSH child.
             spawnPreparation = try await PortGuardian.shared.prepareForTunnelSpawn()
         } catch {
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw NSError(
                 domain: "RemotePortTunnel",
                 code: 5,
@@ -176,11 +167,30 @@ final class RemotePortTunnel: @unchecked Sendable {
                 ])
         }
 
+        var platformOptions = PlatformOptions()
+        platformOptions.qualityOfService = .userInitiated
+        let processConfiguration = Subprocess.Configuration(
+            executable: .path(.init("/usr/bin/ssh")),
+            arguments: Arguments(args),
+            environment: ManagedProcess.environment(from: CommandResolver.sshEnvironment()),
+            platformOptions: platformOptions)
+        let process = ManagedProcess.launch(
+            configuration: processConfiguration,
+            input: .none,
+            output: .discarded,
+            error: .fileDescriptor(
+                .init(rawValue: stderrWriter.fileDescriptor),
+                closeAfterSpawningProcess: false),
+            closeAfterSpawn: [stderrWriter])
+        let processIdentifier: pid_t
         do {
-            try process.run()
+            processIdentifier = try await process.waitUntilStarted()
         } catch {
+            // Cancellation abandons the waiter, not the detached spawn. Reap the
+            // child before releasing its reservation or closing inherited handles.
+            await process.terminate(gracefully: false)
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw error
         }
 
@@ -190,16 +200,16 @@ final class RemotePortTunnel: @unchecked Sendable {
             // a crash window where a live SSH process has no durable reap receipt.
             receipt = try await PortGuardian.shared.record(
                 port: Int(localPort),
-                pid: process.processIdentifier,
-                command: process.executableURL?.path ?? "ssh",
+                pid: processIdentifier,
+                command: "/usr/bin/ssh",
                 mode: .remote,
                 preparation: spawnPreparation)
         } catch {
-            Self.terminateAndWait(process)
+            await process.terminate()
             // Keep the reservation exclusive until this exact child is reaped.
             // Only then may another operation migrate or open the ledger.
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw NSError(
                 domain: "RemotePortTunnel",
                 code: 5,
@@ -212,45 +222,43 @@ final class RemotePortTunnel: @unchecked Sendable {
         do {
             try await Self.waitForListener(
                 process: process,
+                processIdentifier: processIdentifier,
                 localPort: localPort,
-                stderrHandle: stderrHandle,
+                stderrReader: stderrReader,
                 stderrCapture: stderrCapture)
         } catch {
-            Self.terminateAndWait(process)
-            Self.cleanupStderr(stderrHandle)
+            await process.terminate()
+            stderrReader.close()
             await PortGuardian.shared.removeRecord(receipt)
             throw error
         }
 
         return RemotePortTunnel(
             process: process,
+            processIdentifier: processIdentifier,
             localPort: localPort,
-            stderrHandle: stderrHandle,
+            stderrReader: stderrReader,
             guardianReceipt: receipt)
     }
 
-    private static func terminateAndWait(_ process: Process) {
-        guard process.isRunning else { return }
-        process.terminate()
-        // waitUntilExit reaps this exact child before its pid can be reused. A
-        // delayed raw kill(pid) could otherwise signal an unrelated process.
-        process.waitUntilExit()
-    }
-
     private static func waitForListener(
-        process: Process,
+        process: ManagedProcess,
+        processIdentifier: pid_t,
         localPort: UInt16,
-        stderrHandle: FileHandle,
-        stderrCapture: StderrCapture) async throws
+        stderrReader: PipeReadStream,
+        stderrCapture: PipeTextCapture) async throws
     {
         let deadline = Date().addingTimeInterval(6)
         repeat {
             if !process.isRunning {
-                let stderr = Self.drainStderr(stderrHandle, captured: stderrCapture.snapshot())
+                // The reader owns the entire pipe; wait for its final bytes instead
+                // of starting a competing read after the child exits.
+                await stderrReader.finish()
+                let stderr = stderrCapture.snapshot()
                 let msg = stderr.isEmpty ? "ssh tunnel exited before listening" : "ssh tunnel failed: \(stderr)"
                 throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
             }
-            if await PortGuardian.shared.isListening(port: Int(localPort), pid: process.processIdentifier) {
+            if await PortGuardian.shared.isListening(port: Int(localPort), pid: processIdentifier) {
                 return
             }
             do {
@@ -276,7 +284,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             root: root)
     }
 
-    private static func resolveRemotePortOverride(
+    static func resolveRemotePortOverride(
         defaultRemotePort: Int,
         for sshHost: String,
         root: [String: Any]) -> Int?
@@ -442,39 +450,6 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
     #endif
 
-    private static func cleanupStderr(_ handle: FileHandle?) {
-        guard let handle else { return }
-        Self.cleanupStderr(handle)
-    }
-
-    private static func cleanupStderr(_ handle: FileHandle) {
-        if handle.readabilityHandler != nil {
-            handle.readabilityHandler = nil
-        }
-        try? handle.close()
-    }
-
-    private static func drainStderr(_ handle: FileHandle, captured: String) -> String {
-        handle.readabilityHandler = nil
-        defer { try? handle.close() }
-
-        do {
-            let data = try handle.readToEnd() ?? Data()
-            let remaining = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if captured.isEmpty {
-                return remaining
-            }
-            if remaining.isEmpty {
-                return captured
-            }
-            return captured + "\n" + remaining
-        } catch {
-            self.logger.debug("Failed to drain ssh stderr: \(error, privacy: .public)")
-            return captured
-        }
-    }
-
     #if SWIFT_PACKAGE
     static func _testPortIsFree(_ port: UInt16) -> Bool {
         self.portIsFree(port)
@@ -490,14 +465,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
     {
         self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
-    }
-
-    static func _testDrainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle, captured: "")
-    }
-
-    static func _testTerminateAndWait(_ process: Process) {
-        self.terminateAndWait(process)
     }
 
     #endif

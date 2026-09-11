@@ -1,4 +1,8 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  runAgentCleanupStep,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { createCodexAttemptServerRequestController } from "./run-attempt-server-requests.js";
@@ -24,8 +28,8 @@ export async function prepareCodexAttemptRoute(
     releaseSharedClientLeaseOnce,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, runAbortController, abortFromUpstream } = connection;
-  const { state, turnIdRef, turnWatches } = turnRuntime;
+  const { runAbortController } = connection;
+  const { state, turnIdRef, completeTurn } = turnRuntime;
   const { noteNotificationReceived, enqueueNotification } = notifications;
   const attachRouteAbort = (route: CodexThreadRouteReservation) => {
     const onAbort = () => {
@@ -38,9 +42,15 @@ export async function prepareCodexAttemptRoute(
       }
       const reasonText = formatErrorMessage(route.signal.reason);
       const closedClient = reasonText.includes("turn router closed");
+      const closeCause =
+        route.signal.reason instanceof Error && route.signal.reason.cause instanceof Error
+          ? route.signal.reason.cause
+          : undefined;
       state.clientClosedPromptError = closedClient
         ? "codex app-server client closed before turn completed"
         : `codex app-server turn route closed before turn completed: ${reasonText}`;
+      state.clientClosedDiagnostic =
+        closedClient && closeCause ? formatErrorMessage(closeCause) : undefined;
       state.clientClosedAbort = closedClient;
       const activeTurnId = turnIdRef.current;
       if (activeTurnId) {
@@ -52,11 +62,10 @@ export async function prepareCodexAttemptRoute(
       embeddedAgentLog.warn(state.clientClosedPromptError, {
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
+        ...(state.clientClosedDiagnostic ? { transportError: state.clientClosedDiagnostic } : {}),
       });
       runAbortController.abort(closedClient ? "client_closed" : "turn_route_closed");
-      state.completed = true;
-      turnWatches.clearAllTimers();
-      state.resolveCompletion?.();
+      completeTurn();
     };
     route.signal.addEventListener("abort", onAbort, { once: true });
     if (route.signal.aborted) {
@@ -69,7 +78,6 @@ export async function prepareCodexAttemptRoute(
       releaseCurrentRoute();
       resourceState.turnRoute = resourceState.turnRouter.reserveThread({
         threadId: resourceState.thread.threadId,
-        releaseOn: runAbortController.signal,
       });
     }
     if (!resourceState.turnRoute) {
@@ -94,10 +102,19 @@ export async function prepareCodexAttemptRoute(
   } catch (error) {
     activateNativePreToolUseFailureFallback();
     releaseCurrentRoute();
-    resourceState.nativeHookRelay?.unregister();
+    const relay = resourceState.nativeHookRelay;
+    relay?.unregister();
+    await runAgentCleanupStep({
+      runId: connection.params.runId,
+      sessionId: connection.params.sessionId,
+      step: "codex-route-failure-native-hook-relay",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await relay?.drain();
+      },
+    });
     await releaseSandboxExecEnvironment();
     releaseSharedClientLeaseOnce();
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
   return { ensureCurrentThreadRoute };

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import {
   encodeTerminalUpload,
   quoteTerminalUploadPath,
@@ -83,6 +84,34 @@ describe("terminal file upload", () => {
     );
   });
 
+  it("uses declared native CLI path syntax without treating a title as a shell", () => {
+    const shell = "claude --resume 12345678…";
+    expect(quoteTerminalUploadPath("/tmp/report.pdf", shell, "native")).toBe('"/tmp/report.pdf"');
+    expect(quoteTerminalUploadPath("/tmp/it's final.pdf", shell, "native")).toBe(
+      '"/tmp/it\'s final.pdf"',
+    );
+    expect(quoteTerminalUploadPath('/tmp/reviewer"s $notes`\\draft.pdf', shell, "native")).toBe(
+      '"/tmp/reviewer\\"s \\$notes\\`\\\\draft.pdf"',
+    );
+    for (const filePath of [
+      "C:\\Users\\O'Brien\\$cash%value!\\report final.pdf",
+      "\\\\server\\O'Brien\\report final.pdf",
+      "\\\\?\\C:\\Users\\O'Brien\\report.pdf",
+    ]) {
+      expect(quoteTerminalUploadPath(filePath, shell, "native")).toBe(`"${filePath}"`);
+    }
+    expect(() => quoteTerminalUploadPath("/tmp/report.pdf", shell)).toThrow("unsupported shell");
+  });
+
+  it.each(["relative.pdf", "/tmp/report\nnext.pdf", 'C:\\Temp\\bad"path.pdf'])(
+    "refuses an invalid native input path: %j",
+    (filePath) => {
+      expect(() => quoteTerminalUploadPath(filePath, "native CLI", "native")).toThrow(
+        "Cannot safely insert the uploaded native file path",
+      );
+    },
+  );
+
   it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
     "refuses cmd.exe expansion in the complete staged path: %s",
     (filePath) => {
@@ -91,4 +120,30 @@ describe("terminal file upload", () => {
       );
     },
   );
+
+  it("localizes upload validation while preserving file and shell details", async () => {
+    i18n.registerTranslation("pt-BR", {
+      terminal: {
+        uploadTooLarge: "O arquivo excede o limite de 16 MiB: {file}",
+        uploadUnsafeCmdPath: "O caminho enviado não é seguro para cmd.exe",
+        uploadUnsupportedShell: "Shell sem suporte para caminho enviado: {shell}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const oversized = {
+        name: "archive.zip",
+        size: MAX_TERMINAL_UPLOAD_BYTES + 1,
+        arrayBuffer: () => Promise.reject(new Error("should not read")),
+      } as File;
+      await expect(encodeTerminalUpload(oversized)).rejects.toThrow(
+        "O arquivo excede o limite de 16 MiB: archive.zip",
+      );
+      expect(() => quoteTerminalUploadPath("/tmp/report.pdf", "nu")).toThrow(
+        "Shell sem suporte para caminho enviado: nu",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
 });

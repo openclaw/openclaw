@@ -1,23 +1,38 @@
 // Shared heartbeat runner fixtures for infra tests.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { CronService } from "../cron/service.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
-type HeartbeatSessionSeed = Partial<SessionEntry> & {
+type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
+  deliveryContext?: DeliveryContext;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
@@ -29,18 +44,95 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   return replySpy;
 }
 
+/** Set the invocation's execution receipt without replacing its admission state. */
+export function setHeartbeatAgentTurnStatus(
+  options: object | undefined,
+  status: "ok" | "failed" | "superseded" | "cancelled",
+) {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.agentTurn = status === "superseded" ? "cancelled" : status;
+  if (status === "superseded") {
+    const operation = createReplyOperation({
+      sessionKey: "heartbeat-test-superseded",
+      sessionId: "heartbeat-test-superseded",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    operation.supersede();
+    operation.complete();
+    runState.agentTurnOwner = operation;
+  }
+}
+
+/** Seed one system heartbeat monitor and its private scratch in the test state DB. */
+export async function seedHeartbeatScratchForTest(params: {
+  content: string | null;
+  agentId?: string;
+  storePath?: string;
+}): Promise<string> {
+  const agentId = params.agentId ?? "main";
+  const storePath = params.storePath ?? resolveCronJobsStorePath();
+  const noop = () => {};
+  const cron = new CronService({
+    storePath,
+    cronEnabled: false,
+    defaultAgentId: "main",
+    log: { debug: noop, info: noop, warn: noop, error: noop },
+    enqueueSystemEvent: () => false,
+    requestHeartbeat: noop,
+    runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
+  });
+  const result = await cron.add(
+    {
+      declarationKey: `heartbeat:${agentId}`,
+      displayName: `Heartbeat (${agentId})`,
+      name: `heartbeat-${agentId}`,
+      agentId,
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30 * 60_000, anchorMs: 0 },
+      payload: { kind: "heartbeat" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+    },
+    { enabledExplicit: true, systemOwned: true },
+  );
+  const job = "job" in result ? result.job : result;
+  writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
+  return job.id;
+}
+
 /** Write a single heartbeat session entry through the SQLite session accessor. */
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
-  session: HeartbeatSessionSeed,
+  session: Partial<HeartbeatSessionSeed>,
 ): Promise<void> {
+  const {
+    deliveryContext,
+    lastAccountId,
+    lastChannel,
+    lastProvider: _lastProvider,
+    lastThreadId,
+    lastTo,
+    ...entry
+  } = session;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
       sessionId: session.sessionId ?? "sid",
       updatedAt: session.updatedAt ?? Date.now(),
-      ...session,
+      ...entry,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: deliveryContext?.channel ?? lastChannel,
+          to: deliveryContext?.to ?? lastTo,
+          accountId: deliveryContext?.accountId ?? lastAccountId,
+          threadId: deliveryContext?.threadId ?? lastThreadId,
+        },
+      }),
     },
   );
 }
@@ -50,7 +142,7 @@ export function readSessionStoreForTest<T extends object = HeartbeatSessionSeed>
   storePath: string,
 ): Record<string, T> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry as T]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry as T]),
   );
 }
 
@@ -73,28 +165,26 @@ export async function withTempHeartbeatSandbox<T>(
     unsetEnvVars?: string[];
   },
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
-  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-  const storePath = path.join(tmpDir, "sessions.json");
-  const replySpy = createHeartbeatReplySpy();
-  const previousEnv = new Map<string, string | undefined>();
-  for (const envName of options?.unsetEnvVars ?? []) {
-    previousEnv.set(envName, process.env[envName]);
-    process.env[envName] = "";
-  }
-  try {
-    return await fn({ tmpDir, storePath, replySpy });
-  } finally {
-    replySpy.mockReset();
-    for (const [envName, previousValue] of previousEnv.entries()) {
-      if (previousValue === undefined) {
-        delete process.env[envName];
-      } else {
-        process.env[envName] = previousValue;
+  return withTempDir(options?.prefix ?? "openclaw-hb-", async (tmpDir) => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = createHeartbeatReplySpy();
+    const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
+    const env = Object.fromEntries(
+      [...envNames].map((envName) => [
+        envName,
+        envName === "OPENCLAW_STATE_DIR" ? path.join(tmpDir, "state") : "",
+      ]),
+    );
+    return withEnvAsync(env, async () => {
+      try {
+        await seedHeartbeatScratchForTest({ content: "- Check status\n" });
+        return await fn({ tmpDir, storePath, replySpy });
+      } finally {
+        replySpy.mockReset();
+        closeOpenClawStateDatabaseForTest();
       }
-    }
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
+    });
+  });
 }
 
 /** Run a Telegram heartbeat test with Telegram credentials removed. */
@@ -118,3 +208,28 @@ export function setupTelegramHeartbeatPluginRuntimeForTests() {
     ]),
   );
 }
+
+export type HeartbeatReplyContext = Pick<
+  MsgContext,
+  "InternalTurnSource" | "InputProvenance" | "SessionKey" | "MessageThreadId" | "Body"
+>;
+
+export const mockCallAt = (
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] => {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+};
+
+export const getFirstReplyContext = (replySpy: ReturnType<typeof vi.fn>): HeartbeatReplyContext => {
+  const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error("expected heartbeat reply context");
+  }
+  return ctx as HeartbeatReplyContext;
+};

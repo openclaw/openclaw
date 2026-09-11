@@ -3,36 +3,165 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { type WorkboardCard, WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { secondsToDurationMs } from "./store-constants.js";
 import { normalizeExecution } from "./store-normalizers.js";
-import { WorkboardStore } from "./store.js";
+import { WorkboardCardConflictError, WorkboardStore } from "./store.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+  sqliteTestAuxStores,
+} from "./test/sqlite-store.js";
 
-function createMemoryStore<T = PersistedWorkboardCard>(options?: {
-  beforeRegister?: (key: string, value: T) => Promise<void> | void;
-}): WorkboardKeyedStore<T> {
-  const entries = new Map<string, T>();
+function createSignal() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function expectSameCardState(actual: WorkboardCard | undefined, expected: WorkboardCard): void {
+  expect(actual).toBeDefined();
+  const { updatedAt: _actualUpdatedAt, ...actualState } = actual!;
+  const { updatedAt: _expectedUpdatedAt, ...expectedState } = expected;
+  expect(actualState).toEqual(expectedState);
+}
+
+function createPausedCardStore(delegate: WorkboardCardStore) {
+  let pause:
+    | {
+        reached: () => void;
+        waitForResume: Promise<void>;
+      }
+    | undefined;
+  let pauseAfter:
+    | {
+        matches: (key: string, value: PersistedWorkboardCard | undefined) => boolean;
+        reached: () => void;
+        waitForResume: Promise<void>;
+      }
+    | undefined;
+  const beforeWrite = async () => {
+    const current = pause;
+    if (!current) {
+      return;
+    }
+    pause = undefined;
+    current.reached();
+    await current.waitForResume;
+  };
+  const afterWrite = async (key: string, value?: PersistedWorkboardCard) => {
+    const current = pauseAfter;
+    if (!current || !current.matches(key, value)) {
+      return;
+    }
+    pauseAfter = undefined;
+    current.reached();
+    await current.waitForResume;
+  };
   return {
-    async register(key, value) {
-      await options?.beforeRegister?.(key, value);
-      entries.set(key, value);
+    store: {
+      async register(key, value) {
+        await beforeWrite();
+        await delegate.register(key, value);
+        await afterWrite(key, value);
+      },
+      async registerIfAbsent(key, value) {
+        await beforeWrite();
+        const inserted = await delegate.registerIfAbsent(key, value);
+        if (inserted) {
+          await afterWrite(key, value);
+        }
+        return inserted;
+      },
+      async registerIfUpdatedAt(key, value, expectedUpdatedAt) {
+        await beforeWrite();
+        const updated = await delegate.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+        if (updated) {
+          await afterWrite(key, value);
+        }
+        return updated;
+      },
+      async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
+        await beforeWrite();
+        const result = await delegate.claimIfOwnerAvailable(
+          key,
+          value,
+          expectedUpdatedAt,
+          ownerId,
+          now,
+        );
+        if (result === "updated") {
+          await afterWrite(key, value);
+        }
+        return result;
+      },
+      async deleteIfUpdatedAt(key, expectedUpdatedAt) {
+        await beforeWrite();
+        const deleted = await delegate.deleteIfUpdatedAt(key, expectedUpdatedAt);
+        if (deleted) {
+          await afterWrite(key);
+        }
+        return deleted;
+      },
+      async lookup(key) {
+        return await delegate.lookup(key);
+      },
+      async delete(key) {
+        const deleted = await delegate.delete(key);
+        if (deleted) {
+          await afterWrite(key);
+        }
+        return deleted;
+      },
+      async entries() {
+        return await delegate.entries();
+      },
+      async listBoardAggregates() {
+        return await delegate.listBoardAggregates();
+      },
+    } satisfies WorkboardCardStore,
+    pauseNextWrite() {
+      const reached = createSignal();
+      const resume = createSignal();
+      pause = { reached: () => reached.resolve(), waitForResume: resume.promise };
+      return { reached: reached.promise, resume: () => resume.resolve() };
     },
-    async lookup(key) {
-      return entries.get(key);
+    pauseAfterMatchingWrite(
+      matches: (key: string, value: PersistedWorkboardCard | undefined) => boolean,
+    ) {
+      const reached = createSignal();
+      const resume = createSignal();
+      pauseAfter = {
+        matches,
+        reached: () => reached.resolve(),
+        waitForResume: resume.promise,
+      };
+      return { reached: reached.promise, resume: () => resume.resolve() };
     },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
+  };
+}
+
+function createConcurrentSqliteHarness(prefix: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dbPath = path.join(dir, "workboard.sqlite");
+  const operationStores = createWorkboardSqliteStores({ dbPath });
+  const hostStores = createWorkboardSqliteStores({ dbPath });
+  const paused = createPausedCardStore(operationStores.cards);
+  return {
+    operation: new WorkboardStore(paused.store, sqliteTestAuxStores(operationStores)),
+    host: new WorkboardStore(hostStores.cards, sqliteTestAuxStores(hostStores)),
+    paused,
+    close() {
+      hostStores.close();
+      operationStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -50,9 +179,48 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
   };
 }
 
+const WORKBOARD_CARD_CHILD_INDEXES = [
+  ["workboard_card_events", "workboard_card_events_card_idx"],
+  ["workboard_card_attempts", "workboard_card_attempts_card_idx"],
+  ["workboard_card_comments", "workboard_card_comments_card_idx"],
+  ["workboard_card_links", "workboard_card_links_card_idx"],
+  ["workboard_card_proof", "workboard_card_proof_card_idx"],
+  ["workboard_card_artifacts", "workboard_card_artifacts_card_idx"],
+  ["workboard_card_notifications", "workboard_card_notifications_card_idx"],
+  ["workboard_worker_logs", "workboard_worker_logs_card_idx"],
+] as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function explainWorkboardQueryPlan(
+  db: DatabaseSync,
+  sql: string,
+  params: readonly (number | string | null)[] = [],
+): string {
+  const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+    detail?: unknown;
+  }>;
+  return rows
+    .map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")))
+    .join("\n");
+}
+
+function withWorkboardSqliteDatabase(prefix: string, run: (db: DatabaseSync) => void): void {
+  const dir = tempDirs.make(prefix);
+  const dbPath = path.join(dir, "workboard.sqlite");
+  const stores = createWorkboardSqliteStores({ dbPath });
+  stores.close();
+  const db = new DatabaseSync(dbPath);
+  try {
+    run(db);
+  } finally {
+    db.close();
+  }
+}
+
 describe("WorkboardStore", () => {
   it("emits one monotonic change after each visible mutation", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const changes = vi.fn();
     store.subscribeChanges(changes);
 
@@ -66,7 +234,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not emit for no-op commands and isolates listener failures", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const changes = vi.fn(() => {
       throw new Error("listener failed");
     });
@@ -81,11 +249,13 @@ describe("WorkboardStore", () => {
   });
 
   it("announces an epoch and reports failed commands that partially committed", async () => {
-    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    const {
+      store,
+      stores: { subscriptions },
+    } = createWorkboardSqliteTestHarness();
     subscriptions.entries = async () => {
       throw new Error("subscription cleanup failed");
     };
-    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
     const changes = vi.fn();
     store.subscribeChanges(changes);
     store.announceChangeEpoch();
@@ -133,6 +303,344 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("rejects stale card edits across sqlite connections", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cas-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards, sqliteTestAuxStores(firstStores));
+    const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
+    try {
+      const base = await first.create({ title: "Original", status: "todo" });
+      const moved = await second.move(base.id, "blocked", 2000);
+
+      await expect(
+        first.update(
+          base.id,
+          { title: "Stale title", status: "todo" },
+          {
+            expectedUpdatedAt: base.updatedAt,
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: "WorkboardCardConflictError",
+        current: expect.objectContaining({
+          id: base.id,
+          status: "blocked",
+          position: 2000,
+        }),
+      } satisfies Partial<WorkboardCardConflictError>);
+      await expect(first.get(base.id)).resolves.toMatchObject({
+        title: "Original",
+        status: "blocked",
+        position: 2000,
+        updatedAt: moved.updatedAt,
+      });
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes a sqlite card only at its exact updatedAt version", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-delete-cas-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards, sqliteTestAuxStores(firstStores));
+    const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
+    try {
+      const created = await first.create({ title: "Delete fence" });
+      const edited = await second.update(created.id, { notes: "Concurrent edit" });
+
+      await expect(
+        firstStores.cards.deleteIfUpdatedAt(created.id, created.updatedAt),
+      ).resolves.toBe(false);
+      await expect(first.get(created.id)).resolves.toMatchObject({
+        notes: "Concurrent edit",
+      });
+      await expect(firstStores.cards.deleteIfUpdatedAt(created.id, edited.updatedAt)).resolves.toBe(
+        true,
+      );
+      await expect(first.get(created.id)).resolves.toBeUndefined();
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["move", "lifecycle"] as const)(
+    "recomputes a %s write after a concurrent editor commit",
+    async (owner) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-workboard-${owner}-race-`));
+      const dbPath = path.join(dir, "workboard.sqlite");
+      const firstStores = createWorkboardSqliteStores({ dbPath });
+      const secondStores = createWorkboardSqliteStores({ dbPath });
+      const paused = createPausedCardStore(firstStores.cards);
+      const first = new WorkboardStore(paused.store, {
+        boards: firstStores.boards,
+        subscriptions: firstStores.subscriptions,
+        attachments: firstStores.attachments,
+      });
+      const second = new WorkboardStore(secondStores.cards, {
+        boards: secondStores.boards,
+        subscriptions: secondStores.subscriptions,
+        attachments: secondStores.attachments,
+      });
+      try {
+        const sessionKey = "agent:main:dashboard:cas-race";
+        const base = await first.create({
+          title: "Original title",
+          status: owner === "move" ? "todo" : "running",
+          ...(owner === "lifecycle"
+            ? {
+                sessionKey,
+                runId: "run-cas",
+                execution: {
+                  id: "exec-cas",
+                  kind: "agent-session",
+                  mode: "autonomous",
+                  status: "running",
+                  sessionKey,
+                  runId: "run-cas",
+                  startedAt: 1,
+                  updatedAt: 1,
+                },
+              }
+            : {}),
+        });
+        const pause = paused.pauseNextWrite();
+        const ownerWrite =
+          owner === "move"
+            ? first.move(base.id, "blocked", 2000)
+            : first.syncLifecycle(base.id, {
+                targetStatus: "review",
+                executionStatus: "review",
+                sourceUpdatedAt: base.updatedAt + 1_000,
+                stale: undefined,
+                now: base.updatedAt + 1_000,
+              });
+
+        await pause.reached;
+        await second.update(
+          base.id,
+          { title: "Concurrent editor title" },
+          { expectedUpdatedAt: base.updatedAt },
+        );
+        pause.resume();
+        await ownerWrite;
+
+        const current = await first.get(base.id);
+        expect(current?.title).toBe("Concurrent editor title");
+        if (owner === "move") {
+          expect(current).toMatchObject({ status: "blocked", position: 2000 });
+        } else {
+          expect(current).toMatchObject({
+            status: "review",
+            execution: { status: "review" },
+            metadata: { lifecycleStatusSourceUpdatedAt: base.updatedAt + 1_000 },
+          });
+        }
+      } finally {
+        secondStores.close();
+        firstStores.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("converges concurrent session captures from independent sqlite hosts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-capture-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards, sqliteTestAuxStores(firstStores));
+    const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
+    try {
+      const sessionKey = `agent:main:dashboard:${"x".repeat(480)}`;
+      const [left, right] = await Promise.all([
+        first.captureSession({ title: "Captured by host A", sessionKey, boardId: "ops" }),
+        second.captureSession({ title: "Captured by host B", sessionKey, boardId: "other" }),
+      ]);
+
+      expect(left.id).toBe(right.id);
+      expect(left.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(left).toEqual(right);
+      expect(["ops", "other"]).toContain(left.metadata?.automation?.boardId);
+      await expect(first.list()).resolves.toEqual([left]);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("converges concurrent archived session restores across sqlite hosts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-capture-restore-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const paused = createPausedCardStore(firstStores.cards);
+    const first = new WorkboardStore(paused.store, sqliteTestAuxStores(firstStores));
+    const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
+    try {
+      const sessionKey = "agent:main:dashboard:archived-race";
+      const captured = await second.captureSession({ title: "Captured", sessionKey });
+      await second.archive(captured.id, true);
+
+      const pause = paused.pauseNextWrite();
+      const firstRestore = first.captureSession({ title: "Host A", sessionKey });
+      await pause.reached;
+      const secondRestore = await second.captureSession({ title: "Host B", sessionKey });
+      pause.resume();
+      const firstResult = await firstRestore;
+
+      expect(firstResult).toEqual(secondRestore);
+      expect(firstResult.metadata?.archivedAt).toBeUndefined();
+      await expect(first.list()).resolves.toEqual([firstResult]);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows only one cross-host claim per owner", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards, sqliteTestAuxStores(firstStores));
+    const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
+    try {
+      const firstCard = await first.create({ title: "First", status: "ready", agentId: "worker" });
+      const secondCard = await first.create({
+        title: "Second",
+        status: "ready",
+        agentId: "worker",
+      });
+
+      const claims = await Promise.allSettled([
+        first.claim(firstCard.id, { ownerId: "worker" }),
+        second.claim(secondCard.id, { ownerId: "worker" }),
+      ]);
+
+      expect(claims.filter((claim) => claim.status === "fulfilled")).toHaveLength(1);
+      expect(claims.filter((claim) => claim.status === "rejected")).toHaveLength(1);
+      expect((await first.list()).filter((card) => card.status === "running")).toHaveLength(1);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the active captured session across boards and archived duplicates", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:dashboard:captured";
+    const active = await store.create({ title: "Active", sessionKey, boardId: "default" });
+    const historical = await store.create({ title: "Historical", sessionKey, boardId: "ops" });
+    await store.archive(historical.id, true);
+
+    const captured = await store.captureSession({
+      title: "Duplicate",
+      sessionKey,
+      boardId: "other",
+    });
+
+    expect(captured.id).toBe(active.id);
+    expect(captured.metadata?.automation?.boardId).toBe("default");
+    expect((await store.list()).filter((card) => !card.metadata?.archivedAt)).toEqual([active]);
+
+    await store.archive(active.id, true);
+    const restored = await store.captureSession({ title: "Restore", sessionKey, boardId: "other" });
+    expect([active.id, historical.id]).toContain(restored.id);
+    expect(restored.metadata?.archivedAt).toBeUndefined();
+  });
+
+  it("uses card child indexes for per-card ordered reads", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-read-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`,
+          ["card-1"],
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for whole-board ordered scans", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-scan-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`,
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for parent-card cascades", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-cascade-", (db) => {
+      db.exec("PRAGMA foreign_keys = ON");
+      const plan = explainWorkboardQueryPlan(db, "DELETE FROM workboard_cards WHERE id = ?", [
+        "card-1",
+      ]);
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(plan).toContain(index);
+      }
+    });
+  });
+
+  it("restores dropped card child indexes without changing the schema version", () => {
+    const dir = tempDirs.make("openclaw-workboard-index-reopen-");
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+    const db = new DatabaseSync(dbPath);
+    let initialMigrationIds: Array<{ id: string }>;
+    try {
+      initialMigrationIds = db
+        .prepare("SELECT id FROM workboard_schema_migrations ORDER BY id")
+        .all() as Array<{ id: string }>;
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        db.exec(`DROP INDEX ${index}`);
+      }
+    } finally {
+      db.close();
+    }
+
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    reopened.close();
+    const verified = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const indexes = new Set(
+        (
+          verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(indexes).toContain(index);
+      }
+      expect(
+        verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
+      ).toEqual(initialMigrationIds);
+    } finally {
+      verified.close();
+    }
+  });
+
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -146,7 +654,11 @@ describe("WorkboardStore", () => {
         subscriptions: stores.subscriptions,
         attachments: stores.attachments,
       });
-      const board = await store.upsertBoard({ id: "planning", name: "Planning" });
+      const board = await store.upsertBoard({
+        id: "planning",
+        name: "Planning",
+        automationJobId: "job-categorize-planning",
+      });
       const card = await store.create({
         title: "Persist it",
         boardId: board.id,
@@ -238,7 +750,11 @@ describe("WorkboardStore", () => {
       expect(await reopened.listBoards()).toMatchObject({
         boards: [
           expect.objectContaining({ id: "default" }),
-          expect.objectContaining({ id: board.id, name: "Planning" }),
+          expect.objectContaining({
+            id: board.id,
+            name: "Planning",
+            automationJobId: "job-categorize-planning",
+          }),
         ],
       });
       expect(await reopened.get(card.id)).toMatchObject({
@@ -276,6 +792,67 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("lists sqlite board summaries without hydrating card child rows", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-summary-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      let cardId = "";
+      const initialStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        const initial = new WorkboardStore(initialStores.cards, {
+          boards: initialStores.boards,
+          subscriptions: initialStores.subscriptions,
+          attachments: initialStores.attachments,
+        });
+        await initial.upsertBoard({ id: "ops", name: "Ops" });
+        const card = await initial.create({ title: "Summarize me", boardId: "ops" });
+        cardId = card.id;
+        await initial.addComment(card.id, { body: "valid before corruption" });
+        const archived = await initial.create({
+          title: "Summarize archived card",
+          boardId: "ops",
+          status: "ready",
+        });
+        await initial.archive(archived.id, true);
+      } finally {
+        initialStores.close();
+      }
+
+      const rawDb = new DatabaseSync(dbPath);
+      try {
+        rawDb.prepare("UPDATE workboard_card_comments SET body = '' WHERE card_id = ?").run(cardId);
+      } finally {
+        rawDb.close();
+      }
+
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        const reopened = new WorkboardStore(reopenedStores.cards, {
+          boards: reopenedStores.boards,
+          subscriptions: reopenedStores.subscriptions,
+          attachments: reopenedStores.attachments,
+        });
+        await expect(reopened.get(cardId)).rejects.toThrow(/missing body/);
+        await expect(reopened.listBoards()).resolves.toMatchObject({
+          boards: expect.arrayContaining([
+            expect.objectContaining({
+              id: "ops",
+              name: "Ops",
+              total: 2,
+              active: 1,
+              archived: 1,
+              byStatus: { ready: 1, todo: 1 },
+            }),
+          ]),
+        });
+      } finally {
+        reopenedStores.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -301,7 +878,13 @@ describe("WorkboardStore", () => {
           updated_at INTEGER NOT NULL,
           archived_at INTEGER
         );
-        INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
+        INSERT INTO workboard_boards (
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        ) SELECT
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
         DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
@@ -361,8 +944,17 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it.each([
+    ["", "non-empty string"],
+    ["x".repeat(129), "128 characters or fewer"],
+  ])("rejects invalid automation job ids", async (automationJobId, message) => {
+    const store = createWorkboardSqliteTestStore();
+
+    await expect(store.upsertBoard({ id: "planning", automationJobId })).rejects.toThrow(message);
+  });
+
   it("creates and lists cards by status order and position", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
 
     const review = await store.create({
       title: "Review release notes",
@@ -379,8 +971,8 @@ describe("WorkboardStore", () => {
   });
 
   it("does not persist empty metadata for default cards", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
 
     const card = await store.create({ title: "Plain card" });
 
@@ -390,7 +982,7 @@ describe("WorkboardStore", () => {
   });
 
   it("preserves open execution engine identifiers without rewriting historical labels", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const runtimeCard = await store.create({
       title: "Runtime identity",
       execution: {
@@ -428,7 +1020,7 @@ describe("WorkboardStore", () => {
   });
 
   it("preserves explicit zero positions", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
 
     const card = await store.create({ title: "Top card", status: "todo", position: 0 });
 
@@ -436,7 +1028,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps initial session, run, and task links when creating cards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
 
     const card = await store.create({
       title: "Follow up",
@@ -481,7 +1073,7 @@ describe("WorkboardStore", () => {
   });
 
   it("ignores dependency links from generic metadata writes", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent" });
     const child = await store.create({
       title: "Child",
@@ -501,8 +1093,8 @@ describe("WorkboardStore", () => {
   });
 
   it("stores card templates and metadata in the card record", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
 
     const card = await store.create({
       title: "Fix flaky lane",
@@ -528,7 +1120,7 @@ describe("WorkboardStore", () => {
   });
 
   it("updates automation metadata from top-level patch fields", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Tune automation" });
 
     const updated = await store.update(card.id, {
@@ -569,7 +1161,7 @@ describe("WorkboardStore", () => {
   });
 
   it("only accepts workspace authority from trusted top-level provenance", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Restricted card",
       workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
@@ -600,8 +1192,97 @@ describe("WorkboardStore", () => {
     expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
+  it("only accepts launch state from store-owned transitions", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: "Trusted launch",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+      metadata: {
+        automation: {
+          launch: {
+            phase: "prepared",
+            requestedSessionKey: "injected-session",
+            provisionalRunId: "injected-run",
+            preparedAt: 1,
+          },
+        },
+      },
+    });
+    expect(card.metadata?.automation?.launch).toBeUndefined();
+
+    const claimed = await store.claim(card.id, { ownerId: "worker", token: "claim-token" });
+    const prepared = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-trusted",
+      now: 100,
+      scope: { ownerId: "worker", token: claimed.token },
+    });
+    const updated = await store.update(card.id, {
+      metadata: {
+        automation: {
+          launch: {
+            ...prepared.launch,
+            phase: "accepted",
+            acceptedAt: 101,
+            acceptedSessionKey: "agent:injected:subagent:workboard-default-trusted",
+            acceptedRunId: "injected-accepted-run",
+          },
+        },
+      },
+    });
+
+    expect(updated.metadata?.automation?.launch).toEqual(prepared.launch);
+  });
+
+  it("does not let a delayed launch failure overwrite a newer retry", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Retried launch", status: "ready" });
+    const firstClaim = await store.claim(card.id, { ownerId: "worker" });
+    const first = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 100,
+      scope: { ownerId: "worker", token: firstClaim.token },
+    });
+    await store.failPreparedLaunch(card.id, {
+      expectedLaunch: first.launch,
+      reason: "first launch failed",
+      failedAt: 101,
+    });
+    await store.unblock(card.id);
+    const retryClaim = await store.claim(card.id, { ownerId: "worker" });
+    const retry = await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "subagent:workboard-default-retried",
+      now: 200,
+      scope: { ownerId: "worker", token: retryClaim.token },
+    });
+
+    await expect(
+      store.failPreparedLaunch(card.id, {
+        expectedLaunch: first.launch,
+        reason: "delayed first failure",
+        failedAt: 201,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "review",
+        sourceUpdatedAt: undefined,
+        stale: undefined,
+        now: 202,
+        association: {
+          expectedSessionKey: retry.launch.requestedSessionKey,
+          expectedRunId: retry.launch.provisionalRunId,
+          sessionKey: `agent:worker:${retry.launch.requestedSessionKey}`,
+          acceptedAt: 150,
+        },
+      }),
+    ).resolves.toBe(false);
+    expect((await store.get(card.id))?.metadata?.automation?.launch).toEqual(retry.launch);
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Ship workboard" });
 
     const running = await store.move(card.id, "running", 500);
@@ -627,7 +1308,7 @@ describe("WorkboardStore", () => {
   });
 
   it("tracks lifecycle status provenance and clears it on manual status changes", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Sync status provenance" });
 
     const zeroSourceLifecycle = await store.update(card.id, {
@@ -684,7 +1365,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(2000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({
         title: "Initial running status",
         status: "running",
@@ -713,7 +1394,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const staleCard = await store.create({ title: "Stale bulk target" });
       const freshCard = await store.create({ title: "Fresh bulk target" });
       vi.setSystemTime(3000);
@@ -742,7 +1423,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps non-status fields from stale lifecycle patches", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Keep stale sync details",
       execution: {
@@ -810,7 +1491,7 @@ describe("WorkboardStore", () => {
   });
 
   it("clears copied lifecycle provenance on manual status patches", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Clear copied provenance" });
     const lifecycleMoved = await store.update(card.id, {
       status: "review",
@@ -845,7 +1526,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps execution session links aligned with edited card links", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Relink me",
       sessionKey: "agent:main:dashboard:1",
@@ -879,7 +1560,7 @@ describe("WorkboardStore", () => {
   });
 
   it("tracks execution attempts as card metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Run worker" });
 
     const running = await store.update(card.id, {
@@ -957,7 +1638,7 @@ describe("WorkboardStore", () => {
   });
 
   it("adds comments, links, proof, and archive metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Track proof" });
 
     const commented = await store.addComment(card.id, { body: "Reviewer asked for screenshots." });
@@ -1010,11 +1691,29 @@ describe("WorkboardStore", () => {
     expect(restored.events?.at(-1)).toMatchObject({ kind: "unarchived" });
   });
 
+  it("ignores caller-supplied archivedAt on create so no card is born archived", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: "Injected archive",
+      metadata: { archivedAt: Date.now() },
+    });
+
+    // Archival is a transition owned by archive(), which appends the matching
+    // event. Honouring it here would exclude the card from dispatch from birth
+    // with an event log recording only "created".
+    expect(card.metadata?.archivedAt).toBeUndefined();
+    expect(card.events?.map((event) => event.kind)).toEqual(["created"]);
+
+    const archived = await store.archive(card.id, true);
+    expect(archived.metadata?.archivedAt).toBeGreaterThan(0);
+    expect(archived.events?.at(-1)).toMatchObject({ kind: "archived" });
+  });
+
   it("resolves matching unknown proof on completion without duplicating it", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({ title: "Resolve worker proof", status: "running" });
       const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
       const proofInput = {
@@ -1026,6 +1725,14 @@ describe("WorkboardStore", () => {
         ownerId: "main",
         token: "token-1",
       });
+
+      await expect(
+        store.complete(claimed.card.id, {
+          ownerId: "main",
+          token: "token-1",
+          proofId: pending.metadata?.proof?.[0]?.id,
+        }),
+      ).rejects.toThrow("proof is required to resolve a pending proof.");
 
       vi.setSystemTime(6_000);
       const completed = await store.complete(claimed.card.id, {
@@ -1048,7 +1755,7 @@ describe("WorkboardStore", () => {
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Keep proof under metadata pressure",
       status: "running",
@@ -1094,7 +1801,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps identical completion proof append-only without an explicit proof id", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };
     const card = await store.create({
       title: "Preserve historical proof",
@@ -1115,7 +1822,7 @@ describe("WorkboardStore", () => {
   });
 
   it("resolves only the explicitly correlated proof across identical retries", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const proofInput = { command: "review poem", note: "Checked each line." };
     const card = await store.create({
       title: "Keep unresolved proof history",
@@ -1140,7 +1847,7 @@ describe("WorkboardStore", () => {
   });
 
   it("reuses an explicitly correlated terminal proof with the same status", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const proof = {
       id: "proof-passed",
       status: "passed" as const,
@@ -1162,7 +1869,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects an explicitly correlated terminal proof with a different status", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Reject terminal status rewrite",
       metadata: {
@@ -1183,7 +1890,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects a completion proof id when its evidence does not match", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Reject mismatched proof",
       metadata: {
@@ -1210,9 +1917,8 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("stores attachments in the plugin kv namespace and adds worker context", async () => {
-    const attachments = createMemoryStore<PersistedWorkboardAttachment>();
-    const store = new WorkboardStore(createMemoryStore(), { attachments });
+  it("stores attachments in SQLite and adds worker context", async () => {
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Review attached log" });
 
     const attached = await store.addAttachment(card.id, {
@@ -1274,8 +1980,7 @@ describe("WorkboardStore", () => {
   });
 
   it("removes attachment blobs when the card attachment index prunes old entries", async () => {
-    const attachments = createMemoryStore<PersistedWorkboardAttachment>();
-    const store = new WorkboardStore(createMemoryStore(), { attachments });
+    const { store, dbPath } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Many attachments" });
     let firstAttachmentId = "";
 
@@ -1290,13 +1995,26 @@ describe("WorkboardStore", () => {
     const saved = await store.get(card.id);
     expect(saved?.metadata?.attachments).toHaveLength(20);
     expect(await store.getAttachment(firstAttachmentId)).toBeUndefined();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        db
+          .prepare("SELECT attachment_id FROM workboard_attachment_blobs WHERE attachment_id = ?")
+          .get(firstAttachmentId),
+      ).toBeUndefined();
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
+        count: 20,
+      });
+    } finally {
+      db.close();
+    }
     const exported = await store.exportCards();
     expect(exported.attachments).toHaveLength(20);
     expect(exported.attachments[0]).not.toHaveProperty("contentBase64");
   });
 
   it("records worker logs and protocol violations on cards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Protocol card",
       status: "running",
@@ -1353,7 +2071,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps concurrent metadata appends from dropping siblings", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Collect notes" });
 
     await Promise.all([
@@ -1369,7 +2087,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps metadata under the keyed-store value budget", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Collect a lot of notes" });
 
     for (let index = 0; index < 50; index += 1) {
@@ -1387,7 +2105,7 @@ describe("WorkboardStore", () => {
   });
 
   it("records append events when metadata retention drops old comments", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Track retained comments" });
 
     let updated = card;
@@ -1401,7 +2119,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps queued metadata when lifecycle updates add stale state", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Sync stale state" });
 
     await Promise.all([
@@ -1425,7 +2143,7 @@ describe("WorkboardStore", () => {
   });
 
   it("exports card records with metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Export me", templateId: "docs" });
 
     await expect(store.exportCards()).resolves.toMatchObject({
@@ -1435,14 +2153,14 @@ describe("WorkboardStore", () => {
   });
 
   it("claims cards, heartbeats, and releases the claim", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Coordinate worker", status: "todo" });
 
     const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");
-    expect(claimed.card.agentId).toBe("main");
+    expect(claimed.card.agentId).toBeUndefined();
     expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
 
     await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
@@ -1481,9 +2199,11 @@ describe("WorkboardStore", () => {
   });
 
   it("atomically guards and adopts dispatcher workspace authority", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Legacy dispatch", status: "ready" });
     const expectedAuthority = {
+      boardId: "default",
+      status: card.status,
       agentId: card.agentId,
       workspace: card.metadata?.automation?.workspace,
       workspaceAccess: card.metadata?.automation?.workspaceAccess,
@@ -1519,6 +2239,8 @@ describe("WorkboardStore", () => {
       { ownerId: "dispatcher" },
       {
         expectedAuthority: {
+          boardId: "default",
+          status: legacy.status,
           agentId: legacy.agentId,
           workspace: legacy.metadata?.automation?.workspace,
           workspaceAccess: legacy.metadata?.automation?.workspaceAccess,
@@ -1530,7 +2252,7 @@ describe("WorkboardStore", () => {
   });
 
   it("reports an active claim after a dependency-backed card starts running", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "done" });
     const child = await store.create({ title: "Child", parents: [parent.id] });
 
@@ -1541,11 +2263,49 @@ describe("WorkboardStore", () => {
     );
   });
 
+  it("protects a running worker's expired claim throughout its heartbeat grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const card = await store.create({ title: "Grace-protected worker", status: "ready" });
+      const claimed = await store.claim(card.id, { ownerId: "original", ttlSeconds: 1 });
+      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+      if (expiresAt === undefined) {
+        throw new Error("expected a timed worker claim");
+      }
+
+      vi.setSystemTime(expiresAt + 1);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+      const renewed = await store.heartbeat(card.id, {
+        ownerId: "original",
+        token: claimed.token,
+      });
+      const renewedExpiresAt = renewed.metadata?.claim?.expiresAt;
+      if (renewedExpiresAt === undefined) {
+        throw new Error("expected the worker heartbeat to renew its claim");
+      }
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000 + 1);
+      const replacement = await store.claim(card.id, { ownerId: "replacement" });
+      expect(replacement.card.metadata?.claim?.ownerId).toBe("replacement");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves scheduled and retry-budget errors when a claim is active", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const scheduled = await store.create({ title: "Scheduled", status: "ready" });
       await store.claim(scheduled.id, { ownerId: "main", ttlSeconds: 60 });
       await store.update(scheduled.id, { status: "scheduled", scheduledAt: 10_000 });
@@ -1556,7 +2316,7 @@ describe("WorkboardStore", () => {
         maxRetries: 1,
         metadata: { failureCount: 1 },
       });
-      await store.claim(exhausted.id, { ownerId: "main", ttlSeconds: 60 });
+      await store.claim(exhausted.id, { ownerId: "exhausted-worker", ttlSeconds: 60 });
       await store.update(exhausted.id, { metadata: { failureCount: 2 } });
 
       await expect(store.claim(scheduled.id, { ownerId: "other" })).rejects.toThrow(
@@ -1574,7 +2334,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({ title: "Bound claim", status: "todo" });
 
       const claimed = await store.claim(card.id, {
@@ -1589,7 +2349,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not let invalid stored claim expiry block a fresh claim", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Invalid claim expiry",
       status: "todo",
@@ -1613,7 +2373,7 @@ describe("WorkboardStore", () => {
   });
 
   it("creates idempotent child cards and promotes them when parents finish", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "running" });
     const child = await store.create({
       title: "Child",
@@ -1668,7 +2428,7 @@ describe("WorkboardStore", () => {
   });
 
   it("returns an idempotent child retry when its original parent was deleted", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Ephemeral parent" });
     const child = await store.create({
       title: "Retryable child",
@@ -1690,7 +2450,7 @@ describe("WorkboardStore", () => {
   });
 
   it("accepts POSIX and Windows absolute directory workspaces", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
 
     await expect(
       store.create({
@@ -1729,7 +2489,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(0);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({
         title: "Later",
         status: "scheduled",
@@ -1796,7 +2556,7 @@ describe("WorkboardStore", () => {
   });
 
   it("holds dependent cards out of runnable statuses until parents finish", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "running" });
     const child = await store.create({
       title: "Child",
@@ -1873,9 +2633,8 @@ describe("WorkboardStore", () => {
   });
 
   it("resolves parent dependency status with targeted lookups instead of a full-corpus scan", async () => {
-    const cardStore = createMemoryStore();
-    const entriesSpy = vi.spyOn(cardStore, "entries");
-    const store = new WorkboardStore(cardStore);
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const entriesSpy = vi.spyOn(stores.cards, "entries");
 
     const parent = await store.create({ title: "Parent" });
     const children = await Promise.all(
@@ -1901,7 +2660,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects terminal children with incomplete dependency parents", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const runningParent = await store.create({ title: "Running parent", status: "running" });
     const doneChild = await store.create({ title: "Done child", status: "done" });
 
@@ -1918,7 +2677,7 @@ describe("WorkboardStore", () => {
   });
 
   it("preserves dependency links across link caps and parent deletion", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "running" });
     const child = await store.create({ title: "Child", parents: [parent.id] });
 
@@ -1941,7 +2700,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rolls back card creation when dependency link capacity rejects the parent", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Fanout parent" });
     for (let index = 0; index < 50; index += 1) {
       await store.create({ title: `Child ${index}`, parents: [parent.id] });
@@ -1959,7 +2718,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects invalid parent creates without persisting partial cards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parents: string[] = [];
     for (let index = 0; index < 21; index += 1) {
       parents.push((await store.create({ title: `Parent ${index}` })).id);
@@ -1992,7 +2751,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects dependency cycles", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const first = await store.create({ title: "First" });
     const second = await store.create({ title: "Second", parents: [first.id] });
 
@@ -2000,7 +2759,7 @@ describe("WorkboardStore", () => {
   });
 
   it("completes and blocks claimed cards with structured handoff metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Ship child",
       status: "running",
@@ -2091,7 +2850,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps long lifecycle handoffs in comments while capping notifications", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const completeCard = await store.create({ title: "Long complete" });
     const blockCard = await store.create({ title: "Long block" });
     const longSummary = "x".repeat(1000);
@@ -2106,11 +2865,55 @@ describe("WorkboardStore", () => {
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
   });
 
+  it("heals oversized persisted notifications and keeps dispatching sibling cards", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
+      const poisoned = await store.create({ title: "Oversized notification", status: "ready" });
+      const sibling = await store.create({ title: "Unaffected sibling", status: "ready" });
+      const oversized = `${"x".repeat(238)}🦞${" tail".repeat(60)}`;
+      const rawDb = new DatabaseSync(dbPath);
+      try {
+        rawDb
+          .prepare(
+            "INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run("oversized", poisoned.id, 0, "failed", oversized, Date.now());
+      } finally {
+        rawDb.close();
+      }
+
+      expect((await store.get(poisoned.id))?.metadata?.notifications?.[0]?.message).toBe(oversized);
+      await expect(store.dispatch()).resolves.toBeDefined();
+
+      const repaired = await store.get(poisoned.id);
+      expect(repaired?.metadata?.notifications?.[0]?.message).toBe(`${"x".repeat(238)}…`);
+      expect(repaired?.metadata?.automation?.dispatchCount).toBe(1);
+      expect((await store.get(sibling.id))?.metadata?.automation?.dispatchCount).toBe(1);
+
+      const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          verifyDb
+            .prepare("SELECT message FROM workboard_card_notifications WHERE id = ?")
+            .get("oversized"),
+        ).toEqual({ message: `${"x".repeat(238)}…` });
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("dispatches ready cards and blocks expired or timed-out work", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const ready = await store.create({ title: "Ready", status: "ready" });
       const readyUpdatedAt = ready.updatedAt;
       const expired = await store.create({ title: "Expired", status: "running" });
@@ -2135,7 +2938,11 @@ describe("WorkboardStore", () => {
         status: "ready",
         maxRuntimeSeconds: 1,
       });
-      await store.claim(claimedTimed.id, { ownerId: "main", token: "token-2", ttlSeconds: 60 });
+      await store.claim(claimedTimed.id, {
+        ownerId: "timed-worker",
+        token: "token-2",
+        ttlSeconds: 60,
+      });
       const createdRunningTimed = await store.create({
         title: "Created running timed",
         status: "running",
@@ -2146,8 +2953,9 @@ describe("WorkboardStore", () => {
 
       expect(createdRunningTimed.startedAt).toBe(1_000);
       expect(result.count).toBe(4);
-      await expect(store.get(ready.id)).resolves.toMatchObject({
-        updatedAt: readyUpdatedAt,
+      const dispatchedReady = await store.get(ready.id);
+      expect(dispatchedReady?.updatedAt).toBeGreaterThan(readyUpdatedAt);
+      expect(dispatchedReady).toMatchObject({
         metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
         events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
       });
@@ -2182,31 +2990,15 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("caps oversized max runtime seconds during dispatch timeout checks", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
-      const card = await store.create({
-        title: "Bound runtime",
-        status: "running",
-        maxRuntimeSeconds: Number.MAX_SAFE_INTEGER,
-      });
-      if (card.startedAt === undefined) {
-        throw new Error("expected running card to have startedAt");
-      }
-
-      const result = await store.dispatch(card.startedAt + Number.MAX_SAFE_INTEGER + 1);
-
-      expect(result.blocked).toEqual([expect.objectContaining({ id: card.id })]);
-      await expect(store.get(card.id)).resolves.toMatchObject({ status: "blocked" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([Number.MAX_SAFE_INTEGER, Number.MAX_VALUE])(
+    "caps oversized runtime seconds %s to the maximum Date duration",
+    (seconds) => {
+      expect(secondsToDurationMs(seconds)).toBe(MAX_DATE_TIMESTAMP_MS);
+    },
+  );
 
   it("lets in-flight retries finish before enforcing the retry budget", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const retrying = await store.create({
       title: "Retrying",
       status: "ready",
@@ -2277,7 +3069,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({ title: "Long run" });
       await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
 
@@ -2306,7 +3098,7 @@ describe("WorkboardStore", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(MAX_DATE_TIMESTAMP_MS - 30_000);
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({ title: "Near date limit" });
       await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
 
@@ -2320,7 +3112,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps the claim when release status validation fails", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Keep claim" });
     await store.claim(card.id, { ownerId: "main", token: "token-1" });
 
@@ -2334,7 +3126,7 @@ describe("WorkboardStore", () => {
   });
 
   it("checks mutation claim scope inside queued card writes", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Scoped mutation" });
     await store.claim(card.id, { ownerId: "main", token: "token-1" });
 
@@ -2353,7 +3145,7 @@ describe("WorkboardStore", () => {
   });
 
   it("lets operators override claims while enforcing agent-scoped moves", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Scoped move", status: "todo" });
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
 
@@ -2368,7 +3160,7 @@ describe("WorkboardStore", () => {
   });
 
   it("checks matching claim tokens inside queued card writes", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Token-scoped mutation" });
     await store.claim(card.id, { ownerId: "main", token: "test-auth-token" });
 
@@ -2391,7 +3183,7 @@ describe("WorkboardStore", () => {
   });
 
   it("clears resolved proof diagnostics when adding proof", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Needs proof",
       status: "done",
@@ -2416,7 +3208,7 @@ describe("WorkboardStore", () => {
   });
 
   it("clears resolved proof diagnostics when adding an artifact", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Needs artifact",
       status: "done",
@@ -2441,7 +3233,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not commit proof when proof artifact validation fails", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Atomic proof" });
 
     await expect(
@@ -2458,7 +3250,7 @@ describe("WorkboardStore", () => {
   });
 
   it("computes and refreshes card diagnostics", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const ready = await store.create({
       title: "Ready too long",
       agentId: "main",
@@ -2473,25 +3265,19 @@ describe("WorkboardStore", () => {
     const doneWithAttachment = await store.create({
       title: "Done with attachment",
       status: "done",
-      metadata: {
-        attachments: [
-          {
-            id: "attachment-proof",
-            cardId: "attachment-card",
-            fileName: "result.log",
-            byteSize: 1,
-            createdAt: 10,
-          },
-        ],
-      },
+    });
+    await store.addAttachment(doneWithAttachment.id, {
+      fileName: "result.log",
+      contentBase64: Buffer.from("x").toString("base64"),
     });
 
     const now = Date.now() + 2 * 24 * 60 * 60 * 1000;
     const diagnostics = await store.refreshDiagnostics(now);
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    await expect(store.get(ready.id)).resolves.toMatchObject({ updatedAt: ready.updatedAt });
-    await expect(store.get(ready.id)).resolves.toMatchObject({
+    const diagnosedReady = await store.get(ready.id);
+    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    expect(diagnosedReady).toMatchObject({
       metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
     });
     await expect(store.get(running.id)).resolves.toMatchObject({
@@ -2517,11 +3303,105 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("keeps archived cards out of diagnostics without rewriting their history", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Archived completed work", status: "done" });
+    const now = Date.now();
+
+    await expect(store.refreshDiagnostics(now)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: card.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    const unsubscribe = store.subscribeChanges(changes);
+
+    await expect(store.diagnostics(now + 1)).resolves.toEqual({ diagnostics: [], count: 0 });
+    await expect(store.refreshDiagnostics(now + 1)).resolves.toEqual({
+      diagnostics: [],
+      count: 0,
+    });
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    await expect(store.list()).resolves.toEqual([archived]);
+    expect(changes).not.toHaveBeenCalled();
+
+    unsubscribe();
+    const restored = await store.archive(card.id, false);
+    await expect(store.diagnostics(now + 2)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: restored.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+  });
+
+  it.each(WORKBOARD_STATUSES)(
+    "reports archived %s cards according to terminal state",
+    async (status) => {
+      const store = createWorkboardSqliteTestStore();
+      const card = await store.create({ title: `Archived ${status}`, status });
+
+      await store.archive(card.id, true);
+
+      const result = await store.diagnostics(Date.now());
+      if (status === "done") {
+        expect(result).toEqual({ diagnostics: [], count: 0 });
+        return;
+      }
+      expect(result).toMatchObject({
+        diagnostics: [
+          expect.objectContaining({
+            card: expect.objectContaining({ id: card.id }),
+            diagnostics: [
+              expect.objectContaining({
+                kind: "archived_but_active",
+                severity: "warning",
+                actions: [],
+              }),
+            ],
+          }),
+        ],
+        count: 1,
+      });
+    },
+  );
+
+  it("keeps archived-card diagnostics transient across lifecycle changes", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Archived but ready", status: "ready" });
+    const now = Date.now();
+
+    await store.archive(card.id, true);
+
+    await expect(store.refreshDiagnostics(now)).resolves.toEqual({ diagnostics: [], count: 0 });
+    await expect(store.get(card.id)).resolves.not.toHaveProperty("metadata.diagnostics");
+    await expect(store.diagnostics(now)).resolves.toMatchObject({
+      diagnostics: [expect.objectContaining({ card: expect.objectContaining({ id: card.id }) })],
+      count: 1,
+    });
+
+    await store.archive(card.id, false);
+    await expect(store.diagnostics(now + 1)).resolves.toEqual({ diagnostics: [], count: 0 });
+
+    await store.archive(card.id, true);
+    await store.move(card.id, "done", undefined);
+    await expect(store.diagnostics(now + 2)).resolves.toEqual({ diagnostics: [], count: 0 });
+  });
+
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
-    const keyed = createMemoryStore({
-      async beforeRegister(_key, value) {
+    const store: WorkboardStore = createWorkboardSqliteTestStore({
+      async beforeCardWrite(_key, value) {
         if (triggered || !value.card.metadata?.diagnostics?.length) {
           return;
         }
@@ -2532,7 +3412,6 @@ describe("WorkboardStore", () => {
         });
       },
     });
-    const store: WorkboardStore = new WorkboardStore(keyed);
     const card = await store.create({ title: "Ready too long", agentId: "main" });
 
     await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
@@ -2547,7 +3426,7 @@ describe("WorkboardStore", () => {
   });
 
   it("builds bounded worker context from card metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Write docs",
       notes: "Acceptance:\n- mention tools",
@@ -2567,7 +3446,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps worker-context text bounds UTF-16 safe", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Bound context",
       metadata: {
@@ -2585,7 +3464,7 @@ describe("WorkboardStore", () => {
   });
 
   it("scopes idempotent creates and stats by board", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const ops = await store.create({
       title: "Ops work",
       boardId: "ops",
@@ -2639,8 +3518,49 @@ describe("WorkboardStore", () => {
     expect(metadataBoardSecond.position).toBe(2000);
   });
 
+  it("excludes archived ready cards from active queue-age statistics", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const oldReady = await store.create({
+        title: "Archived ready work",
+        boardId: "ops",
+        status: "ready",
+      });
+      vi.setSystemTime(2_000);
+      await store.archive(oldReady.id, true);
+
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
+        total: 1,
+        active: 0,
+        archived: 1,
+        byStatus: { ready: 1 },
+      });
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.not.toHaveProperty(
+        "oldestReadyAgeMs",
+      );
+
+      vi.setSystemTime(3_000);
+      await store.create({
+        title: "Active ready work",
+        boardId: "ops",
+        status: "ready",
+      });
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
+        total: 2,
+        active: 1,
+        archived: 1,
+        byStatus: { ready: 2 },
+        oldestReadyAgeMs: 2_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects completed manifests for cards not created from the parent", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "running" });
     const unrelated = await store.create({ title: "Unrelated" });
 
@@ -2667,7 +3587,7 @@ describe("WorkboardStore", () => {
   });
 
   it("promotes, reassigns, and reclaims cards for operator recovery", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Recover me",
       status: "blocked",
@@ -2718,7 +3638,7 @@ describe("WorkboardStore", () => {
   });
 
   it("includes parent results and recent assignee work in worker context", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({
       title: "Design",
       status: "running",
@@ -2755,11 +3675,11 @@ describe("WorkboardStore", () => {
     );
   });
 
-  it("persists board metadata and notification subscriptions in separate stores", async () => {
-    const cards = createMemoryStore();
-    const boards = createMemoryStore<PersistedWorkboardBoard>();
-    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
-    const store = new WorkboardStore(cards, { boards, subscriptions });
+  it("persists board metadata and notification subscriptions in separate SQLite tables", async () => {
+    const {
+      store,
+      stores: { cards, boards, subscriptions },
+    } = createWorkboardSqliteTestHarness();
 
     const board = await store.upsertBoard({
       id: "ops",
@@ -2802,9 +3722,71 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("excludes archived cards from notification replay without discarding their history", async () => {
+    const {
+      store,
+      stores: { subscriptions },
+    } = createWorkboardSqliteTestHarness();
+    const historical = await store.create({
+      title: "Archived notifications",
+      boardId: "ops",
+      status: "done",
+      metadata: {
+        notifications: [
+          { id: "archived-completed", kind: "completed", createdAt: 101, message: "Done" },
+          { id: "archived-failed", kind: "failed", createdAt: 102, message: "Failed" },
+        ],
+        stale: { detectedAt: 103, reason: "Previous worker stopped" },
+      },
+    });
+    const archived = await store.archive(historical.id, true);
+    const active = await store.create({ title: "Active notifications", boardId: "ops" });
+    await store.complete(active.id, { summary: "Still active." });
+    const boardSubscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+    });
+    const archivedSubscription = await store.subscribeNotifications({
+      cardId: archived.id,
+      target: "session:operator",
+    });
+
+    await expect(
+      store.notificationEvents({ subscriptionId: boardSubscription.id }),
+    ).resolves.toMatchObject({
+      events: [expect.objectContaining({ kind: "completed", message: "Still active." })],
+    });
+    await expect(
+      store.notificationEvents({ subscriptionId: archivedSubscription.id }),
+    ).resolves.toMatchObject({ events: [] });
+    await expect(
+      store.advanceNotificationEvents({ subscriptionId: archivedSubscription.id }),
+    ).resolves.toMatchObject({ events: [] });
+    const storedSubscription = await subscriptions.lookup(archivedSubscription.id);
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventAt");
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventId");
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventSequence");
+    await expect(store.get(archived.id)).resolves.toEqual(archived);
+
+    await store.archive(archived.id, false);
+    const restored = await store.notificationEvents({
+      subscriptionId: archivedSubscription.id,
+    });
+    expect(restored.events).toHaveLength(3);
+    expect(restored.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "archived-completed", kind: "completed" }),
+        expect.objectContaining({ id: "archived-failed", kind: "failed" }),
+        expect.objectContaining({ kind: "stale" }),
+      ]),
+    );
+  });
+
   it("replays notification events with subscription cursors", async () => {
-    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
-    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const {
+      store,
+      stores: { subscriptions },
+    } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Notify me", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",
@@ -2847,10 +3829,52 @@ describe("WorkboardStore", () => {
     );
   });
 
-  it("does not skip same-millisecond notification events after cursor advancement", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+  it("does not resurrect a subscription deleted during cursor advancement", async () => {
+    let markCursorWriteStarted!: () => void;
+    let releaseCursorWrite!: () => void;
+    const cursorWriteStarted = new Promise<void>((resolve) => {
+      markCursorWriteStarted = resolve;
     });
+    const cursorWriteReleased = new Promise<void>((resolve) => {
+      releaseCursorWrite = resolve;
+    });
+    const {
+      store,
+      stores: { subscriptions },
+    } = createWorkboardSqliteTestHarness();
+    const registerSubscription = subscriptions.register.bind(subscriptions);
+    subscriptions.register = async (key, value) => {
+      if (value.subscription.lastEventId) {
+        markCursorWriteStarted();
+        await cursorWriteReleased;
+      }
+      await registerSubscription(key, value);
+    };
+    const card = await store.create({ title: "Delete in-flight notification", boardId: "ops" });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+    await store.complete(card.id, { summary: "Done." });
+
+    const advancing = store.advanceNotificationEvents({ subscriptionId: subscription.id });
+    await cursorWriteStarted;
+    const deleting = store.deleteNotificationSubscription(subscription.id);
+    releaseCursorWrite();
+
+    await expect(Promise.all([advancing, deleting])).resolves.toEqual([
+      expect.objectContaining({
+        events: [expect.objectContaining({ kind: "completed" })],
+      }),
+      { deleted: true },
+    ]);
+    await expect(subscriptions.lookup(subscription.id)).resolves.toBeUndefined();
+    await expect(store.listNotificationSubscriptions()).resolves.toEqual({ subscriptions: [] });
+  });
+
+  it("does not skip same-millisecond notification events after cursor advancement", async () => {
+    const store = createWorkboardSqliteTestStore();
     await store.create({
       title: "First same-ms event",
       boardId: "ops",
@@ -2897,10 +3921,62 @@ describe("WorkboardStore", () => {
     expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
   });
 
-  it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+  it("does not skip unsequenced notifications after a sequenced same-millisecond event", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await store.create({
+      title: "Sequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "z-event",
+            kind: "completed",
+            createdAt: 1234,
+            sequence: 1234000,
+            message: "First",
+          },
+        ],
+      },
     });
+    await store.create({
+      title: "Unsequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "a-event",
+            kind: "completed",
+            createdAt: 1234,
+            message: "Second",
+          },
+        ],
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(first.events).toEqual([expect.objectContaining({ id: "z-event" })]);
+
+    const second = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [],
+    });
+  });
+
+  it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
+    const store = createWorkboardSqliteTestStore();
     for (let index = 0; index < 205; index += 1) {
       await store.create({
         title: `Same-ms event ${index}`,
@@ -2938,9 +4014,7 @@ describe("WorkboardStore", () => {
   });
 
   it("filters replayed notification events by session and run subscriptions", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
-    });
+    const store = createWorkboardSqliteTestStore();
     const matching = await store.create({
       title: "Matching session",
       boardId: "ops",
@@ -2989,9 +4063,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays card-scoped subscriptions without requiring the board id", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
-    });
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Ops card", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       cardId: card.id,
@@ -3008,9 +4080,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays stale metadata as stale notification events", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
-    });
+    const store = createWorkboardSqliteTestStore();
     await store.create({
       title: "Stale card",
       boardId: "ops",
@@ -3040,8 +4110,7 @@ describe("WorkboardStore", () => {
   });
 
   it("marks triage cards as orchestration candidates during dispatch", async () => {
-    const boards = createMemoryStore<PersistedWorkboardBoard>();
-    const store = new WorkboardStore(createMemoryStore(), { boards });
+    const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({
       id: "planning",
       orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
@@ -3087,9 +4156,111 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("does not mutate archived ready cards during repeated dispatch", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: "Archived ready work",
+      status: "ready",
+    });
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await expect(store.dispatch(10 + attempt)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+    }
+
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it("does not promote or claim an archived scheduled card", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const card = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const archived = await store.archive(card.id, true);
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await expect(store.promoteReady(3_000 + attempt)).resolves.toEqual({
+          cards: [],
+          count: 0,
+        });
+      }
+      await expect(store.claim(card.id, { ownerId: "worker" })).rejects.toThrow(/archived/);
+      await expect(store.get(card.id)).resolves.toEqual(archived);
+      expect(changes).not.toHaveBeenCalled();
+
+      vi.setSystemTime(3_000);
+      await store.archive(card.id, false);
+      await expect(store.claim(card.id, { ownerId: "worker" })).resolves.toMatchObject({
+        card: { id: card.id, status: "running" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not promote, time out, or reclaim archived cards during dispatch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const timedOut = await store.create({
+        title: "Archived timed-out work",
+        status: "running",
+        maxRuntimeSeconds: 1,
+      });
+      const scheduled = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const parent = await store.create({ title: "Dependency parent", status: "running" });
+      const dependent = await store.create({
+        title: "Archived dependent work",
+        parents: [parent.id],
+      });
+      const archived = await Promise.all([
+        store.archive(timedOut.id, true),
+        store.archive(scheduled.id, true),
+        store.archive(dependent.id, true),
+      ]);
+      await store.complete(parent.id, { summary: "Dependency finished." });
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      await expect(store.dispatch(3_000)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+      await expect(Promise.all(archived.map((card) => store.get(card.id)))).resolves.toEqual(
+        archived,
+      );
+      expect(changes).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies auto orchestration dispatch caps per board", async () => {
-    const boards = createMemoryStore<PersistedWorkboardBoard>();
-    const store = new WorkboardStore(createMemoryStore(), { boards });
+    const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({
       id: "ops",
       orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
@@ -3113,8 +4284,7 @@ describe("WorkboardStore", () => {
   });
 
   it("scopes dispatch mutations by board", async () => {
-    const boards = createMemoryStore<PersistedWorkboardBoard>();
-    const store = new WorkboardStore(createMemoryStore(), { boards });
+    const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({
       id: "ops",
       orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
@@ -3142,10 +4312,7 @@ describe("WorkboardStore", () => {
   });
 
   it("deletes board notification subscriptions with empty board metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      boards: createMemoryStore<PersistedWorkboardBoard>(),
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
-    });
+    const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({ id: "ops", name: "Ops" });
     await store.subscribeNotifications({
       boardId: "ops",
@@ -3160,9 +4327,7 @@ describe("WorkboardStore", () => {
   });
 
   it("deletes card notification subscriptions with the card", async () => {
-    const store = new WorkboardStore(createMemoryStore(), {
-      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
-    });
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Notify me" });
     await store.subscribeNotifications({
       cardId: card.id,
@@ -3177,7 +4342,7 @@ describe("WorkboardStore", () => {
   });
 
   it("specifies and decomposes rough cards into linked children", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({
       title: "Rough idea",
       status: "triage",
@@ -3246,7 +4411,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps specify as a todo-only clarification step", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Rough idea", status: "triage" });
     const blocked = await store.create({ title: "Blocked idea", status: "blocked" });
 
@@ -3264,7 +4429,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rolls back newly created children when decomposition fails", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "todo" });
 
     await expect(
@@ -3278,7 +4443,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rolls back links added to reused idempotent children when decomposition fails", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent" });
     const existingChild = await store.create({
       title: "Existing child",
@@ -3306,8 +4471,246 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("rolls back every task-owned decomposition write in sqlite when uncontended", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-decompose-control-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
+    try {
+      const parent = await store.create({ title: "Parent" });
+      const reusedChild = await store.create({
+        title: "Existing child",
+        idempotencyKey: "child-key",
+      });
+
+      await expect(
+        store.decompose(parent.id, {
+          children: [
+            { title: "New child" },
+            { title: "Existing child", idempotencyKey: "child-key" },
+            { notes: "Missing title" },
+          ],
+        }),
+      ).rejects.toThrow(/title is required/);
+
+      await expect(store.list()).resolves.toEqual([
+        expect.objectContaining({ id: parent.id }),
+        expect.objectContaining({ id: reusedChild.id }),
+      ]);
+      expectSameCardState(await store.get(parent.id), parent);
+      expectSameCardState(await store.get(reusedChild.id), reusedChild);
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reverts completed parent state while preserving a concurrent parent edit", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-parent-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const createdParent = await operation.create({ title: "Parent", status: "ready" });
+      const claimed = await operation.claim(createdParent.id, { ownerId: "worker" });
+      const parent = claimed.card;
+      const reusedChild = await operation.create({
+        title: "Existing child",
+        idempotencyKey: "child-key",
+      });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) => key === parent.id && value?.card.status === "done",
+      );
+      const decomposition = operation.decompose(
+        parent.id,
+        {
+          summary: "Task-owned decomposition",
+          children: [{ title: "Existing child", idempotencyKey: "child-key" }],
+        },
+        { ownerId: "worker", token: claimed.token },
+      );
+
+      await pause.reached;
+      await host.update(parent.id, { notes: "Concurrent parent edit" });
+      pause.resume();
+
+      await expect(decomposition).rejects.toThrow(/changed while you were editing/);
+      const rolledBackParent = await host.get(parent.id);
+      expect(rolledBackParent?.status).toBe(parent.status);
+      expect(rolledBackParent?.notes).toBe("Concurrent parent edit");
+      expect(rolledBackParent?.completedAt).toBeUndefined();
+      expect(rolledBackParent?.metadata).toEqual(parent.metadata);
+      expect(rolledBackParent?.events?.map((event) => event.kind)).toEqual([
+        ...(parent.events?.map((event) => event.kind) ?? []),
+        "edited",
+      ]);
+      expectSameCardState(await host.get(reusedChild.id), reusedChild);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it.each(["reused child", "new child"] as const)(
+    "reverts decomposition-owned links while preserving a concurrent %s edit",
+    async (target) => {
+      const harness = createConcurrentSqliteHarness("openclaw-workboard-child-rollback-");
+      const { operation, host, paused } = harness;
+      try {
+        const parent = await operation.create({ title: "Parent" });
+        const reusedChild =
+          target === "reused child"
+            ? await operation.create({ title: "Existing child", idempotencyKey: "child-key" })
+            : undefined;
+        const pause = paused.pauseAfterMatchingWrite((_key, value) => {
+          const card = value?.card;
+          if (!card || (target === "reused child" && card.id !== reusedChild?.id)) {
+            return false;
+          }
+          if (target === "new child" && card.title !== "New child") {
+            return false;
+          }
+          return Boolean(
+            card.metadata?.links?.some(
+              (link) => link.type === "parent" && link.targetCardId === parent.id,
+            ),
+          );
+        });
+        const decomposition = operation.decompose(parent.id, {
+          children: [
+            reusedChild
+              ? { title: "Existing child", idempotencyKey: "child-key" }
+              : { title: "New child" },
+            { notes: "Missing title" },
+          ],
+        });
+
+        await pause.reached;
+        const child = reusedChild ?? (await host.list()).find((card) => card.title === "New child");
+        expect(child).toBeDefined();
+        await host.update(child!.id, { notes: `Concurrent ${target} edit` });
+        pause.resume();
+
+        await expect(decomposition).rejects.toThrow(/title is required/);
+        expectSameCardState(await host.get(parent.id), parent);
+        const rolledBackChild = await host.get(child!.id);
+        expect(rolledBackChild?.notes).toBe(`Concurrent ${target} edit`);
+        expect(rolledBackChild?.metadata?.links).toBeUndefined();
+        expect(rolledBackChild?.metadata?.automation).toMatchObject(
+          target === "reused child"
+            ? { idempotencyKey: "child-key" }
+            : { createdByCardId: parent.id },
+        );
+        expect(rolledBackChild?.events?.map((event) => event.kind)).toEqual(["created", "edited"]);
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
+  it("reverts a partial link while preserving a concurrent child edit", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-link-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const parent = await operation.create({ title: "Parent" });
+      const child = await operation.create({ title: "Child" });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) =>
+          key === parent.id &&
+          Boolean(
+            value?.card.metadata?.links?.some(
+              (link) => link.type === "child" && link.targetCardId === child.id,
+            ),
+          ),
+      );
+      const linking = operation.linkCards(parent.id, child.id);
+
+      await pause.reached;
+      await host.update(child.id, { notes: "Concurrent child edit" });
+      pause.resume();
+
+      await expect(linking).rejects.toThrow(/changed while you were editing/);
+      expectSameCardState(await host.get(parent.id), parent);
+      await expect(host.get(child.id)).resolves.toMatchObject({
+        notes: "Concurrent child edit",
+      });
+      expect((await host.get(child.id))?.metadata?.links).toBeUndefined();
+      expect((await host.get(child.id))?.events?.map((event) => event.kind)).toEqual([
+        ...(child.events?.map((event) => event.kind) ?? []),
+        "edited",
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("reverts task-owned links while preserving a concurrently adopted child", async () => {
+    const harness = createConcurrentSqliteHarness("openclaw-workboard-create-rollback-");
+    const { operation, host, paused } = harness;
+    try {
+      const firstParent = await operation.create({ title: "First parent" });
+      const secondParent = await operation.create({ title: "Second parent" });
+      const pause = paused.pauseAfterMatchingWrite(
+        (key, value) =>
+          key === secondParent.id &&
+          Boolean(
+            value?.card.metadata?.links?.some(
+              (link) => link.type === "child" && link.targetCardId !== undefined,
+            ),
+          ),
+      );
+      const creation = operation.create({
+        title: "New child",
+        parents: [firstParent.id, secondParent.id],
+      });
+
+      await pause.reached;
+      const child = (await host.list()).find((card) => card.title === "New child");
+      expect(child).toBeDefined();
+      await host.update(child!.id, { notes: "Concurrent child edit" });
+      pause.resume();
+
+      await expect(creation).rejects.toThrow(/changed while you were editing/);
+      await expect(host.get(child!.id)).resolves.toMatchObject({
+        notes: "Concurrent child edit",
+      });
+      expect((await host.get(child!.id))?.metadata?.links).toBeUndefined();
+      expect((await host.get(child!.id))?.events?.map((event) => event.kind)).toEqual([
+        "created",
+        "edited",
+      ]);
+      expectSameCardState(await host.get(firstParent.id), firstParent);
+      expectSameCardState(await host.get(secondParent.id), secondParent);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("preserves a linked-create failure when card compensation also fails", async () => {
+    const {
+      store,
+      stores: { cards },
+    } = createWorkboardSqliteTestHarness();
+    const parent = await store.create({ title: "Claimed parent", status: "ready" });
+    await store.claim(parent.id, { ownerId: "worker" });
+    cards.deleteIfUpdatedAt = async () => {
+      throw new Error("card compensation failed");
+    };
+
+    const error = await store
+      .create({ title: "New child", parents: [parent.id] }, { ownerId: "other" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/claimed by/),
+      cause: expect.objectContaining({ message: expect.stringMatching(/claimed by/) }),
+    });
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: expect.stringMatching(/claimed by/) }),
+      expect.objectContaining({ message: "card compensation failed" }),
+    ]);
+  });
+
   it("preserves parent child links when decomposition leaves the parent open", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Parent", status: "triage" });
     await store.addLink(parent.id, { type: "relates_to", url: "https://example.com/context" });
 
@@ -3333,7 +4736,7 @@ describe("WorkboardStore", () => {
   });
 
   it("omits derived child idempotency keys when the parent key is already at the limit", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const parent = await store.create({
       title: "Parent",
       idempotencyKey: "p".repeat(160),
@@ -3347,7 +4750,7 @@ describe("WorkboardStore", () => {
   });
 
   it("links an idempotent existing child before completing decomposition", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const existingChild = await store.create({
       title: "Existing child",
       idempotencyKey: "child-key",
@@ -3371,7 +4774,7 @@ describe("WorkboardStore", () => {
   });
 
   it("rejects invalid status values", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     await expect(store.create({ title: "Bad card", status: "later" })).rejects.toThrow(
       /status must be one of/,
     );

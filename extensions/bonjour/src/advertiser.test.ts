@@ -25,7 +25,7 @@ const {
 } = mocks;
 const dnsLabelEncoder = new TextEncoder();
 
-const asString = (value: unknown, fallback: string) =>
+const stringOrFallback = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
 
 function expectDnsLabelByteLength(value: string, expected: number) {
@@ -81,8 +81,9 @@ function mockCiaoService(params?: {
       advertise,
       destroy,
       on,
-      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
-      getHostname: () => asString(options.hostname, "unknown"),
+      getFQDN: () =>
+        `${stringOrFallback(options.type, "service")}.${stringOrFallback(options.domain, "local")}.`,
+      getHostname: () => stringOrFallback(options.hostname, "unknown"),
       getPort: () => Number(options.port ?? -1),
     };
     Object.defineProperty(service, "serviceState", {
@@ -173,7 +174,7 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(1);
     const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
     expect(gatewayCall?.[0]?.type).toBe("openclaw-gw");
-    const gatewayType = asString(gatewayCall?.[0]?.type, "");
+    const gatewayType = stringOrFallback(gatewayCall?.[0]?.type, "");
     expect(gatewayType.length).toBeLessThanOrEqual(15);
     expect(gatewayCall?.[0]?.port).toBe(18789);
     expect(gatewayCall?.[0]?.domain).toBe("local");
@@ -451,6 +452,39 @@ describe("gateway bonjour advertiser", () => {
       await started.stop();
     } finally {
       console.log = originalConsoleLog;
+    }
+  });
+
+  it("suppresses transient ciao ENODEV MDNS socket warnings while advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleWarn = console.warn;
+    const baseConsoleWarn = vi.fn();
+    console.warn = baseConsoleWarn as typeof console.warn;
+
+    try {
+      const started = await startAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      // A Docker bridge disappears between ciao's interface polls; the send to
+      // the removed interface fails with ENODEV, which ciao does not silence.
+      console.warn(
+        "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
+      );
+      console.warn("ordinary warning line");
+
+      expect(baseConsoleWarn).toHaveBeenCalledTimes(1);
+      expect(baseConsoleWarn).toHaveBeenCalledWith("ordinary warning line");
+
+      await started.stop();
+    } finally {
+      console.warn = originalConsoleWarn;
     }
   });
 

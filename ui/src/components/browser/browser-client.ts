@@ -1,16 +1,29 @@
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 // Typed Control UI wrapper over the `browser.request` gateway method.
 //
 // The gateway method speaks an HTTP-shaped envelope ({method, path, body})
 // that is dispatched against the browser plugin's control routes, either
 // locally or via a browser-capable node. This module narrows the handful of
 // routes the browser panel needs and keeps route-path knowledge in one place.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
+import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { browserInspectScript } from "./browser-inspect-script.ts";
+import type { BrowserRoute } from "./browser-target.ts";
+
+registerBrowserEnglish();
+
+export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
 
 const BROWSER_REQUEST_METHOD = "browser.request";
 const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
 
 export type BrowserPanelTab = {
+  kind: "remote" | "native";
   /**
    * Stable panel handle: the plugin's per-profile tab alias (`t1`, a label)
    * when present, else the raw CDP target id. Raw target ids are volatile
@@ -21,6 +34,7 @@ export type BrowserPanelTab = {
   targetId: string;
   title: string;
   url: string;
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 
 type BrowserTabsSnapshot = {
@@ -61,34 +75,66 @@ type BrowserRequestEnvelope = {
   timeoutMs?: number;
 };
 
-function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserRequestEnvelope) {
+/** Bind every browser operation to one route and one live panel scope. */
+export function bindBrowserRequestClient(
+  client: BrowserRequestClient,
+  route?: BrowserRoute,
+  current: () => boolean = () => true,
+): BrowserRequestClient {
+  return {
+    async request<T>(
+      method: string,
+      params?: unknown,
+      options?: GatewayClientRequestOptions,
+    ): Promise<T> {
+      if (!current()) {
+        throw new DOMException("Browser request scope ended", "AbortError");
+      }
+      const envelope = asRecord(params);
+      const routedParams = route
+        ? {
+            ...envelope,
+            target: route.target,
+            ...(route.target === "node" ? { node: route.node } : {}),
+            query: { ...asRecord(envelope?.query), profile: route.profile },
+          }
+        : params;
+      return options
+        ? await client.request<T>(method, routedParams, options)
+        : await client.request<T>(method, routedParams);
+    },
+  };
+}
+
+function browserRequest<T>(client: BrowserRequestClient, envelope: BrowserRequestEnvelope) {
   return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function stringOrEmpty(value: unknown): string {
+  return readStringValue(value) ?? "";
 }
 
 function normalizeTab(value: unknown): BrowserPanelTab | null {
   const record = asRecord(value);
-  const targetId = asString(record?.targetId);
+  const targetId = stringOrEmpty(record?.targetId);
   if (!targetId) {
     return null;
   }
-  const tabId = asString(record?.tabId);
+  const tabId = stringOrEmpty(record?.tabId);
   return {
+    kind: "remote",
     id: tabId || targetId,
     targetId,
-    title: asString(record?.title),
-    url: asString(record?.url),
+    title: stringOrEmpty(record?.title),
+    url: stringOrEmpty(record?.url),
+    ...(record?.urlUnavailableReason === "navigation_blocked" ||
+    record?.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: record.urlUnavailableReason }
+      : {}),
   };
 }
 
-export async function listBrowserTabs(client: GatewayBrowserClient): Promise<BrowserTabsSnapshot> {
+export async function listBrowserTabs(client: BrowserRequestClient): Promise<BrowserTabsSnapshot> {
   const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
@@ -96,12 +142,12 @@ export async function listBrowserTabs(client: GatewayBrowserClient): Promise<Bro
   return { running: result?.running === true, tabs };
 }
 
-export async function startBrowser(client: GatewayBrowserClient): Promise<void> {
+export async function startBrowser(client: BrowserRequestClient): Promise<void> {
   await browserRequest(client, { method: "POST", path: "/start", body: {} });
 }
 
 export async function openBrowserTab(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   url: string,
 ): Promise<BrowserPanelTab | null> {
   return normalizeTab(
@@ -109,32 +155,91 @@ export async function openBrowserTab(
   );
 }
 
-export async function focusBrowserTab(client: GatewayBrowserClient, targetId: string) {
+export async function focusBrowserTab(client: BrowserRequestClient, targetId: string) {
   await browserRequest(client, { method: "POST", path: "/tabs/focus", body: { targetId } });
 }
 
-export async function closeBrowserTab(client: GatewayBrowserClient, targetId: string) {
+export async function closeBrowserTab(client: BrowserRequestClient, targetId: string) {
   await browserRequest(client, {
     method: "DELETE",
     path: `/tabs/${encodeURIComponent(targetId)}`,
   });
 }
 
+/** The owning Browser saves its current document; only managed bytes reach the dashboard. */
+export async function downloadBrowserDocument(
+  client: BrowserRequestClient,
+  targetId: string,
+  expectedUrl: string,
+  signal: AbortSignal,
+): Promise<{ path: string; filename: string }> {
+  const result = asRecord(
+    await client.request(
+      BROWSER_REQUEST_METHOD,
+      {
+        method: "POST",
+        path: "/download",
+        body: { targetId, currentDocument: true, expectedUrl, timeoutMs: 120_000 },
+        timeoutMs: 150_000,
+      },
+      { signal, timeoutMs: 150_000 },
+    ),
+  );
+  const download = asRecord(result?.download);
+  const path = stringOrEmpty(download?.path);
+  const filename = stringOrEmpty(download?.suggestedFilename);
+  if (!path || !filename) {
+    throw new Error(t("browser.errors.downloadEmpty"));
+  }
+  return { path, filename };
+}
+
 export async function navigateBrowser(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { url: string; targetId?: string },
 ): Promise<{ targetId: string; url: string }> {
   const result = asRecord(
     await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
   );
   return {
-    targetId: asString(result?.targetId) || params.targetId || "",
-    url: asString(result?.url) || params.url,
+    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
+    url: stringOrEmpty(result?.url) || params.url,
   };
 }
 
+export async function requestBrowserScreencast(
+  client: BrowserRequestClient,
+  params: { targetId: string; maxWidth: number; maxHeight: number },
+): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+  const result = asRecord(
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+  );
+  const token = stringOrEmpty(result?.token);
+  const wsPath = stringOrEmpty(result?.wsPath);
+  if (!token || !wsPath) {
+    throw new Error("browser screencast response is malformed");
+  }
+  return {
+    token,
+    wsPath,
+    targetId: stringOrEmpty(result?.targetId),
+    url: stringOrEmpty(result?.url),
+  };
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  const record = asRecord(error);
+  const details =
+    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  return (
+    details?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+  );
+}
+
 export async function captureBrowserScreenshot(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   targetId: string,
 ): Promise<BrowserScreenshotCapture> {
   const result = asRecord(
@@ -144,19 +249,19 @@ export async function captureBrowserScreenshot(
       body: { targetId, type: "png" },
     }),
   );
-  const path = asString(result?.path);
+  const path = stringOrEmpty(result?.path);
   if (!path) {
-    throw new Error("browser screenshot did not return a media path");
+    throw new Error(t("browser.errors.screenshotPathMissing"));
   }
   return {
     path,
-    targetId: asString(result?.targetId) || targetId,
-    url: asString(result?.url),
+    targetId: stringOrEmpty(result?.targetId) || targetId,
+    url: stringOrEmpty(result?.url),
   };
 }
 
 export async function clickBrowserCoords(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number; doubleClick?: boolean },
 ) {
   await browserRequest(client, {
@@ -173,7 +278,7 @@ export async function clickBrowserCoords(
 }
 
 export async function pressBrowserKey(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; key: string },
 ) {
   await browserRequest(client, {
@@ -183,8 +288,24 @@ export async function pressBrowserKey(
   });
 }
 
+export async function resizeBrowserViewport(
+  client: BrowserRequestClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+  });
+}
+
 async function evaluateInBrowser<T>(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; fn: string },
 ): Promise<T | null> {
   const result = asRecord(
@@ -197,13 +318,27 @@ async function evaluateInBrowser<T>(
   return (result?.result as T | undefined) ?? null;
 }
 
+export function isBrowserNavigationBlockedError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError && asRecord(error.details)?.reason === "navigation_blocked"
+  );
+}
+
 /** True when the failure is the config-gated `browser.evaluateEnabled=false` rejection. */
 export function isBrowserEvaluateDisabledError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("evaluateEnabled=false");
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const details = err instanceof GatewayRequestError ? asRecord(err.details) : null;
+  const code = details?.code;
+  const hasStructuredCode = code !== undefined || details?.unrecognizedCode === true;
+  return !hasStructuredCode
+    ? err.message.includes("evaluateEnabled=false")
+    : code === "ACT_EVALUATE_DISABLED";
 }
 
 export async function scrollBrowserBy(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; deltaX: number; deltaY: number },
 ) {
   const dx = Math.round(params.deltaX);
@@ -215,7 +350,7 @@ export async function scrollBrowserBy(
 }
 
 export async function goBrowserHistory(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; delta: -1 | 1 },
 ) {
   await evaluateInBrowser(client, {
@@ -225,7 +360,7 @@ export async function goBrowserHistory(
 }
 
 export async function readBrowserPageMetrics(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   targetId: string,
 ): Promise<BrowserPageMetrics | null> {
   const result = asRecord(
@@ -242,13 +377,13 @@ export async function readBrowserPageMetrics(
   return {
     cssWidth,
     cssHeight,
-    title: asString(result?.title),
-    url: asString(result?.url),
+    title: stringOrEmpty(result?.title),
+    url: stringOrEmpty(result?.url),
   };
 }
 
 export async function inspectBrowserElementAt(
-  client: GatewayBrowserClient,
+  client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number },
 ): Promise<BrowserInspectedNode | null> {
   const x = Math.max(0, Math.round(params.x));
@@ -256,40 +391,26 @@ export async function inspectBrowserElementAt(
   const result = asRecord(
     await evaluateInBrowser(client, {
       targetId: params.targetId,
-      fn: `() => {
-        const el = document.elementFromPoint(${x}, ${y});
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        const label = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || "";
-        const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
-        const nameSource = label || text;
-        const nameLimit = 120;
-        // This serialized page function cannot call imported helpers; back up only when the cap splits a surrogate pair.
-        const nameEnd = (nameSource.codePointAt(nameLimit - 1) || 0) > 0xffff ? nameLimit - 1 : nameLimit;
-        return {
-          tag: el.tagName.toLowerCase(),
-          id: el.id || "",
-          classes: Array.from(el.classList).slice(0, 6),
-          role: el.getAttribute("role") || "",
-          name: nameSource.slice(0, nameEnd),
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          focusable: typeof el.tabIndex === "number" && el.tabIndex >= 0,
-        };
-      }`,
+      fn: `() => { ${browserInspectScript}\nreturn openclawInspectBrowserElement(${x}, ${y}); }`,
     }),
   );
+  return readBrowserInspectedNode(result);
+}
+
+export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
+  const result = asRecord(value);
   if (!result) {
     return null;
   }
   const rect = asRecord(result.rect);
   return {
-    tag: asString(result.tag),
-    id: asString(result.id),
+    tag: stringOrEmpty(result.tag),
+    id: stringOrEmpty(result.id),
     classes: Array.isArray(result.classes)
-      ? result.classes.filter((value): value is string => typeof value === "string")
+      ? result.classes.filter((entry): entry is string => typeof entry === "string")
       : [],
-    role: asString(result.role),
-    name: asString(result.name),
+    role: stringOrEmpty(result.role),
+    name: stringOrEmpty(result.name),
     rect: {
       x: asFiniteNumber(rect?.x) ?? 0,
       y: asFiniteNumber(rect?.y) ?? 0,
@@ -306,36 +427,35 @@ export async function inspectBrowserElementAt(
  * same one chat history uses for local media previews).
  */
 export async function fetchBrowserScreenshotDataUrl(params: {
-  basePath: string;
+  resourceBasePath: string;
   authToken: string | null;
   path: string;
 }): Promise<string> {
-  const basePath =
-    params.basePath && params.basePath !== "/"
-      ? params.basePath.endsWith("/")
-        ? params.basePath.slice(0, -1)
-        : params.basePath
-      : "";
-  const search = new URLSearchParams({ source: params.path });
   const headers = new Headers({ Accept: "image/*" });
   if (params.authToken) {
     headers.set("Authorization", `Bearer ${params.authToken}`);
   }
   const controller = new AbortController();
   const timeout = setTimeout(
-    () => controller.abort(new DOMException("screenshot fetch timed out", "TimeoutError")),
+    () =>
+      controller.abort(
+        new DOMException(t("browser.errors.screenshotFetchTimedOut"), "TimeoutError"),
+      ),
     BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS,
   );
   let blob: Blob;
   try {
-    const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
+    const res = await fetch(buildAssistantMediaUrl(params.path, params.resourceBasePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
       signal: controller.signal,
     });
     if (!res.ok) {
-      throw new Error(`screenshot fetch failed (${res.status})`);
+      // A response stream can take indefinitely to cancel; release it without
+      // delaying the stable HTTP error or defeating the request deadline.
+      void res.body?.cancel().catch(() => undefined);
+      throw new Error(t("browser.errors.screenshotFetchFailed", { status: String(res.status) }));
     }
     blob = await res.blob();
   } finally {
@@ -347,11 +467,11 @@ export async function fetchBrowserScreenshotDataUrl(params: {
       if (typeof reader.result === "string") {
         resolve(reader.result);
       } else {
-        reject(new Error("screenshot read failed"));
+        reject(new Error(t("browser.errors.screenshotReadFailed")));
       }
     });
     reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error("screenshot read failed")),
+      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
     );
     reader.readAsDataURL(blob);
   });

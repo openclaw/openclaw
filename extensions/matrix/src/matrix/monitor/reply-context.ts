@@ -1,7 +1,9 @@
 // Matrix plugin module implements reply context behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
-import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
+import { setBoundedMap } from "./bounded-cache.js";
+import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_CACHED_REPLY_CONTEXTS = 256;
@@ -38,13 +40,7 @@ export function createMatrixReplyContextResolver(params: {
   const cache = new Map<string, MatrixReplyContext>();
 
   const remember = (key: string, value: MatrixReplyContext): MatrixReplyContext => {
-    cache.set(key, value);
-    if (cache.size > MAX_CACHED_REPLY_CONTEXTS) {
-      const oldest = cache.keys().next().value;
-      if (typeof oldest === "string") {
-        cache.delete(oldest);
-      }
-    }
+    setBoundedMap(cache, key, value, MAX_CACHED_REPLY_CONTEXTS);
     return value;
   };
 
@@ -82,7 +78,7 @@ export function createMatrixReplyContextResolver(params: {
       return remember(cacheKey, {});
     }
 
-    const senderId = trimMatrixMaybeString(rawEvent.sender);
+    const senderId = normalizeOptionalString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));

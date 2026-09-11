@@ -4,6 +4,8 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogLocator,
+  type SessionCatalogShareRoute,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -13,20 +15,56 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import {
+  capturePluginLifecycleAuthority,
+  capturePluginRegistryLifecycleEpoch,
+  capturePluginRegistryLifecycleSignal,
+} from "../../plugins/registry-lifecycle.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
-import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { projectSessionParticipant } from "../session-identity-projection.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
+import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
+import {
+  createSessionCatalogRequestEntrySnapshot,
+  type SessionCatalogInstances,
+} from "./session-catalog-entry-snapshot.js";
+import {
+  SessionCatalogListLifetime,
+  type CatalogListProgressSubscriber,
+} from "./session-catalog-list-lifetime.js";
+import {
+  allowProcessHomeFallback,
+  createSessionCatalogRequestNodeSnapshot,
+  listSessionCatalogProvider,
+  catalogRegistrationSnapshot,
+  type CatalogRegistrationSnapshot,
+} from "./session-catalog-provider-access.js";
+import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+import {
+  filterSessionCatalogHost,
+  resolveSessionCatalogVisibility,
+} from "./session-catalog-visibility.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
+const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
 
 function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(search);
@@ -46,20 +84,10 @@ function catalogError(error: unknown): { code: string; message: string } {
   };
 }
 
-function providers(): SessionCatalogProvider[] {
-  return registrations().map((entry) => entry.provider);
-}
-
 export function resolveSessionCatalogProvider(
   catalogId: string,
 ): SessionCatalogProvider | undefined {
-  return providers().find((candidate) => candidate.id === catalogId);
-}
-
-function registrations() {
-  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
-    (left, right) => left.provider.id.localeCompare(right.provider.id),
-  );
+  return catalogRegistrationSnapshot().providers.find((candidate) => candidate.id === catalogId);
 }
 
 type SessionCatalogCreateTargetResolution =
@@ -70,28 +98,85 @@ type ProviderCreateTargetResolution =
   | { ok: true; target: SessionCatalogCreateTarget }
   | { ok: false; message: string };
 
+const providerCreateTargetsByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<SessionCatalogProvider, Map<string, ProviderCreateTargetResolution>>
+>();
+
+type CatalogListResult = { catalogs: SessionCatalog[] };
+type CatalogListEnumeration = CatalogListResult & { instances: SessionCatalogInstances };
+
+type CatalogListCacheEntry = {
+  expiresAt?: number;
+  progress: SessionCatalogListLifetime;
+  result: Promise<CatalogListEnumeration>;
+};
+
+type CatalogListCacheState = {
+  registrations: CatalogRegistrationSnapshot;
+  entries: Map<string, CatalogListCacheEntry>;
+};
+
+const catalogListsByConfig = new WeakMap<OpenClawConfig, CatalogListCacheState>();
+const catalogCallerIds = new WeakMap<GatewayClient, number>();
+let nextCatalogCallerId = 0;
+
+function providerCreateTargetCache(
+  config: OpenClawConfig,
+  provider: SessionCatalogProvider,
+): Map<string, ProviderCreateTargetResolution> {
+  let byProvider = providerCreateTargetsByConfig.get(config);
+  if (!byProvider) {
+    byProvider = new WeakMap();
+    providerCreateTargetsByConfig.set(config, byProvider);
+  }
+  let byAgent = byProvider.get(provider);
+  if (!byAgent) {
+    byAgent = new Map();
+    byProvider.set(provider, byAgent);
+  }
+  return byAgent;
+}
+
 function resolveProviderCreateTarget(
   provider: SessionCatalogProvider,
-  agentId?: string,
+  agentId: string,
+  config: OpenClawConfig,
 ): ProviderCreateTargetResolution {
+  const cache = providerCreateTargetCache(config, provider);
+  const cached = cache.get(agentId);
+  if (cached) {
+    // The provider contract makes create targets config-derived. A reload changes config identity;
+    // retaining the old target would advertise a model no longer allowed.
+    return cached;
+  }
+  let resolution: ProviderCreateTargetResolution;
   try {
     const target = provider.resolveCreateSession?.({ agentId });
     const model = target?.model.trim();
     const agentRuntime = target?.agentRuntime.trim();
-    return model && agentRuntime
-      ? { ok: true, target: { model, agentRuntime } }
-      : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
+    resolution =
+      model && agentRuntime
+        ? { ok: true, target: { model, agentRuntime } }
+        : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
   } catch (error) {
+    // Resolver exceptions are not config state. Retry them on the next request so a transient
+    // provider initialization failure cannot suppress session creation until config reload.
     return { ok: false, message: catalogError(error).message };
   }
+  cache.set(agentId, resolution);
+  return resolution;
 }
 
 /** Resolves a catalog-owned create target at the start of sessions.create. */
-export function resolveSessionCatalogCreateTarget(
+export function resolveRegisteredCatalogCreateTarget(
   catalogId: string,
   agentId: string,
+  config: OpenClawConfig,
 ): SessionCatalogCreateTargetResolution {
-  const registration = registrations().find((entry) => entry.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (entry) => entry.provider.id === catalogId,
+  );
   if (!registration) {
     return {
       ok: false,
@@ -99,10 +184,58 @@ export function resolveSessionCatalogCreateTarget(
       unknownCatalog: true,
     };
   }
-  const resolved = resolveProviderCreateTarget(registration.provider, agentId);
+  const resolved = resolveProviderCreateTarget(registration.provider, agentId, config);
   return resolved.ok
     ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
     : resolved;
+}
+
+function sessionCatalogListKey(params: {
+  agentId: string;
+  client: GatewayClient | null;
+  request: SessionsCatalogListParams;
+  search?: string;
+  allowProcessHomeFallback: boolean;
+  visibilityKey: string;
+}): string {
+  // Providers inherit this exact caller through Gateway async scope, including node APIs.
+  // A matching profile alone cannot make another connection's enumeration reusable.
+  let callerId = params.client ? catalogCallerIds.get(params.client) : 0;
+  if (params.client && callerId === undefined) {
+    callerId = ++nextCatalogCallerId;
+    catalogCallerIds.set(params.client, callerId);
+  }
+  const cursors = params.request.cursors
+    ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      )
+    : null;
+  return JSON.stringify([
+    params.agentId,
+    params.request.catalogId ?? null,
+    params.search ?? null,
+    params.request.limitPerHost ?? null,
+    params.request.hostIds ?? null,
+    cursors,
+    params.allowProcessHomeFallback,
+    params.visibilityKey,
+    callerId,
+    params.client?.connect?.scopes?.toSorted() ?? [],
+    params.client?.connect?.role ?? null,
+    params.client?.connect?.device?.id ?? null,
+  ]);
+}
+
+function catalogListCache(
+  config: OpenClawConfig,
+  registrationSnapshot: CatalogRegistrationSnapshot,
+): Map<string, CatalogListCacheEntry> {
+  let state = catalogListsByConfig.get(config);
+  if (!state || state.registrations !== registrationSnapshot) {
+    state = { registrations: registrationSnapshot, entries: new Map() };
+    catalogListsByConfig.set(config, state);
+  }
+  return state.entries;
 }
 
 function providerOrRespond(
@@ -120,8 +253,39 @@ function providerOrRespond(
   return provider;
 }
 
+async function authorizeCatalogRequest(params: {
+  access: "read" | "mutate";
+  request: SessionCatalogLocator & { agentId?: string };
+  provider: SessionCatalogProvider;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
+  const resolvedAgent = resolveAgentIdOrRespondError({
+    rawAgentId: params.request.agentId,
+    respond: params.respond,
+    cfg: params.context.getRuntimeConfig(),
+    normalize: normalizeOptionalString,
+  });
+  if (!resolvedAgent) {
+    return null;
+  }
+  const authorization = await authorizeSessionCatalogThread({
+    access: params.access,
+    agentId: resolvedAgent.agentId,
+    client: params.client,
+    context: params.context,
+    provider: params.provider,
+    request: params.request,
+    respond: params.respond,
+  });
+  return authorization ? { agentId: resolvedAgent.agentId, ...authorization } : null;
+}
+
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
-  const registration = registrations().find((candidate) => candidate.provider.id === catalogId);
+  const registration = catalogRegistrationSnapshot().registrations.find(
+    (candidate) => candidate.provider.id === catalogId,
+  );
   if (!registration) {
     respond(
       false,
@@ -134,6 +298,7 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
 
 function catalogResult(
   provider: SessionCatalogProvider,
+  shareRoute: SessionCatalogShareRoute | undefined,
   hosts: SessionCatalog["hosts"],
   error?: SessionCatalog["error"],
   createSession?: NonNullable<SessionCatalog["capabilities"]["createSession"]>,
@@ -142,11 +307,13 @@ function catalogResult(
     id: provider.id,
     label: provider.label,
     capabilities: {
-      continueSession: Boolean(provider.continueSession),
+      continueSession: Boolean(provider.continueSession || provider.copyToGatewaySession),
       archive: Boolean(provider.archive),
       ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
+      ...(provider.startTerminalSession ? { startTerminal: true } : {}),
     },
+    ...(shareRoute ? { shareRoute } : {}),
     hosts,
   };
   if (error) {
@@ -156,7 +323,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context, client }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client, signal }) => {
     if (
       !assertValidParams(
         params,
@@ -176,15 +343,23 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const catalogRegistrations = catalogRegistrationSnapshot();
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
-      const provider = providerOrRespond(request.catalogId, respond);
+      const provider = catalogRegistrations.providers.find(
+        (candidate) => candidate.id === request.catalogId,
+      );
       if (!provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+        );
         return;
       }
       selected = [provider];
     } else {
-      selected = providers();
+      selected = catalogRegistrations.providers;
     }
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
@@ -197,46 +372,187 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
+    const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
+    // Cached provider enumeration is not permission. Each synchronous delivery gets current
+    // caller facts and one canonical index, never the provider's pre-await planning snapshot.
+    const projectResult = (result: CatalogListEnumeration): CatalogListResult => {
+      const currentConfig = context.getRuntimeConfig();
+      const visibility = resolveSessionCatalogVisibility(client, currentConfig);
+      const requestEntries = createSessionCatalogRequestEntrySnapshot({
+        cfg: currentConfig,
+        fallbackAgentId: resolvedAgent.agentId,
+      });
+      return {
+        catalogs: result.catalogs.map((catalog) => ({
+          ...catalog,
+          hosts: catalog.hosts.map((host) =>
+            filterSessionCatalogHost(
+              requestEntries.projectHostSessions(host, result.instances),
+              visibility,
+              {
+                audience: catalogRegistrations.providers.find(
+                  (provider) => provider.id === catalog.id,
+                )?.audience,
+                requestEntries,
+              },
+            ),
+          ),
+        })),
+      };
+    };
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
-    const catalogList = await Promise.all(
-      selected.map(async (provider): Promise<SessionCatalog> => {
-        const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
-        const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
-        const onHost = progressConnId
-          ? (host: SessionCatalog["hosts"][number]) => {
-              // Progressive frames are an optimization. The final RPC response remains
-              // authoritative when a slow client drops an intermediate host update.
-              context.broadcastToConnIds(
-                "sessions.catalog.host",
-                {
-                  progressId,
-                  agentId: resolvedAgent.agentId,
-                  catalog: catalogResult(provider, [host], undefined, createSession),
-                },
-                new Set([progressConnId]),
-                { dropIfSlow: true },
-              );
-            }
-          : undefined;
-        try {
-          const hosts = await provider.list({
-            search,
-            limitPerHost: request.limitPerHost,
-            hostIds: request.hostIds,
-            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
-            ...(onHost ? { onHost } : {}),
-          });
-          return catalogResult(provider, hosts, undefined, createSession);
-        } catch (error) {
-          return catalogResult(provider, [], catalogError(error), createSession);
-        }
-      }),
+    const subscriber: CatalogListProgressSubscriber | undefined =
+      progressConnId && progressId
+        ? (catalog, instances) =>
+            context.broadcastToConnIds(
+              "sessions.catalog.host",
+              {
+                progressId,
+                agentId: resolvedAgent.agentId,
+                catalog: projectResult({ catalogs: [catalog], instances }).catalogs[0],
+              },
+              new Set([progressConnId]),
+              { dropIfSlow: true },
+            )
+        : undefined;
+    const subscribe = (progress: SessionCatalogListLifetime) => {
+      if (subscriber && progressConnId) {
+        progress.subscribe(
+          `${progressConnId}\0${progressId}`,
+          subscriber,
+          () =>
+            client?.invalidated !== true &&
+            context.isConnectionActive?.(progressConnId) !== false &&
+            (!client?.internal?.agentRuntimeIdentity ||
+              context.validateAgentRuntimeApprovalAuthority?.(
+                client.internal.agentRuntimeIdentity,
+              ) === true),
+          client?.connectionSignal ?? signal,
+        );
+      }
+    };
+    const listKey = sessionCatalogListKey({
+      agentId: resolvedAgent.agentId,
+      client,
+      request,
+      search,
+      allowProcessHomeFallback: allowHomeFallback,
+      visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
+    });
+    const cache = catalogListCache(config, catalogRegistrations);
+    const cached = cache.get(listKey);
+    if (cached && (cached.expiresAt === undefined || cached.expiresAt > Date.now())) {
+      // progressId is connection-owned and excluded from the work key. Active followers register
+      // for the remaining host frames; settled followers receive only the authoritative result.
+      if (cached.expiresAt === undefined) {
+        subscribe(cached.progress);
+      }
+      cache.delete(listKey);
+      cache.set(listKey, cached);
+      respond(true, projectResult(await cached.result));
+      return;
+    }
+    if (cached) {
+      cache.delete(listKey);
+    }
+    const registry = catalogRegistrations.registry;
+    const scopedRuntime = getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry;
+    const epoch = registry ? capturePluginRegistryLifecycleEpoch(registry) : undefined;
+    const registryAuthority = registry
+      ? capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime })
+      : undefined;
+    const registrySignal = registry
+      ? capturePluginRegistryLifecycleSignal(registry, epoch, { scopedRuntime })
+      : undefined;
+    const resolveGatewayContext = context.resolveGatewayContext;
+    const progress = new SessionCatalogListLifetime(
+      () =>
+        (!resolveGatewayContext || resolveGatewayContext() === context) &&
+        (!registry ||
+          (registryAuthority?.() === true &&
+            registry.sessionCatalogs === catalogRegistrations.source)),
+      [
+        getGatewayRestartDrainSignal(),
+        context.requestEntryLifetime?.signal,
+        registrySignal,
+        signal,
+      ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
     );
-    respond(true, { catalogs: catalogList });
+    subscribe(progress);
+    const operation = (async () => {
+      const requestEntries = createSessionCatalogRequestEntrySnapshot({
+        cfg: config,
+        fallbackAgentId: resolvedAgent.agentId,
+      });
+      requestEntries.freeze();
+      const instances: SessionCatalogInstances = new Map();
+      const listNodes = createSessionCatalogRequestNodeSnapshot();
+      const catalogList = await Promise.all(
+        selected.map(async (provider): Promise<SessionCatalog> => {
+          const shareRoute = catalogRegistrations.shareRoutes.get(provider);
+          const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
+          const createSession = createTarget.ok
+            ? {
+                model: createTarget.target.model,
+                ...(provider.startTerminalSession ? { startTerminal: true as const } : {}),
+              }
+            : undefined;
+          const onHost = (host: SessionCatalog["hosts"][number]) => {
+            requestEntries.captureHostInstances(host, instances);
+            const catalog = catalogResult(provider, shareRoute, [host], undefined, createSession);
+            // Progressive frames are an optimization. The final RPC response remains
+            // authoritative when a slow client drops an intermediate host update.
+            progress.publish(catalog, instances);
+          };
+          try {
+            const hosts = await progress.runProvider(onHost, (lifetime) =>
+              listSessionCatalogProvider(provider, {
+                agentId: resolvedAgent.agentId,
+                allowProcessHomeFallback: allowHomeFallback,
+                search,
+                limitPerHost: request.limitPerHost,
+                hostIds: request.hostIds,
+                ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+                sessionEntries: requestEntries.sessionEntries,
+                listNodes,
+                ...lifetime,
+              }),
+            );
+            for (const host of hosts) {
+              requestEntries.captureHostInstances(host, instances);
+            }
+            return catalogResult(provider, shareRoute, hosts, undefined, createSession);
+          } catch (error) {
+            return catalogResult(provider, shareRoute, [], catalogError(error), createSession);
+          }
+        }),
+      );
+      return { catalogs: catalogList, instances };
+    })();
+    const entry: CatalogListCacheEntry = { progress, result: operation };
+    // Raw enumeration stays shareable for 3s within the caller's authority partition. Privacy
+    // and creator projection are refreshed per delivery, independently of metadata expiry.
+    cache.set(listKey, entry);
+    pruneMapToMaxSize(cache, SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES);
+    try {
+      const result = await operation;
+      if (cache.get(listKey) === entry) {
+        entry.expiresAt = Date.now() + SESSION_CATALOG_SHARE_WINDOW_MS;
+      }
+      respond(true, projectResult(result));
+    } catch (error) {
+      progress.retire(error);
+      if (cache.get(listKey) === entry) {
+        cache.delete(listKey);
+      }
+      throw error;
+    } finally {
+      progress.finishListing();
+    }
   },
 
-  "sessions.catalog.read": async ({ params, respond }) => {
+  "sessions.catalog.read": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -253,8 +569,34 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeCatalogRequest({
+        access: "read",
+        request,
+        provider,
+        respond,
+        context,
+        client,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.read(providerRequest));
+      const page = await provider.read({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+      });
+      const profiles = new Map<string, SessionActorProfileIdentity | undefined>();
+      respond(true, {
+        ...page,
+        items: page.items.map((item) =>
+          item.sender?.identity.type === "profile"
+            ? Object.assign({}, item, {
+                sender: projectSessionParticipant(item.sender.identity, profiles),
+              })
+            : item,
+        ),
+      });
     } catch (error) {
       const details = catalogError(error);
       respond(
@@ -265,7 +607,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond, client }) => {
+  "sessions.catalog.continue": async ({
+    params,
+    respond,
+    client,
+    context,
+    sessionMutationCommitGuard,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -282,58 +630,45 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const provider = registration.provider;
-    if (!provider.continueSession) {
+    if (!provider.continueSession && !provider.copyToGatewaySession) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
       return;
     }
     try {
-      const { catalogId: _catalogId, ...providerRequest } = request;
-      // Fail closed for unscoped callers: providers gate high-authority
-      // continues (e.g. node-executing bindings) on these scopes.
-      const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-      const result = await provider.continueSession({ ...providerRequest, clientScopes });
-      if (result.conversationBinding) {
-        // operator.write on Continue is the approval boundary. Per-turn plugin and
-        // node command authorization still applies after this binding is installed.
-        await bindPluginSessionConversation({
-          pluginId: registration.pluginId,
-          pluginName: registration.pluginName,
-          pluginRoot: registration.rootDir?.trim() || registration.source,
-          sessionKey: result.sessionKey,
-          binding: result.conversationBinding,
-          afterBind: result.afterConversationBound,
-        });
-      }
-      // Adopted sessions are created under the resolved default store agent, so the
-      // key-derived agent matches the owning agent. Provider-authoritative agent
-      // identity (a `SessionCatalogContinueProviderResult.agentId`) is a follow-up
-      // that would let adapters adopt under non-default agents; see issue tracker.
-      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
-      if (result.upstream) {
-        // Links exist only for adoptions made on this version: pre-upgrade adopted
-        // sessions are transient linkage with no shipped contract, and re-continuing
-        // from the catalog establishes the link. No doctor backfill by design.
-        upsertSessionUpstreamLink({
-          sessionKey: result.sessionKey,
-          agentId,
-          catalogId: request.catalogId,
-          hostId: request.hostId,
-          threadId: request.threadId,
-          upstreamKind: result.upstream.kind,
-          upstreamRef: result.upstream.ref,
-          marker: result.upstream.marker,
-        });
-      }
-      recordSessionStateEvent({
-        sessionKey: result.sessionKey,
-        agentId,
-        kind: "adopted",
-        actorType: "human",
-        dedupeKey: `adopted:${result.sessionKey}`,
-        summary: `adopted from ${request.catalogId}`,
-        payload: { catalogId: request.catalogId, hostId: request.hostId },
+      const authorization = await authorizeCatalogRequest({
+        access: "mutate",
+        request,
+        provider,
+        respond,
+        context,
+        client,
       });
-      respond(true, { sessionKey: result.sessionKey });
+      if (!authorization) {
+        return;
+      }
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: context.getRuntimeConfig(),
+        client,
+        agentId: authorization.agentId,
+      });
+      if (creationError) {
+        respond(false, undefined, creationError);
+        return;
+      }
+      const continued = await continueAuthorizedSessionCatalog({
+        request,
+        registration,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+        client,
+        context,
+        commitGuard: sessionMutationCommitGuard,
+      });
+      if (!continued.ok) {
+        respond(false, undefined, continued.error);
+        return;
+      }
+      respond(true, { sessionKey: continued.sessionKey });
     } catch (error) {
       const details = catalogError(error);
       respond(
@@ -344,7 +679,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.archive": async ({ params, respond }) => {
+  "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
+
+  "sessions.catalog.archive": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -365,8 +702,32 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeCatalogRequest({
+        access: "mutate",
+        request,
+        provider,
+        respond,
+        context,
+        client,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.archive(providerRequest));
+      const result = await provider.archive({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+      });
+      const cache = catalogListsByConfig.get(context.getRuntimeConfig())?.entries;
+      if (cache) {
+        // Host publications can outlive the aggregate response and still contain the deleted row.
+        for (const entry of cache.values()) {
+          entry.progress.retire();
+        }
+        cache.clear();
+      }
+      respond(true, result);
     } catch (error) {
       const details = catalogError(error);
       respond(

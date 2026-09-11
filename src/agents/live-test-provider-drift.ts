@@ -10,10 +10,9 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
+} from "./failover/classify.js";
 import { isApiKeyRateLimitError } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
@@ -81,8 +80,7 @@ function isLiveBillingDrift(error: unknown): boolean {
 
 /** Returns whether an error is expected live rate-limit drift. */
 function isLiveRateLimitDrift(error: unknown): boolean {
-  const raw = liveProviderErrorText(error);
-  return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
+  return isApiKeyRateLimitError(liveProviderErrorText(error));
 }
 
 /** Returns whether an error is expected live timeout drift. */
@@ -115,6 +113,7 @@ function isLiveProviderUnavailableDrift(error: unknown): boolean {
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model") ||
+    msg.includes("upstream request failed: model is unavailable") ||
     (msg.includes("502") && msg.includes("internal server error"))
   );
 }

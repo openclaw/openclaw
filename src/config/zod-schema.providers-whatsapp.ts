@@ -6,7 +6,7 @@ import { resolveAccountEntry } from "../routing/account-lookup.js";
 import {
   ChannelSendReadReceiptsSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
 } from "./zod-schema.channel-messaging-common.js";
 import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
@@ -25,15 +25,6 @@ const WhatsAppDirectEntrySchema = z
 
 const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
-const WhatsAppAckReactionSchema = z
-  .object({
-    emoji: z.string().optional(),
-    direct: z.boolean().optional().default(true),
-    group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
-  })
-  .strict()
-  .optional();
-
 const WhatsAppPluginHooksSchema = z
   .object({
     messageReceived: z.boolean().optional(),
@@ -41,31 +32,25 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
-function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
-  return {
-    ...buildCommonChannelAccountShape({
-      useDefaults: params.useDefaults,
-      omit: ["name"],
-      allowFrom: z.array(z.string()).optional(),
-      groupAllowFrom: z.array(z.string()).optional(),
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-      mediaMaxMb: z.number().int().positive().optional(),
-    }),
-    sendReadReceipts: ChannelSendReadReceiptsSchema,
-    messagePrefix: z.string().optional(),
-    selfChatMode: z.boolean().optional(),
-    groups: WhatsAppGroupsSchema,
-    direct: WhatsAppDirectSchema,
-    ...buildChannelReactionShape({
-      reactionLevels: ["off", "ack", "minimal", "extensive"],
-      ackReaction: WhatsAppAckReactionSchema,
-    }),
-    debounceMs: params.useDefaults
-      ? z.number().int().nonnegative().optional().default(0)
-      : z.number().int().nonnegative().optional(),
-    pluginHooks: WhatsAppPluginHooksSchema,
-  };
-}
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["name"],
+  allowFrom: z.array(z.string()).optional(),
+  groupAllowFrom: z.array(z.string()).optional(),
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+});
+
+const WhatsAppCommonShape = {
+  ...accountShape,
+  sendReadReceipts: ChannelSendReadReceiptsSchema,
+  selfChatMode: z.boolean().optional(),
+  groups: WhatsAppGroupsSchema,
+  direct: WhatsAppDirectSchema,
+  ...buildChannelReactionShape({
+    reactionLevels: ["off", "ack", "minimal", "extensive"],
+  }),
+  pluginHooks: WhatsAppPluginHooksSchema,
+};
 
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
@@ -109,9 +94,9 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   });
 }
 
-const WhatsAppAccountObjectSchema = z
+const WhatsAppAccountSchema = z
   .object({
-    ...buildWhatsAppCommonShape({ useDefaults: false }),
+    ...WhatsAppCommonShape,
     name: z.string().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
@@ -119,11 +104,10 @@ const WhatsAppAccountObjectSchema = z
   })
   .strict();
 
-const WhatsAppAccountSchema = WhatsAppAccountObjectSchema;
-
-const WhatsAppConfigObjectSchema = z
+export const WhatsAppConfigSchema = z
   .object({
-    ...buildWhatsAppCommonShape({ useDefaults: true }),
+    ...WhatsAppCommonShape,
+    ...rootPolicyShape,
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     defaultAccount: z.string().optional(),
     mediaMaxMb: z.number().int().positive().optional().default(50),
@@ -187,5 +171,3 @@ const WhatsAppConfigObjectSchema = z
       });
     }
   });
-
-export const WhatsAppConfigSchema = WhatsAppConfigObjectSchema;

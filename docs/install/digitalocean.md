@@ -44,12 +44,12 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     apt update && apt upgrade -y
 
-    # Install Node.js 24
+    # Install Node.js 24 LTS
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    # Install OpenClaw; run onboarding later as the non-root owner.
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 
     # Create the non-root user that will own OpenClaw state and services.
     adduser openclaw
@@ -69,21 +69,21 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
     openclaw onboard --install-daemon
     ```
 
-    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd user service).
+    The wizard walks you through model auth, channel setup, Gateway token generation, and daemon installation (systemd user service).
 
   </Step>
 
   <Step title="Add swap (recommended for 1 GB Droplets)">
     ```bash
-    fallocate -l 2G /swapfile
-    chmod 600 /swapfile
-    mkswap /swapfile
-    swapon /swapfile
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     ```
   </Step>
 
-  <Step title="Verify the gateway">
+  <Step title="Verify the Gateway">
     ```bash
     openclaw status
     systemctl --user status openclaw-gateway.service
@@ -92,7 +92,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
   </Step>
 
   <Step title="Access the Control UI">
-    The gateway binds to loopback by default. Pick one of these options.
+    The Gateway binds to loopback by default. Pick one of these options.
 
     **Option A: SSH tunnel (simplest)**
 
@@ -114,16 +114,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     Then open `https://<magicdns>/` from any device on your tailnet.
 
-    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints still follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
-
-    **Option C: Tailnet bind (no Serve)**
-
-    ```bash
-    openclaw config set gateway.bind tailnet
-    openclaw gateway restart
-    ```
-
-    Then open `http://<tailscale-ip>:18789` (token required).
+    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the Gateway host itself is trusted. HTTP API endpoints still follow the Gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
   </Step>
 </Steps>
@@ -132,16 +123,20 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, per-agent `auth-profiles.json`, and session data.
+- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, shared and per-agent SQLite auth stores, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
 These survive Droplet reboots. To take a portable snapshot:
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is portable across hosts.
+DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is
+portable across hosts. Restore verifies and extracts into a fresh staging
+directory; activation is a separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## 1 GB RAM tips
 

@@ -99,10 +99,10 @@ export {
   buildModelsProviderData,
   formatModelsAvailableHeader,
   resolveModelsCommandReply,
-} from "../auto-reply/reply/commands-models.js";
+} from "./models-provider-runtime.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
-export type { StoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
+export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
+export type { StoredModelOverride } from "../sessions/stored-model-overrides.js";
 
 /**
  * Inputs for legacy sender command authorization.
@@ -264,7 +264,7 @@ export async function resolveSenderCommandAuthorization(
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,

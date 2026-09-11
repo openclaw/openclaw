@@ -79,6 +79,9 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
       : undefined,
   queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+}));
+
+vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
 }));
@@ -88,7 +91,6 @@ const providerUsageMocks = vi.hoisted(() => ({
     updatedAt: 0,
     providers: [],
   }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
@@ -120,7 +122,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
+  readPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -129,22 +131,24 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
 }));
 
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.readPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
@@ -173,7 +177,7 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
 }));
 
 const installModelFallbackMock = () =>
-  vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
+  vi.doMock("../../../src/agents/model-fallback-runner.js", () => modelFallbackMocks);
 
 installModelFallbackMock();
 
@@ -305,12 +309,19 @@ export function makeCfg(home: string): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-7" },
+        models: {
+          "anthropic/claude-haiku-4-5-20251001": {},
+          "anthropic/claude-opus-4-7": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
+      list: [{ id: "main", default: true }],
     },
     channels: {
       whatsapp: {
@@ -327,12 +338,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -351,7 +362,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -385,7 +396,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
 }) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();

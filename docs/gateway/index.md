@@ -69,7 +69,7 @@ Gateway config reload watches the active config file path (resolved from profile
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, [`/tools/invoke`](/gateway/tools-invoke-http-api))
   - Plugin HTTP routes, such as optional `/api/v1/admin/rpc`
   - Control UI and hooks
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
@@ -113,9 +113,9 @@ Gateway startup uses the same effective port and bind when it seeds local Contro
 | `gateway.reload.mode` | Behavior                                   |
 | --------------------- | ------------------------------------------ |
 | `off`                 | No config reload                           |
-| `hot`                 | Apply only hot-safe changes                |
-| `restart`             | Restart on reload-required changes         |
 | `hybrid` (default)    | Hot-apply when safe, restart when required |
+
+The earlier `hot` and `restart` modes were retired in `v2026.7.2-beta.4`, stable from `v2026.8.1`. [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`.
 
 ## Operator command set
 
@@ -187,6 +187,12 @@ See: [Remote Gateway](/gateway/remote), [Authentication](/gateway/authentication
 
 ## Supervision and service lifecycle
 
+Native service-control commands receive only the operating-system environment
+needed for executable lookup, account identity, locale, and service-manager
+routing. They do not inherit application credentials or arbitrary shell
+variables. The Gateway payload and its installed service definition retain
+their separately configured environments.
+
 Use supervised runs for production-like reliability.
 
 <Tabs>
@@ -204,6 +210,19 @@ Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop
 On macOS, `gateway stop` uses `launchctl bootout` by default. This removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
+
+### Existing system LaunchDaemons
+
+OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.
+
+The ownership check reads `launchctl print system/<label>` and also checks installed plists under `/Library/LaunchDaemons`. It fails closed when system ownership cannot be verified, and `--force` does not bypass it. `openclaw gateway status` reports a loaded same-label system job; add `--deep` to scan installed system service files.
+
+Choose one lifecycle owner before retrying:
+
+- To keep the custom system LaunchDaemon, remove any competing user LaunchAgent and set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when running Doctor so it remains diagnostic-only for service lifecycle.
+- To return to the supported user LaunchAgent, unload the system job with `sudo launchctl bootout system/<label>`, remove or relocate its actual plist, sign in to the macOS desktop as the target user, then run `openclaw gateway install`.
+
+For the default profile, `<label>` is `ai.openclaw.gateway`. Named profiles use `ai.openclaw.<profile>`.
 
   </Tab>
 
@@ -238,15 +257,17 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=default.target
 ```
+
+`TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
   </Tab>
 
@@ -270,21 +291,41 @@ that points at `gateway.cmd` inside the state directory.
 
 Use a system unit for multi-user/always-on hosts.
 
+Start with the user-unit example, install it under
+`/etc/systemd/system/openclaw-gateway[-<profile>].service`, adjust
+`ExecStart=` if your `openclaw` binary lives elsewhere, and add `User=` to
+its `[Service]` section:
+
+```ini
+[Service]
+User=<user>
+```
+
+Replace `<user>` with the non-root account that owns the OpenClaw state and
+configuration. A system unit without `User=` runs as root. Running the Gateway
+and its agent commands as root is unsafe and unsupported for this setup.
+
+When `Group=` is omitted, systemd uses the selected account's primary group.
+By default, `User=` also supplies that account's `HOME`, which OpenClaw uses
+for normal state and configuration lookup. For intentional custom locations,
+set `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` in the unit environment.
+Do not copy configuration into root's home as a workaround. On a single-user
+host, the user unit above with `loginctl enable-linger` is the supported way
+to keep the Gateway running without a login session.
+
+Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
+
+After writing the unit, reload systemd and enable it:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now openclaw-gateway[-<profile>].service
 ```
 
-Use the same service body as the user unit, but install it under
-`/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
-`ExecStart=` if your `openclaw` binary lives elsewhere.
-
-Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
-
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression.
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 
@@ -355,9 +396,10 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 
 - [Configuration](/gateway/configuration)
 - [Gateway troubleshooting](/gateway/troubleshooting)
-- [Background process](/gateway/background-process)
+- [Background exec and process tool](/gateway/background-process) — the agent-facing exec and process tool, not a Gateway service control
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)
 - [Remote access](/gateway/remote)
 - [Secrets management](/gateway/secrets)
+- [CLI backends](/gateway/cli-backends) — running an external CLI agent as a Gateway backend

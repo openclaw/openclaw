@@ -4,11 +4,10 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   buildChannelAllowBotsSchema,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
 } from "./zod-schema.channel-messaging-common.js";
 import {
   ChannelDeliveryStreamingConfigSchema,
-  DmPolicySchema,
   SecretRefSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -31,13 +30,14 @@ const GoogleChatGroupSchema = z
   })
   .strict();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["mentionPatterns"],
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+});
+
 const GoogleChatAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      groupPolicyDefault: true,
-      omit: ["mentionPatterns"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
     allowBots: buildChannelAllowBotsSchema(),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
@@ -47,7 +47,6 @@ const GoogleChatAccountSchemaBase = z
       .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
       .optional()
       .register(sensitive),
-    serviceAccountRef: SecretRefSchema.optional().register(sensitive),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),
@@ -61,7 +60,7 @@ const GoogleChatAccountSchemaBase = z
   .strict();
 
 export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  ...rootPolicyShape,
   accounts: z.record(z.string(), GoogleChatAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

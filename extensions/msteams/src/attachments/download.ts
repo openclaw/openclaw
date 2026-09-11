@@ -1,4 +1,5 @@
 // Msteams plugin module implements download behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,14 +11,15 @@ import {
   withMSTeamsRequestDeadline,
 } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { resolveMSTeamsAdvertisedMedia } from "./html.js";
+import { resolveUnrepresentedHtmlAttachmentIds } from "./html.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
-  extractInlineImageCandidates,
+  extractInlineImageReferences,
   isAdvertisedFileAttachment,
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
@@ -47,8 +49,7 @@ type DownloadCandidate =
   | {
       kind: "data";
       mediaKind: "image";
-      data: Buffer;
-      contentType?: string;
+      src: string;
       sourceId?: string;
     }
   | { kind: "unavailable"; mediaKind: MSTeamsInboundMedia["kind"]; sourceId?: string };
@@ -130,8 +131,72 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+function canonicalizeInlineBase64Payload(value: string): string | undefined {
+  let cleaned = "";
+  let padding = 0;
+  let sawPadding = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x20) {
+      continue;
+    }
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return undefined;
+      }
+      sawPadding = true;
+      cleaned += "=";
+      continue;
+    }
+    const isDataChar =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f;
+    if (sawPadding || !isDataChar) {
+      return undefined;
+    }
+    cleaned += value[index];
+  }
+  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
+}
+
+function decodeInlineDataImage(
+  src: string,
+  maxBytes: number,
+  totalBytes: number,
+): { data: Buffer; contentType: string; estimatedBytes: number } | null {
+  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
+  if (!match) {
+    return null;
+  }
+  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
+  const isBase64 = Boolean(match[2]);
+  if (!isBase64) {
+    return null;
+  }
+  const payload = match[3] ?? "";
+  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+  if (!canonicalPayload) {
+    return null;
+  }
+
+  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
+  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
+  if (
+    estimatedBytes <= 0 ||
+    (typeof maxBytes === "number" &&
+      (estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes))
+  ) {
+    return null;
+  }
+  try {
+    return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
+  } catch {
+    return null;
+  }
 }
 
 async function resolveInlineDataImageMime(inline: {
@@ -178,8 +243,7 @@ async function fetchWithAuthFallback(params: {
   if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
-  await firstAttempt.body?.cancel();
-
+  let fallbackAttempt = firstAttempt;
   const scopes = scopeCandidatesForUrl(params.url);
   const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
@@ -203,25 +267,18 @@ async function fetchWithAuthFallback(params: {
         resolveFn: params.resolveFn,
         timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
-      if (authAttempt.ok) {
-        return authAttempt;
-      }
-      if (isRedirectStatus(authAttempt.status)) {
+      await fallbackAttempt.body?.cancel().catch(() => undefined);
+      if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
         // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;
       }
-      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
-        // Preserve scope fallback semantics for non-auth failures.
-        await authAttempt.body?.cancel();
-        continue;
-      }
-      await authAttempt.body?.cancel();
+      fallbackAttempt = authAttempt;
     } catch {
       // Try the next scope.
     }
   }
 
-  return firstAttempt;
+  return fallbackAttempt;
 }
 
 /**
@@ -275,17 +332,14 @@ export async function downloadMSTeamsAttachments(params: {
         }
       );
     });
+  const maxInlineBytes = params.maxBytes;
   candidates.push(
-    ...extractInlineImageCandidates(list, {
-      maxInlineBytes: params.maxBytes,
-      maxInlineTotalBytes: params.maxBytes,
-    }).map((candidate): DownloadCandidate => {
+    ...extractInlineImageReferences(list).map((candidate): DownloadCandidate => {
       if (candidate.kind === "data") {
         return {
           kind: "data",
           mediaKind: "image",
-          data: candidate.data,
-          contentType: candidate.contentType,
+          src: candidate.src,
           sourceId: candidate.sourceId,
         };
       }
@@ -302,15 +356,11 @@ export async function downloadMSTeamsAttachments(params: {
       return { kind: "unavailable", mediaKind: "image", sourceId: candidate.sourceId };
     }),
   );
-  const advertisedMedia = resolveMSTeamsAdvertisedMedia(list, {
-    maxInlineBytes: params.maxBytes,
-    maxInlineTotalBytes: params.maxBytes,
-  });
-  for (const advertised of advertisedMedia.slice(candidates.length)) {
+  for (const sourceId of resolveUnrepresentedHtmlAttachmentIds(list)) {
     candidates.push({
       kind: "unavailable",
-      mediaKind: advertised.kind,
-      sourceId: advertised.sourceId,
+      mediaKind: "document",
+      sourceId,
     });
   }
   if (candidates.length === 0) {
@@ -318,20 +368,28 @@ export async function downloadMSTeamsAttachments(params: {
   }
 
   const out: MSTeamsInboundMedia[] = [];
+  let totalInlineBytes = 0;
   for (const candidate of candidates) {
     if (candidate.kind === "unavailable") {
       out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
       continue;
     }
     if (candidate.kind === "data") {
+      const decoded = decodeInlineDataImage(candidate.src, maxInlineBytes, totalInlineBytes);
+      if (!decoded) {
+        out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
+        continue;
+      }
+      // Accepted bytes still consume the message budget when MIME detection or saving fails.
+      totalInlineBytes += decoded.estimatedBytes;
       try {
-        const contentType = await resolveInlineDataImageMime(candidate);
+        const contentType = await resolveInlineDataImageMime(decoded);
         if (!contentType) {
           out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
           continue;
         }
         const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-          candidate.data,
+          decoded.data,
           contentType,
           "inbound",
           params.maxBytes,
@@ -345,7 +403,7 @@ export async function downloadMSTeamsAttachments(params: {
       } catch (err) {
         out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
         params.logger?.warn?.("msteams inline attachment decode failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: coerceErrorMessage(err),
         });
       }
       continue;
@@ -381,7 +439,7 @@ export async function downloadMSTeamsAttachments(params: {
       out.push(withSourceId(media, candidate.sourceId));
     } catch (err) {
       out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = coerceErrorMessage(err);
       params.logger?.warn?.(
         `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,
       );

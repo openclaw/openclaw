@@ -1,4 +1,4 @@
-/** Publishes gateway/canvas/SSH records through one ciao-owned advertisement lifecycle. */
+/** Publishes gateway/SSH records through one ciao-owned advertisement lifecycle. */
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
@@ -19,7 +19,6 @@ type GatewayBonjourAdvertiseOpts = {
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable?: boolean;
-  canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
   minimal?: boolean;
@@ -27,7 +26,6 @@ type GatewayBonjourAdvertiseOpts = {
 
 type BonjourServices = Array<{ label: string; svc: CiaoService }>;
 
-type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -39,6 +37,13 @@ type BonjourAdvertiserDeps = {
 
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
+
+// Ciao already treats EADDRNOTAVAIL / EHOSTDOWN / ENETUNREACH / EHOSTUNREACH /
+// EPERM / EINVAL as transient socket errors and keeps the socket valid, but
+// ENODEV (device gone — a short-lived Docker bridge removed between interface
+// polls) is not in that set, so ciao logs a full warning stack trace per send.
+const CIAO_MDNS_SOCKET_ERROR_FRAGMENT = "Encountered MDNS socket error on socket";
+const CIAO_ENODEV_SOCKET_ERROR_FRAGMENT = "send ENODEV";
 
 const defaultLogger = {
   info: (_msg: string) => {},
@@ -169,18 +174,38 @@ function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
   );
 }
 
+function shouldSuppressCiaoConsoleWarn(args: unknown[]): boolean {
+  return args.some(
+    (arg) =>
+      typeof arg === "string" &&
+      arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
+      arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
+  );
+}
+
 function installCiaoConsoleNoiseFilter(): () => void {
-  const previousConsoleLog = console.log as ConsoleLogFn;
-  const wrapper = ((...args: unknown[]) => {
+  const previousConsoleLog = console.log;
+  const previousConsoleWarn = console.warn;
+  const logWrapper = (...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleLog(args)) {
       return;
     }
     previousConsoleLog(...args);
-  }) as ConsoleLogFn;
-  console.log = wrapper;
+  };
+  const warnWrapper = (...args: unknown[]) => {
+    if (shouldSuppressCiaoConsoleWarn(args)) {
+      return;
+    }
+    previousConsoleWarn(...args);
+  };
+  console.log = logWrapper;
+  console.warn = warnWrapper;
   return () => {
-    if (console.log === wrapper) {
+    if (console.log === logWrapper) {
       console.log = previousConsoleLog;
+    }
+    if (console.warn === warnWrapper) {
+      console.warn = previousConsoleWarn;
     }
   };
 }
@@ -264,9 +289,6 @@ export async function startGatewayBonjourAdvertiser(
     }
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
-    }
-    if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
-      txtBase.canvasPort = String(opts.canvasPort);
     }
     if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();

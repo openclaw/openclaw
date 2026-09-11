@@ -1,9 +1,11 @@
 import Foundation
+import OpenClawProtocol
 
 /// Pure grouping/filtering shared by the Apple sessions sidebars. Kept UI-free
 /// so pin/search/ordering rules stay unit-testable across macOS and iOS.
 public enum ChatSessionSidebarModel {
     public struct Badges: Equatable, Sendable {
+        public let queuedCount: Int
         public let runningCount: Int
         public let failedCount: Int
         public let hasUnread: Bool
@@ -158,12 +160,15 @@ public enum ChatSessionSidebarModel {
 
     private static func node(session: OpenClawChatSessionEntry, children: [Node]) -> Node {
         let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isRunning = session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running"
+        let isQueued = status == "queued"
+        let isRunning = !isQueued &&
+            (session.hasActiveRun == true || session.hasActiveSubagentRun == true || status == "running")
         let hasFailed = status == "failed" || status == "timeout"
         return Node(
             session: session,
             children: children,
             badges: Badges(
+                queuedCount: (isQueued ? 1 : 0) + children.reduce(0) { $0 + $1.badges.queuedCount },
                 runningCount: (isRunning ? 1 : 0) + children.reduce(0) { $0 + $1.badges.runningCount },
                 failedCount: (hasFailed ? 1 : 0) + children.reduce(0) { $0 + $1.badges.failedCount },
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
@@ -175,12 +180,17 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        for candidate in [session.displayName, session.label] {
-            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !trimmed.isEmpty
-            {
-                return trimmed
-            }
+        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generated = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let label, !label.isEmpty {
+            return label
+        }
+        if let generated, !generated.isEmpty {
+            return generated
+        }
+        if let autoLabel, !autoLabel.isEmpty {
+            return autoLabel
         }
         return self.displayName(forKey: session.key)
     }
@@ -197,6 +207,291 @@ public enum ChatSessionSidebarModel {
         return "\(repoName) \u{2387} \(shortBranch)"
     }
 
+    /// Resolves the single session-list subtitle slot with the same ownership
+    /// order as the web sidebar. Gateway-supplied text stays verbatim.
+    public static func subtitle(
+        for session: OpenClawChatSessionEntry,
+        workSubtitle: String?,
+        now: Double = Date().timeIntervalSince1970 * 1000) -> String?
+    {
+        let agentStatus = self.activeAgentStatus(session.agentStatus, now: now)
+        let declaredAttention = agentStatus?.attention == nil ? nil : agentStatus?.note
+        let failedAttention = self.unreadFailureReason(for: session)
+        let statusNote = agentStatus?.note
+        let queued = self.normalized(session.status)?.lowercased() == "queued"
+            ? String(localized: "Waiting for a concurrency slot")
+            : nil
+        let observer = self.visibleObserverDigest(for: session)?.headline
+        return declaredAttention ?? failedAttention ?? statusNote ?? queued ?? observer ?? workSubtitle
+    }
+
+    /// Live observer events are useful only after a server row names the
+    /// active run. This prevents a late event from a prior run taking over a
+    /// replacement run that reused the same session key.
+    public static func applying(
+        observerDigest digest: SessionObserverDigest,
+        to sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String? = nil) -> [OpenClawChatSessionEntry]
+    {
+        let scopedSessions = self.clearingForeignGlobalObserverDigest(
+            in: sessions,
+            activeAgentId: activeAgentId)
+        if digest.sessionkey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
+            let digestAgentId = self.normalized(digest.agentid)?.lowercased()
+            guard digestAgentId != nil,
+                  digestAgentId == self.normalized(activeAgentId)?.lowercased()
+            else { return scopedSessions }
+        }
+        guard let index = scopedSessions.firstIndex(where: { $0.key == digest.sessionkey }) else {
+            return scopedSessions
+        }
+        var session = scopedSessions[index]
+        let candidate = OpenClawChatSessionObserverDigest(digest)
+        let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
+        guard self.isRunning(session),
+              let runId = normalized(candidate.runId),
+              activeRunIds.contains(runId)
+        else { return scopedSessions }
+
+        if let previous = session.observerDigest,
+           previous.runId == candidate.runId,
+           !self.isNewer(candidate, than: previous)
+        {
+            return scopedSessions
+        }
+
+        session.observerDigest = candidate
+        var updated = scopedSessions
+        updated[index] = session
+        return updated
+    }
+
+    public static func reconcilingGlobalObserverDigestOwner(
+        in sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String?) -> [OpenClawChatSessionEntry]
+    {
+        self.reconcilingGlobalObserverDigestOwner(
+            in: sessions,
+            activeAgentId: activeAgentId,
+            adoptOwnerless: true)
+    }
+
+    public static func clearingForeignGlobalObserverDigest(
+        in sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String?) -> [OpenClawChatSessionEntry]
+    {
+        self.reconcilingGlobalObserverDigestOwner(
+            in: sessions,
+            activeAgentId: activeAgentId,
+            adoptOwnerless: false)
+    }
+
+    static func sessionMatchesActiveAgent(
+        sessionKey: String?,
+        agentId: String?,
+        activeAgentId: String?) -> Bool
+    {
+        guard self.normalized(sessionKey)?.lowercased() == "global" else { return true }
+        guard let owner = self.normalized(agentId)?.lowercased() else { return false }
+        return owner == self.normalized(activeAgentId)?.lowercased()
+    }
+
+    private static func reconcilingGlobalObserverDigestOwner(
+        in sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String?,
+        adoptOwnerless: Bool) -> [OpenClawChatSessionEntry]
+    {
+        // Missing ownership is transient disconnect state, not an agent switch.
+        // Preserve the last verified offline projection until routing identity returns.
+        guard let selectedAgentId = self.normalized(activeAgentId)?.lowercased(),
+              let index = sessions.firstIndex(where: { $0.key == "global" }),
+              let digest = sessions[index].observerDigest
+        else { return sessions }
+        let digestAgentId = self.normalized(digest.agentId)?.lowercased()
+        guard digestAgentId != selectedAgentId else { return sessions }
+        var updated = sessions
+        updated[index].observerDigest = if digestAgentId == nil, adoptOwnerless {
+            OpenClawChatSessionObserverDigest(
+                agentId: selectedAgentId,
+                runId: digest.runId,
+                revision: digest.revision,
+                updatedAt: digest.updatedAt,
+                headline: digest.headline,
+                health: digest.health)
+        } else {
+            nil
+        }
+        return updated
+    }
+
+    private static func observerProjection(
+        for change: OpenClawChatSessionsChangedEvent,
+        activeAgentId: String?) -> (digest: OpenClawChatSessionObserverDigest?, present: Bool)?
+    {
+        let digest = change.observerDigest
+        let present = change.observerDigestPresent
+        guard self.normalized(change.sessionKey)?.lowercased() == "global" else {
+            return (digest, present)
+        }
+        guard self.sessionMatchesActiveAgent(
+            sessionKey: change.sessionKey,
+            agentId: change.agentId,
+            activeAgentId: activeAgentId),
+            let owner = self.normalized(change.agentId)?.lowercased()
+        else { return nil }
+        guard let digest else { return (nil, present) }
+        let digestOwner = self.normalized(digest.agentId)?.lowercased()
+        if digestOwner == nil {
+            return (
+                OpenClawChatSessionObserverDigest(
+                    agentId: owner,
+                    runId: digest.runId,
+                    revision: digest.revision,
+                    updatedAt: digest.updatedAt,
+                    headline: digest.headline,
+                    health: digest.health),
+                present)
+        }
+        return digestOwner == owner ? (digest, present) : (nil, false)
+    }
+
+    /// Session snapshots own rollover and clearing. A projected digest may
+    /// advance a live one, while an active-run change immediately retires any
+    /// digest that no longer belongs to a server-reported run.
+    public static func applying(
+        sessionChange change: OpenClawChatSessionsChangedEvent,
+        to sessions: [OpenClawChatSessionEntry],
+        activeAgentId: String? = nil) -> [OpenClawChatSessionEntry]?
+    {
+        guard let key = change.sessionKey else { return sessions }
+        guard let index = sessions.firstIndex(where: { $0.key == key }) else { return nil }
+        guard let projection = self.observerProjection(for: change, activeAgentId: activeAgentId)
+        else { return sessions }
+        let projectedDigest = projection.digest
+        let observerDigestPresent = projection.present
+
+        var session = sessions[index]
+        if let updatedAt = change.updatedAt {
+            session.updatedAt = updatedAt
+        }
+        if let lastReadAt = change.lastReadAt {
+            session.lastReadAt = lastReadAt
+        }
+        if change.colorPresent {
+            session.color = change.color
+        }
+        if change.agentStatusPresent {
+            session.agentStatus = change.agentStatus
+        }
+        if change.statusPresent {
+            session.status = change.status
+        }
+        if change.lastRunErrorPresent {
+            session.lastRunError = change.lastRunError
+        }
+        if let hasActiveRun = change.hasActiveRun {
+            session.hasActiveRun = hasActiveRun
+        }
+        if change.activeRunIdsPresent {
+            session.activeRunIds = change.activeRunIds
+        }
+        if let startedAt = change.startedAt {
+            session.startedAt = startedAt
+        }
+        if let endedAt = change.endedAt {
+            session.endedAt = endedAt
+        }
+
+        let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
+        if self.isRunning(session),
+           self.normalized(session.observerDigest?.runId).map(activeRunIds.contains) != true
+        {
+            session.observerDigest = nil
+        }
+        if observerDigestPresent {
+            if let projected = projectedDigest {
+                let matchesActiveRun = !self.isRunning(session) ||
+                    self.normalized(projected.runId).map(activeRunIds.contains) == true
+                if matchesActiveRun {
+                    if let previous = session.observerDigest,
+                       previous.runId == projected.runId
+                    {
+                        if self.isNewer(projected, than: previous) {
+                            session.observerDigest = projected
+                        }
+                    } else {
+                        session.observerDigest = projected
+                    }
+                }
+            } else {
+                session.observerDigest = nil
+            }
+        }
+
+        var updated = sessions
+        updated[index] = session
+        return updated
+    }
+
+    private static func visibleObserverDigest(
+        for session: OpenClawChatSessionEntry) -> OpenClawChatSessionObserverDigest?
+    {
+        guard let digest = session.observerDigest else { return nil }
+        if self.isRunning(session) {
+            let activeRunIds = self.normalizedActiveRunIds(session.activeRunIds)
+            guard let runId = normalized(digest.runId),
+                  activeRunIds.contains(runId)
+            else { return nil }
+            return digest
+        }
+        let health = digest.health.lowercased()
+        guard health == "done" || health == "failed",
+              (session.lastReadAt ?? 0) < digest.updatedAt
+        else { return nil }
+        return digest
+    }
+
+    private static func activeAgentStatus(
+        _ status: OpenClawChatSessionAgentStatus?,
+        now: Double) -> OpenClawChatSessionAgentStatus?
+    {
+        guard let status,
+              status.expiresAt > now,
+              !status.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return status
+    }
+
+    private static func unreadFailureReason(for session: OpenClawChatSessionEntry) -> String? {
+        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard status == "failed" || status == "timeout" else { return nil }
+        let failureAt = session.endedAt ?? session.updatedAt ?? 0
+        guard (session.lastReadAt ?? 0) < failureAt else { return nil }
+        return self.normalized(session.lastRunError)
+    }
+
+    private static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
+        session.hasActiveRun == true ||
+            session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
+    }
+
+    private static func isNewer(
+        _ candidate: OpenClawChatSessionObserverDigest,
+        than previous: OpenClawChatSessionObserverDigest) -> Bool
+    {
+        candidate.revision > previous.revision ||
+            (candidate.revision == previous.revision && candidate.updatedAt > previous.updatedAt)
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    private static func normalizedActiveRunIds(_ runIds: [String]?) -> Set<String> {
+        Set((runIds ?? []).compactMap(self.normalized))
+    }
+
     public static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
         let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedMain = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -208,15 +503,24 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String) -> Bool
     {
         let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
+        return self.normalized(session.sessionId) != nil &&
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
             session.hasActiveRun != true &&
             session.hasActiveSubagentRun != true &&
             status != "running"
     }
 
-    static func isSessionInActiveAgentScope(key: String, activeAgentID: String?) -> Bool {
+    public static func isSessionInActiveAgentScope(
+        key: String,
+        agentID: String? = nil,
+        activeAgentID: String?) -> Bool
+    {
         let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         guard !normalizedAgent.isEmpty else { return true }
+        // Gateway row ownership outranks ambiguous bare/global keys. Missing
+        // metadata is a shipped legacy-cache state and keeps key-only behavior.
+        let rowAgent = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let rowAgent, !rowAgent.isEmpty, rowAgent != normalizedAgent { return false }
         let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].lowercased() == "agent" else { return true }
         return parts[1].lowercased() == normalizedAgent
@@ -320,38 +624,12 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(self.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
         }
-        entries.sort { (($0.updatedAt ?? $0.lastActivityAt) ?? 0) > (($1.updatedAt ?? $1.lastActivityAt) ?? 0) }
-
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return entries }
-        return entries.filter { entry in
-            self.displayName(for: entry).lowercased().contains(needle) ||
-                entry.key.lowercased().contains(needle)
-        }
-    }
-
-    private static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
+        // Gateway, cached lists, iOS, and macOS must share the same pin
+        // chronology, stable key ties, and searchable session fields.
+        return OpenClawChatSessionListOrganizer.filter(
+            OpenClawChatSessionListOrganizer.organize(entries),
+            search: query)
     }
 }

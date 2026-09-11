@@ -1,4 +1,3 @@
-// Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -17,17 +16,14 @@ import {
   type OutboundCallOptions,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
-import type { CallManagerContext } from "./context.js";
+import type { CallEndResult, CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
-import { addTranscriptEntry, transitionState } from "./state.js";
+import { updateCall } from "./mutations.js";
+import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
-import {
-  clearTranscriptWaiter,
-  ensureMaxDurationTimerForLiveCall,
-  waitForFinalTranscript,
-} from "./timers.js";
+import { clearTranscriptWaiter, startMaxDurationTimer, waitForFinalTranscript } from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
@@ -40,6 +36,9 @@ type InitiateContext = Pick<
   | "storePath"
   | "webhookUrl"
   | "streamSessionIssuer"
+  | "mutationQueue"
+  | "pendingCallAdmissions"
+  | "isStopping"
 >;
 
 type SpeakContext = Pick<
@@ -51,6 +50,10 @@ type SpeakContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
+  | "mutationQueue"
+  | "trackCallWork"
+  | "isStopping"
 >;
 
 type ConversationContext = Pick<
@@ -64,6 +67,11 @@ type ConversationContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "initialMessageInFlight"
+  | "notifyHangupTimers"
+  | "endCallOperations"
+  | "mutationQueue"
+  | "trackCallWork"
+  | "isStopping"
 >;
 
 type EndCallContext = Pick<
@@ -74,6 +82,8 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
+  | "mutationQueue"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
@@ -127,6 +137,10 @@ function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): Connec
   };
 }
 
+function isCurrentCall(ctx: Pick<CallManagerContext, "activeCalls">, call: CallRecord): boolean {
+  return ctx.activeCalls.get(call.callId) === call && !TerminalStates.has(call.state);
+}
+
 function validateDtmfDigits(digits: string): string | null {
   return /^[0-9*#wWpP,]+$/.test(digits)
     ? null
@@ -167,7 +181,7 @@ export async function initiateCall(
     return { callId: "", success: false, error: "Webhook URL not configured" };
   }
 
-  if (ctx.activeCalls.size >= ctx.config.maxConcurrentCalls) {
+  if (ctx.activeCalls.size + ctx.pendingCallAdmissions.size >= ctx.config.maxConcurrentCalls) {
     return {
       callId: "",
       success: false,
@@ -207,10 +221,21 @@ export async function initiateCall(
     },
   };
 
-  ctx.activeCalls.set(callId, callRecord);
-  persistCallRecord(ctx.storePath, callRecord);
+  ctx.pendingCallAdmissions.add(callId);
+  try {
+    await ctx.mutationQueue.enqueue("state", async () => {
+      await persistCallRecord(ctx.storePath, callRecord);
+      ctx.activeCalls.set(callId, callRecord);
+      ctx.pendingCallAdmissions.delete(callId);
+    });
+  } finally {
+    ctx.pendingCallAdmissions.delete(callId);
+  }
 
   try {
+    if (ctx.isStopping()) {
+      throw new Error("Voice Call manager is stopping");
+    }
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     let preConnectTwiml: string | undefined;
@@ -248,20 +273,30 @@ export async function initiateCall(
         : {}),
     });
 
-    callRecord.providerCallId = result.providerCallId;
-    ctx.providerCallIdMap.set(result.providerCallId, callId);
-    persistCallRecord(ctx.storePath, callRecord);
+    // A callback may establish the canonical ID or finalize the call while dialing awaits.
+    await ctx.mutationQueue.enqueue("state", async () => {
+      if (!isCurrentCall(ctx, callRecord) || callRecord.providerCallId) {
+        return;
+      }
+      const next = copyCallRecord(callRecord);
+      next.providerCallId = result.providerCallId;
+      await persistCallRecord(ctx.storePath, next);
+      Object.assign(callRecord, next);
+      ctx.providerCallIdMap.set(result.providerCallId, callId);
+    });
     console.log(
-      `[voice-call] Outbound call initiated: callId=${callId} providerCallId=${result.providerCallId} mode=${mode} preConnectDtmf=${preConnectTwiml ? "yes" : "no"} initialMessage=${initialMessage ? "yes" : "no"}`,
+      `[voice-call] Outbound call initiated: callId=${callId} providerCallId=${callRecord.providerCallId ?? result.providerCallId} mode=${mode} preConnectDtmf=${preConnectTwiml ? "yes" : "no"} initialMessage=${initialMessage ? "yes" : "no"}`,
     );
 
     return { callId, success: true };
   } catch (err) {
-    finalizeCall({
-      ctx,
-      call: callRecord,
-      endReason: "failed",
-    });
+    await ctx.mutationQueue.enqueue("state", () =>
+      finalizeCall({
+        ctx,
+        call: callRecord,
+        endReason: "failed",
+      }),
+    );
 
     return {
       callId,
@@ -273,6 +308,7 @@ export async function initiateCall(
 
 export type SpeakOptions = {
   listenAfterPlayback?: boolean;
+  isCurrent?: () => boolean;
 };
 
 export async function speak(
@@ -287,17 +323,41 @@ export async function speak(
   }
   const { call, providerCallId, provider } = connected;
 
+  let speakingCommitted = false;
   try {
-    ensureMaxDurationTimerForLiveCall({
+    let startTimer = false;
+    speakingCommitted = await updateCall(
       ctx,
       call,
-      liveAt: Date.now(),
-      onTimeout: async (id) => {
-        await endCall(ctx, id, { reason: "timeout" });
+      (next) => {
+        if (!next.answeredAt) {
+          next.answeredAt = Date.now();
+          startTimer = true;
+        }
+        transitionState(next, "speaking");
       },
-    });
-    transitionState(call, "speaking");
-    persistCallRecord(ctx.storePath, call);
+      options?.isCurrent,
+    );
+    if (options?.isCurrent) {
+      // Speech admitted during the write must finish its replay/turn checks before playback.
+      await ctx.mutationQueue.enqueue("state", async () => undefined);
+      if (!options.isCurrent()) {
+        throw new Error("Automatic reply superseded");
+      }
+    }
+    if (!speakingCommitted || !isCurrentCall(ctx, call)) {
+      return { success: false, error: "Call has ended" };
+    }
+    if (ctx.isStopping()) {
+      throw new Error("Voice Call manager is stopping");
+    }
+    if (startTimer) {
+      startMaxDurationTimer({
+        ctx,
+        callId,
+        onTimeout: (id) => endCall(ctx, id, { reason: "timeout" }),
+      });
+    }
 
     const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
     const voice = resolvePreferredTtsVoice(
@@ -306,20 +366,25 @@ export async function speak(
     const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
     await provider.playTts({
       callId,
-      providerCallId,
+      providerCallId: call.providerCallId ?? providerCallId,
       text,
       voice,
       ...playbackOptions,
     });
 
-    addTranscriptEntry(call, "bot", text);
-    persistCallRecord(ctx.storePath, call);
+    if (!(await updateCall(ctx, call, (next) => addTranscriptEntry(next, "bot", text)))) {
+      return { success: false, error: "Call has ended" };
+    }
 
     return { success: true };
   } catch (err) {
-    // A failed playback should not leave the call stuck in speaking state.
-    transitionState(call, "listening");
-    persistCallRecord(ctx.storePath, call);
+    if (speakingCommitted) {
+      await updateCall(ctx, call, (next) => {
+        if (next.state === "speaking") {
+          transitionState(next, "listening");
+        }
+      });
+    }
     return { success: false, error: formatErrorMessage(err) };
   }
 }
@@ -405,34 +470,70 @@ export async function speakInitialMessage(
     }
 
     // Clear only after successful playback so transient provider failures can retry.
-    if (call.metadata) {
-      delete call.metadata.initialMessage;
-      persistCallRecord(ctx.storePath, call);
+    if (
+      !(await updateCall(ctx, call, (next) => {
+        if (next.metadata?.initialMessage === initialMessage) {
+          delete next.metadata.initialMessage;
+        }
+      })) ||
+      !isCurrentCall(ctx, call)
+    ) {
+      return;
     }
 
+    if (ctx.isStopping()) {
+      throw new Error("Voice Call manager is stopping");
+    }
     if (mode === "notify") {
       const delaySec = ctx.config.outbound.notifyHangupDelaySec;
       const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
       console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(() => {
-        void (async () => {
-          const currentCall = ctx.activeCalls.get(call.callId);
-          if (currentCall && !TerminalStates.has(currentCall.state)) {
+      const previousTimer = ctx.notifyHangupTimers.get(call.callId);
+      if (previousTimer) {
+        clearTimeout(previousTimer);
+      }
+      const timer = setTimeout(() => {
+        if (ctx.notifyHangupTimers.get(call.callId) !== timer) {
+          return;
+        }
+        ctx.notifyHangupTimers.delete(call.callId);
+        const work = (async () => {
+          if (!ctx.isStopping() && isCurrentCall(ctx, call)) {
             console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-            await endCall(ctx, call.callId);
+            try {
+              const endResult = await endCall(ctx, call.callId);
+              if (!endResult.success) {
+                console.warn(
+                  `[voice-call] Notify mode failed to hang up call ${call.callId}: ${endResult.error ?? "unknown error"}`,
+                );
+              }
+            } catch (error) {
+              console.warn(
+                `[voice-call] Notify mode failed to hang up call ${call.callId}: ${formatErrorMessage(error)}`,
+              );
+            }
           }
         })();
+        ctx.trackCallWork(work);
       }, delayMs);
+      ctx.notifyHangupTimers.set(call.callId, timer);
     } else if (
       mode === "conversation" &&
       ctx.provider &&
       shouldStartListeningAfterInitialMessage(ctx)
     ) {
-      transitionState(call, "listening");
-      persistCallRecord(ctx.storePath, call);
+      if (
+        !(await updateCall(ctx, call, (next) => transitionState(next, "listening"))) ||
+        !isCurrentCall(ctx, call)
+      ) {
+        return;
+      }
+      if (ctx.isStopping()) {
+        throw new Error("Voice Call manager is stopping");
+      }
       await ctx.provider.startListening({
         callId: call.callId,
-        providerCallId,
+        providerCallId: call.providerCallId ?? providerCallId,
       });
     }
   } finally {
@@ -460,13 +561,33 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    await speak(ctx, callId, prompt);
+    const speakResult = await speak(ctx, callId, prompt);
+    if (!speakResult.success) {
+      return speakResult;
+    }
 
-    transitionState(call, "listening");
-    persistCallRecord(ctx.storePath, call);
+    if (
+      !(await updateCall(ctx, call, (next) => transitionState(next, "listening"))) ||
+      !isCurrentCall(ctx, call)
+    ) {
+      return { success: false, error: "Call has ended" };
+    }
 
+    if (ctx.isStopping()) {
+      throw new Error("Voice Call manager is stopping");
+    }
     const listenStartedAt = Date.now();
-    await provider.startListening({ callId, providerCallId, turnToken });
+    await provider.startListening({
+      callId,
+      providerCallId: call.providerCallId ?? providerCallId,
+      turnToken,
+    });
+    if (ctx.isStopping()) {
+      throw new Error("Voice Call manager is stopping");
+    }
+    if (!isCurrentCall(ctx, call)) {
+      return { success: false, error: "Call has ended" };
+    }
 
     const transcript = await waitForFinalTranscript(ctx, callId, turnToken);
     const transcriptReceivedAt = Date.now();
@@ -476,19 +597,21 @@ export async function continueCall(
 
     const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
     const lastTurnListenWaitMs = transcriptReceivedAt - listenStartedAt;
-    const turnCount =
-      call.metadata && typeof call.metadata.turnCount === "number"
-        ? call.metadata.turnCount + 1
-        : 1;
-
-    call.metadata = {
-      ...call.metadata,
-      turnCount,
-      lastTurnLatencyMs,
-      lastTurnListenWaitMs,
-      lastTurnCompletedAt: transcriptReceivedAt,
-    };
-    persistCallRecord(ctx.storePath, call);
+    if (
+      !(await updateCall(ctx, call, (next) => {
+        const turnCount =
+          typeof next.metadata?.turnCount === "number" ? next.metadata.turnCount + 1 : 1;
+        next.metadata = {
+          ...next.metadata,
+          turnCount,
+          lastTurnLatencyMs,
+          lastTurnListenWaitMs,
+          lastTurnCompletedAt: transcriptReceivedAt,
+        };
+      }))
+    ) {
+      return { success: false, error: "Call has ended" };
+    }
 
     console.log(
       "[voice-call] continueCall latency call=" +
@@ -508,36 +631,51 @@ export async function continueCall(
   }
 }
 
-export async function endCall(
+export function endCall(
   ctx: EndCallContext,
   callId: CallId,
   options?: { reason?: EndReason },
-): Promise<{ success: boolean; error?: string }> {
+): Promise<CallEndResult> {
+  const inFlight = ctx.endCallOperations.get(callId);
+  if (inFlight) {
+    return inFlight;
+  }
   const lookup = lookupConnectedCall(ctx, callId);
   if (lookup.kind === "error") {
-    return { success: false, error: lookup.error };
+    return Promise.resolve({ success: false, error: lookup.error });
   }
   if (lookup.kind === "ended") {
-    return { success: true };
+    return Promise.resolve({ success: true });
   }
   const { call, providerCallId, provider } = lookup;
   const reason = options?.reason ?? "hangup-bot";
 
-  try {
-    await provider.hangupCall({
-      callId,
-      providerCallId,
-      reason,
-    });
+  const operation = (async (): Promise<CallEndResult> => {
+    try {
+      await provider.hangupCall({
+        callId,
+        providerCallId,
+        reason,
+      });
 
-    finalizeCall({
-      ctx,
-      call,
-      endReason: reason,
-    });
+      await ctx.mutationQueue.enqueue("state", () =>
+        finalizeCall({
+          ctx,
+          call,
+          endReason: reason,
+        }),
+      );
 
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: formatErrorMessage(err) };
-  }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: formatErrorMessage(err) };
+    }
+  })();
+  ctx.endCallOperations.set(callId, operation);
+  void operation.then(() => {
+    if (ctx.endCallOperations.get(callId) === operation) {
+      ctx.endCallOperations.delete(callId);
+    }
+  });
+  return operation;
 }

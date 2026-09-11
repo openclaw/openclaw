@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
+import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -16,7 +18,7 @@ function rejectAfterSend(
 
 describe("custodian page nudges", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {
@@ -304,11 +306,11 @@ describe("custodian page nudges", () => {
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: true, reconnecting: false });
+    setGatewaySnapshot({ phase: "connected" });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     expect(request).toHaveBeenCalledOnce();
@@ -337,8 +339,7 @@ describe("custodian page nudges", () => {
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
     expect(request).toHaveBeenCalledTimes(2);
@@ -464,12 +465,20 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
-  it("sends a real message when an event nudge is clicked", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+  it("replaces greeting quick actions with a real message when an event nudge is clicked", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+        question: QUICK_ACTIONS_QUESTION,
+      })
+      .mockResolvedValue({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Inspecting the channel failure.",
+        action: "none",
+      });
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -724,26 +733,37 @@ describe("custodian page nudges", () => {
 
   it("ignores a stale question reply outcome after a same-owner reconnect", async () => {
     let resolveQuestion!: (value: { sessionId: string; reply: string; action: "none" }) => void;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Choose one.",
+    let chatCalls = 0;
+    const request = vi.fn((_method: string, params: { message?: string; sessionId?: string }) => {
+      if (params.message !== undefined) {
+        // The skip reply is in flight when the connection drops.
+        return new Promise((resolve) => {
+          resolveQuestion = resolve;
+        });
+      }
+      chatCalls += 1;
+      if (chatCalls === 1) {
+        return Promise.resolve({
+          sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+          reply: "Choose one.",
+          action: "none",
+          question: {
+            id: "access",
+            header: "Access",
+            question: "How should OpenClaw work?",
+            options: [{ label: "Full access" }, { label: "Ask first" }],
+            isOther: false,
+          },
+        });
+      }
+      // The unknown-outcome reply triggers a full rejoin; the Gateway answers
+      // with its authoritative current state (no live question).
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Welcome back.",
         action: "none",
-        question: {
-          id: "access",
-          header: "Access",
-          question: "How should OpenClaw work?",
-          options: [{ label: "Full access" }, { label: "Ask first" }],
-          isOther: false,
-        },
-      })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveQuestion = resolve;
-          }),
-      );
+      });
+    });
     const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -758,10 +778,11 @@ describe("custodian page nudges", () => {
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
-    setGatewaySnapshot({ connected: true, reconnecting: false });
-    await page.updateComplete;
+    setGatewaySnapshot({ phase: "connected" });
+    // The unknown outcome triggers a full rejoin instead of staying stale.
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     resolveQuestion({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
       reply: "Moving on.",
@@ -770,10 +791,12 @@ describe("custodian page nudges", () => {
 
     await Promise.resolve();
     await page.updateComplete;
+    // The stale outcome of the interrupted reply is ignored; the rejoin's
+    // authoritative state wins and the transcript never shows "Moving on.".
+    expect(page.textContent).not.toContain("Moving on.");
+    expect(page.textContent).toContain("Welcome back.");
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
-    expect(action.disabled).toBe(true);
-    action.click();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(action.disabled).toBe(false);
   });
 
   it("restores an event nudge after its request fails", async () => {
@@ -838,9 +861,9 @@ describe("custodian page nudges", () => {
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
-    setGatewaySnapshot({ connected: true, reconnecting: false });
+    setGatewaySnapshot({ phase: "connected" });
     await page.updateComplete;
     resolveNudge({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

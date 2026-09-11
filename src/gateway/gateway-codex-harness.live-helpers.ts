@@ -96,6 +96,7 @@ export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
   guardianProbe: boolean;
   imageProbe: boolean;
   mcpProbe: boolean;
+  multiSessionProbe: boolean;
   resumeStress: boolean;
   subagentProbe: boolean;
 }): boolean {
@@ -107,6 +108,7 @@ export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
     !params.guardianProbe &&
     !params.imageProbe &&
     !params.mcpProbe &&
+    !params.multiSessionProbe &&
     !params.resumeStress &&
     !params.explicitOptOut
   );
@@ -167,6 +169,10 @@ export function isExpectedNativeCommand(command: string, expectedCommand: string
   const wrappedCommand = extractShellWrapperInlineCommand(commandArgv);
   const wrappedArgv = wrappedCommand ? splitShellArgs(wrappedCommand) : null;
   return wrappedArgv ? shellArgvMatches(wrappedArgv, expectedArgv) : false;
+}
+
+export function buildCodexHarnessAppServerArgs(overrides: readonly string[]): string[] {
+  return ["app-server", "--listen", "stdio://", ...overrides.flatMap((value) => ["-c", value])];
 }
 
 export function buildCodexHarnessLargeOutputCommand(params: {

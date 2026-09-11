@@ -6,6 +6,7 @@ import {
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
+  getMcpAppViewLeaseForSession,
 } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -15,6 +16,7 @@ const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
   return {
     sessionId: "session-1",
+    sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
@@ -79,6 +81,43 @@ describe("MCP App UI resources", () => {
         result?.viewId ?? "",
         runtime(async () => ({ contents: [] })),
       ),
+    ).toBeUndefined();
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:main:main", "main"),
+    ).toMatchObject({
+      html: "<html>demo</html>",
+      runtime: sessionRuntime,
+      agentId: "main",
+    });
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main", "other"),
+    ).toBeUndefined();
+  });
+
+  it("isolates live views by agent when bare session keys collide", async () => {
+    const sessionRuntime = runtime(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>ops</html>",
+        },
+      ],
+    }));
+    sessionRuntime.sessionKey = "global";
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      agentId: "ops",
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "global", "ops")).toBeDefined();
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "global", "research"),
     ).toBeUndefined();
   });
 
@@ -155,7 +194,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("normalizes CSP metadata before retaining the view", async () => {
+  it("normalizes CSP before retaining the view", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {

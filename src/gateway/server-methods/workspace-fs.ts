@@ -3,19 +3,22 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 
-type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
+export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
+type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonicalPath: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
-async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
+export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
     return await fsSafeRoot(rootDir, {
       hardlinks: "reject",
@@ -29,10 +32,10 @@ async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undef
 }
 
 export async function statWorkspacePath(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
 ): Promise<WorkspacePathStat | undefined> {
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -44,10 +47,10 @@ export async function statWorkspacePath(
 }
 
 export async function listWorkspacePath(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
 ): Promise<WorkspaceDirEntry[] | undefined> {
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -86,12 +89,50 @@ export async function readWorkspaceFile(
   }
 }
 
+/** Reads only a bounded prefix after fs-safe opens and verifies the file identity. */
+export async function readWorkspaceFilePrefix(
+  rootDir: string,
+  browserPath: string,
+  maxBytes: number,
+): Promise<WorkspaceFilePrefixResult | undefined> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    return undefined;
+  }
+  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  try {
+    const opened = await workspaceRoot.open(browserPath, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    try {
+      const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
+      const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
+      return {
+        buffer: buffer.subarray(0, bytesRead),
+        canonicalPath: path
+          .relative(workspaceRoot.rootReal, opened.realPath)
+          .split(path.sep)
+          .join("/"),
+        stat: opened.stat,
+      };
+    } finally {
+      await opened.handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 export type WorkspaceFileUpdateResult =
   | { status: "updated"; canonicalPath: string; hash: string; stat: WorkspacePathStat }
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
 
-function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
   const result = workspaceFileUpdateQueue.then(update, update);
   workspaceFileUpdateQueue = result.then(
     () => undefined,
@@ -105,6 +146,7 @@ export async function updateWorkspaceFile(
   browserPath: string,
   content: string,
   expectedHash: string,
+  assertCurrent?: () => void,
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -132,6 +174,7 @@ export async function updateWorkspaceFile(
     if (currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
+    assertCurrent?.();
     await workspaceRoot.write(browserPath, content, {
       encoding: "utf8",
       renameIdentity: "strict",
@@ -189,14 +232,8 @@ export function resolveWorkspacePath(
   if (!root) {
     return undefined;
   }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
+  const resolved = path.resolve(root, filePath);
+  return isPathInside(root, resolved) ? resolved : undefined;
 }
 
 export function workspaceStatKind(

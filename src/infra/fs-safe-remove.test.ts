@@ -69,7 +69,8 @@ describe("removePathWithinRoot", () => {
         relativePath: "nested",
         force: true,
       }),
-      /ENOTEMPTY|EEXIST|EPERM/,
+      // fs-safe 0.5.2 reports the documented typed remove codes instead of raw errnos.
+      "not-empty",
     );
     await expect(fs.readFile(childPath, "utf8")).resolves.toBe("hello");
   });
@@ -110,6 +111,35 @@ describe("removePathWithinRoot", () => {
     );
   });
 
+  it.each([undefined, false, true])("handles a missing parent with force=%s", async (force) => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const parentPath = path.join(root, "missing-parent");
+    const removal = removePathWithinRoot({
+      rootDir: root,
+      relativePath: path.join("missing-parent", "target.txt"),
+      recursive: true,
+      force,
+    });
+
+    if (force === false) {
+      await expectRejectCode(removal, "not-found");
+    } else {
+      await expect(removal).resolves.toBeUndefined();
+    }
+    await expectRejectCode(fs.stat(parentPath), "ENOENT");
+  });
+
+  it.each([undefined, false, true])("rejects a missing root with force=%s", async (force) => {
+    const parent = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = path.join(parent, "missing-root");
+
+    await expectRejectCode(
+      removePathWithinRoot({ rootDir: root, relativePath: "target.txt", force }),
+      "not-found",
+    );
+    await expectRejectCode(fs.stat(root), "ENOENT");
+  });
+
   it("rejects symlink and junction targets", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const realDir = path.join(root, "real");
@@ -134,20 +164,25 @@ describe("removePathWithinRoot", () => {
   });
 
   it.runIf(process.platform === "win32")(
-    "fails closed when the fallback remove path is rebound during recursive removal",
+    "does not delete through a rebound junction during recursive removal",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
       const nestedDir = path.join(root, "tree", "nested");
       const leafPath = path.join(nestedDir, "leaf.txt");
       const outside = await tempDirs.make("openclaw-fs-safe-outside-");
-      const outsideFile = path.join(outside, "outside.txt");
+      const outsideFile = path.join(outside, "leaf.txt");
       await fs.mkdir(nestedDir, { recursive: true });
       await fs.writeFile(leafPath, "leaf");
       await fs.writeFile(outsideFile, "outside");
       let rebound = false;
+      const leafName = path.basename(leafPath).toLowerCase();
       __setFsSafeTestHooksForTest({
         beforeRootFallbackMutation: async (operation, targetPath) => {
-          if (rebound || operation !== "remove" || targetPath !== leafPath) {
+          if (
+            rebound ||
+            operation !== "remove" ||
+            path.basename(targetPath).toLowerCase() !== leafName
+          ) {
             return;
           }
           rebound = true;
@@ -158,15 +193,21 @@ describe("removePathWithinRoot", () => {
         },
       });
 
-      await expectRejectCode(
-        removePathWithinRoot({
-          rootDir: root,
-          relativePath: "tree",
-          recursive: true,
-          force: true,
-        }),
-        /path-mismatch|path-alias|outside-workspace|invalid-path|not-found|not-file|ENOENT|EPERM/,
-      );
+      const removalError = await removePathWithinRoot({
+        rootDir: root,
+        relativePath: "tree",
+        recursive: true,
+        force: true,
+      }).catch((error: unknown) => error);
+
+      // The guarded remove may abort on the rebind or safely unlink only the raced junction.
+      if (removalError === undefined) {
+        await expectRejectCode(fs.stat(path.join(root, "tree")), "ENOENT");
+      } else {
+        expect((removalError as NodeJS.ErrnoException).code).toMatch(
+          /path-mismatch|path-alias|outside-workspace|invalid-path|not-found|not-file|ENOENT|EPERM/,
+        );
+      }
 
       expect(rebound).toBe(true);
       await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");

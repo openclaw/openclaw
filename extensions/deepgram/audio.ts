@@ -3,14 +3,7 @@ import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import {
-  assertOkOrThrowHttpError,
-  postTranscriptionRequest,
-  readProviderJsonObjectResponse,
-  resolveProviderHttpRequestConfig,
-  requireTranscriptionText,
-} from "openclaw/plugin-sdk/provider-http";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
@@ -21,21 +14,21 @@ function resolveModel(model?: string): string {
 }
 
 function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {
-  const results = asRecord(payload.results);
+  const results = asOptionalRecord(payload.results);
   if (!results) {
     return undefined;
   }
   if (!Array.isArray(results.channels)) {
     throw new Error("Audio transcription failed: malformed JSON response");
   }
-  const channel = asRecord(results.channels[0]);
+  const channel = asOptionalRecord(results.channels[0]);
   if (!channel) {
     return undefined;
   }
   if (!Array.isArray(channel.alternatives)) {
     throw new Error("Audio transcription failed: malformed JSON response");
   }
-  const alternative = asRecord(channel.alternatives[0]);
+  const alternative = asOptionalRecord(channel.alternatives[0]);
   if (!alternative) {
     return undefined;
   }
@@ -48,22 +41,34 @@ function readDeepgramTranscript(payload: Record<string, unknown>): string | unde
 export async function transcribeDeepgramAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
-  const fetchFn = params.fetchFn ?? fetch;
+  const {
+    assertOkOrThrowHttpError,
+    postTranscriptionRequest,
+    readProviderJsonObjectResponse,
+    resolveProviderHttpRequestConfigWithOriginTrust,
+    requireTranscriptionText,
+  } = await import("openclaw/plugin-sdk/provider-http");
+  const { isDeepgramFluxModel, transcribeDeepgramFluxAudio } = await import("./audio-flux.js");
   const model = resolveModel(params.model);
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        authorization: `Token ${params.apiKey}`,
-        "content-type": params.mime ?? "application/octet-stream",
-      },
-      provider: "deepgram",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const flux = isDeepgramFluxModel(model);
+  const requestConfig = resolveProviderHttpRequestConfigWithOriginTrust({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      authorization: `Token ${params.apiKey}`,
+      ...(flux ? {} : { "content-type": params.mime ?? "application/octet-stream" }),
+    },
+    provider: "deepgram",
+    capability: "audio",
+    transport: "media-understanding",
+  });
+  if (flux) {
+    return await transcribeDeepgramFluxAudio({ request: params, requestConfig, model });
+  }
+  const fetchFn = params.fetchFn ?? fetch;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = requestConfig;
 
   const url = new URL(`${baseUrl}/listen`);
   url.searchParams.set("model", model);
@@ -85,6 +90,7 @@ export async function transcribeDeepgramAudio(
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

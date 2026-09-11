@@ -1,8 +1,58 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+
+describe("create-as-draft availability", () => {
+  it("requires both draft policy and multiple creator identities", () => {
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared", "draft"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(true);
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(false);
+    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
+  });
+
+  it("stays dormant when the gateway has fewer than two identities", () => {
+    for (const hasMultipleIdentities of [undefined, false]) {
+      expect(
+        canStartSessionAsDraft({
+          allowedVisibilities: ["shared", "draft"],
+          hasMultipleIdentities,
+        }),
+      ).toBe(false);
+    }
+  });
+});
 
 describe("buildDraftSessionCreateParams", () => {
+  it("retains a cloud repository through the empty create without sending local checkout options", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: `${"x".repeat(999)}🦞 longer prompt`,
+        deferInitialTurn: true,
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        worktree: true,
+        baseRef: "ignored-local-ref",
+        worktreeName: "ignored-local-name",
+        cwd: "/local/clone",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      titleSource: "x".repeat(999),
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+    });
+  });
   it("keeps plain chats minimal", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -15,6 +65,40 @@ describe("buildDraftSessionCreateParams", () => {
         workspace: "/workspace",
       }),
     ).toEqual({ agentId: "main", message: "hello" });
+  });
+
+  it.each([false, true])(
+    "keeps incognito prompts out of early naming (deferred=%s)",
+    (deferInitialTurn) => {
+      expect(
+        buildDraftSessionCreateParams({
+          agentId: "main",
+          message: "private task",
+          deferInitialTurn,
+          visibility: "incognito",
+          worktree: false,
+        }),
+      ).toEqual({
+        agentId: "main",
+        message: deferInitialTurn ? "" : "private task",
+        incognito: true,
+      });
+    },
+  );
+
+  it("adds draft visibility only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private work in progress",
+        worktree: false,
+        visibility: "draft",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "private work in progress",
+      visibility: "draft",
+    });
   });
 
   it("includes initial-message attachments", () => {
@@ -31,20 +115,44 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes selected model and thinking overrides for a plain session", () => {
+  it("includes selected model, context-window, thinking, and fast overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        contextWindow: "200k",
         thinkingLevel: "high",
+        fastMode: true,
         worktree: false,
       }),
     ).toEqual({
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      contextWindow: "200k",
       thinkingLevel: "high",
+      fastMode: true,
+    });
+  });
+
+  it("includes selected capability overrides in the atomic create request", () => {
+    const toolOverrides = {
+      mcpServers: { github: false },
+      skills: { release: false },
+      webSearch: false,
+    };
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "use these capabilities",
+        toolOverrides,
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "use these capabilities",
+      toolOverrides,
     });
   });
 
@@ -54,7 +162,9 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        contextWindow: "200k",
         thinkingLevel: "medium",
+        fastMode: true,
         worktree: false,
         catalogId: "claude",
       }),
@@ -100,6 +210,25 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("assigns a session created from a custom group", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start grouped work",
+        worktree: true,
+        cwd: "/repos/client",
+        workspace: "/workspace",
+        category: " Client work ",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start grouped work",
+      category: "Client work",
+      cwd: "/repos/client",
+      worktree: true,
+    });
+  });
+
   it("sends a custom Gateway folder without requiring a worktree", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -113,6 +242,24 @@ describe("buildDraftSessionCreateParams", () => {
       agentId: "main",
       message: "bootstrap here",
       cwd: "/home",
+    });
+  });
+
+  it("submits a selected project by id without leaking its host path", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "work in the recorded repo",
+        projectId: "openclaw",
+        worktree: true,
+        cwd: "/recorded/openclaw",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "work in the recorded repo",
+      projectId: "openclaw",
+      worktree: true,
     });
   });
 
@@ -132,42 +279,6 @@ describe("buildDraftSessionCreateParams", () => {
       cwd: "/other/repo",
       worktree: true,
       worktreeBaseRef: "main",
-    });
-  });
-
-  it("sends the selected folder and execNode for node sessions", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/other/repo",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/other/repo",
-      execNode: "macbook",
-    });
-  });
-
-  it("sends the selected node cwd even when it matches the Gateway workspace path", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/workspace",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/workspace",
-      execNode: "macbook",
     });
   });
 });

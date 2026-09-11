@@ -1,8 +1,11 @@
 // Qa Lab plugin module validates taxonomy-backed QA scorecard evidence.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
+import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -25,13 +28,6 @@ const qaScorecardIdSchema = z
     message: "scorecard ids must use lowercase dotted or dashed tokens",
   });
 
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
-  });
-
 function isRepoRootRelativeRef(value: string) {
   return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
 }
@@ -47,6 +43,7 @@ const qaScorecardProfileSchema = z.object({
   includeAllCategories: z.boolean().default(false),
   channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
+  coverageIds: z.array(qaCoverageIdSchema).default([]),
 });
 
 function maturityScoreLabelForScore(score: number) {
@@ -156,7 +153,9 @@ const qaMaturityScoresSchema = z.strictObject({
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
-  coverageIds: z.array(qaCoverageIdSchema).default([]),
+  coverageIds: z
+    .array(qaCoverageIdSchema)
+    .length(1, { message: "taxonomy features must define exactly one coverage ID" }),
   description: z.string().trim().min(1).optional(),
 });
 
@@ -180,6 +179,16 @@ const qaMaturitySurfaceSchema = z.object({
   rationale: z.string().trim().min(1).optional(),
   completeness_instructions: z.string().trim().min(1).optional(),
   last_score_run: qaMaturityScoreLastRunSchema.optional(),
+  additional_validation: z
+    .array(
+      z.object({
+        id: qaScorecardIdSchema,
+        name: z.string().trim().min(1),
+        command: z.string().trim().min(1),
+        purpose: z.string().trim().min(1),
+      }),
+    )
+    .optional(),
   categories: z.array(qaMaturityCategorySchema).default([]),
 });
 
@@ -226,6 +235,20 @@ const qaMaturityTaxonomySchema = z
           message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
         });
       }
+      if (profile.includeAllCategories && profile.coverageIds.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileIndex, "coverageIds"],
+          message: `profile ${profile.id} cannot set coverageIds when includeAllCategories is true`,
+        });
+      }
+      if (profile.categoryIds.length > 0 && profile.coverageIds.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileIndex, "coverageIds"],
+          message: `profile ${profile.id} must select categories or coverage IDs, not both`,
+        });
+      }
       if (profile.channelDriver === "crabline" && profile.includeAllCategories) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -233,11 +256,15 @@ const qaMaturityTaxonomySchema = z
           message: `profile ${profile.id} cannot set includeAllCategories when channelDriver is crabline`,
         });
       }
-      if (profile.channelDriver === "crabline" && !profile.categoryIds.length) {
+      if (
+        profile.channelDriver === "crabline" &&
+        !profile.categoryIds.length &&
+        !profile.coverageIds.length
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "categoryIds"],
-          message: `profile ${profile.id} requires categoryIds when channelDriver is crabline`,
+          path: ["profiles", profileIndex],
+          message: `profile ${profile.id} requires categoryIds or coverageIds when channelDriver is crabline`,
         });
       }
 
@@ -252,9 +279,22 @@ const qaMaturityTaxonomySchema = z
         }
         seenProfileCategoryIds.add(categoryId);
       }
+
+      const seenProfileCoverageIds = new Set<string>();
+      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
+        if (seenProfileCoverageIds.has(coverageId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
+            message: `duplicate coverage ID in profile ${profile.id}: ${coverageId}`,
+          });
+        }
+        seenProfileCoverageIds.add(coverageId);
+      }
     }
 
     const categoryIds = new Set<string>();
+    const coverageIdOwners = new Map<string, { key: string; label: string }>();
     const surfaceIds = new Set<string>();
     for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
       if (surfaceIds.has(surface.id)) {
@@ -277,6 +317,50 @@ const qaMaturityTaxonomySchema = z
         }
         localCategoryIds.add(category.id);
         categoryIds.add(`${surface.id}.${category.id}`);
+
+        for (const [featureIndex, feature] of category.features.entries()) {
+          const featureOwner = {
+            key: `${surfaceIndex}.${categoryIndex}.${featureIndex}`,
+            label: `${surface.id}.${category.id} feature ${feature.name}`,
+          };
+          for (const [coverageIdIndex, coverageId] of feature.coverageIds.entries()) {
+            if (!coverageId.startsWith(`${surface.id}.`)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} must belong to surface ${surface.id}`,
+              });
+            }
+            const existingOwner = coverageIdOwners.get(coverageId);
+            if (existingOwner && existingOwner.key !== featureOwner.key) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
+              });
+              continue;
+            }
+            coverageIdOwners.set(coverageId, featureOwner);
+          }
+        }
       }
     }
 
@@ -287,6 +371,15 @@ const qaMaturityTaxonomySchema = z
             code: z.ZodIssueCode.custom,
             path: ["profiles", profileIndex, "categoryIds", categoryIndex],
             message: `profile ${profile.id} references missing category ${categoryId}`,
+          });
+        }
+      }
+      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
+        if (!coverageIdOwners.has(coverageId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
+            message: `profile ${profile.id} references missing coverage ID ${coverageId}`,
           });
         }
       }
@@ -320,6 +413,7 @@ type QaScorecardValidationIssueCode =
   | "taxonomy-ref-not-found"
   | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
+  | "profile-coverage-ref-not-found"
   | "profile-category-missing-inventory";
 
 type QaScorecardValidationIssue = {
@@ -363,6 +457,8 @@ type QaScorecardProfileReport = {
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
   categoryIds: string[];
+  coverageIds: string[];
+  scenarioRefs: string[];
 };
 
 export type QaScorecardTaxonomyReport = {
@@ -370,6 +466,7 @@ export type QaScorecardTaxonomyReport = {
   title: string | null;
   taxonomy: {
     sourcePath: string;
+    identity: QaMaturityTaxonomyIdentity;
   } | null;
   profileCount: number;
   profiles: QaScorecardProfileReport[];
@@ -424,34 +521,12 @@ function repoRootFromPath(filePath: string) {
   return path.dirname(filePath);
 }
 
-function formatZodIssuePath(pathLocal: PropertyKey[]) {
-  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
-}
-
-function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
-  const parsed = qaMaturityTaxonomySchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
-function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
-  const parsed = qaMaturityScoresSchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
 export function readQaMaturityTaxonomySource(taxonomyPath = QA_MATURITY_TAXONOMY_PATH) {
-  return parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync(taxonomyPath, "utf8")), taxonomyPath);
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
+    YAML.parse(fs.readFileSync(taxonomyPath, "utf8")),
+    taxonomyPath,
+  );
 }
 
 export function readValidatedQaMaturityScoreSources(params?: {
@@ -463,7 +538,11 @@ export function readValidatedQaMaturityScoreSources(params?: {
   const taxonomyPath = params?.taxonomyPath ?? QA_MATURITY_TAXONOMY_PATH;
   const scoresPath = params?.scoresPath ?? QA_MATURITY_SCORES_PATH;
   const taxonomy = params?.taxonomy ?? readQaMaturityTaxonomySource(taxonomyPath);
-  const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync(scoresPath, "utf8")), scoresPath);
+  const scores = parseQaYamlWithContext(
+    qaMaturityScoresSchema,
+    YAML.parse(fs.readFileSync(scoresPath, "utf8")),
+    scoresPath,
+  );
   const warnings = validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
@@ -480,7 +559,8 @@ function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   if (!taxonomyPath || !fs.existsSync(taxonomyPath)) {
     return null;
   }
-  return parseQaMaturityTaxonomy(
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
     YAML.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
     QA_MATURITY_TAXONOMY_PATH,
   );
@@ -495,6 +575,33 @@ function pathExists(repoRoot: string | undefined, relativePath: string) {
 
 function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
+}
+
+function selectQaScorecardProfileScenarios(params: {
+  coverageIds: readonly string[];
+  profileId: string;
+  scenarios: readonly QaSeedScenarioWithSource[];
+}) {
+  if (params.coverageIds.length === 0) {
+    return [...params.scenarios];
+  }
+  const selected: QaSeedScenarioWithSource[] = [];
+  const selectedIds = new Set<string>();
+  for (const coverageId of params.coverageIds) {
+    const candidates = params.scenarios.filter((scenario) =>
+      scenario.coverage?.primary.includes(coverageId),
+    );
+    if (candidates.length === 0) {
+      throw new Error(`${params.profileId} profile coverage ${coverageId} has no primary owner.`);
+    }
+    for (const candidate of candidates) {
+      if (!selectedIds.has(candidate.id)) {
+        selectedIds.add(candidate.id);
+        selected.push(candidate);
+      }
+    }
+  }
+  return selected;
 }
 
 type ScenarioInventoryRef = {
@@ -540,6 +647,63 @@ function uniqueSorted(values: Iterable<string>) {
 
 function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
+}
+
+export const qaMaturityTaxonomyIdentitySchema = z.strictObject({
+  version: z.literal(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export type QaMaturityTaxonomyIdentity = z.infer<typeof qaMaturityTaxonomyIdentitySchema>;
+
+export function qaMaturityTaxonomyIdentity(
+  taxonomy: QaMaturityTaxonomy,
+): QaMaturityTaxonomyIdentity {
+  const byId = <T extends { id: string }>(values: readonly T[]) =>
+    values.toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  const refs = (values: readonly string[]) => [...new Set(values)].toSorted();
+  // Evidence binds to capability meaning and proof obligations, not maturity decisions
+  // or YAML layout. Explicit projection keeps unrelated metadata out of the identity.
+  const semantics = {
+    profiles: byId(taxonomy.profiles).map((profile) => ({
+      id: profile.id,
+      description: profile.description,
+      includeAllCategories: profile.includeAllCategories,
+      categoryIds: refs(profile.categoryIds),
+      coverageIds: refs(profile.coverageIds),
+      channelDriver: profile.channelDriver,
+      evidenceMode: profile.evidenceMode ?? "full",
+    })),
+    surfaces: byId(activeQaMaturityTaxonomySurfaces(taxonomy)).map((surface) => ({
+      id: surface.id,
+      name: surface.name,
+      family: surface.family,
+      completenessInstructions: surface.completeness_instructions ?? null,
+      additionalValidation: byId(surface.additional_validation ?? []).map((validation) => ({
+        id: validation.id,
+        name: validation.name,
+        command: validation.command,
+        purpose: validation.purpose,
+      })),
+      categories: byId(surface.categories).map((category) => ({
+        id: category.id,
+        name: category.name,
+        note: category.category_note,
+        docs: refs(category.docs),
+        features: byId(
+          category.features.map((feature) => ({
+            id: feature.coverageIds[0]!,
+            name: feature.name,
+            description: feature.description ?? null,
+          })),
+        ),
+      })),
+    })),
+  };
+  return {
+    version: 1,
+    sha256: createHash("sha256").update(JSON.stringify(semantics)).digest("hex"),
+  };
 }
 
 export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
@@ -805,11 +969,15 @@ export function readQaScorecardProfileOptions(profileId: string | undefined, rep
 function pushMissingPrimaryInventoryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
+  requiredCoverageIds: ReadonlySet<string>;
   coverageIdsWithPrimaryInventory: ReadonlySet<string>;
   coverageIdsWithSecondaryInventory: ReadonlySet<string>;
 }) {
   for (const feature of params.category.features) {
     for (const coverageId of feature.coverageIds) {
+      if (!params.requiredCoverageIds.has(coverageId)) {
+        continue;
+      }
       if (params.coverageIdsWithPrimaryInventory.has(coverageId)) {
         continue;
       }
@@ -914,9 +1082,10 @@ function buildQaScorecardTaxonomyReport(params: {
   }
 
   const profileCategoryIdsByCategoryId = new Map<string, Set<string>>();
+  const requiredCoverageIdsByCategoryId = new Map<string, Set<string>>();
   const profiles =
     params.taxonomy?.profiles.map((profile) => {
-      const validCategoryIds: string[] = [];
+      const selectedCoverageIds = new Set<string>();
       const selectedCategoryIds = profile.includeAllCategories
         ? [...maturityRefs.categories.keys()]
         : profile.categoryIds;
@@ -930,16 +1099,61 @@ function buildQaScorecardTaxonomyReport(params: {
           });
           continue;
         }
-        const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
-        profileIds.add(profile.id);
-        profileCategoryIdsByCategoryId.set(categoryId, profileIds);
-        validCategoryIds.push(categoryId);
+        for (const coverageId of maturityRefs.categories.get(categoryId)?.coverageIds ?? []) {
+          selectedCoverageIds.add(coverageId);
+        }
       }
+      for (const coverageId of profile.coverageIds) {
+        if (!maturityRefs.coverageIds.has(coverageId)) {
+          issues.push({
+            code: "profile-coverage-ref-not-found",
+            severity: "warning",
+            ref: coverageId,
+            message: `${profile.id} profile references missing taxonomy coverage ID ${coverageId}`,
+          });
+          continue;
+        }
+        selectedCoverageIds.add(coverageId);
+      }
+
+      const validCategoryIds = new Set<string>();
+      for (const coverageId of selectedCoverageIds) {
+        for (const coverageRef of maturityRefs.coverageIds.get(coverageId) ?? []) {
+          const categoryId = coverageRef.categoryId;
+          validCategoryIds.add(categoryId);
+          const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
+          profileIds.add(profile.id);
+          profileCategoryIdsByCategoryId.set(categoryId, profileIds);
+          const requiredCoverageIds =
+            requiredCoverageIdsByCategoryId.get(categoryId) ?? new Set<string>();
+          requiredCoverageIds.add(coverageId);
+          requiredCoverageIdsByCategoryId.set(categoryId, requiredCoverageIds);
+        }
+      }
+      const validCoverageIds = uniqueSorted(selectedCoverageIds);
+      const scenarioRefs =
+        profile.coverageIds.length > 0
+          ? selectQaScorecardProfileScenarios({
+              coverageIds: validCoverageIds,
+              profileId: profile.id,
+              scenarios: params.scenarios,
+            })
+              .map((scenario) => scenario.sourcePath)
+              .toSorted()
+          : uniqueSorted(
+              validCoverageIds.flatMap((coverageId) =>
+                (primaryInventoryRefsByCoverageId.get(coverageId) ?? []).map(
+                  (ref) => ref.sourcePath,
+                ),
+              ),
+            );
       return {
         id: profile.id,
         evidenceMode: profile.evidenceMode ?? "full",
         channelDriver: profile.channelDriver,
-        categoryIds: validCategoryIds,
+        categoryIds: uniqueSorted(validCategoryIds),
+        coverageIds: validCoverageIds,
+        scenarioRefs,
       };
     }) ?? [];
 
@@ -973,7 +1187,9 @@ function buildQaScorecardTaxonomyReport(params: {
     }
 
     const profileIds = uniqueSorted(profileCategoryIdsByCategoryId.get(categoryId) ?? []);
-    const required = profileIds.length > 0;
+    const requiredCoverageIdsForCategory =
+      requiredCoverageIdsByCategoryId.get(categoryId) ?? new Set<string>();
+    const required = requiredCoverageIdsForCategory.size > 0;
     const inventoryRefs: QaScorecardInventoryRef[] = [];
     const categoryScenarioRefs = new Set<string>();
     const inventoriedCoverageIds = new Set<string>();
@@ -1027,7 +1243,7 @@ function buildQaScorecardTaxonomyReport(params: {
       inventoriedCoverageIds.has(coverageId),
     ).length;
     if (required) {
-      for (const coverageId of category.coverageIds) {
+      for (const coverageId of requiredCoverageIdsForCategory) {
         requiredCoverageIds.add(coverageId);
         if (inventoriedCoverageIds.has(coverageId)) {
           inventoriedRequiredCoverageIds.add(coverageId);
@@ -1036,6 +1252,7 @@ function buildQaScorecardTaxonomyReport(params: {
       pushMissingPrimaryInventoryIssues({
         issues,
         category,
+        requiredCoverageIds: requiredCoverageIdsForCategory,
         coverageIdsWithPrimaryInventory: inventoriedCoverageIds,
         coverageIdsWithSecondaryInventory: secondaryOnlyCoverageIds,
       });
@@ -1050,12 +1267,16 @@ function buildQaScorecardTaxonomyReport(params: {
     }
 
     const missingCoverageIds = required
-      ? category.coverageIds.filter((coverageId) => !coverageIdsWithAnyInventory.has(coverageId))
+      ? [...requiredCoverageIdsForCategory].filter(
+          (coverageId) => !coverageIdsWithAnyInventory.has(coverageId),
+        )
       : [];
     const inventoryStatus =
       required &&
-      category.coverageIds.length > 0 &&
-      inventoriedCoverageIdCountForCategory === category.coverageIds.length
+      requiredCoverageIdsForCategory.size > 0 &&
+      [...requiredCoverageIdsForCategory].every((coverageId) =>
+        inventoriedCoverageIds.has(coverageId),
+      )
         ? "complete"
         : inventoryRefs.length > 0
           ? "partial"
@@ -1096,6 +1317,7 @@ function buildQaScorecardTaxonomyReport(params: {
     taxonomy: params.taxonomy
       ? {
           sourcePath: QA_MATURITY_TAXONOMY_PATH,
+          identity: qaMaturityTaxonomyIdentity(params.taxonomy),
         }
       : null,
     profileCount: params.taxonomy?.profiles.length ?? 0,

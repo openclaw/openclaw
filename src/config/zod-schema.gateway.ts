@@ -1,15 +1,56 @@
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
 import {
-  isValidControlUiChatMessageMaxWidth,
-  normalizeControlUiChatMessageMaxWidth,
-} from "./control-ui-css.js";
-import { SecretInputSchema } from "./zod-schema.core.js";
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
+  READ_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+} from "../gateway/operator-scopes.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
-  TailscaleServiceNameSchema,
+  validateHttpOrigin,
 } from "./zod-schema.root-support.js";
+import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+const OperatorScopeSchema = z.enum([
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  QUESTIONS_SCOPE,
+  PAIRING_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+]);
+const GatewayOperatorRoleDefinitionSchema = z.strictObject({
+  sessions: z.strictObject({ others: z.enum(["none", "view", "suggest", "write"]) }),
+  sandbox: z.enum(["inherit", "required"]).optional(),
+  agents: z.union([
+    z.literal("*"),
+    z
+      .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
+      .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
+  ]),
+  scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
+});
+const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
+const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function validateGatewayPublicOrigin(value: string): boolean {
+  if (!validateHttpOrigin(value)) {
+    return false;
+  }
+  const url = new URL(value);
+  return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
+}
 
 export const GatewayConfigSchema = z
   .strictObject({
@@ -25,29 +66,45 @@ export const GatewayConfigSchema = z
       ])
       .optional(),
     customBindHost: z.string().optional(),
+    publicOrigin: z
+      .string()
+      .url()
+      .refine(
+        validateGatewayPublicOrigin,
+        "gateway.publicOrigin must be a bare HTTPS origin; HTTP is allowed only for localhost, 127.0.0.1, or [::1]",
+      )
+      .optional(),
     controlUi: z
       .strictObject({
+        // Shipped legacy input. Doctor removes it after recording migration state.
+        dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
+        experimental: z.strictObject({ customPlugins: z.boolean().optional() }).optional(),
         root: z.string().optional(),
-        toolTitles: z.boolean().optional(),
+        environment: z
+          .strictObject({
+            label: z.string().trim().min(1).max(24),
+            color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
+          })
+          .optional(),
+        communityInvite: z.boolean().optional(),
+        github: z
+          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
-        chatMessageMaxWidth: z
-          .string()
-          .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
-          .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
-            message:
-              "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
-          })
-          .optional(),
+        automaticallyFetchFavicons: z.boolean().optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
-        allowInsecureAuth: z.boolean().optional(),
-        dangerouslyDisableDeviceAuth: z.boolean().optional(),
+      })
+      .optional(),
+    cliAgents: z
+      .strictObject({
+        enabled: z.boolean().optional(),
       })
       .optional(),
     terminal: z
@@ -70,6 +127,7 @@ export const GatewayConfigSchema = z
         token: SecretInputSchema.optional().register(sensitive),
         password: SecretInputSchema.optional().register(sensitive),
         allowTailscale: z.boolean().optional(),
+        identityScopes: z.record(z.string().min(1), z.array(OperatorScopeSchema)).optional(),
         rateLimit: z
           .strictObject({
             maxAttempts: z.number().optional(),
@@ -94,6 +152,26 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    roles: z
+      .strictObject({
+        default: GatewayOperatorRoleNameSchema,
+        definitions: z
+          .record(GatewayOperatorRoleNameSchema, GatewayOperatorRoleDefinitionSchema)
+          .refine(
+            (definitions) => Object.keys(definitions).length > 0,
+            "gateway.roles.definitions must contain at least one role definition",
+          ),
+      })
+      .superRefine((roles, ctx) => {
+        if (!Object.hasOwn(roles.definitions, roles.default)) {
+          ctx.addIssue({
+            code: "custom",
+            message: "gateway.roles.default must name a configured role definition",
+            path: ["default"],
+          });
+        }
+      })
+      .optional(),
     trustedProxies: z.array(z.string()).optional(),
     allowRealIpFallback: z.boolean().optional(),
     tools: z
@@ -105,17 +183,13 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
-        resetOnExit: z.boolean().optional(),
-        serviceName: TailscaleServiceNameSchema.optional(),
         preserveFunnel: z.boolean().optional(),
       })
       .optional(),
     remote: GatewayRemoteConfigSchema,
     reload: z
       .strictObject({
-        mode: z
-          .union([z.literal("off"), z.literal("restart"), z.literal("hot"), z.literal("hybrid")])
-          .optional(),
+        mode: z.union([z.literal("off"), z.literal("hybrid")]).optional(),
       })
       .optional(),
     tls: z
@@ -208,6 +282,7 @@ export const GatewayConfigSchema = z
           .optional(),
         pairing: z
           .strictObject({
+            autoApproveLocal: z.boolean().optional(),
             autoApproveCidrs: z.array(z.string()).optional(),
             sshVerify: z
               .union([
@@ -227,13 +302,13 @@ export const GatewayConfigSchema = z
             enabled: z.boolean().optional(),
           })
           .optional(),
-        skills: z
+        allowSkills: z.boolean().optional(),
+        commands: z
           .strictObject({
-            enabled: z.boolean().optional(),
+            allow: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
           })
           .optional(),
-        allowCommands: z.array(z.string()).optional(),
-        denyCommands: z.array(z.string()).optional(),
       })
       .optional(),
   })

@@ -1,279 +1,72 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import {
+  API_KEY_FIELD,
+  SET_RUNTIME_API_KEY_FIELD,
+  imageRuntimeMocks,
+  installImageRuntimeTestHooks,
+  preparedAuthStorage,
+} from "./image.test-support.js";
 
-const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
-const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
-const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
-
-const hoisted = vi.hoisted(() => ({
-  completeMock: vi.fn(),
-  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
-  getApiKeyForModelMock: vi.fn(
-    async (): Promise<{
-      apiKey: string;
-      source: string;
-      mode: string;
-      profileId?: string;
-    }> => ({
-      [API_KEY_FIELD]: "test-token",
-      source: "test",
-      mode: "oauth",
-    }),
-  ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
-    [API_KEY_FIELD]: "test-token",
-    source: "test",
-    mode: "oauth",
-  })),
-  requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
-  setRuntimeApiKeyMock: vi.fn(),
-  discoverModelsMock: vi.fn(),
-  fetchMock: vi.fn(),
-  registerProviderStreamForModelMock: vi.fn(),
-  prepareProviderDynamicModelMock: vi.fn(async () => {}),
-  prepareProviderRuntimeAuthMock: vi.fn(),
-  acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
-  releasePreparedModelRuntimeMock: vi.fn(),
-  resolveModelAsyncMock: vi.fn(),
-  resolveModelWithRegistryMock: vi.fn(),
-  shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
-  unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
-}));
 const {
   completeMock,
-  ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
-  requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
-  fetchMock,
   registerProviderStreamForModelMock,
-  prepareProviderDynamicModelMock,
   prepareProviderRuntimeAuthMock,
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
-  resolveModelWithRegistryMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
-} = hoisted;
-const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock };
+} = imageRuntimeMocks;
 
-type ResolveModelWithRegistryTestParams = {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-};
-
+const resolveProviderRuntimePluginHandleMock = vi.hoisted(() => vi.fn());
+vi.mock("../plugins/provider-hook-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-hook-runtime.js")>(
+    "../plugins/provider-hook-runtime.js",
+  )),
+  resolveProviderRuntimePluginHandle: resolveProviderRuntimePluginHandleMock,
+}));
+const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRuntimePluginHandle",
+);
 type AuthRequestCall = {
   profileId?: string;
   preferredProfile?: string;
   store?: unknown;
 };
 
-function requireMockCallAt<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  index: number,
-  label: string,
-): Calls[number] {
-  // Tests inspect exact dependency calls because image runtime behavior is
-  // mostly provider/auth orchestration.
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index}`);
-  }
-  return call as Calls[number];
-}
+const { describeImageWithModelCore } = await import("./image.js");
 
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  label: string,
-): Calls[number] {
-  return requireMockCallAt(mock, 0, label);
-}
-
-vi.mock("../llm/stream.js", async () => {
-  const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
-  return {
-    ...actual,
-    complete: completeMock,
-  };
-});
-
-vi.mock("../agents/models-config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
-    "../agents/models-config.js",
-  )),
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-}));
-
-vi.mock("../agents/model-auth.js", () => ({
-  applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-  [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
-}));
-
-vi.mock("../agents/provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
-
-vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
-  getModelRegistryRuntime: () => ({ apiRegistry: {}, llmRuntime: {} }),
-}));
-
-vi.mock("../agents/provider-secret-egress.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
-    "../agents/provider-secret-egress.js",
-  )),
-  unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
-}));
-
-vi.mock("../agents/agent-model-discovery.js", () => ({
-  discoverAuthStorage: () => ({
-    [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-  }),
-  discoverModels: discoverModelsMock,
-}));
-
-vi.mock("../agents/prepared-model-runtime.js", () => ({
-  acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
-}));
-
-vi.mock("../plugins/provider-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  )),
-  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
-  shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
-}));
-
-vi.mock("../plugins/provider-runtime.runtime.js", () => ({
-  prepareProviderRuntimeAuth: prepareProviderRuntimeAuthMock,
-}));
-
-vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModelAsync: resolveModelAsyncMock,
-}));
-
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
-}));
-
-const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
-  return {
-    ...mod,
-    fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
-  };
-});
-
-const { describeImageWithModel } = await import("./image.js");
-
-describe("describeImageWithModel", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+describe("describeImageWithModelCore", () => {
+  installImageRuntimeTestHooks({
+    copilotHeaders: {
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    },
   });
-
   beforeEach(() => {
-    // Provider endpoint policy comes from manifests. Pin source manifests so a
-    // prior local build cannot make this source-checkout test read partial dist output.
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
-    vi.stubGlobal("fetch", fetchMock);
-    vi.clearAllMocks();
-    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
-      async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
-        snapshot: {
-          agentDir: input.agentDir,
-          config: input.config,
-          workspaceDir: input.workspaceDir,
-          createStores: () => ({
-            authStorage: preparedAuthStorage,
-            modelRegistry: {},
-          }),
-        },
-        release: releasePreparedModelRuntimeMock,
-      }),
-    );
-    fetchMock.mockImplementation(async () =>
-      Response.json({
-        base_resp: { status_code: 0 },
-        content: "portal ok",
-      }),
-    );
-    // Bridge fetchWithSsrFGuard through the globally-stubbed fetch so existing
-    // assertions on fetchMock call count and arguments continue to work.
-    imageTestFetchWithSsrFGuardMock.mockImplementation(
-      async (opts: { url: string; init: RequestInit; timeoutMs?: number }) => {
-        const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
-        const init = { ...opts.init, signal };
-        const response = await globalThis.fetch(opts.url, init);
-        return { response, release: vi.fn(), finalUrl: opts.url };
-      },
-    );
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "minimax-portal",
-        id: "MiniMax-VL-01",
-        input: ["text", "image"],
-        baseUrl: "https://api.minimax.io/anthropic",
-      })),
-    });
-    resolveModelWithRegistryMock.mockImplementation(
-      // Delegate to modelRegistry.find so tests that override discoverModelsMock
-      // automatically get the right model through resolveModelWithRegistry.
-      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
-        modelRegistry.find(provider, modelId),
-    );
-    resolveModelAsyncMock.mockImplementation(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
-        const authStorage = {
-          [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-        };
-        const modelRegistry = discoverModelsMock(authStorage, agentDir);
-        const model = resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
-        return { authStorage, model, modelRegistry };
-      },
-    );
-    prepareProviderRuntimeAuthMock.mockImplementation(async (params: { provider: string }) => {
-      return params.provider === "github-copilot"
-        ? {
-            [API_KEY_FIELD]: "test-token",
-            baseUrl: "https://api.githubcopilot.com",
-          }
-        : undefined;
-    });
+    resolveProviderRuntimePluginHandleMock.mockReset().mockImplementation((params) => ({
+      ...params,
+      plugin: undefined,
+    }));
   });
 
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }
@@ -300,7 +93,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -355,7 +148,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash lite ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -396,7 +189,6 @@ describe("describeImageWithModel", () => {
     };
     resolveModelAsyncMock
       .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
-      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
       .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "test-token",
@@ -415,7 +207,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "profile-scoped image ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -428,15 +220,15 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
-    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
+    expect(resolveModelAsyncMock.mock.calls[1]?.[4]).toEqual(
       expect.objectContaining({
         authStorage,
         modelRegistry,
         authProfileId: "github-copilot:backup",
       }),
     );
-    const [completionModel] = requireFirstMockCall(completeMock, "complete");
+    const [completionModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
     expect(completionModel).toEqual(
       expect.objectContaining({
         contextWindow: 1_050_000,
@@ -469,7 +261,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -495,17 +287,24 @@ describe("describeImageWithModel", () => {
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
-      { baseUrl?: string },
+      { baseUrl?: string; headers?: Record<string, string> },
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
       { apiKey?: string; headers?: Record<string, string> },
     ];
     expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(completionModel.headers).toMatchObject({
+      "Copilot-Integration-Id": "copilot-developer-cli",
+      "Editor-Version": "vscode/1.107.0",
+      "Openai-Organization": "github-copilot",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    });
+    expect(
+      Object.values(completionModel.headers ?? {}).some((value) => looksLikeSecretSentinel(value)),
+    ).toBe(false);
     expect(options.apiKey).toBe(storedValue);
     expect(options.headers).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
       "Copilot-Vision-Request": "true",
-      "Editor-Version": "vscode/1.107.0",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
+      "x-initiator": "user",
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
@@ -547,7 +346,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -586,7 +385,7 @@ describe("describeImageWithModel", () => {
     );
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "github-copilot",
@@ -623,7 +422,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "A solid red square." }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "openai",
@@ -669,7 +468,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "agent-plan",
@@ -681,7 +480,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const options = requireFirstMockCall(completeMock, "image completion")[2];
+    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -706,7 +505,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "fake",
@@ -718,7 +517,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const options = requireFirstMockCall(completeMock, "image completion")[2];
+    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
     expect(options.maxTokens).toBe(1024);
   });
 
@@ -752,7 +551,7 @@ describe("describeImageWithModel", () => {
       },
     };
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg,
       agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
@@ -766,7 +565,11 @@ describe("describeImageWithModel", () => {
     });
 
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        loadRuntimePlugins: true,
+      }),
+      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",
@@ -780,11 +583,19 @@ describe("describeImageWithModel", () => {
   it("uses one committed prepared generation for image setup and streaming", async () => {
     const requestedCfg: OpenClawConfig = { logging: { level: "info" } };
     const committedCfg: OpenClawConfig = { logging: { level: "debug" } };
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot("/tmp/committed-workspace");
+    const providerRuntimeHandle = {
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      plugin: { id: "generation-a" },
+    };
+    resolveProviderRuntimePluginHandleMock.mockReturnValueOnce(providerRuntimeHandle);
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: {
         agentDir: "/tmp/committed-agent",
         config: committedCfg,
         workspaceDir: "/tmp/committed-workspace",
+        metadataSnapshot,
         createStores: () => ({
           authStorage: preparedAuthStorage,
           modelRegistry: {},
@@ -800,6 +611,12 @@ describe("describeImageWithModel", () => {
         input: ["text", "image"],
       })),
     });
+    registerProviderStreamForModelMock.mockImplementationOnce(({ model }) => {
+      expect((model as Record<symbol, unknown>)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]).toBe(
+        providerRuntimeHandle,
+      );
+      return undefined;
+    });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "google-generative-ai",
@@ -810,7 +627,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "committed runtime" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: requestedCfg,
       agentDir: "/tmp/requested-agent",
       workspaceDir: "/tmp/requested-workspace",
@@ -835,7 +652,15 @@ describe("describeImageWithModel", () => {
       cfg: committedCfg,
       agentDir: "/tmp/committed-agent",
       workspaceDir: "/tmp/committed-workspace",
+      wrapProviderStream: true,
     });
+    expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        pluginMetadataSnapshot: metadataSnapshot,
+      }),
+    );
   });
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
@@ -861,10 +686,13 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/parent-agent",
       config: cfg,
       workspaceDir: "/tmp/parent-workspace",
+      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/parent-workspace"),
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg,
       agentDir: "/tmp/parent-agent",
       workspaceDir: "/tmp/parent-workspace",
@@ -881,5 +709,8 @@ describe("describeImageWithModel", () => {
     expect(result.text).toBe("parent runtime");
     expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
     expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(expect.objectContaining({ preparedModelRuntime }));
+    }
   });
 });

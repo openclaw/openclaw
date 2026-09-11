@@ -11,10 +11,10 @@ final class DeviceStatusService: DeviceStatusServicing {
     }
 
     func status() async throws -> OpenClawDeviceStatusPayload {
-        let battery = self.batteryStatus()
+        let battery = Self.batteryStatus(device: UIDevice.current)
         let thermal = self.thermalStatus()
         let storage = self.storageStatus()
-        let network = await self.networkStatus.currentStatus()
+        let network = try await self.networkStatus.currentStatus()
         let uptime = ProcessInfo.processInfo.systemUptime
 
         return OpenClawDeviceStatusPayload(
@@ -40,10 +40,15 @@ final class DeviceStatusService: DeviceStatusServicing {
             locale: locale)
     }
 
-    private func batteryStatus() -> OpenClawBatteryStatusPayload {
-        let device = UIDevice.current
+    static func batteryStatus(device: UIDevice) -> OpenClawBatteryStatusPayload {
+        let wasMonitoring = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
+        defer { device.isBatteryMonitoringEnabled = wasMonitoring }
+        // UIDevice.batteryLevel is a normalized 0.0–1.0 fraction, matching the
+        // shared OpenClawBatteryStatusPayload.level contract. `levelPercent`
+        // mirrors it as an integer 0–100 percentage.
         let level = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
+        let levelPercent = level.map { Int(($0 * 100).rounded()) }
         let state: OpenClawBatteryState = switch device.batteryState {
         case .charging: .charging
         case .full: .full
@@ -54,7 +59,8 @@ final class DeviceStatusService: DeviceStatusServicing {
         return OpenClawBatteryStatusPayload(
             level: level,
             state: state,
-            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            levelPercent: levelPercent)
     }
 
     private func thermalStatus() -> OpenClawThermalStatusPayload {

@@ -1,6 +1,5 @@
 // Session reset policy resolves automatic freshness for direct, group, and thread sessions.
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
-import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;
@@ -22,17 +21,15 @@ export type SessionFreshness = {
 
 const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_IDLE_MINUTES = 0;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {
-  const normalizedAtHour = normalizeResetAtHour(atHour);
-  const resetAt = new Date(now);
-  resetAt.setHours(normalizedAtHour, 0, 0, 0);
-  if (now < resetAt.getTime()) {
-    // Before today's reset hour, the active reset boundary is yesterday's scheduled reset.
-    resetAt.setDate(resetAt.getDate() - 1);
-  }
-  return resetAt.getTime();
+  const hour = normalizeResetAtHour(atHour);
+  const today = new Date(now).setHours(hour, 0, 0, 0);
+  // Resolve each calendar day's authored hour from now; reusing today's date
+  // can carry a spring-forward adjustment into yesterday.
+  return now < today ? new Date(now).setHours(hour - 24, 0, 0, 0) : today;
 }
 
 /** Resolves the effective reset policy for direct, group, or thread sessions. */
@@ -44,25 +41,18 @@ export function resolveSessionResetPolicy(params: {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
   const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
-  const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
-  const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
-  const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
-  // Legacy `idleMinutes` implied idle reset only when no modern reset block was configured.
+  const configured = Boolean(baseReset || typeReset);
   const inheritedTypeMode = typeReset && baseReset?.mode !== "none" ? baseReset?.mode : undefined;
   const mode =
     typeReset?.mode ??
     inheritedTypeMode ??
     (typeReset ? "daily" : undefined) ??
     baseReset?.mode ??
-    (baseReset
-      ? "daily"
-      : !hasExplicitReset && legacyIdleMinutes != null
-        ? "idle"
-        : DEFAULT_RESET_MODE);
+    (baseReset ? "daily" : DEFAULT_RESET_MODE);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
-  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
+  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes;
 
   let idleMinutes: number | undefined;
   if (idleMinutesRaw != null) {

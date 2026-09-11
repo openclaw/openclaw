@@ -31,6 +31,24 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    expectTelegramConfigIssue({ dmPolicy: "allowlist", botToken: "fake" }, "allowFrom");
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectTelegramConfigValid({
+      allowFrom: ["12345"],
+      accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+    });
+  });
+
+  it("rejects account allowlist without account or channel allowFrom", () => {
+    expectTelegramConfigIssue(
+      { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
+      "accounts.bot1.allowFrom",
+    );
+  });
+
   it("defaults dm/group policy", () => {
     const res = TelegramConfigSchema.safeParse({});
 
@@ -51,6 +69,19 @@ describe("telegram custom commands schema", () => {
     if (res.success) {
       expect(res.data.historyLimit).toBe(8);
       expect(res.data.accounts?.ops?.historyLimit).toBe(3);
+    }
+  });
+
+  it("accepts group join introduction overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      joinIntro: false,
+      accounts: { ops: { joinIntro: true } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.joinIntro).toBe(false);
+      expect(res.data.accounts?.ops?.joinIntro).toBe(true);
     }
   });
 

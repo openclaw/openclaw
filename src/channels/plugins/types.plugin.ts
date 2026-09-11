@@ -5,6 +5,7 @@ import type { OperatorScope } from "../../gateway/operator-scopes.js";
  * Defines the full plugin object shape composed from config, runtime, setup, and adapter surfaces.
  */
 import type { ChannelMessageAdapterShape } from "../message/types.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
 import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type {
   ChannelApprovalCapability,
@@ -67,6 +68,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   };
   reload?: {
     configPrefixes: string[];
+    /** Published dynamic reads; `*` matches one nonempty dotted config key. */
     noopPrefixes?: string[];
     /**
      * Opt into restarting only the changed non-default named account.
@@ -79,6 +81,9 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
+  /** Channel-owned typed setup contract. Preferred over the legacy shared input adapter. */
+  setupContract?: ChannelOwnedSetupContract;
+  /** @deprecated Use setupContract for new plugins. */
   setup?: ChannelSetupAdapter;
   pairing?: ChannelPairingAdapter;
   security?: ChannelSecurityAdapter<ResolvedAccount>;

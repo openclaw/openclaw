@@ -1,14 +1,9 @@
 // Covers bootstrap context rendering, truncation, and transcript header setup.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
-  ensureSessionHeader,
   resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -16,7 +11,6 @@ import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 const EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
-const EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 
 const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
@@ -32,22 +26,23 @@ const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
   makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
 ];
 
-describe("ensureSessionHeader", () => {
-  it("creates transcript files with restrictive permissions", async () => {
-    // Session transcripts can contain private prompts and tool outputs, so both
-    // the directory and file need restrictive permissions from creation.
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
-    try {
-      const sessionFile = path.join(tempDir, "nested", "session.jsonl");
-      await ensureSessionHeader({ sessionFile, sessionId: "session-1", cwd: tempDir });
+const QUOTED_HEARTBEAT_EXAMPLE =
+  "`Check STATUS.md if it exists. Follow it strictly. Do not repeat old tasks from prior chats. If nothing needs attention, reply STATUS_OK.`";
 
-      expect((await fs.stat(path.dirname(sessionFile))).mode & 0o777).toBe(0o700);
-      expect((await fs.stat(sessionFile)).mode & 0o777).toBe(0o600);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+function makeMiddleBootstrapFile(lines: string[]): WorkspaceBootstrapFile {
+  return makeFile({
+    content: [
+      "# AGENTS.md",
+      "",
+      "A".repeat(9000),
+      "",
+      ...lines,
+      "",
+      "B".repeat(7000),
+      "tail marker",
+    ].join("\n"),
   });
-});
+}
 
 describe("buildBootstrapContextFiles", () => {
   it("keeps missing markers", () => {
@@ -67,7 +62,7 @@ describe("buildBootstrapContextFiles", () => {
     const head = `HEAD-${"a".repeat(600)}`;
     const tail = `${"b".repeat(300)}-TAIL`;
     const long = `${head}${tail}`;
-    const files = [makeFile({ name: "TOOLS.md", content: long })];
+    const files = [makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: long })];
     const warnings: string[] = [];
     const maxChars = 200;
     const [result] = buildBootstrapContextFiles(files, {
@@ -75,10 +70,10 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
+    expect(kept?.slice(0, 3)).toStrictEqual(["kept 75+25 chars", "75", "25"]);
     const headChars = Number(kept?.[1]);
     const tailChars = Number(kept?.[2]);
-    expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content).toContain("[...truncated, read SOUL.md for full content...]");
     expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
@@ -87,15 +82,15 @@ describe("buildBootstrapContextFiles", () => {
       expect(result?.content.endsWith(long.slice(-tailChars))).toBe(true);
     }
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("TOOLS.md");
+    expect(warnings[0]).toContain("SOUL.md");
     expect(warnings[0]).toContain("limit 200");
   });
   it("keeps generic and AGENTS.md truncation valid at UTF-16 boundaries", () => {
     const cases = [
       {
         file: makeFile({
-          name: "TOOLS.md",
-          path: "/tmp/TOOLS.md",
+          name: "SOUL.md",
+          path: "/tmp/SOUL.md",
           content: `${"h".repeat(73)}😀${"m".repeat(200)}😀${"t".repeat(23)}`,
         }),
         maxChars: 200,
@@ -128,14 +123,33 @@ describe("buildBootstrapContextFiles", () => {
     const maxChars = EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content: "a".repeat(maxChars * 2),
       }),
     ];
     const [result] = buildBootstrapContextFiles(files, { maxChars });
-    expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
+    expect(result?.content).toContain("[...truncated, read USER.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("gives USER.md its own small bootstrap budget", () => {
+    const files = [
+      makeFile({
+        name: "USER.md",
+        path: "/tmp/USER.md",
+        content: "u".repeat(10_000),
+      }),
+      makeFile({
+        name: "MEMORY.md",
+        path: "/tmp/MEMORY.md",
+        content: "m".repeat(10_000),
+      }),
+    ];
+    const result = buildBootstrapContextFiles(files);
+
+    expect(result[0]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[0]?.content).toContain("read USER.md for full content");
+    expect(result[1]?.content).toBe("m".repeat(10_000));
   });
   it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
     // AGENTS.md truncation keeps scoped-policy signals from the middle so model
@@ -159,13 +173,166 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain(requiredScopedInstruction);
     expect(result?.content).toContain("[...truncated, read AGENTS.md for full content...]");
   });
+  it("keeps non-Latin mandatory policy lines from oversized AGENTS.md middle content", () => {
+    const mandatory = "禁止在此子树使用共享账号";
+    const ordinary = "请保持本段内容简洁";
+    const content = [
+      "# Root policy",
+      "A".repeat(900),
+      "",
+      mandatory,
+      "",
+      ordinary,
+      "B".repeat(700),
+      "tail marker",
+    ].join("\n");
+    const [result] = buildBootstrapContextFiles([makeFile({ content })], {
+      maxChars: 600,
+    });
+
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(result?.content).toContain(mandatory);
+    expect(result?.content).not.toContain(ordinary);
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
+  it("keeps the quoted heartbeat example with its framing", () => {
+    const frame = "Example heartbeat prompt:";
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([frame, QUOTED_HEARTBEAT_EXAMPLE])],
+      { maxChars: 2000 },
+    );
+
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(result?.content).toContain([frame, QUOTED_HEARTBEAT_EXAMPLE].join("\n"));
+    expect(result?.content.length).toBeLessThanOrEqual(2000);
+  });
+
+  it.each([
+    { padding: 51, fits: true },
+    { padding: 52, fits: false },
+  ])("selects the whole framed unit when fits=$fits", ({ padding, fits }) => {
+    // The header and separator leave 198 of the 210 digest characters for this unit.
+    const frame = "Example " + "x".repeat(padding);
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([frame, QUOTED_HEARTBEAT_EXAMPLE])],
+      { maxChars: 600 },
+    );
+
+    if (fits) {
+      expect(result?.content).toContain([frame, QUOTED_HEARTBEAT_EXAMPLE].join("\n"));
+      expect(result?.content).not.toContain("more policy lines omitted");
+    } else {
+      expect(result?.content).not.toContain(frame);
+      expect(result?.content).not.toContain(QUOTED_HEARTBEAT_EXAMPLE);
+      expect(result?.content).toContain("[...1 more policy lines omitted...]");
+    }
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
+
+  it("keeps framing indivisible under the remaining total budget", () => {
+    const frame = "Example " + "x".repeat(52);
+    const result = buildBootstrapContextFiles(
+      [
+        makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "s".repeat(400) }),
+        makeMiddleBootstrapFile([frame, QUOTED_HEARTBEAT_EXAMPLE]),
+      ],
+      { maxChars: 2000, totalMaxChars: 1000 },
+    );
+
+    expect(result[0]?.content).toBe("s".repeat(400));
+    expect(result[1]?.content).not.toContain(QUOTED_HEARTBEAT_EXAMPLE);
+    expect(result[1]?.content).not.toContain(frame);
+    expect(result[1]?.content.length).toBeLessThanOrEqual(600);
+  });
+
+  it.each([
+    { name: "blank line", before: ["Example policy:", ""], after: [] },
+    { name: "backtick opening", before: ["Example policy:", "```"], after: ["```"] },
+    { name: "backtick closing", before: ["```", "Example policy:", "```"], after: [] },
+    { name: "tilde opening", before: ["Example policy:", "~~~"], after: ["~~~"] },
+    { name: "tilde closing", before: ["~~~", "Example policy:", "~~~"], after: [] },
+  ])("clears framing at a $name boundary", ({ before, after }) => {
+    const candidate = "Never commit secrets without validation.";
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([...before, candidate, ...after])],
+      { maxChars: 2000 },
+    );
+
+    expect(result?.content).toContain(candidate);
+    expect(result?.content).not.toContain("Example policy:");
+    expect(result?.content).not.toContain("```");
+    expect(result?.content).not.toContain("~~~");
+    expect(result?.content.length).toBeLessThanOrEqual(2000);
+  });
+
+  it("counts omitted candidates without counting their framing lines", () => {
+    const selected = "Never commit secrets without validation.";
+    const omitted = "Required: always run tests before push.";
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile(["Example policy:", selected, "Another example:", omitted])],
+      { maxChars: 350 },
+    );
+
+    expect(result?.content).toContain(["Example policy:", selected].join("\n"));
+    expect(result?.content).not.toContain(omitted);
+    expect(result?.content).toContain("[...1 more policy lines omitted...]");
+    expect(result?.content.length).toBeLessThanOrEqual(350);
+  });
+
+  it.each(["Required: always run tests before push.", "Never commit secrets without validation."])(
+    "keeps repeated frames local and ordered for %s",
+    (second) => {
+      const first = "Never commit secrets without validation.";
+      const middle = "Must read scoped AGENTS.md before subtree work.";
+      const frame = "Example policy:";
+      const [result] = buildBootstrapContextFiles(
+        [makeMiddleBootstrapFile([frame, first, "", middle, "", frame, second])],
+        { maxChars: 2000 },
+      );
+
+      expect(result?.content).toContain([frame, first, middle, frame, second].join("\n"));
+      expect(result?.content.split(frame)).toHaveLength(3);
+      expect(result?.content.length).toBeLessThanOrEqual(2000);
+    },
+  );
+
+  it("prioritizes policy lines while rendering selected units in source order", () => {
+    const earlyShort = "- Early normal ".padEnd(20, "a");
+    const earlyLong = "- Normal payload ".padEnd(70, "b");
+    const urgent = "Never ".padEnd(140, "c");
+    const lateShort = "- Late normal ".padEnd(20, "d");
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([earlyShort, "", earlyLong, "", urgent, "", lateShort])],
+      { maxChars: 600 },
+    );
+
+    expect(result?.content).toContain([earlyShort, urgent, lateShort].join("\n"));
+    expect(result?.content).not.toContain(earlyLong);
+    expect(result?.content).toContain("[...1 more policy lines omitted...]");
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
+  it("prioritizes Traditional Chinese mandatory bullets", () => {
+    const earlyShort = "- Early normal ".padEnd(20, "a");
+    const earlyLong = "- Normal payload ".padEnd(70, "b");
+    const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
+    const lateShort = "- Late normal ".padEnd(20, "d");
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([earlyShort, "", earlyLong, "", urgent, "", lateShort])],
+      { maxChars: 600 },
+    );
+
+    expect(result?.content).toContain([earlyShort, urgent, lateShort].join("\n"));
+    expect(result?.content).not.toContain(earlyLong);
+    expect(result?.content).toContain("[...1 more policy lines omitted...]");
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
   it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
     const maxChars = 64;
     const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content,
       }),
     ];
@@ -180,8 +347,8 @@ describe("buildBootstrapContextFiles", () => {
     const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content,
       }),
     ];
@@ -206,7 +373,8 @@ describe("buildBootstrapContextFiles", () => {
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
     expect(totalChars).toBeLessThanOrEqual(EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
     expect(result).toHaveLength(3);
-    expect(result[2]?.content).toBe("c".repeat(10_000));
+    expect(result[2]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[2]?.content).toContain("read USER.md for full content");
   });
 
   it("caps total injected bootstrap characters when totalMaxChars is configured", () => {
@@ -361,6 +529,56 @@ describe("bootstrap limit resolvers", () => {
     }
   });
 
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "uses built-in limits for invalid per-agent overrides (%s), not configured defaults",
+    (value) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+          entries: { worker: { bootstrapMaxChars: value, bootstrapTotalMaxChars: value } },
+        },
+      };
+      for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+        expect(resolver.resolve(cfg, "worker")).toBe(resolver.defaultValue);
+      }
+    },
+  );
+
+  it.each([
+    { name: "omitted", override: {} },
+    {
+      name: "undefined",
+      override: { bootstrapMaxChars: undefined, bootstrapTotalMaxChars: undefined },
+    },
+  ])("inherits configured defaults for $name per-agent limits", ({ override }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+        entries: { worker: override },
+      },
+    };
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      expect(resolver.resolve(cfg, "worker")).toBe(12345);
+    }
+  });
+
+  it("floors positive fractional limits to zero", () => {
+    const configs: OpenClawConfig[] = [
+      { agents: { defaults: { bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 } } },
+      {
+        agents: {
+          defaults: { bootstrapMaxChars: 12345, bootstrapTotalMaxChars: 12345 },
+          entries: { worker: { bootstrapMaxChars: 0.5, bootstrapTotalMaxChars: 0.5 } },
+        },
+      },
+    ];
+    for (const cfg of configs) {
+      for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+        expect(resolver.resolve(cfg, "worker")).toBe(0);
+      }
+    }
+  });
+
   it("fall back when values are invalid", () => {
     for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
       const cfg = {
@@ -368,38 +586,5 @@ describe("bootstrap limit resolvers", () => {
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
     }
-  });
-});
-
-describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to always", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
-    expect(EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
-  });
-
-  it("accepts explicit valid modes", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
-      } as OpenClawConfig),
-    ).toBe("off");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
-      } as OpenClawConfig),
-    ).toBe("once");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },
-      } as OpenClawConfig),
-    ).toBe("always");
-  });
-
-  it("falls back to default for invalid values", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "invalid" } },
-      } as unknown as OpenClawConfig),
-    ).toBe(EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE);
   });
 });

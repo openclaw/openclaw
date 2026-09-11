@@ -38,7 +38,7 @@ const matrixThreadBindingsSchema = z
 
 const matrixExecApprovalsSchema = z
   .object({
-    enabled: z.boolean().optional(),
+    enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
     approvers: AllowFromListSchema,
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
@@ -56,7 +56,7 @@ const botLoopProtectionSchema = z
   .strict()
   .optional();
 
-const matrixRoomSchema = buildGroupEntrySchema({
+export const matrixRoomSchema = buildGroupEntrySchema({
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
@@ -74,7 +74,7 @@ const matrixNetworkSchema = z
   .strict()
   .optional();
 
-const matrixStreamingSchema = z
+export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -92,6 +92,7 @@ const matrixStreamingSchema = z
         maxLines: z.number().int().positive().optional(),
         maxLineChars: z.number().int().positive().optional(),
         toolProgress: z.boolean().optional(),
+        commandText: z.enum(["raw", "status"]).optional(),
       })
       .strict()
       .optional(),
@@ -104,11 +105,48 @@ const matrixStreamingSchema = z
   })
   .strict();
 
-const MatrixConfigSchema = z.object({
+const retiredMatrixAccountStreamingKeys = [
+  "streamMode",
+  "chunkMode",
+  "blockStreaming",
+  "blockStreamingCoalesce",
+  "draftChunk",
+] as const;
+
+function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
+  if (typeof account !== "object" || account === null || Array.isArray(account)) {
+    return true;
+  }
+  if (retiredMatrixAccountStreamingKeys.some((key) => Object.hasOwn(account, key))) {
+    return false;
+  }
+  if (!Object.hasOwn(account, "streaming")) {
+    return true;
+  }
+  const streaming = (account as { streaming?: unknown }).streaming;
+  return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
+}
+
+export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
+  joinIntro: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  accounts: z.record(z.string(), z.unknown()).optional(),
+  // Accounts stay schema-open, but retired scalar streaming must fail loudly
+  // instead of silently resolving to "off"; doctor migrates the old spelling.
+  accounts: z
+    .record(
+      z.string(),
+      z
+        .object({ joinIntro: z.boolean().optional() })
+        .passthrough()
+        .refine(hasCanonicalMatrixAccountStreaming, {
+          message:
+            'flat or scalar streaming values are no longer supported; use streaming.* and run "openclaw doctor --fix"',
+        }),
+    )
+    .optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   network: matrixNetworkSchema,

@@ -1,8 +1,16 @@
 // Media read capability tests cover allowed roots and blocked file access.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { readOutboundMediaFile } from "./bounded-read-file.js";
+import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import { loadWebMediaRaw } from "./web-media.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn<
@@ -16,6 +24,8 @@ const channelPluginMocks = vi.hoisted(() => ({
   >(() => undefined),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
   getLoadedChannelPlugin: channelPluginMocks.getLoadedChannelPlugin,
@@ -23,6 +33,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 describe("resolveAgentScopedOutboundMediaAccess", () => {
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.unstubAllEnvs();
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
@@ -35,7 +46,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
     expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
+      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
       "/tmp/media-workspace",
     ]);
     expect(typeof result.readFile).toBe("function");
@@ -51,7 +62,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(Object.keys(result)).toStrictEqual(["localRoots", "readFile", "workspaceDir"]);
     expect(result.localRoots).toStrictEqual([
-      ...getDefaultMediaLocalRoots(),
+      ...getDefaultMediaLocalRoots().filter((root) => path.basename(root) !== "sandboxes"),
       "/tmp/explicit-workspace",
     ]);
     expect(typeof result.readFile).toBe("function");
@@ -105,6 +116,249 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeUndefined();
     expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+  });
+
+  it.each([
+    {
+      name: "global sender id",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "id:attacker": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat", requesterSenderId: "attacker" },
+    },
+    {
+      name: "agent sender username",
+      cfg: {
+        tools: { allow: ["read"] },
+        agents: {
+          list: [
+            {
+              id: "restricted",
+              workspace: "/tmp/restricted-workspace",
+              tools: {
+                toolsBySender: { "username:blocked-user": { deny: ["read"] } },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      identity: {
+        agentId: "restricted",
+        messageProvider: "requestchat",
+        requesterSenderUsername: "blocked-user",
+      },
+    },
+    {
+      name: "session-derived channel sender id",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "channel:requestchat:attacker": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: {
+        sessionKey: "agent:main:requestchat:group:ops",
+        requesterSenderId: "attacker",
+      },
+    },
+    {
+      name: "sender wildcard",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat", requesterSenderId: "attacker" },
+    },
+    {
+      name: "sender wildcard without identity",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat" },
+    },
+  ])("does not enable host reads for $name policy", ({ cfg, identity }) => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      ...identity,
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeUndefined();
+    expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+  });
+
+  it("keeps host reads enabled when agent sender policy allows the requester", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "*": { deny: ["read"] } },
+      },
+      agents: {
+        list: [
+          {
+            id: "trusted",
+            workspace: "/tmp/trusted-workspace",
+            tools: { toolsBySender: { "id:trusted-user": {} } },
+          },
+        ],
+      },
+    };
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "trusted",
+      messageProvider: "requestchat",
+      requesterSenderId: "trusted-user",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+    expect(result.localRoots).toContain("/Users/peter/Pictures");
+  });
+
+  it("blocks denied workspace attachments while preserving managed artifacts", async () => {
+    const baseDir = tempDirs.make("openclaw-media-sender-policy-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace");
+    const workspaceFile = path.join(workspaceDir, "private.bin");
+    const managedFile = path.join(stateDir, "media", "tool-image-generation", "result.bin");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(path.dirname(managedFile), { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(workspaceFile, "private");
+    await fs.writeFile(managedFile, "managed");
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "id:attacker": { deny: ["read"] } },
+      },
+      agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
+    };
+
+    const workspaceReadFile = vi.fn(async () => Buffer.from("private"));
+    const deniedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [workspaceFile],
+      workspaceMediaAccess: {
+        localRoots: [workspaceDir],
+        readFile: workspaceReadFile,
+        workspaceDir,
+      },
+    });
+    await expect(
+      loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess })),
+    ).rejects.toThrow(/not under an allowed directory/i);
+    expect(workspaceReadFile).not.toHaveBeenCalled();
+
+    const managedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [managedFile],
+    });
+    const loaded = await loadWebMediaRaw(
+      managedFile,
+      buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
+    );
+    expect(loaded.buffer.toString()).toBe("managed");
+  });
+
+  it("keeps approved temp media readable with a workspace reader in workspace-only mode", async () => {
+    const preferredTmpRoot = getDefaultMediaLocalRoots()[0];
+    if (!preferredTmpRoot) {
+      throw new Error("preferred temp media root is unavailable");
+    }
+    await fs.mkdir(preferredTmpRoot, { recursive: true });
+    const tempMediaDir = tempDirs.make("workspace-only-media-", preferredTmpRoot);
+    const workspaceDir = tempDirs.make("workspace-only-agent-");
+    const tempMediaPath = path.join(tempMediaDir, "generated.txt");
+    await fs.writeFile(tempMediaPath, "generated");
+    const workspaceReadFile = vi.fn(async () => Buffer.from("workspace"));
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: { allow: ["read"], fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      workspaceDir,
+      mediaSources: [tempMediaPath],
+      workspaceMediaAccess: {
+        localRoots: [workspaceDir],
+        readFile: workspaceReadFile,
+        workspaceDir,
+      },
+    });
+
+    const loaded = await loadWebMediaRaw(
+      tempMediaPath,
+      buildOutboundMediaLoadOptions({ mediaAccess: access }),
+    );
+    expect(loaded.buffer.toString()).toBe("generated");
+    expect(workspaceReadFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects sibling sandbox media for a workspace-only agent", async () => {
+    const baseDir = tempDirs.make("workspace-only-sibling-sandbox-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace-main");
+    const siblingFile = path.join(stateDir, "sandboxes", "sibling", "secret.txt");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(path.dirname(siblingFile), { recursive: true });
+    await fs.writeFile(siblingFile, "sibling-secret");
+
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        tools: { fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      agentId: "main",
+      workspaceDir,
+      mediaSources: [siblingFile],
+    });
+
+    await expect(
+      loadWebMediaRaw(siblingFile, buildOutboundMediaLoadOptions({ mediaAccess: access })),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows media from the exact active session workspace", async () => {
+    const baseDir = tempDirs.make("active-sandbox-media-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace-main");
+    const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "active");
+    const activeFile = path.join(sessionWorkspaceDir, "report.txt");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(sessionWorkspaceDir, { recursive: true });
+    await fs.writeFile(activeFile, "active-report");
+
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        tools: { fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      agentId: "main",
+      workspaceDir,
+      sessionWorkspaceDir,
+      mediaSources: [activeFile],
+    });
+
+    const loaded = await loadWebMediaRaw(
+      activeFile,
+      buildOutboundMediaLoadOptions({ mediaAccess: access }),
+    );
+    expect(loaded.buffer.toString()).toBe("active-report");
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {
@@ -183,6 +437,68 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
   });
+
+  it("enforces the caller byte cap before buffering host media", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cap-"));
+    try {
+      const filePath = path.join(workspaceDir, "oversized.bin");
+      await fs.writeFile(filePath, Buffer.alloc(2));
+      const result = resolveAgentScopedOutboundMediaAccess({
+        cfg: {
+          tools: {
+            allow: ["read"],
+          },
+        } as OpenClawConfig,
+        workspaceDir,
+      });
+
+      await expect(
+        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
+      ).rejects.toThrow(/exceeds.*1 byte/i);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects owned host reads when an allowed ancestor symlink retargets before open",
+    async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-media-race-"));
+      const workspaceDir = path.join(base, "workspace");
+      const insideDir = path.join(workspaceDir, "inside");
+      const outsideDir = path.join(base, "outside");
+      const aliasDir = path.join(workspaceDir, "slot");
+      const filePath = path.join(aliasDir, "report.csv");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(insideDir, "report.csv"), "inside");
+      await fs.writeFile(path.join(outsideDir, "report.csv"), "outside-secret");
+      await fs.symlink(insideDir, aliasDir);
+      const result = resolveAgentScopedOutboundMediaAccess({
+        cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
+        workspaceDir,
+        mediaSources: [filePath],
+      });
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (openedPath) => {
+          if (openedPath !== filePath) {
+            return;
+          }
+          await fs.rm(aliasDir);
+          await fs.symlink(outsideDir, aliasDir);
+        },
+      });
+
+      try {
+        await expect(
+          readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
+          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+        ).rejects.toMatchObject({ code: "path-mismatch" });
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps host reads enabled for DM sender when no group context exists", () => {
     const result = resolveAgentScopedOutboundMediaAccess({

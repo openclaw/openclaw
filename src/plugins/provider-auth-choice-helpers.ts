@@ -1,12 +1,17 @@
 // Normalizes provider auth choice metadata from plugin setup surfaces.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  listAgentEntries,
+  readAgentRosterProperty,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -263,7 +268,8 @@ function normalizeConfigModelRefsForWrite(
 ): OpenClawConfig {
   const providerNormalized = normalizeModelProviderConfigsForWrite(cfg, providerConfigNormalizer);
   const defaults = providerNormalized.agents?.defaults;
-  const agentsList = providerNormalized.agents?.list;
+  const agentsList = listAgentEntries(providerNormalized);
+  const roster = readAgentRosterProperty(providerNormalized);
 
   let nextDefaults = defaults;
   if (defaults) {
@@ -295,7 +301,11 @@ function normalizeConfigModelRefsForWrite(
     agents: {
       ...providerNormalized.agents,
       ...(nextDefaults ? { defaults: nextDefaults } : {}),
-      ...(nextAgentsList !== undefined ? { list: nextAgentsList as typeof agentsList } : {}),
+      ...(nextAgentsList !== agentsList && roster?.kind === "entries"
+        ? { entries: toAgentEntriesRecord(nextAgentsList as typeof agentsList) }
+        : nextAgentsList !== agentsList && roster?.kind === "list"
+          ? { list: nextAgentsList as typeof agentsList }
+          : {}),
     },
   };
 }
@@ -343,25 +353,34 @@ export function applyProviderAuthConfigPatch(
 }
 
 /**
- * Restore `agents.defaults.model` after a provider auth config merge when the user did not pass
- * `--set-default`, so `applyConfig` patches cannot replace the primary without an explicit opt-in.
+ * Restore `agents.defaults.model`, including its absence, after a provider auth config merge when
+ * the user did not pass `--set-default`.
  */
 export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
   cfg: OpenClawConfig;
   priorAgentsDefaultsModel?: AgentModelConfig;
   setDefault?: boolean;
 }): OpenClawConfig {
-  if (params.setDefault || params.priorAgentsDefaultsModel === undefined) {
+  if (params.setDefault) {
     return params.cfg;
+  }
+  if (
+    params.priorAgentsDefaultsModel === undefined &&
+    params.cfg.agents?.defaults?.model === undefined
+  ) {
+    return params.cfg;
+  }
+  const defaults = { ...params.cfg.agents?.defaults };
+  if (params.priorAgentsDefaultsModel === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = params.priorAgentsDefaultsModel;
   }
   return {
     ...params.cfg,
     agents: {
       ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        model: params.priorAgentsDefaultsModel,
-      },
+      defaults,
     },
   };
 }

@@ -5,20 +5,30 @@
  * companion pass keeps the rest of scripts/** as library project files and
  * makes repository tests real consumers of deliberately testable helpers.
  */
+import fs from "node:fs";
 import productionConfig from "./knip.config.ts";
 
-const scriptEntries = productionConfig.workspaces["."].entry.filter((entry) =>
-  entry.startsWith("scripts/"),
+function isTypedShimImplementationEntry(entry: string): boolean {
+  const filePath = entry.endsWith("!") ? entry.slice(0, -1) : entry;
+  // The export-free Crabbox implementation must remain a root so its library imports stay live.
+  if (!filePath.endsWith(".mts") || filePath === "scripts/crabbox-wrapper.mts") {
+    return false;
+  }
+  const basePath = filePath.slice(0, -".mts".length);
+  return fs.existsSync(`${basePath}.mjs`) || fs.existsSync(`${basePath}.js`);
+}
+
+const scriptEntries = productionConfig.workspaces["."].entry.filter(
+  (entry) => entry.startsWith("scripts/") && !isTypedShimImplementationEntry(entry),
 );
 
 const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/actions/register-bind-mount-cleanup/main.cjs!",
-  ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
+  "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
 const config = {
@@ -45,24 +55,14 @@ const config = {
       "enumMembers",
       "namespaceMembers",
     ],
-    "scripts/e2e/secret-provider-integrations.mjs": [
-      "exports",
-      "nsExports",
-      "types",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
-    "scripts/repro/code-mode-namespace-live.ts": [
-      "exports",
-      "nsExports",
-      "types",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
+    // Vitest consumes this required default export through the reporter CLI path.
+    "scripts/lib/vitest-resource-reporter.mts": ["exports"],
+    // Wrangler consumes the Worker default export and instantiates the Durable
+    // Object class by name from wrangler.jsonc; Knip cannot resolve either.
+    "scripts/cloudflare/src/index.ts": ["exports"],
+    "scripts/cloudflare/src/container.ts": ["exports"],
     "src/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     "test/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
   },
@@ -74,6 +74,8 @@ const config = {
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
       project: [
@@ -84,6 +86,7 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
     },

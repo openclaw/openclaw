@@ -1,6 +1,10 @@
 // Scans packaged dist JavaScript for relative imports and missing closure entries.
+import { createRequire } from "node:module";
 import path from "node:path";
+import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
@@ -15,120 +19,33 @@ function hasJavaScriptFileExtension(value) {
   return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
-function resolveDistImportPath(importerPath, specifier) {
-  if (!specifier.startsWith(".")) {
-    return null;
-  }
-  const stripped = stripSpecifierSuffix(specifier);
-  if (!stripped) {
-    return null;
-  }
-  return path.posix.normalize(path.posix.join(path.posix.dirname(importerPath), stripped));
-}
-
-function findStatementStart(source, index) {
-  return (
-    Math.max(
-      source.lastIndexOf(";", index),
-      source.lastIndexOf("{", index),
-      source.lastIndexOf("}", index),
-      source.lastIndexOf("\n", index),
-      source.lastIndexOf("\r", index),
-    ) + 1
+function appendImportEdges(source, importerPath, imports) {
+  const sourceFile = ts.createSourceFile(
+    importerPath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.JS,
   );
-}
-
-function isImportSpecifierContext(source, index) {
-  const dynamicPrefix = source.slice(Math.max(0, index - 32), index);
-  if (/\bimport\s*\(\s*$/u.test(dynamicPrefix)) {
-    return true;
-  }
-  const statementPrefix = source.slice(findStatementStart(source, index), index).trimStart();
-  return (
-    /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
-    /^import\s*$/u.test(statementPrefix)
+  visitModuleSpecifiers(
+    ts,
+    sourceFile,
+    ({ kind, specifier }) => {
+      if (
+        !specifier.startsWith(".") ||
+        (kind === "import-meta-url" && !hasJavaScriptFileExtension(specifier))
+      ) {
+        return;
+      }
+      const importedPath = path.posix.normalize(
+        path.posix.join(path.posix.dirname(importerPath), stripSpecifierSuffix(specifier)),
+      );
+      if (kind !== "import-meta-url" || importedPath.startsWith("dist/")) {
+        imports.push({ importerPath, importedPath });
+      }
+    },
+    { includeCommonJs: true, includeImportMetaUrl: true },
   );
-}
-
-function isRequireSpecifierContext(source, index) {
-  const prefix = source.slice(Math.max(0, index - 32), index);
-  return /\brequire\s*\(\s*$/u.test(prefix);
-}
-
-function isImportMetaUrlContext(source, quoteStart, quoteEnd) {
-  const prefix = source.slice(Math.max(0, quoteStart - 32), quoteStart);
-  if (!/\bnew\s+URL\s*\(\s*$/u.test(prefix)) {
-    return false;
-  }
-  const suffix = source.slice(quoteEnd + 1, quoteEnd + 96);
-  return /^\s*,\s*import\.meta\.url\s*,?\s*\)/u.test(suffix);
-}
-
-function collectImportSpecifiers(source) {
-  const specifiers = [];
-  let inBlockComment = false;
-  let inLineComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    if (inBlockComment) {
-      if (source[index] === "*" && source[index + 1] === "/") {
-        inBlockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (inLineComment) {
-      if (source[index] === "\n" || source[index] === "\r") {
-        inLineComment = false;
-      }
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "*") {
-      inBlockComment = true;
-      index += 1;
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "/") {
-      inLineComment = true;
-      index += 1;
-      continue;
-    }
-
-    const quote = source[index];
-    if (quote !== '"' && quote !== "'") {
-      continue;
-    }
-
-    let cursor = index + 1;
-    let value = "";
-    while (cursor < source.length) {
-      const char = source[cursor];
-      if (char === "\\") {
-        value += source.slice(cursor, cursor + 2);
-        cursor += 2;
-        continue;
-      }
-      if (char === quote) {
-        break;
-      }
-      value += char;
-      cursor += 1;
-    }
-    if (cursor >= source.length) {
-      break;
-    }
-
-    if (value.startsWith(".")) {
-      const isDistDependency =
-        isImportSpecifierContext(source, index) ||
-        isRequireSpecifierContext(source, index) ||
-        (isImportMetaUrlContext(source, index, cursor) && hasJavaScriptFileExtension(value));
-      if (isDistDependency) {
-        specifiers.push(value);
-      }
-    }
-    index = cursor;
-  }
-  return specifiers;
 }
 
 /** Collect missing-file errors for relative imports inside package dist files. */
@@ -149,48 +66,21 @@ export function collectPackageDistImportErrors(params) {
 
 /** Collect relative dist import edges from package JavaScript files. */
 export function collectPackageDistImports(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
+  const files =
+    params.files.length === 1
+      ? [normalizePackagePath(params.files[0])]
+      : [...new Set(params.files.map(normalizePackagePath))].toSorted((left, right) =>
+          left.localeCompare(right),
+        );
   const imports = [];
 
-  for (const importerPath of files.toSorted((left, right) => left.localeCompare(right))) {
+  for (const importerPath of files) {
     if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
       continue;
     }
     const source = params.readText(importerPath);
-    for (const specifier of collectImportSpecifiers(source)) {
-      const importedPath = resolveDistImportPath(importerPath, specifier);
-      if (!importedPath) {
-        continue;
-      }
-      imports.push({ importerPath, importedPath });
-    }
+    appendImportEdges(source, importerPath, imports);
   }
 
   return imports;
-}
-
-/** Expand seed dist files to include all reachable relative dist imports. */
-export function expandPackageDistImportClosure(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
-  const fileSet = new Set(files);
-  const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
-  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
-  const importsByImporter = new Map();
-  for (const { importerPath, importedPath } of imports) {
-    const importerImports = importsByImporter.get(importerPath) ?? [];
-    importerImports.push(importedPath);
-    importsByImporter.set(importerPath, importerImports);
-  }
-
-  const queue = [...expectedSet].filter((file) => fileSet.has(file));
-  for (const importerPath of queue) {
-    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
-      if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
-        expectedSet.add(importedPath);
-        queue.push(importedPath);
-      }
-    }
-  }
-
-  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
 }

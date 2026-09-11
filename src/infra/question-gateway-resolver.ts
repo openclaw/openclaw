@@ -10,7 +10,17 @@ const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 
 export type ResolveQuestionOverGatewayResult =
   | { status: "answered"; questionId: string; optionValue: string }
+  | { status: "custom-input"; questionId: string }
   | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
+
+/**
+ * Re-checked after the awaited question read and immediately before the resolve
+ * write, so access lost during that window cannot answer.
+ */
+export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Only a caller that supplies an authorizer can receive this. */
+export type ResolveQuestionOverGatewayDenial = { status: "denied" };
 
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
@@ -23,10 +33,18 @@ export type ResolveQuestionOverGatewayParams = {
       /** Rendered option value carried by the pressed control (reactions). */
       optionValue: string;
       optionIndex?: never;
+      customInput?: never;
     }
   | {
       /** Compact callback index; mapped to the canonical label via question.get. */
       optionIndex: number;
+      optionValue?: never;
+      customInput?: never;
+    }
+  | {
+      /** Validate and retain the Gateway question for a typed custom answer. */
+      customInput: true;
+      optionIndex?: never;
       optionValue?: never;
     }
 );
@@ -46,14 +64,31 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
   return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
 }
 
-/** Resolves one rendered option value against the gateway-owned question. */
+/** Params for the overload that re-checks access before the resolve write. */
+export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
+  authorize: QuestionResolutionAuthorizer;
+};
+
+/** Resolves one rendered choice or validates a custom-input transition. */
+// Only the authorized overload widens the result, so callers that never opt in
+// keep the result union they already exhaust.
+export async function resolveQuestionOverGateway(
+  params: AuthorizedResolveQuestionOverGatewayParams,
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial>;
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
-): Promise<ResolveQuestionOverGatewayResult> {
+): Promise<ResolveQuestionOverGatewayResult>;
+export async function resolveQuestionOverGateway(
+  params: ResolveQuestionOverGatewayParams & { authorize?: QuestionResolutionAuthorizer },
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
-  if (params.optionValue === undefined && !Number.isInteger(params.optionIndex)) {
+  if (
+    params.customInput !== true &&
+    params.optionValue === undefined &&
+    !Number.isInteger(params.optionIndex)
+  ) {
     throw new Error("question resolution requires an option value or index");
   }
   if (params.optionValue !== undefined && !params.optionValue) {
@@ -89,9 +124,18 @@ export async function resolveQuestionOverGateway(
   if (!question || question.multiSelect || question.isSecret) {
     throw new Error("question button resolution requires one tappable question");
   }
+  if (params.customInput === true) {
+    if (!question.isOther) {
+      throw new Error("question does not allow a custom answer");
+    }
+    return { status: "custom-input", questionId: question.questionId };
+  }
   const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
+  }
+  if (params.authorize && !(await params.authorize())) {
+    return { status: "denied" };
   }
   try {
     await callGateway<QuestionResolveResult>({

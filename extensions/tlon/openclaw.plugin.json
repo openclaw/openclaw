@@ -1,5 +1,9 @@
 {
   "id": "tlon",
+  "categories": ["channels"],
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Tlon/Urbit",
   "description": "OpenClaw Tlon/Urbit channel plugin for chat workflows.",
   "activation": {

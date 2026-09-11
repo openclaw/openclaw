@@ -1,6 +1,9 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
+import { CronCliError } from "./cron-cli-error.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
@@ -24,6 +27,8 @@ const assignIf = (
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
+  webhookUrl: string | undefined,
+  commandCwd: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -31,19 +36,24 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const commandShell = normalizeOptionalString(opts.command);
   const commandArgv = parseCronCommandArgv(opts.commandArgv);
   if (commandShell && commandArgv) {
-    throw new Error("Pass command payload either with --command or --command-argv, not both.");
+    throw new CronCliError(
+      "Pass command payload either with --command or --command-argv, not both.",
+    );
   }
+  // Raw flag presence owns the set/clear mutex even when normalization omits a blank value.
+  const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
-  if (model && opts.clearModel) {
-    throw new Error("Use --model or --clear-model, not both");
+  if (hasModel && opts.clearModel) {
+    throw new CronCliError("Use --model or --clear-model, not both");
   }
+  const hasThinking = typeof opts.thinking === "string";
   const thinking = normalizeOptionalString(opts.thinking);
-  if (thinking && opts.clearThinking) {
-    throw new Error("Use --thinking or --clear-thinking, not both");
+  if (hasThinking && opts.clearThinking) {
+    throw new CronCliError("Use --thinking or --clear-thinking, not both");
   }
   const fallbacks = parseCronFallbacks(opts.fallbacks);
   if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
-    throw new Error("Use --fallbacks or --clear-fallbacks, not both");
+    throw new CronCliError("Use --fallbacks or --clear-fallbacks, not both");
   }
   const toolsAllow = parseCronToolsAllow(opts.tools);
   const timeoutSecondsValue = opts.timeoutSeconds;
@@ -54,7 +64,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
         ? String(timeoutSecondsValue).trim()
         : "";
   if (rawTimeoutSeconds !== undefined && !/^\d+$/u.test(rawTimeoutSeconds)) {
-    throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+    throw new CronCliError("Invalid --timeout-seconds (must be a positive integer).");
   }
   const timeoutSeconds = rawTimeoutSeconds === undefined ? undefined : Number(rawTimeoutSeconds);
   const hasTimeoutSeconds =
@@ -62,7 +72,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     Number.isSafeInteger(timeoutSeconds) &&
     timeoutSeconds > 0;
   if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
-    throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+    throw new CronCliError("Invalid --timeout-seconds (must be a positive integer).");
   }
   const rawNoOutputTimeoutSeconds =
     opts.noOutputTimeoutSeconds ??
@@ -71,22 +81,22 @@ export async function resolveCronEditPayloadDeliveryPatch(
       : undefined);
   const noOutputTimeoutSeconds = parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
   if (rawNoOutputTimeoutSeconds !== undefined && noOutputTimeoutSeconds === undefined) {
-    throw new Error("Invalid --no-output-timeout-seconds (must be a positive integer).");
+    throw new CronCliError("Invalid --no-output-timeout-seconds (must be a positive integer).");
   }
   const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
   if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
-    throw new Error("Invalid --output-max-bytes (must be a positive integer).");
+    throw new CronCliError("Invalid --output-max-bytes (must be a positive integer).");
   }
   const scriptTimeoutSeconds = parseStrictPositiveInteger(opts.scriptTimeoutSeconds);
   if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
-    throw new Error("Invalid --script-timeout-seconds (must be a positive integer).");
+    throw new CronCliError("Invalid --script-timeout-seconds (must be a positive integer).");
   }
   const scriptToolBudget = parseStrictPositiveInteger(opts.scriptToolBudget);
   if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
-    throw new Error("Invalid --script-tool-budget (must be a positive integer).");
+    throw new CronCliError("Invalid --script-tool-budget (must be a positive integer).");
   }
 
-  const hasWebhookDelivery = typeof opts.webhook === "string";
+  const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
@@ -101,48 +111,34 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const hasDeliveryAccount = typeof opts.account === "string" || Boolean(opts.clearAccount);
   const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
   if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
-    throw new Error("--webhook cannot be combined with chat delivery options.");
+    throw new CronCliError("--webhook cannot be combined with chat delivery options.");
   }
   if (typeof opts.channel === "string" && opts.clearChannel) {
-    throw new Error("Use --channel or --clear-channel, not both");
+    throw new CronCliError("Use --channel or --clear-channel, not both");
   }
   if (typeof opts.to === "string" && opts.clearTo) {
-    throw new Error("Use --to or --clear-to, not both");
+    throw new CronCliError("Use --to or --clear-to, not both");
   }
   if (hasDeliveryThreadId && opts.clearThreadId) {
-    throw new Error("Use --thread-id or --clear-thread-id, not both");
+    throw new CronCliError("Use --thread-id or --clear-thread-id, not both");
   }
   if (typeof opts.account === "string" && opts.clearAccount) {
-    throw new Error("Use --account or --clear-account, not both");
+    throw new CronCliError("Use --account or --clear-account, not both");
   }
 
+  // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
+  const hasCommandInput = typeof opts.commandInput === "string";
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
-    typeof opts.commandCwd === "string" ||
-    typeof opts.commandInput === "string" ||
+    Boolean(commandCwd) ||
+    hasCommandInput ||
     opts.commandEnv !== undefined ||
     noOutputTimeoutSeconds !== undefined ||
     outputMaxBytes !== undefined;
-  let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
-  if (
-    hasTimeoutSeconds &&
-    !hasCommandSpecificPayloadField &&
-    typeof opts.message !== "string" &&
-    !model &&
-    typeof opts.fallbacks !== "string" &&
-    !opts.clearFallbacks &&
-    !thinking &&
-    !opts.clearThinking &&
-    typeof opts.lightContext !== "boolean" &&
-    typeof opts.tools !== "string" &&
-    !Array.isArray(opts.tools) &&
-    !opts.clearTools
-  ) {
-    const existing = await loadExistingJob();
-    timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
-  }
-  const hasAgentTurnPayloadField =
+  const hasToolsAllowPatch =
+    typeof opts.tools === "string" || Array.isArray(opts.tools) || Boolean(opts.clearTools);
+  const hasAgentTurnSpecificPayloadField =
     typeof opts.message === "string" ||
     Boolean(model) ||
     Boolean(opts.clearModel) ||
@@ -150,32 +146,84 @@ export async function resolveCronEditPayloadDeliveryPatch(
     Boolean(opts.clearFallbacks) ||
     Boolean(thinking) ||
     Boolean(opts.clearThinking) ||
-    (hasTimeoutSeconds &&
-      !hasCommandSpecificPayloadField &&
-      timeoutOnlyPayloadKind !== "command") ||
-    typeof opts.lightContext === "boolean" ||
-    typeof opts.tools === "string" ||
-    Array.isArray(opts.tools) ||
-    opts.clearTools;
+    typeof opts.lightContext === "boolean";
+  const hasScriptSpecificPayloadField =
+    Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
+  if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
+    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  }
+  if (hasTimeoutSeconds && hasSystemEventPatch) {
+    throw new CronCliError("--timeout-seconds is not supported for systemEvent jobs.");
+  }
+  let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
+  if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
+    const existingJob = await loadExistingJob();
+    const existingKind = existingJob.payload.kind;
+    if (existingKind === "script") {
+      throw new CronCliError(
+        "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
+      );
+    }
+    if (
+      existingKind === "systemEvent" ||
+      isSystemOwnedCronPayloadKind(existingKind) ||
+      isSystemMonitorDeclaration(existingJob.declarationKey)
+    ) {
+      throw new CronCliError(`--timeout-seconds is not supported for ${existingKind} jobs.`);
+    }
+    timeoutOnlyPayloadKind = existingKind;
+  }
+  let toolsOnlyPayloadKind: CronJob["payload"]["kind"] | undefined;
+  if (
+    hasToolsAllowPatch &&
+    !hasSystemEventPatch &&
+    !hasAgentTurnSpecificPayloadField &&
+    !hasCommandSpecificPayloadField &&
+    !hasScriptSpecificPayloadField &&
+    !hasTimeoutSeconds
+  ) {
+    // Tool grants are shared by every payload kind; a policy-only edit must
+    // preserve the stored execution kind instead of creating an agent turn.
+    const existingJob = await loadExistingJob();
+    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
+      throw new CronCliError("System-owned cron jobs cannot be edited by cron clients.");
+    }
+    toolsOnlyPayloadKind = existingJob.payload.kind;
+  }
+  const hasAgentTurnPayloadField =
+    hasAgentTurnSpecificPayloadField ||
+    timeoutOnlyPayloadKind === "agentTurn" ||
+    (hasToolsAllowPatch && toolsOnlyPayloadKind === "agentTurn");
   const hasCommandPayloadField =
     hasCommandSpecificPayloadField ||
-    (hasTimeoutSeconds && (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command"));
+    timeoutOnlyPayloadKind === "command" ||
+    toolsOnlyPayloadKind === "command";
   const hasAgentTurnPatch = hasAgentTurnPayloadField;
   const hasCommandPatch = hasCommandPayloadField;
-  const hasScriptPatch =
-    Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
+  const hasScriptPatch = hasScriptSpecificPayloadField || toolsOnlyPayloadKind === "script";
+  const hasSystemEventOrToolsPatch = hasSystemEventPatch || toolsOnlyPayloadKind === "systemEvent";
   if (
-    [hasSystemEventPatch, hasAgentTurnPatch, hasCommandPatch, hasScriptPatch].filter(Boolean)
+    [hasSystemEventOrToolsPatch, hasAgentTurnPatch, hasCommandPatch, hasScriptPatch].filter(Boolean)
       .length > 1
   ) {
-    throw new Error("Choose at most one payload change");
+    throw new CronCliError("Choose at most one payload change");
   }
 
-  if (hasSystemEventPatch) {
-    patch.payload = {
-      kind: "systemEvent",
-      text: String(opts.systemEvent),
-    };
+  const assignToolsAllowPatch = (payload: Record<string, unknown>): void => {
+    if (opts.clearTools) {
+      // Clearing a restriction means an explicit unrestricted grant. Persisting
+      // a wildcard avoids creating a new capless legacy job at the upgrade boundary.
+      payload.toolsAllow = ["*"];
+    } else if (toolsAllow) {
+      payload.toolsAllow = toolsAllow;
+    }
+  };
+
+  if (hasSystemEventOrToolsPatch) {
+    const payload: Record<string, unknown> = { kind: "systemEvent" };
+    assignIf(payload, "text", String(opts.systemEvent), hasSystemEventPatch);
+    assignToolsAllowPatch(payload);
+    patch.payload = payload;
   } else if (hasAgentTurnPatch) {
     const payload: Record<string, unknown> = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
@@ -193,24 +241,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
-    if (opts.clearTools) {
-      payload.toolsAllow = null;
-    } else if (toolsAllow) {
-      payload.toolsAllow = toolsAllow;
-    }
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   } else if (hasCommandPatch) {
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
-    assignIf(
-      payload,
-      "cwd",
-      normalizeOptionalString(opts.commandCwd),
-      typeof opts.commandCwd === "string",
-    );
+    assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
-    assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
+    assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(
       payload,
@@ -219,6 +258,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       noOutputTimeoutSeconds !== undefined,
     );
     assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   } else if (hasScriptPatch) {
     const payload: Record<string, unknown> = { kind: "script" };
@@ -227,6 +267,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds, scriptTimeoutSeconds !== undefined);
     assignIf(payload, "toolBudget", scriptToolBudget, scriptToolBudget !== undefined);
+    assignToolsAllowPatch(payload);
     patch.payload = payload;
   }
 
@@ -249,8 +290,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       delivery.channel = channel ? channel : undefined;
     }
     if (hasWebhookDelivery) {
-      const webhook = normalizeOptionalString(opts.webhook) ?? "";
-      delivery.to = webhook ? webhook : undefined;
+      delivery.to = webhookUrl;
     } else if (opts.clearTo) {
       delivery.to = null;
     } else if (typeof opts.to === "string") {

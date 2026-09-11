@@ -2,14 +2,34 @@
 // Wraps registry/git update checks and formats compact update rows/hints.
 
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import {
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+  type UpdateChannel,
+} from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
+  type UpdateInstallIdentity,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
+
+/** Chooses a registry tag only after the status check has identified the install. */
+export function resolveStatusRegistryUpdateChannel(
+  params: UpdateInstallIdentity & {
+    configChannel?: UpdateChannel | null;
+  },
+): UpdateChannel {
+  return resolveEffectiveUpdateChannel({
+    configChannel: params.configChannel,
+    currentVersion: VERSION,
+    installKind: params.installKind,
+    git: params.git,
+  }).channel;
+}
 
 /** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
@@ -24,16 +44,27 @@ export async function getUpdateCheckResult(params: {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  return await checkUpdateStatus({
+  const update = await checkUpdateStatus({
     root,
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
-    registryChannel: resolveRegistryUpdateChannel({
-      configChannel,
-      currentVersion: VERSION,
-    }),
+    resolveRegistryChannel: ({ installKind, git }) =>
+      resolveStatusRegistryUpdateChannel({
+        configChannel,
+        installKind,
+        git,
+      }),
   });
+  if (update.installKind === "git" && update.git && !params.fetchGit) {
+    const stale = await import("../infra/update-run-ledger.js")
+      .then(({ getLatestUpdateFetchFailure }) => getLatestUpdateFetchFailure())
+      .catch(() => undefined);
+    if (stale) {
+      update.git = { ...update.git, stale, countsCached: true };
+    }
+  }
+  return update;
 }
 
 type UpdateAvailability = {
@@ -73,7 +104,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
   const details: string[] = [];
   if (availability.hasGitUpdate && availability.gitBehind != null) {
-    details.push(`git behind ${availability.gitBehind}`);
+    details.push(
+      `git behind ${availability.gitBehind}${update.git?.countsCached ? " (cached)" : ""}`,
+    );
   }
   if (availability.hasRegistryUpdate && availability.latestVersion) {
     details.push(`npm ${availability.latestVersion}`);
@@ -144,7 +177,15 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.dirty === true) {
       parts.push("dirty");
     }
-    if (update.git.behind != null && update.git.ahead != null) {
+    if (update.git.stale) {
+      const { failedAtMs, detail } = update.git.stale;
+      parts.push(
+        `update check stale: last update fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
+      );
+      if (update.git.behind != null && update.git.ahead != null) {
+        parts.push(`cached: ahead ${update.git.ahead}, behind ${update.git.behind}`);
+      }
+    } else if (update.git.behind != null && update.git.ahead != null) {
       if (update.git.behind === 0 && update.git.ahead === 0) {
         parts.push("up to date");
       } else if (update.git.behind > 0 && update.git.ahead === 0) {
@@ -158,6 +199,11 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
     }
+    // A checkout that pulled but never rebuilt keeps executing the previous dist,
+    // so report the built commit rather than letting HEAD imply what is running.
+    if (update.git.builtSha && update.git.sha && update.git.builtSha !== update.git.sha) {
+      parts.push(`stale build (running ${update.git.builtSha.slice(0, 8)}, run pnpm build)`);
+    }
     appendRegistryUpdateSummary();
   } else {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
@@ -170,9 +216,6 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     if (update.deps.status === "missing") {
       parts.push("deps missing");
-    }
-    if (update.deps.status === "stale") {
-      parts.push("deps stale");
     }
   }
   return `Update: ${parts.join(" · ")}`;

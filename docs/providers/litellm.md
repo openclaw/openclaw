@@ -21,7 +21,7 @@ spend limits, and backend failover without changing OpenClaw config.
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
     ```bash
-    openclaw onboard --non-interactive --accept-risk --auth-choice litellm-api-key \
+    openclaw onboard --non-interactive --accept-risk --skip-health --auth-choice litellm-api-key \
       --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
     ```
 
@@ -30,8 +30,13 @@ spend limits, and backend failover without changing OpenClaw config.
   <Tab title="Manual setup">
     <Steps>
       <Step title="Start LiteLLM Proxy">
+        LiteLLM calls the upstream provider on your behalf, so export that
+        provider's key before starting it — `ANTHROPIC_API_KEY` for the model
+        below. See [Model routing](#advanced) for multi-backend setups.
+
         ```bash
         pip install 'litellm[proxy]'
+        export ANTHROPIC_API_KEY=sk-ant-...
         litellm --model claude-opus-4-6
         ```
       </Step>
@@ -42,6 +47,7 @@ spend limits, and backend failover without changing OpenClaw config.
         ```
       </Step>
     </Steps>
+
   </Tab>
 </Tabs>
 
@@ -65,12 +71,12 @@ spend limits, and backend failover without changing OpenClaw config.
             maxTokens: 64000,
           },
           {
-            id: "gpt-4o",
-            name: "GPT-4o",
-            reasoning: false,
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            reasoning: true,
             input: ["text", "image"],
-            contextWindow: 128000,
-            maxTokens: 8192,
+            contextWindow: 1050000,
+            maxTokens: 128000,
           },
         ],
       },
@@ -90,7 +96,7 @@ The default model onboarding writes is `litellm/claude-opus-4-6`.
 
 LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/generations` and
 `/images/edits` routes. Default image model is `gpt-image-2`; configure a different one under
-`agents.defaults.imageGenerationModel`:
+`agents.defaults.mediaModels.image`:
 
 ```json5
 {
@@ -104,9 +110,11 @@ LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/ge
   },
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "litellm/gpt-image-2",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: {
+          primary: "litellm/gpt-image-2",
+          timeoutMs: 180000,
+        },
       },
     },
   },
@@ -148,9 +156,9 @@ without a global private-network override. For a LAN-hosted proxy, set
           model: claude-opus-4-6
           api_key: os.environ/ANTHROPIC_API_KEY
 
-      - model_name: gpt-4o
+      - model_name: gpt-5.6-sol
         litellm_params:
-          model: gpt-4o
+          model: gpt-5.6-sol
           api_key: os.environ/OPENAI_API_KEY
     ```
 

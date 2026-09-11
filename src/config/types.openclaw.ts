@@ -1,27 +1,20 @@
 // Defines the top-level OpenClaw configuration type.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
+import type { ConfigIncludeOwnership } from "./includes.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type {
-  AuditConfig,
-  DiagnosticsConfig,
-  LoggingConfig,
-  SessionConfig,
-  WebConfig,
-} from "./types.base.js";
+import type { AuditConfig, DiagnosticsConfig, LoggingConfig, SessionConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
-import type { CliConfig } from "./types.cli.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
-import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CronConfig } from "./types.cron.js";
+import type { DesktopConfig } from "./types.desktop.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
-import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
@@ -30,8 +23,9 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
-import type { SystemAgentConfig } from "./types.system-agent.js";
+import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 /** One persisted suppression for a known security audit finding. */
@@ -75,8 +69,6 @@ export type SecurityConfig = {
       env?: Record<string, string>;
       passEnv?: string[];
       trustedDirs?: string[];
-      allowInsecurePath?: boolean;
-      allowSymlinkCommand?: boolean;
     };
   };
 };
@@ -88,18 +80,15 @@ export type SurfaceConfigEntry = {
 
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
-    /** ISO timestamp when this config was last written. */
-    lastTouchedAt?: string;
     /** One-time doctor migrations already applied to this config. */
-    migrations?: {
-      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
-      modelPolicyAllowlist?: true;
-    };
+    migrations?: { modelPolicyAllowlist?: true };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -108,7 +97,7 @@ export type OpenClawConfig = {
   /** ACP integration settings. */
   acp?: AcpConfig;
   env?: {
-    /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
+    /** Opt-in: import missing secrets from a login shell environment (interactive for Bash). */
     shellEnv?: {
       enabled?: boolean;
       /** Timeout for the login shell exec (ms). Default: 15000. */
@@ -128,37 +117,23 @@ export type OpenClawConfig = {
     accessMode?: "full" | "guarded";
     /** Offer installed-application plugin and skill recommendations during onboarding. */
     appRecommendations?: boolean;
-    /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
-    /** OpenClaw version used by the last completed wizard run. */
     lastRunVersion?: string;
-    /** Git commit used by the last completed wizard run, when available. */
     lastRunCommit?: string;
-    /** Command that invoked the last wizard run. */
     lastRunCommand?: string;
-    /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
-    /** Model whose lean-mode default is owned by inference onboarding. */
-    localModelLeanAutoModel?: string;
-    /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
-  /** Metadata-only agent activity audit ledger settings. */
-  audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  /** CLI defaults and command-specific settings. */
-  cli?: CliConfig;
-  /** System-agent rescue/maintenance integration settings. */
-  systemAgent?: SystemAgentConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
-    /** Check for updates on gateway start (npm installs only). */
+    /** Check for updates on gateway start; disabling also prevents anonymous update pings. */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
     auto?: {
@@ -166,17 +141,13 @@ export type OpenClawConfig = {
       enabled?: boolean;
     };
   };
+  /** Explicit operator consent for anonymous feature statistics in the daily update check. */
+  telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
-    assistant?: {
-      /** Assistant display name for UI surfaces. */
-      name?: string;
-      /** Assistant avatar (emoji, short text, or image URL/data URI). */
-      avatar?: string;
-    };
     /**
      * Operator display preferences. Canonical config home so agents can
      * change them through the approval gate and clients stay in sync; the
@@ -184,11 +155,23 @@ export type OpenClawConfig = {
      */
     prefs?: {
       /** Control UI theme. */
-      theme?: "claw" | "knot" | "dash" | "custom";
+      theme?:
+        | "claw"
+        | "knot"
+        | "dash"
+        | "absolutely"
+        | "tide"
+        | "beacon"
+        | "phosphor"
+        | "crt"
+        | "manuscript"
+        | "rose"
+        | "miami"
+        | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** Text scale percentage stop. */
-      textScale?: 90 | 100 | 110 | 125 | 140;
+      /** User-selected Control UI accent color (#RRGGBB). */
+      accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */
@@ -203,14 +186,10 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
-      /** Show live agent activity beneath running Control UI sidebar sessions. */
-      sidebarLiveActivity?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
-  /** Marketplace feed and local package source profile configuration. */
-  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */
@@ -223,36 +202,34 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
+  /** Global root for new managed worktrees. Defaults to <state-dir>/worktrees; accepts ~. */
+  worktreeRoot?: string;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  media?: {
-    /** Preserve original uploaded filenames when storing inbound media. */
-    preserveFilenames?: boolean;
+  attachments?: {
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
   };
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
+  /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
+  tts?: TtsConfig;
   /** Chat command settings. */
   commands?: CommandsConfig;
   /** Human approval workflow settings. */
   approvals?: ApprovalsConfig;
   /** Session keying, reset, maintenance, send-policy, and thread-binding settings. */
   session?: SessionConfig;
-  /** Web runtime settings, including WhatsApp web transport controls. */
-  web?: WebConfig;
   /** Channel defaults, built-in channel sections, and plugin-owned channel config. */
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
-  /** Commitment/reminder extraction settings. */
-  commitments?: CommitmentsConfig;
   /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
   /** Network discovery and service advertisement settings. */
@@ -261,8 +238,10 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
-  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
+  /** Experimental desktop sources owned by the gateway host. */
+  desktop?: DesktopConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */
@@ -314,12 +293,19 @@ export type ConfigFileSnapshot = {
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
+  /** Exact authored ownership for every successfully resolved $include directive. */
+  includeProvenance?: readonly ConfigIncludeOwnership[];
+  /** Temporary roster-only projection retained until write preparation uses generic ownership. */
+  agentRosterIncludeOwned?: boolean;
+  bindingsIncludeOwned?: boolean;
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Include/env-resolved source before raw compatibility migrations. */
+  sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

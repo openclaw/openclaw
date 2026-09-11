@@ -1,0 +1,5 @@
+{
+  "startupJsGzipBytes": 353694,
+  "reason": "Main-area /terminal route adds eager route registration, the dynamic session-path bridge, and catalog navigation glue for native CLI sessions; measured 353694 B startup gzip in CI on the rebased tree. Fixed 358400 B cap retained.",
+  "updatedAt": "2026-09-11"
+}

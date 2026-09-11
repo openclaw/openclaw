@@ -1,7 +1,11 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
+import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -9,6 +13,7 @@ import type { PluginPackageChannelCliOption } from "../plugins/manifest.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { WizardSession } from "../wizard/session.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
@@ -18,9 +23,15 @@ import {
   createExternalChatCatalogEntry,
   createExternalChatSetupPlugin,
 } from "./channels.plugin-install.test-helpers.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
+import {
+  baseConfigSnapshot,
+  createTestConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 let channelsAddCommand: typeof import("./channels/add.js").channelsAddCommand;
+let runChannelsSetupWizard: typeof import("./channels/add-wizard.js").runChannelsSetupWizard;
 
 const catalogMocks = vi.hoisted(() => ({
   getChannelPluginCatalogEntry: vi.fn(),
@@ -44,6 +55,16 @@ const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
   commitConfigWithPendingPluginInstalls: vi.fn(),
 }));
 
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
+}));
+
+const policyMocks = vi.hoisted(() => ({
+  readCurrentConfigForPolicyCheck: vi.fn<() => OpenClawConfig>(() => ({})),
+}));
+
+vi.mock("../config/io.runtime.js", () => policyMocks);
+
 const channelWizardMocks = vi.hoisted(() => {
   const prompter = {
     intro: vi.fn(async () => undefined),
@@ -51,7 +72,9 @@ const channelWizardMocks = vi.hoisted(() => {
     confirm: vi.fn(async () => false),
     note: vi.fn(async () => undefined),
     select: vi.fn(),
+    multiselect: vi.fn(async () => []),
     text: vi.fn(),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   };
   return {
     prompter,
@@ -95,6 +118,8 @@ vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
+
+vi.mock("../cli/terminal-interactivity.js", () => terminalMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -152,12 +177,7 @@ function listConfiguredAccountIds(
   return [];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -367,18 +387,51 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
+function registerEnvContractTestPlugin(channelId: string, envVars: readonly string[]): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channelId,
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          setupContract: defineChannelSetupContract({
+            fields: {
+              useEnv: {
+                kind: "boolean",
+                cli: { flags: "--use-env", description: "Use environment credentials" },
+                envVars,
+              },
+            },
+            adapter: {
+              applyAccountConfig: ({ cfg }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  [channelId]: { enabled: true },
+                },
+              }),
+            },
+          }),
+        } as ChannelPlugin,
+        source: "test",
+      },
+    ]),
+  );
+}
+
 type SignalAfterAccountConfigWritten = NonNullable<
   NonNullable<ChannelPlugin["setup"]>["afterAccountConfigWritten"]
 >;
 type ApplyAccountConfigParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
 >[0];
-type ResolveAccountIdParams = Parameters<
-  NonNullable<NonNullable<ChannelPlugin["setup"]>["resolveAccountId"]>
->[0];
 type PrepareAccountConfigInputParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
 >[0];
+type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
+type NextcloudTalkSetupInput = ChannelSetupInput & { secretFile?: string };
+type MatrixSetupInput = ChannelSetupInput & { initialSyncLimit?: number };
+type PreparedChatSetupInput = ChannelSetupInput & { workspace?: string };
 
 function createSignalPlugin(
   afterAccountConfigWritten: SignalAfterAccountConfigWritten,
@@ -397,7 +450,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                account: input.signalNumber,
+                account: (input as SignalSetupInput).signalNumber,
               },
             },
           },
@@ -425,23 +478,27 @@ async function runSignalAddCommand(
 describe("channelsAddCommand", () => {
   beforeAll(async () => {
     ({ channelsAddCommand } = await import("./channels/add.js"));
+    ({ runChannelsSetupWizard } = await import("./channels/add-wizard.js"));
   });
 
   beforeEach(async () => {
+    policyMocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue({});
     resetPluginRuntimeStateForTest();
+    configFiles.clear();
     configMocks.readConfigFileSnapshot.mockClear();
+    configMocks.readConfigFileSnapshotForWrite.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
-      .mockImplementation(async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      .mockImplementation(async (params: { sourceConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
       });
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      async (params: { sourceConfig: OpenClawConfig }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
         return {
-          config: params.nextConfig,
+          ...configFiles.write(params.sourceConfig),
           installRecords: {},
           movedInstallRecords: false,
         };
@@ -451,6 +508,7 @@ describe("channelsAddCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     catalogMocks.getChannelPluginCatalogEntry.mockClear();
     catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     catalogMocks.listChannelPluginCatalogEntries.mockClear();
@@ -477,12 +535,597 @@ describe("channelsAddCommand", () => {
     channelWizardMocks.prompter.confirm.mockClear();
     channelWizardMocks.prompter.note.mockClear();
     channelWizardMocks.prompter.select.mockClear();
+    channelWizardMocks.prompter.multiselect.mockClear();
     channelWizardMocks.prompter.text.mockClear();
+    channelWizardMocks.prompter.progress.mockClear();
     channelWizardMocks.setupChannels.mockClear();
     channelWizardMocks.setupChannels.mockImplementation(
       async (...args: unknown[]) => args[0] as OpenClawConfig,
     );
     setMinimalChannelsAddRegistryForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["direct", "guided", "gateway"] as const)(
+    "keeps the original write ownership across awaited %s channel setup",
+    async (flow) => {
+      const cfg: OpenClawConfig = {
+        gateway: { auth: { mode: "token", token: "at-read" } },
+        agents: {
+          ownership: "explicit",
+          entries: { research: {} },
+          defaults: { systemAgent: { agentId: "research" } },
+        },
+      };
+      const snapshot = createTestConfigSnapshot(cfg);
+      const writeOptions = {
+        expectedConfigPath: snapshot.path,
+        envSnapshotForRestore: { CHANNEL_SETUP_TOKEN: "at-read" },
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+      configMocks.readConfigFileSnapshotForWrite.mockResolvedValueOnce({ snapshot, writeOptions });
+      vi.stubEnv("CHANNEL_SETUP_TOKEN", "at-read");
+      const changeEnvironment = async () => {
+        await Promise.resolve();
+        vi.stubEnv("CHANNEL_SETUP_TOKEN", "after-await");
+      };
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        await changeEnvironment();
+        const options = args[3] as SetupChannelsOptions;
+        options.onSelection?.(["lifecycle-chat"]);
+        options.onAccountId?.("lifecycle-chat", "default");
+        return cfg;
+      });
+      if (flow === "gateway") {
+        await runChannelsSetupWizard(
+          { channel: "lifecycle-chat", beforePersistentEffect: changeEnvironment },
+          runtime,
+          channelWizardMocks.prompter,
+        );
+      } else {
+        await channelsAddCommand({ channel: "lifecycle-chat", token: "fixture-token" }, runtime, {
+          hasFlags: flow === "direct",
+          beforePersistentEffect: changeEnvironment,
+        });
+      }
+      expect(process.env.CHANNEL_SETUP_TOKEN).toBe("after-await");
+      expect(
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+      ).toHaveBeenCalledWith(expect.objectContaining({ writeOptions }));
+      expect(configMocks.writeConfigFile).toHaveBeenCalledOnce();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("retains the selected workspace when hasFlags=%s", async (hasFlags) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: {
+          research: { workspace: "/tmp/research-workspace" },
+          ops: { workspace: "/tmp/ops-workspace" },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+
+    await channelsAddCommand(
+      { channel: "lifecycle-chat", agent: "ops", ...(hasFlags ? { token: "fixture-token" } : {}) },
+      runtime,
+      { hasFlags },
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(catalogMocks.listChannelPluginCatalogEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+    );
+    if (!hasFlags) {
+      expect(setupOptions().workspaceDir).toBe("/tmp/ops-workspace");
+    }
+  });
+
+  it.each([undefined, "research"])(
+    "keeps workspace selection separate from the routing prompt with ambient owner %s",
+    async (systemAgentId) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: { research: {}, ops: { workspace: "/tmp/ops-workspace" } },
+          ...(systemAgentId ? { defaults: { systemAgent: { agentId: systemAgentId } } } : {}),
+        },
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[3] as SetupChannelsOptions;
+        options.onSelection?.(["lifecycle-chat"]);
+        options.onAccountId?.("lifecycle-chat", "work");
+        return cfg;
+      });
+      channelWizardMocks.prompter.select.mockImplementationOnce(async () => {
+        expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+        return "research";
+      });
+
+      await channelsAddCommand({ channel: "lifecycle-chat", agent: "ops" }, runtime, {
+        hasFlags: false,
+      });
+
+      expect(setupOptions().workspaceDir).toBe("/tmp/ops-workspace");
+      expect(channelWizardMocks.prompter.select).toHaveBeenCalledWith(
+        expect.objectContaining({ initialValue: "ops" }),
+      );
+      expect(writtenConfig().bindings).toEqual([
+        {
+          agentId: "research",
+          match: { channel: "lifecycle-chat", accountId: "work" },
+        },
+      ]);
+    },
+  );
+
+  it("fails fast before guided setup when no interactive terminal is available", async () => {
+    terminalMocks.isTerminalInteractive.mockReturnValue(false);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("channels add --channel <id> --use-env"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+  });
+
+  it("keeps no-TTY guidance for an explicit ownerless agent fleet", async () => {
+    terminalMocks.isTerminalInteractive.mockReturnValue(false);
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("channels add --channel <id> --use-env"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    [true, false].flatMap((interactive) => [
+      { label: "empty", channel: "", expectedChannel: "", interactive },
+      { label: "whitespace-only", channel: " \t ", expectedChannel: "", interactive },
+      {
+        label: "unknown",
+        channel: "unknown-channel",
+        expectedChannel: "unknown-channel",
+        interactive,
+      },
+    ]),
+  )(
+    "rejects an explicit $label guided selector when interactive=$interactive",
+    async ({ channel, expectedChannel, interactive }) => {
+      terminalMocks.isTerminalInteractive.mockReturnValue(interactive);
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+      await channelsAddCommand({ channel }, runtime, { hasFlags: false });
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        interactive
+          ? `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`
+          : expect.stringContaining("channels add --channel <id> --use-env"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(channelWizardMocks.prompter.intro).not.toHaveBeenCalled();
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "empty", channel: "", expectedChannel: "" },
+    { label: "whitespace-only", channel: " \t ", expectedChannel: "" },
+    {
+      label: "unknown",
+      channel: "unknown-channel",
+      expectedChannel: "unknown-channel",
+    },
+  ])(
+    "rejects an explicit $label hosted selector before wizard effects",
+    async ({ channel, expectedChannel }) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+      await expect(
+        runChannelsSetupWizard({ channel }, runtime, channelWizardMocks.prompter),
+      ).rejects.toThrow(
+        `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+      );
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(channelWizardMocks.prompter.intro).not.toHaveBeenCalled();
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an omitted hosted selector on the shared picker path", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await runChannelsSetupWizard({}, runtime, channelWizardMocks.prompter);
+
+    expect(setupOptions()).not.toHaveProperty("initialSelection");
+    expect(setupOptions()).not.toHaveProperty("finishAfterInitialSelection");
+    expect(setupOptions().deferDeviceLinkToClient).toBe(true);
+  });
+
+  it.each(["authority", "write"] as const)(
+    "does not run guided hooks after %s rejection",
+    async (failure) => {
+      const hook = vi.fn(async () => {});
+      const beforePersistentEffect = vi.fn(async () => {
+        if (failure === "authority") {
+          throw new Error("owner revoked");
+        }
+      });
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[3] as SetupChannelsOptions;
+        options.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
+        return { ...(args[0] as OpenClawConfig), messages: { responsePrefix: "configured" } };
+      });
+      if (failure === "write") {
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockRejectedValueOnce(
+          new Error("write failed"),
+        );
+      }
+
+      await expect(
+        channelsAddCommand({}, runtime, { hasFlags: false, beforePersistentEffect }),
+      ).rejects.toThrow(failure === "authority" ? "owner revoked" : "write failed");
+
+      expect(hook).not.toHaveBeenCalled();
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+      ).toHaveBeenCalledTimes(failure === "authority" ? 0 : 1);
+    },
+  );
+
+  it.each(["external-chat", "ext"])(
+    "preselects a hosted catalog channel from the %s selector",
+    async (channel) => {
+      const config: OpenClawConfig = { channels: {} };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          ...createExternalChatCatalogEntry(),
+          origin: "bundled",
+          trustedSourceLinkedOfficialInstall: true,
+          meta: { ...createExternalChatCatalogEntry().meta, aliases: ["ext"] },
+        },
+      ]);
+
+      await runChannelsSetupWizard({ channel }, runtime, channelWizardMocks.prompter);
+
+      expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+      expect(setupOptions().finishAfterInitialSelection).toBe(true);
+      expect(setupOptions().deferDeviceLinkToClient).toBe(true);
+    },
+  );
+
+  it.each(["CLI", "hosted"] as const)(
+    "selects and carries an explicit multi-agent channel owner in the %s wizard",
+    async (surface) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { workspace: "/tmp/openclaw-main-workspace" },
+            helper: { workspace: "/tmp/openclaw-helper-workspace" },
+          },
+        },
+        channels: {},
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      channelWizardMocks.prompter.select
+        .mockResolvedValueOnce({ agentId: "helper" })
+        .mockResolvedValueOnce("main");
+      policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = requireRecord(args[3], "setup options");
+        const onSelection = options.onSelection as ((selection: string[]) => void) | undefined;
+        const onAccountId = options.onAccountId as
+          | ((channel: string, accountId: string) => void)
+          | undefined;
+        onSelection?.(["lifecycle-chat"]);
+        onAccountId?.("lifecycle-chat", "ops");
+        return args[0] as OpenClawConfig;
+      });
+
+      if (surface === "CLI") {
+        await channelsAddCommand({ channel: "lifecycle-chat" }, runtime, { hasFlags: false });
+      } else {
+        await runChannelsSetupWizard(
+          { channel: "lifecycle-chat" },
+          runtime,
+          channelWizardMocks.prompter,
+        );
+      }
+
+      expect(channelWizardMocks.prompter.select).toHaveBeenCalledTimes(2);
+      expect(channelWizardMocks.prompter.select.mock.calls[0]?.[0]).toEqual({
+        message: "Set up channels for agent",
+        options: [
+          { value: { agentId: "main" }, label: "main" },
+          { value: { agentId: "helper" }, label: "helper" },
+        ],
+      });
+      expect(setupOptions().workspaceDir).toBe("/tmp/openclaw-helper-workspace");
+      expect(writtenConfig()).toMatchObject({
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "lifecycle-chat", accountId: "ops" },
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    { answer: { agentId: "missing" }, error: 'Unknown agent id "missing"' },
+    { answer: { agentId: "" }, error: 'Unknown agent id ""' },
+    { answer: { agentId: "   " }, error: 'Unknown agent id "   "' },
+    { answer: null, error: "Invalid channel setup owner selection" },
+    { answer: {}, error: "Invalid channel setup owner selection" },
+    { answer: { agentId: 17 }, error: "Invalid channel setup owner selection" },
+  ])("rejects invalid hosted owner $answer before setup", async ({ answer, error }) => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+        },
+      },
+      channels: {},
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+    const session = new WizardSession(async (prompter) => {
+      await runChannelsSetupWizard({ channel: "lifecycle-chat" }, runtime, prompter);
+    });
+
+    const selection = await session.next();
+    expect(selection).toMatchObject({
+      step: { type: "select", message: "Set up channels for agent" },
+    });
+    if (selection.done || !selection.step) {
+      throw new Error("Expected agent selection step");
+    }
+    try {
+      await session.answer(selection.step.id, answer);
+      expect(await session.next()).toMatchObject({
+        done: true,
+        status: "error",
+        error: expect.stringContaining(error),
+      });
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
+  });
+
+  it("rejects an owner removed while the hosted selection is pending", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
+    policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+    const session = new WizardSession(async (prompter) => {
+      await runChannelsSetupWizard({ channel: "lifecycle-chat" }, runtime, prompter);
+    });
+    try {
+      const selection = await session.next();
+      if (selection.done || !selection.step) {
+        throw new Error("Expected owner selection step");
+      }
+      policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+        agents: {
+          ownership: "explicit",
+          entries: { main: { workspace: "/tmp/openclaw-main-workspace" } },
+        },
+      });
+      await session.answer(selection.step.id, { agentId: "helper" });
+      expect(await session.next()).toMatchObject({
+        done: true,
+        status: "error",
+        error: expect.stringContaining('Unknown agent id "helper"'),
+      });
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
+  });
+
+  it.each(["CLI", "hosted"] as const)(
+    "uses the configured setup owner and preserves binding choice in the %s wizard",
+    async (surface) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "helper" } },
+          entries: {
+            main: { workspace: "/tmp/openclaw-main-workspace" },
+            helper: { workspace: "/tmp/openclaw-helper-workspace" },
+          },
+        },
+        channels: {},
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      channelWizardMocks.prompter.select.mockResolvedValueOnce("main");
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = requireRecord(args[3], "setup options");
+        const onSelection = options.onSelection as ((selection: string[]) => void) | undefined;
+        const onAccountId = options.onAccountId as
+          | ((channel: string, accountId: string) => void)
+          | undefined;
+        onSelection?.(["lifecycle-chat"]);
+        onAccountId?.("lifecycle-chat", "ops");
+        return args[0] as OpenClawConfig;
+      });
+
+      if (surface === "CLI") {
+        await channelsAddCommand({ channel: "lifecycle-chat" }, runtime, { hasFlags: false });
+      } else {
+        await runChannelsSetupWizard(
+          { channel: "lifecycle-chat" },
+          runtime,
+          channelWizardMocks.prompter,
+        );
+      }
+
+      expect(channelWizardMocks.prompter.select).toHaveBeenCalledOnce();
+      expect(channelWizardMocks.prompter.select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Send lifecycle-chat/ops messages to agent",
+          initialValue: "helper",
+        }),
+      );
+      expect(setupOptions().workspaceDir).toBe("/tmp/openclaw-helper-workspace");
+      expect(writtenConfig()).toMatchObject({
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "lifecycle-chat", accountId: "ops" },
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    {
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "" },
+      missing: ["SINGLE_CHAT_TOKEN"],
+    },
+    {
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "" },
+      missing: ["MULTI_CHAT_SECOND_TOKEN"],
+    },
+    {
+      channel: "private-key-chat",
+      env: { PRIVATE_CHAT_KEY: "" },
+      missing: ["PRIVATE_CHAT_KEY"],
+    },
+  ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    for (const missing of testCase.missing) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
+    }
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      channel: "single-env-chat",
+      env: { SINGLE_CHAT_TOKEN: "token" },
+    },
+    {
+      channel: "multi-env-chat",
+      env: { MULTI_CHAT_TOKEN: "token", MULTI_CHAT_SECOND_TOKEN: "second-token" },
+    },
+  ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    registerEnvContractTestPlugin(testCase.channel, Object.keys(testCase.env));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not demand env vars outside the selected setup contract", async () => {
+    vi.stubEnv("DECLARED_TOKEN", "declared-token");
+    vi.stubEnv("CONDITIONAL_TOKEN", "");
+    registerEnvContractTestPlugin("conditional-chat", ["DECLARED_TOKEN"]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "conditional-chat", useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("conditional-chat")).toMatchObject({
+      enabled: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("CONDITIONAL_TOKEN"));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("keeps guided channel setup lazy until the user selects a channel", async () => {
@@ -531,7 +1174,7 @@ describe("channelsAddCommand", () => {
 
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
-    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
+    ).toHaveBeenCalledWith(expect.objectContaining({ sourceConfig: installedConfig }));
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
     ).toHaveBeenCalledOnce();
@@ -540,20 +1183,87 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
   });
 
-  it("preselects an installable catalog channel in guided setup", async () => {
+  it.each(["external-chat", "ext"])(
+    "preselects an installable catalog channel from the %s selector",
+    async (channel) => {
+      const config: OpenClawConfig = { channels: {} };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          ...createExternalChatCatalogEntry(),
+          origin: "bundled",
+          trustedSourceLinkedOfficialInstall: true,
+          meta: { ...createExternalChatCatalogEntry().meta, aliases: ["ext"] },
+        },
+      ]);
+
+      await channelsAddCommand({ channel }, runtime, { hasFlags: false });
+
+      expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+      expect(setupOptions().finishAfterInitialSelection).toBe(true);
+    },
+  );
+
+  it("preselects an inactive known channel in guided setup", async () => {
+    const config: OpenClawConfig = {
+      channels: { "lifecycle-chat": { enabled: false } },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await channelsAddCommand({ channel: "lifecycle-chat" }, runtime, { hasFlags: false });
+
+    expect(setupOptions().initialSelection).toEqual(["lifecycle-chat"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
+  });
+
+  it("opens an exact channel id instead of an earlier plugin alias", async () => {
     const config: OpenClawConfig = { channels: {} };
+    const aliasOwner = createChannelTestPluginBase({
+      id: "alias-owner",
+      label: "Alias Owner",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alias-owner",
+          plugin: {
+            ...aliasOwner,
+            meta: { ...aliasOwner.meta, aliases: ["exact-id"] },
+          },
+          source: "test",
+        },
+      ]),
+    );
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       sourceConfig: config,
       config,
     });
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      { ...createExternalChatCatalogEntry(), origin: "workspace" },
+      {
+        ...createExternalChatCatalogEntry(),
+        id: "exact-id",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          id: "exact-id",
+          label: "Exact ID",
+          selectionLabel: "Exact ID",
+        },
+      },
     ]);
 
-    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
+    await channelsAddCommand({ channel: "exact-id" }, runtime, { hasFlags: false });
 
-    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().initialSelection).toEqual(["exact-id"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {
@@ -610,19 +1320,55 @@ describe("channelsAddCommand", () => {
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { account: "", label: "empty" },
+    { account: "   ", label: "whitespace" },
+  ])(
+    "rejects a $label --account before installing a plugin or writing config",
+    async ({ account }) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+      setActivePluginRegistry(createTestRegistry());
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        createExternalChatCatalogEntry(),
+      ]);
+      registerExternalChatSetupPlugin();
+
+      await expect(
+        channelsAddCommand({ channel: "external-chat", account, token: "token-1" }, runtime, {
+          hasFlags: true,
+        }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
-    const applyAccountConfig = vi.fn(({ cfg, input }) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": {
-          enabled: true,
-          baseUrl: input.baseUrl,
-          botSecret: input.secret,
-          botSecretFile: input.secretFile,
+    const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
+      const setupInput = input as NextcloudTalkSetupInput;
+      return {
+        ...setupInput,
+        baseUrl: setupInput.baseUrl ?? setupInput.url,
+        secret: setupInput.secret ?? setupInput.token ?? setupInput.password,
+        secretFile: setupInput.secretFile ?? setupInput.tokenFile,
+      };
+    });
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => {
+      const setupInput = input as NextcloudTalkSetupInput;
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          "nextcloud-talk": {
+            enabled: true,
+            baseUrl: setupInput.baseUrl,
+            botSecret: setupInput.secret,
+            botSecretFile: setupInput.secretFile,
+          },
         },
-      },
-    }));
+      };
+    });
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -632,16 +1378,7 @@ describe("channelsAddCommand", () => {
               id: "nextcloud-talk",
               label: "Nextcloud Talk",
             }),
-            setup: {
-              resolveAccountId: ({ accountId }: ResolveAccountIdParams) => accountId ?? "default",
-              prepareAccountConfigInput: ({ input }: PrepareAccountConfigInputParams) => ({
-                ...input,
-                baseUrl: input.baseUrl ?? input.url,
-                secret: input.secret ?? input.token ?? input.password,
-                secretFile: input.secretFile ?? input.tokenFile,
-              }),
-              applyAccountConfig,
-            },
+            setup: { prepareAccountConfigInput, applyAccountConfig },
           },
           source: "test",
         },
@@ -751,6 +1488,92 @@ describe("channelsAddCommand", () => {
     });
   });
 
+  it("uses channel-owned setup parsing for bundled plugins", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        "typed-chat": {
+          token: input.token,
+          port: input.port,
+        },
+      },
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "typed-chat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "typed-chat", label: "Typed Chat" }),
+            setupContract: defineChannelSetupContract({
+              fields: {
+                token: {
+                  kind: "string",
+                  cli: { flags: "--token <token>", description: "Bot token" },
+                },
+                port: {
+                  kind: "integer",
+                  cli: { flags: "--port <port>", description: "HTTP port" },
+                },
+              },
+              adapter: { applyAccountConfig },
+            }),
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      { channel: "typed-chat", agent: "main", token: "secret", port: "8080" },
+      runtime,
+      {
+        hasFlags: true,
+      },
+    );
+
+    expect(writtenChannel("typed-chat")).toEqual({ token: "secret", port: 8080 });
+    expect(applyAccountConfig).toHaveBeenCalledWith({
+      cfg: baseConfigSnapshot.config,
+      accountId: "default",
+      input: { token: "secret", port: 8080 },
+    });
+  });
+
+  it("reports options that do not belong to the selected channel contract", async () => {
+    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "typed-chat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "typed-chat", label: "Typed Chat" }),
+            setupContract: defineChannelSetupContract({
+              fields: {
+                token: {
+                  kind: "string",
+                  cli: { flags: "--token <token>", description: "Bot token" },
+                },
+              },
+              adapter: { applyAccountConfig },
+            }),
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "typed-chat", signalTransport: "container" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("Unsupported setup option: signalTransport");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(applyAccountConfig).not.toHaveBeenCalled();
+  });
+
   it("prepares setup input before validation, config writes, and post-write hooks", async () => {
     const callOrder: string[] = [];
     const beforePersistentEffect = vi.fn(async () => {
@@ -777,7 +1600,7 @@ describe("channelsAddCommand", () => {
           "prepared-chat": {
             enabled: true,
             token: input.token,
-            workspace: input.workspace,
+            workspace: (input as PreparedChatSetupInput).workspace,
           },
         },
       };
@@ -864,13 +1687,6 @@ describe("channelsAddCommand", () => {
     expect(installCall().promptInstall).toBe(false);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(snapshotCall().forceSetupOnlyChannelPlugins).toBe(true);
-    const refreshedChannels = requireRecord(
-      requireRecord(refreshCall().config, "refresh config").channels,
-      "refresh channels",
-    );
-    expect(
-      requireRecord(refreshedChannels["external-chat"], "refreshed external chat").enabled,
-    ).toBe(true);
     expect(refreshCall().reason).toBe("source-changed");
     expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
@@ -975,6 +1791,53 @@ describe("channelsAddCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("normalizes external channel compatibility before a non-interactive write", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "openclaw-qqbot",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "qqbot", label: "QQ Bot" }),
+            setup: {
+              applyAccountConfig: ({ cfg, input }: ApplyAccountConfigParams) => {
+                const [appId, clientSecret] = input.token?.split(":") ?? [];
+                return {
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    qqbot: {
+                      appId,
+                      clientSecret,
+                      allowFrom: ["*"],
+                    },
+                  },
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "qqbot",
+        token: "app-id:secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(writtenChannel("qqbot")).toMatchObject({
+      appId: "app-id",
+      clientSecret: "secret",
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
+    });
+  });
+
   it("uses setup-entry snapshots when an already loaded channel plugin has no setup adapter", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(
@@ -1076,16 +1939,16 @@ describe("channelsAddCommand", () => {
         ...cfg.channels,
         matrix: {
           enabled: true,
-          initialSyncLimit: input.initialSyncLimit,
+          initialSyncLimit: (input as MatrixSetupInput).initialSyncLimit,
         },
       },
     }));
     const plugin = {
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      ...createChannelTestPluginBase({ id: "legacy-numeric", label: "Legacy Numeric" }),
       setup: { applyAccountConfig },
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("matrix", "Matrix", [
+      createSetupOptionCatalogEntry("legacy-numeric", "Legacy Numeric", [
         {
           flags: "--initial-sync-limit <n>",
           description: "Matrix initial sync limit",
@@ -1094,12 +1957,14 @@ describe("channelsAddCommand", () => {
       ]),
     ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "legacy-numeric", plugin, source: "test" }]),
+    );
 
     await expect(
       channelsAddCommand(
         {
-          channel: "matrix",
+          channel: "legacy-numeric",
           initialSyncLimit: "10x",
         },
         runtime,
@@ -1124,11 +1989,11 @@ describe("channelsAddCommand", () => {
       },
     }));
     const plugin = {
-      ...createChannelTestPluginBase({ id: "tlon", label: "Tlon" }),
+      ...createChannelTestPluginBase({ id: "legacy-lists", label: "Legacy Lists" }),
       setup: { applyAccountConfig },
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("tlon", "Tlon", [
+      createSetupOptionCatalogEntry("legacy-lists", "Legacy Lists", [
         {
           flags: "--group-channels <list>",
           description: "Tlon group channels",
@@ -1142,11 +2007,13 @@ describe("channelsAddCommand", () => {
       ]),
     ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "tlon", plugin, source: "test" }]));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "legacy-lists", plugin, source: "test" }]),
+    );
 
     await channelsAddCommand(
       {
-        channel: "tlon",
+        channel: "legacy-lists",
         groupChannels: "chat/~host/general, chat/~host/random",
         dmAllowlist: "~zod;~nec",
       },
@@ -1173,10 +2040,10 @@ describe("channelsAddCommand", () => {
       },
     }));
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("matrix", "Matrix", [
-        { flags: "--shared-value <value>", description: "Matrix shared value" },
+      createSetupOptionCatalogEntry("legacy-scalar", "Legacy Scalar", [
+        { flags: "--shared-value <value>", description: "Legacy scalar value" },
       ]),
-      createSetupOptionCatalogEntry("tlon", "Tlon", [
+      createSetupOptionCatalogEntry("legacy-list", "Legacy List", [
         {
           flags: "--shared-value <value>",
           description: "Tlon shared values",
@@ -1187,9 +2054,9 @@ describe("channelsAddCommand", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "matrix",
+          pluginId: "legacy-scalar",
           plugin: {
-            ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+            ...createChannelTestPluginBase({ id: "legacy-scalar", label: "Legacy Scalar" }),
             setup: { applyAccountConfig },
           },
           source: "test",
@@ -1198,7 +2065,7 @@ describe("channelsAddCommand", () => {
     );
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await channelsAddCommand({ channel: "matrix", sharedValue: "one,two" }, runtime, {
+    await channelsAddCommand({ channel: "legacy-scalar", sharedValue: "one,two" }, runtime, {
       hasFlags: true,
     });
 
@@ -1315,12 +2182,12 @@ describe("channelsAddCommand", () => {
       },
     };
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
-      async (params: { nextConfig: OpenClawConfig }) => {
-        const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
-        const writtenConfigLocal = { ...params.nextConfig, plugins };
+      async (params: { sourceConfig: OpenClawConfig }) => {
+        const { installs: _installs, ...plugins } = params.sourceConfig.plugins ?? {};
+        const writtenConfigLocal = { ...params.sourceConfig, plugins };
         await configMocks.writeConfigFile(writtenConfigLocal);
         return {
-          config: writtenConfigLocal,
+          ...configFiles.write(writtenConfigLocal),
           installRecords,
           movedInstallRecords: true,
         };
@@ -1350,7 +2217,7 @@ describe("channelsAddCommand", () => {
     );
 
     const commitCall = commitInstallCall();
-    const commitNextConfig = requireRecord(commitCall.nextConfig, "commit next config");
+    const commitNextConfig = requireRecord(commitCall.sourceConfig, "commit source config");
     expect(requireRecord(commitNextConfig.plugins, "commit plugins").installs).toEqual(
       installRecords,
     );

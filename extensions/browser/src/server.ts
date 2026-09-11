@@ -1,7 +1,6 @@
 /**
  * Browser control HTTP server startup and shutdown entrypoints.
  */
-import type { Server } from "node:http";
 import express from "express";
 import {
   createBrowserControlContext,
@@ -18,8 +17,8 @@ import {
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
-import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import {
   installBrowserAuthMiddleware,
@@ -82,13 +81,10 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserControlContext();
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const port = resolved.controlPort;
-  const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, "127.0.0.1", () => resolve(s));
-    s.once("error", reject);
-  }).catch((err: unknown) => {
+  const server = await listenBrowserHttpServer(app, port, "127.0.0.1").catch((err: unknown) => {
     logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });

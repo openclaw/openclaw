@@ -2,18 +2,15 @@
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
+  hasNonEmptyString as nonEmptyString,
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
-import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
+import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
+import { readExecApprovalAllowlistRequirements } from "./exec-approval-rules.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
-
-type ExecApprovalAllowlistRequirement = {
-  readonly key: string;
-  readonly pattern: string;
-  readonly argPattern?: string;
-};
+import { isChannelDenyRule } from "./shape-helpers.js";
 
 export function isPolicyValueAtLeastAsStrict(
   metadata: PolicyRuleMetadata,
@@ -171,10 +168,6 @@ function normalizeRoutingId(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
 }
 
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
-}
-
 function isPolicyOrderedStringAtLeastAsStrict(
   metadata: PolicyRuleMetadata,
   candidate: unknown,
@@ -265,11 +258,7 @@ function policyStringList(
     return undefined;
   }
   if (metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected") {
-    const entries = value.map(execApprovalAllowlistRequirement);
-    if (!entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)) {
-      return undefined;
-    }
-    return entries.map((entry) => entry.key);
+    return readExecApprovalAllowlistRequirements(value, [])?.map((entry) => entry.key);
   }
   if (!value.every((entry) => typeof entry === "string")) {
     return undefined;
@@ -313,101 +302,4 @@ function policyString(value: unknown, metadata: PolicyRuleMetadata): string | un
   }
   const trimmed = value.trim();
   return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
-}
-
-function execApprovalAllowlistRequirement(
-  value: unknown,
-): ExecApprovalAllowlistRequirement | undefined {
-  if (typeof value === "string") {
-    const pattern = value.trim();
-    return pattern === "" ? undefined : execApprovalAllowlistRequirementFromParts(pattern);
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "argPattern" && key !== "pattern")) {
-    return undefined;
-  }
-  const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
-  if (pattern === "") {
-    return undefined;
-  }
-  const argPattern = typeof value.argPattern === "string" ? value.argPattern.trim() : undefined;
-  if (value.argPattern !== undefined && argPattern === undefined) {
-    return undefined;
-  }
-  return execApprovalAllowlistRequirementFromParts(
-    pattern,
-    argPattern === "" ? undefined : argPattern,
-  );
-}
-
-function execApprovalAllowlistRequirementFromParts(
-  pattern: string,
-  argPattern?: string,
-): ExecApprovalAllowlistRequirement {
-  return {
-    key: execApprovalAllowlistRequirementKey(pattern, argPattern),
-    pattern,
-    ...(argPattern === undefined ? {} : { argPattern }),
-  };
-}
-
-function execApprovalAllowlistRequirementKey(
-  pattern: string,
-  argPattern: string | undefined,
-): string {
-  return `${pattern}\0${argPattern ?? ""}`;
-}
-
-function isChannelDenyRule(value: unknown): value is {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-} {
-  return (
-    isRecord(value) &&
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.reason === undefined || typeof value.reason === "string") &&
-    isRecord(value.when) &&
-    typeof value.when.provider === "string"
-  );
-}
-
-function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function expandPolicyToolRequirement(value: string): readonly string[] {
-  const normalized = normalizePolicyToolName(value);
-  return POLICY_TOOL_GROUPS[normalized] ?? [normalized];
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
-}
-
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
 }

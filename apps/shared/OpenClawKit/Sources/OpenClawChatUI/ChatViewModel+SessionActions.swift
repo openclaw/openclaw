@@ -6,6 +6,22 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    var canRequestSessionCompact: Bool {
+        !self.isCompacting &&
+            !self.isSending &&
+            !self.hasBlockingRunActivity &&
+            !self.isAborting
+    }
+
+    struct SessionBranchSwitchActivity: Equatable {
+        let session: SessionSnapshot
+        let generation: UInt64
+    }
+
+    var isSwitchingSessionBranch: Bool {
+        self.sessionBranchSwitchActivity != nil
+    }
+
     private enum SessionBranchesRefreshPurpose {
         case readOnly
         case reconcile
@@ -26,11 +42,10 @@ extension OpenClawChatViewModel {
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
     {
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return false
-        }
+        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return false }
+        self.isCreatingSession = true
+        defer { self.isCreatingSession = false }
+        let initiatingSession = self.currentSessionSnapshot()
         let normalizedAgentID = agentID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -68,6 +83,7 @@ extension OpenClawChatViewModel {
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
+            guard self.isCurrentSession(initiatingSession) else { return false }
             if Self.isUnsupportedCreateSessionError(error) {
                 // Reset only mimics a plain new chat; agent/worktree selections were
                 // not honored, so advanced requests surface the error instead of
@@ -77,17 +93,17 @@ extension OpenClawChatViewModel {
                     self.errorText = error.localizedDescription
                     return false
                 }
+                guard self.canCreateSessionForImmediateSwitch() else { return false }
                 chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
                 await self.performReset()
-                return true
+                return self.isCurrentSession(initiatingSession)
             }
             chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
             self.errorText = error.localizedDescription
             return false
         }
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
+        guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
+            if !self.sessions.contains(where: { $0.key == next }) { self.refreshSessions() }
             return false
         }
         self.adoptCreatedSession(next)
@@ -271,8 +287,15 @@ extension OpenClawChatViewModel {
                     archived: nil,
                     unread: nil)
             case .archive:
+                guard let expectedSessionID = entries[key]?.sessionId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    !expectedSessionID.isEmpty
+                else {
+                    throw ChatSessionBatchValidationError.cannotArchive
+                }
                 try await routeLease.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
                     pinned: nil,
@@ -343,8 +366,10 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: nil,
                     label: .some(nextLabel),
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: nil,
                     unread: nil)
@@ -358,11 +383,15 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func forkSession(key: String) async {
+    public func forkSession(key: String, fromLastCompleted: Bool? = nil) async {
         guard self.canCreateSessionForImmediateSwitch() else { return }
         let initiatingSession = self.currentSessionSnapshot()
         do {
-            let createdKey = try await self.transport.forkSession(parentKey: key)
+            let stableBoundary = fromLastCompleted ??
+                (self.sessions.first(where: { $0.key == key })?.hasActiveRun == true)
+            let createdKey = try await self.transport.forkSession(
+                parentKey: key,
+                fromLastCompleted: stableBoundary)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !createdKey.isEmpty else { return }
             guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
@@ -400,6 +429,7 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.input = result.editorText ?? ""
+            self.restoreEditorAttachments(result.editorAttachments)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else {
@@ -462,7 +492,7 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let response = try await self.transport.listSessionBranches(
+            let response = try await self.requestSessionBranchListing(
                 sessionKey: session.key,
                 agentID: self.outboxAgentID(for: session))
             guard self.isCurrentSession(session),
@@ -647,6 +677,7 @@ extension OpenClawChatViewModel {
             self.switchSession(to: createdKey)
             guard self.sessionKey == createdKey else { return }
             self.input = result.editorText ?? ""
+            self.restoreEditorAttachments(result.editorAttachments)
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             self.errorText = error.localizedDescription
@@ -703,6 +734,24 @@ extension OpenClawChatViewModel {
         }
     }
 
+    public func setSessionColor(key: String, color: String?) async {
+        do {
+            let routeLease = await self.transport.acquireSessionMutationRouteLease()
+            guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
+            try await routeLease.patchSession(
+                key: key,
+                label: nil,
+                category: nil,
+                color: .some(color),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+        } catch {
+            self.errorText = error.localizedDescription
+        }
+    }
+
     public func setSessionPinned(key: String, pinned: Bool) {
         let previous = self.sessions
         if let index = self.sessions.firstIndex(where: { $0.key == key }) {
@@ -714,8 +763,10 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: nil,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: pinned,
                     archived: nil,
                     unread: nil)
@@ -729,9 +780,17 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func setSessionArchived(key: String, archived: Bool) {
+    public func setSessionArchived(_ session: OpenClawChatSessionEntry, archived: Bool) {
+        let key = session.key
         guard archived else {
-            Task { await self.restoreSession(key: key) }
+            Task { await self.restoreSession(session) }
+            return
+        }
+        guard let expectedSessionID = session.sessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !expectedSessionID.isEmpty
+        else {
+            self.errorText = "Session lifecycle action requires a durable session identity."
             return
         }
         let previous = self.sessions
@@ -740,8 +799,10 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: true,
                     unread: nil)
@@ -763,12 +824,21 @@ extension OpenClawChatViewModel {
     /// Restores an archived session. Returns false (with `errorText` set) on
     /// failure so open-flows can avoid switching into a still-archived session.
     @discardableResult
-    public func restoreSession(key: String) async -> Bool {
+    public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
+        guard let expectedSessionID = session.sessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !expectedSessionID.isEmpty
+        else {
+            self.errorText = "Session lifecycle action requires a durable session identity."
+            return false
+        }
         do {
             try await self.transport.patchSession(
-                key: key,
+                key: session.key,
+                expectedSessionID: expectedSessionID,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: false,
                 unread: nil)
@@ -790,7 +860,8 @@ extension OpenClawChatViewModel {
               let entry = self.currentSessionEntry() ?? fallbackEntry,
               let revision = self.unreadPatchGuard.shouldPatch(
                   key: self.sessionMutationIdentity(for: entry.key, listedKey: entry.key),
-                  unread: entry.unread)
+                  unread: entry.unread,
+                  markedUnreadAt: entry.markedUnreadAt)
         else { return }
         let identityKey = self.sessionMutationIdentity(for: entry.key, listedKey: entry.key)
         let routeLease = Task { await self.transport.acquireSessionMutationRouteLease() }
@@ -798,6 +869,7 @@ extension OpenClawChatViewModel {
             routeLease: routeLease,
             queueKey: identityKey,
             routeKey: entry.key,
+            expectedMarkedUnreadAt: .some(entry.markedUnreadAt),
             unread: false)
         do {
             try await operation.value
@@ -806,9 +878,7 @@ extension OpenClawChatViewModel {
                 unread: false,
                 revision: revision)
             else { return }
-            if let index = self.sessions.firstIndex(where: { $0.key == entry.key }) {
-                self.sessions[index].unread = false
-            }
+            self.refreshSessions()
         } catch {
             guard self.unreadPatchGuard.patchFailed(key: identityKey, revision: revision) else { return }
             chatSessionActionsLogger.error(

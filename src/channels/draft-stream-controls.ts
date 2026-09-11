@@ -34,39 +34,47 @@ type DeleteFinalizableDraftMessageParams<T> = Omit<
   "isValidMessageId" | "onDeleteFailure" | "stopForClear"
 >;
 
-type FinalizableDraftLifecycleParams<T> = Omit<
-  ClearFinalizableDraftMessageParams<T>,
+type FinalizableDraftLifecycleParams<TMessageId, TUpdate = string> = Omit<
+  ClearFinalizableDraftMessageParams<TMessageId>,
   "onDeleteFailure" | "stopForClear"
 > & {
   throttleMs: number;
   state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: TUpdate) => Promise<void | boolean>;
+  emptyValue?: TUpdate;
+  isEmpty?: (value: TUpdate) => boolean;
 };
 
 /**
  * Creates controls for streaming preview messages that can be finalized, sealed, or cleared.
  */
-export function createFinalizableDraftStreamControls(params: {
+export function createFinalizableDraftStreamControls<T = string>(params: {
   throttleMs: number;
+  coalesceInFlight?: boolean;
   isStopped: () => boolean;
   isFinal: () => boolean;
   markStopped: () => void;
   markFinal: () => void;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
 }) {
-  const loop = createDraftStreamLoop({
+  const loop = createDraftStreamLoop<T>({
     throttleMs: params.throttleMs,
+    coalesceInFlight: params.coalesceInFlight,
     isStopped: params.isStopped,
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 
-  const update = (text: string) => {
+  const update = (value: T) => {
     // Finalized or stopped streams must ignore late model deltas so a deleted/posted draft is
     // not recreated by an in-flight throttle tick.
     if (params.isStopped() || params.isFinal()) {
       return;
     }
-    loop.update(text);
+    loop.update(value);
   };
 
   const stop = async (): Promise<void> => {
@@ -102,13 +110,17 @@ export function createFinalizableDraftStreamControls(params: {
 /**
  * Creates finalizable draft controls backed by a shared mutable state object.
  */
-export function createFinalizableDraftStreamControlsForState(params: {
+export function createFinalizableDraftStreamControlsForState<T = string>(params: {
   throttleMs: number;
+  coalesceInFlight?: boolean;
   state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
 }) {
-  return createFinalizableDraftStreamControls({
+  return createFinalizableDraftStreamControls<T>({
     throttleMs: params.throttleMs,
+    coalesceInFlight: params.coalesceInFlight,
     isStopped: () => params.state.stopped,
     isFinal: () => params.state.final,
     markStopped: () => {
@@ -118,6 +130,8 @@ export function createFinalizableDraftStreamControlsForState(params: {
       params.state.final = true;
     },
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 }
 
@@ -178,45 +192,78 @@ export async function clearFinalizableDraftMessage<T>(
 /**
  * Builds the standard draft lifecycle used by channel streaming preview implementations.
  */
-export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifecycleParams<T>) {
-  const controls = createFinalizableDraftStreamControlsForState({
+export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
+  params: FinalizableDraftLifecycleParams<TMessageId, TUpdate>,
+) {
+  const controls = createFinalizableDraftStreamControlsForState<TUpdate>({
     throttleMs: params.throttleMs,
     state: params.state,
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 
-  let pendingDeleteIds: T[] = [];
+  let pendingDeleteIds: TMessageId[] = [];
   let clearTail = Promise.resolve();
 
-  const clearOnce = async (stopForClear: () => Promise<void>) => {
-    await stopForClear();
-    const currentMessageId = params.readMessageId();
+  const drainDeletes = async (
+    owner: DeleteFinalizableDraftMessageParams<TMessageId>,
+    retainedId?: TMessageId,
+  ) => {
     const deleteIds = pendingDeleteIds;
     pendingDeleteIds = [];
-    if (!params.isValidMessageId(currentMessageId)) {
-      params.clearMessageId();
-    } else if (!deleteIds.some((messageId) => Object.is(messageId, currentMessageId))) {
-      deleteIds.push(currentMessageId);
-    }
-
     for (const messageId of deleteIds) {
-      const deleted = await deleteFinalizableDraftMessage(params, messageId);
+      const deleted =
+        !Object.is(messageId, retainedId) &&
+        (await deleteFinalizableDraftMessage(owner, messageId));
       if (!deleted && !pendingDeleteIds.some((pendingId) => Object.is(pendingId, messageId))) {
         pendingDeleteIds.push(messageId);
       }
     }
   };
 
-  const clearWithStop = (stopForClear: () => Promise<void>) => {
+  const clearWithStop = (
+    stopForClear: () => Promise<void>,
+    messageIdOwner?: Pick<
+      StopAndClearMessageIdParams<TMessageId>,
+      "readMessageId" | "clearMessageId"
+    >,
+  ) => {
+    const owner = messageIdOwner ? { ...params, ...messageIdOwner } : params;
     // Custom channel stops share the same serialized retry ownership as the default clear path.
-    const clearRun = clearTail.catch(() => {}).then(() => clearOnce(stopForClear));
+    const clearRun = clearTail
+      .catch(() => {})
+      .then(async () => {
+        await stopForClear();
+        const currentMessageId = owner.readMessageId();
+        if (!owner.isValidMessageId(currentMessageId)) {
+          owner.clearMessageId();
+        } else if (!pendingDeleteIds.some((messageId) => Object.is(messageId, currentMessageId))) {
+          pendingDeleteIds.push(currentMessageId);
+        }
+        await drainDeletes(owner);
+      });
     clearTail = clearRun;
     return clearRun;
   };
   const clear = () => clearWithStop(controls.stopForClear);
+  const stop = () => {
+    // Seal synchronously, then retry retired IDs without deleting the current/final preview.
+    // Even a failed flush must join earlier deletions before a later clear starts.
+    const previousClear = clearTail.catch(() => {});
+    const stopRun = Promise.allSettled([controls.stop(), previousClear]).then(([stopped]) => {
+      if (stopped.status === "rejected") {
+        throw stopped.reason;
+      }
+      return drainDeletes(params, params.readMessageId());
+    });
+    clearTail = stopRun;
+    return stopRun;
+  };
 
   return {
     ...controls,
+    stop,
     clear,
     clearWithStop,
   };

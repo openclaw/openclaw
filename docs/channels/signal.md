@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/signal` or `npm:@openclaw/signal`. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -49,7 +49,7 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
   </Step>
   <Step title="Verify and pair">
     ```bash
-    openclaw gateway call channels.status --params '{"probe":true}'
+    openclaw channels status --probe
     ```
     Send a first DM and approve pairing: `openclaw pairing approve signal <CODE>`.
   </Step>
@@ -63,7 +63,10 @@ Minimal config:
     signal: {
       enabled: true,
       account: "+15551234567",
-      cliPath: "signal-cli",
+      transport: {
+        kind: "managed-native",
+        cliPath: "signal-cli",
+      },
       dmPolicy: "pairing",
       allowFrom: ["+15557654321"],
     },
@@ -71,20 +74,21 @@ Minimal config:
 }
 ```
 
-| Field        | Description                                       |
-| ------------ | ------------------------------------------------- |
-| `account`    | Bot phone number in E.164 format (`+15551234567`) |
-| `cliPath`    | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
-| `configPath` | signal-cli config dir passed as `--config`        |
-| `dmPolicy`   | DM access policy (`pairing` recommended)          |
-| `allowFrom`  | Phone numbers or `uuid:<id>` values allowed to DM |
+| Field       | Description                                       |
+| ----------- | ------------------------------------------------- |
+| `account`   | Bot phone number in E.164 format (`+15551234567`) |
+| `transport` | Account-owned Signal connection and process mode  |
+| `dmPolicy`  | DM access policy (`pairing` recommended)          |
+| `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
 
-Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
+Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
+
+Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
 ## What it is
 
 - Deterministic routing: replies always go back to Signal.
-- DMs share the agent's main session; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
+- DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 
 ## Setup path A: link existing Signal account (QR)
@@ -116,12 +120,13 @@ If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. 
 signal-cli -a +<BOT_PHONE_NUMBER> register
 ```
 
-If captcha is required (browser access is needed to complete this step):
+Still inside step 3, if captcha is required (browser access is needed to complete
+this step):
 
-1. Open `https://signalcaptchas.org/registration/generate.html`.
-2. Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
-3. Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
-4. Register and verify immediately:
+- Open `https://signalcaptchas.org/registration/generate.html`.
+- Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
+- Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
+- Register and verify immediately:
 
 ```bash
 signal-cli -a +<BOT_PHONE_NUMBER> register --captcha '<SIGNALCAPTCHA_URL>'
@@ -154,26 +159,40 @@ Upstream references:
 - Captcha flow: `https://github.com/AsamK/signal-cli/wiki/Registration-with-captcha`
 - Linking flow: `https://github.com/AsamK/signal-cli/wiki/Linking-other-devices-(Provisioning)`
 
-## External daemon mode (httpUrl)
+## External native daemon mode
 
 To manage `signal-cli` yourself (slow JVM cold starts, container init, shared CPUs), run the daemon separately and point OpenClaw at it:
+
+For non-interactive setup, select the endpoint kind explicitly when needed:
+
+```bash
+openclaw channels add --channel signal --signal-number +15551234567 \
+  --http-url http://127.0.0.1:8080 --signal-transport external-native
+```
 
 ```json5
 {
   channels: {
     signal: {
-      httpUrl: "http://127.0.0.1:8080",
-      autoStart: false,
+      transport: {
+        kind: "external-native",
+        url: "http://127.0.0.1:8080",
+      },
     },
   },
 }
 ```
 
-This skips auto-spawn and OpenClaw's startup wait. For slow auto-spawned starts, set `channels.signal.startupTimeoutMs`.
+This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
 
 ## Container mode (bbernhard/signal-cli-rest-api)
 
 Instead of running `signal-cli` natively, use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container, which wraps `signal-cli` behind a REST + WebSocket interface.
+
+```bash
+openclaw channels add --channel signal --signal-number +15551234567 \
+  --http-url http://signal-cli:8080 --signal-transport container
+```
 
 Requirements:
 
@@ -201,31 +220,31 @@ OpenClaw config:
     signal: {
       enabled: true,
       account: "+15551234567",
-      httpUrl: "http://signal-cli:8080",
-      autoStart: false,
-      apiMode: "container", // or "auto" to detect automatically
+      transport: {
+        kind: "container",
+        url: "http://signal-cli:8080",
+      },
     },
   },
 }
 ```
 
-`apiMode` controls which protocol OpenClaw uses:
+`transport.kind` controls which protocol and process lifecycle OpenClaw uses:
 
-| Value         | Behavior                                                                             |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `"auto"`      | (Default) Probes both transports; streaming validates container WebSocket receive    |
-| `"native"`    | Force native signal-cli (JSON-RPC at `/api/v1/rpc`, SSE at `/api/v1/events`)         |
-| `"container"` | Force bbernhard container (REST at `/v2/send`, WebSocket at `/v1/receive/{account}`) |
+| Value               | Behavior                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `"managed-native"`  | Start native signal-cli and use JSON-RPC at `/api/v1/rpc` plus SSE at `/api/v1/events`; `url` may select a connection endpoint distinct from the daemon bind |
+| `"external-native"` | Connect to an already-running native signal-cli daemon                                                                                                       |
+| `"container"`       | Connect to bbernhard REST at `/v2/send` and WebSocket at `/v1/receive/{account}`                                                                             |
 
-When `apiMode` is `"auto"`, OpenClaw caches the detected mode for 30 seconds per daemon URL to avoid repeated probes (native wins when both transports are healthy). Container receive is only selected for streaming after `/v1/receive/{account}` upgrades to WebSocket, which requires `MODE=json-rpc`.
+Setup and `openclaw doctor --fix` may probe an existing endpoint once to identify its concrete kind. Runtime operations do not auto-detect or switch protocols.
 
 Container mode supports the same Signal operations as native mode where the container exposes matching APIs: sends, receives, attachments, typing indicators, read/viewed receipts, reactions, groups, and styled text. OpenClaw translates native Signal RPC calls into the container's REST payloads, including `group.{base64(internal_id)}` group IDs and `text_mode: "styled"` for formatted text.
 
 Operational notes:
 
-- Use `autoStart: false` with container mode; OpenClaw should not spawn a native daemon when `apiMode: "container"` is selected.
-- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so OpenClaw will not select container receive streaming in `auto` mode.
-- Set `apiMode: "container"` when `httpUrl` points at the bbernhard REST API, `"native"` when it points at native `signal-cli` JSON-RPC/SSE, and `"auto"` when the deployment may vary.
+- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its probe.
+- Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 
 ## Access control (DMs + groups)
@@ -245,7 +264,7 @@ Groups:
 - `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
-- With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Configured `mentionPatterns` remain a plain-text fallback.
+- With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Plain-text matching uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, it derives patterns from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level disables this text fallback without disabling native @mentions.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 Mention-gated group with bounded context:
@@ -290,7 +309,7 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 - Attachments are supported (base64 fetched from `signal-cli`).
 - Voice-note attachments use the `signal-cli` filename as a MIME fallback when `contentType` is missing, so audio transcription can still classify AAC voice memos.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
-- Use `channels.signal.ignoreAttachments` to skip downloading media.
+- Use `channels.signal.ignoreAttachments` to skip downloading media for any transport.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Typing + read receipts
@@ -305,7 +324,7 @@ Set `messages.statusReactions.enabled: true` to let Signal show the shared queue
 
 Status reactions also require an ack reaction and a matching `messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`). Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
 
-`messages.removeAckAfterReply: true` clears the final status reaction after the configured hold time. Otherwise Signal restores the initial ack reaction after the final done/error state.
+Signal restores the initial ack reaction after the final done/error state.
 
 ## Reactions (message tool)
 
@@ -418,7 +437,7 @@ openclaw pairing list signal
 
 Common failures:
 
-- Daemon reachable but no replies: verify account/daemon settings (`httpUrl`, `account`) and receive mode.
+- Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.
@@ -429,7 +448,7 @@ Extra checks:
 ```bash
 openclaw pairing list signal
 pgrep -af signal-cli
-grep -i "signal" "/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log" | tail -20
+openclaw logs --plain --limit 500 | grep -i "signal" | tail -20
 ```
 
 For triage flow: [Channels Troubleshooting](/channels/troubleshooting).
@@ -448,18 +467,18 @@ Full configuration: [Configuration](/gateway/configuration)
 Provider options:
 
 - `channels.signal.enabled`: enable/disable channel startup.
-- `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.accountUuid`: optional bot account UUID for native @mention detection and loop protection.
-- `channels.signal.cliPath`: path to `signal-cli`.
-- `channels.signal.configPath`: optional `signal-cli --config` directory.
-- `channels.signal.httpUrl`: full daemon URL (overrides host/port).
-- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default `127.0.0.1:8080`).
-- `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
-- `channels.signal.startupTimeoutMs`: startup wait timeout in ms (min 1000, cap 120000; default 30000).
-- `channels.signal.receiveMode`: `on-start | manual`.
-- `channels.signal.ignoreAttachments`: skip attachment downloads.
-- `channels.signal.ignoreStories`: ignore stories from the daemon.
+- `channels.signal.transport`: account-owned transport. Omit it for managed native defaults.
+- `channels.signal.transport.kind`: `managed-native | external-native | container`.
+- `channels.signal.transport.url`: required for `external-native` and `container`; optional for `managed-native` when its connection endpoint differs from the daemon bind.
+- `channels.signal.transport.cliPath`: managed-native path to `signal-cli`.
+- `channels.signal.transport.configPath`: optional managed-native `signal-cli --config` directory.
+- `channels.signal.transport.httpHost`, `channels.signal.transport.httpPort`: managed-native daemon bind (default `127.0.0.1:8080`).
+- `channels.signal.transport.startupTimeoutMs`: managed-native startup wait in ms (min 1000, cap 120000; default 30000).
+- `channels.signal.transport.receiveMode`: managed-native `on-start | manual`.
+- `channels.signal.ignoreAttachments`: skip inbound attachment downloads for this account.
+- `channels.signal.transport.ignoreStories`: managed-native story toggle.
 - `channels.signal.sendReadReceipts`: forward read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID IDs.
@@ -475,6 +494,7 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).
+- `channels.signal.markdown.tables`: Markdown table rendering mode, `off | bullets | code` (default `bullets`); `block` falls back to `code` (Signal has no native block tables).
 - `channels.signal.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap in MB (default 8).
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive` (default `minimal`). See [Reactions](#reactions-message-tool).
@@ -484,14 +504,16 @@ Provider options:
 
 Related global options:
 
-- `agents.list[].groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
+- `agents.entries.*.groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
 - `messages.groupChat.mentionPatterns` (global fallback).
-- `messages.responsePrefix`.
+- `channels.signal.responsePrefix` or an account-level `responsePrefix`.
 
 ## Related
 
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
+- [Reactions](/tools/reactions) - emoji reaction semantics for the `message` tool
+- [RPC adapters](/reference/rpc) - the signal-cli JSON-RPC-over-HTTP daemon pattern behind this channel
 - [Security](/gateway/security) - access model and hardening

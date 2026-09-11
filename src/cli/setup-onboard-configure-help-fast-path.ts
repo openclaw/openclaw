@@ -2,7 +2,7 @@
 import { Command, CommanderError } from "commander";
 import { VERSION } from "../version.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import type { ProgramContext } from "./program/context.js";
+import { isSimpleCommandHelpInvocation } from "./argv.js";
 import { configureProgramHelp } from "./program/help.js";
 
 type SetupOnboardConfigureHelpCommand = "setup" | "onboard" | "configure";
@@ -17,22 +17,16 @@ function resolveSetupOnboardConfigureHelpCommand(
   argv: string[],
 ): SetupOnboardConfigureHelpCommand | null {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.commandPath.length !== 1 || !invocation.hasHelpOrVersion) {
+  if (
+    invocation.commandPath.length !== 1 ||
+    !isSimpleCommandHelpInvocation(argv, SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS)
+  ) {
     return null;
   }
   const command = invocation.commandPath[0];
   return SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS.has(command as SetupOnboardConfigureHelpCommand)
     ? (command as SetupOnboardConfigureHelpCommand)
     : null;
-}
-
-function createHelpContext(): ProgramContext {
-  return {
-    programVersion: VERSION,
-    channelOptions: [],
-    messageChannelOptions: "",
-    agentChannelOptions: "last",
-  };
 }
 
 async function registerHelpCommand(
@@ -63,7 +57,7 @@ export async function tryOutputSetupOnboardConfigureHelp(argv: string[]): Promis
   const program = new Command();
   program.enablePositionalOptions();
   program.exitOverride();
-  configureProgramHelp(program, createHelpContext());
+  configureProgramHelp(program, { programVersion: VERSION });
   await registerHelpCommand(program, command);
 
   try {

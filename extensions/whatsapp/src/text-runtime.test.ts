@@ -7,6 +7,7 @@ import {
   assertWebChannel,
   jidToE164,
   markdownToWhatsApp,
+  markdownToWhatsAppChunks,
   resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
@@ -27,57 +28,115 @@ async function withTempDir<T>(
 
 describe("markdownToWhatsApp", () => {
   it.each([
-    ["converts **bold** to *bold*", "**SOD Blast:**", "*SOD Blast:*"],
-    ["converts __bold__ to *bold*", "__important__", "*important*"],
-    ["converts ~~strikethrough~~ to ~strikethrough~", "~~deleted~~", "~deleted~"],
-    ["leaves single *italic* unchanged (already WhatsApp bold)", "*text*", "*text*"],
-    ["leaves _italic_ unchanged (already WhatsApp italic)", "_text_", "_text_"],
-    ["preserves inline code", "Use `**not bold**` here", "Use `**not bold**` here"],
+    ["bold", "**SOD Blast:**", "*SOD Blast:*"],
+    ["alternate bold", "__important__", "*important*"],
+    ["strikethrough", "~~deleted~~", "~deleted~"],
+    ["star italic", "*text*", "_text_"],
+    ["underscore italic", "_text_", "_text_"],
+    ["underline fallback", "<u>under</u>", "under"],
+    ["spoiler fallback", "||secret||", "secret"],
+    ["inline code", "Use `**not bold**` here", "Use ```**not bold**``` here"],
+    ["fenced code", "```\nconst x = **bold**;\n```", "```\nconst x = **bold**;\n```"],
+    ["fence language fallback", "```ts\nconst x = 1;\n```", "```\nconst x = 1;\n```"],
+    ["labeled link fallback", "[docs](https://example.com)", "docs (https://example.com)"],
+    ["heading fallback", "# Title", "*Title*"],
+    ["bullet list", "- one\n- two", "• one\n• two"],
+    ["ordered list", "1. one\n2. two", "1. one\n2. two"],
+    ["task-list fallback", "- [x] done\n- [ ] todo", "[x] done\n[ ] todo"],
+    ["table fallback", "| Name | Value |\n| --- | --- |\n| A | 1 |", "*A*\n• Value: 1"],
+    ["blockquote", "> quote", "> quote"],
+    ["image fallback", "![alt](https://example.com/a.png)", "alt"],
+    ["mention", "Hello @alice", "Hello @alice"],
     [
-      "handles mixed formatting",
+      "mixed formatting",
       "**bold** and ~~strike~~ and _italic_",
       "*bold* and ~strike~ and _italic_",
     ],
-    ["handles multiple bold segments", "**one** then **two**", "*one* then *two*"],
-    ["returns empty string for empty input", "", ""],
-    ["returns plain text unchanged", "no formatting here", "no formatting here"],
-    ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
-    ["converts GFM ***bold italic*** to WhatsApp bold+italic", "***bi***", "*_bi_*"],
-    ["converts GFM __*bold italic*__ to WhatsApp bold+italic", "__*y*__", "*_y_*"],
-    ["converts GFM **_bold italic_** to WhatsApp bold+italic", "**_x_**", "*_x_*"],
-    ["converts GFM ___bold italic___ to WhatsApp bold+italic", "___z___", "*_z_*"],
-    ["converts GFM *__bold italic__* to WhatsApp bold+italic", "*__q__*", "*_q_*"],
-    ["converts GFM _**bold italic**_ to WhatsApp bold+italic", "_**r**_", "*_r_*"],
+    ["multiple bold segments", "**one** then **two**", "*one* then *two*"],
+    ["empty input", "", ""],
+    ["plain text", "no formatting here", "no formatting here"],
+    ["inline bold", "This is **very** important", "This is *very* important"],
+    ["triple-star bold italic", "***bi***", "*_bi_*"],
+    ["underscore-star bold italic", "__*y*__", "*_y_*"],
+    ["star-underscore bold italic", "**_x_**", "*_x_*"],
+    ["triple-underscore bold italic", "___z___", "*_z_*"],
+    ["star-double-underscore bold italic", "*__q__*", "*_q_*"],
+    ["underscore-double-star bold italic", "_**r**_", "*_r_*"],
     [
-      "preserves inline code containing bold-italic markers",
+      "inline code containing markers",
       "Use `***not bold italic***` here",
-      "Use `***not bold italic***` here",
+      "Use ```***not bold italic***``` here",
     ],
-    // Regression: a digit immediately after an inline-code span must not be
-    // absorbed into the placeholder index (which previously dropped both).
-    ["preserves inline code immediately followed by a digit", "`a`5", "`a`5"],
-    ["preserves inline code followed by a number", "`status`200 done", "`status`200 done"],
-    ["preserves two adjacent code+digit spans", "`x`1 and `y`2", "`x`1 and `y`2"],
-    ["preserves inline code with a space before a digit", "`a` 5", "`a` 5"],
-  ] as const)("handles markdown-to-whatsapp conversion: %s", (_name, input, expected) => {
+    ["inline code containing a backtick", "Use ``a`b`` here", "Use ```a`b``` here"],
+    ["inline code followed by one digit", "`a`5", "```a```5"],
+    ["inline code followed by a number", "`status`200 done", "```status```200 done"],
+    ["two code spans followed by digits", "`x`1 and `y`2", "```x```1 and ```y```2"],
+    ["inline code separated from a digit", "`a` 5", "```a``` 5"],
+    ["triple-delimited inline code followed by a digit", "```code```7 done", "```code```7 done"],
+    [
+      "triple-delimited inline code containing markers",
+      "Before ```**bold** and ~~strike~~``` after **real bold**",
+      "Before ```**bold** and ~~strike~~``` after *real bold*",
+    ],
+    [
+      "escaped WhatsApp markers",
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
+    ],
+    ["short leading indentation", "  indented", "  indented"],
+    [
+      "literal private-use characters",
+      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
+      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
+    ],
+  ] as const)("renders %s through the WhatsApp capability profile", (_name, input, expected) => {
     expect(markdownToWhatsApp(input)).toBe(expected);
   });
 
-  it("preserves fenced code blocks", () => {
-    const input = "```\nconst x = **bold**;\n```";
-    expect(markdownToWhatsApp(input)).toBe(input);
+  it("honors each configured table mode", () => {
+    const input = "| Name | Value |\n| --- | --- |\n| A | 1 |";
+    expect({
+      off: markdownToWhatsApp(input, "off"),
+      bullets: markdownToWhatsApp(input, "bullets"),
+      code: markdownToWhatsApp(input, "code"),
+      block: markdownToWhatsApp(input, "block"),
+    }).toEqual({
+      off: input,
+      bullets: "*A*\n• Value: 1",
+      code: "```\n| Name | Value |\n| ---- | ----- |\n| A    | 1     |\n```",
+      block: "```\n| Name | Value |\n| ---- | ----- |\n| A    | 1     |\n```",
+    });
   });
 
-  it("preserves a fenced code block immediately followed by a digit", () => {
-    const input = "```code```7 done";
-    expect(markdownToWhatsApp(input)).toBe(input);
+  it("closes and reopens formatting at chunk boundaries", () => {
+    const chunks = markdownToWhatsAppChunks(`# ${"word ".repeat(12)}`, 20);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(chunks.every((chunk) => /^\*.*\*\s*$/su.test(chunk))).toBe(true);
+    expect(
+      chunks.map((chunk) => chunk.replace(/^\*/u, "").replace(/\*(\s*)$/u, "$1")).join(""),
+    ).toBe("word ".repeat(12));
   });
 
-  it("preserves code block with formatting inside", () => {
-    const input = "Before ```**bold** and ~~strike~~``` after **real bold**";
-    expect(markdownToWhatsApp(input)).toBe(
-      "Before ```**bold** and ~~strike~~``` after *real bold*",
-    );
+  it("keeps newline-mode paragraph packing for formatted text", () => {
+    expect(
+      markdownToWhatsAppChunks("**Alpha**\n\n**Beta**\n\n**Gamma**", 14, "bullets", "newline"),
+    ).toEqual(["*Alpha*", "*Beta*", "*Gamma*"]);
+  });
+
+  it("keeps escaped markers atomic across formatted chunk boundaries", () => {
+    const chunks = markdownToWhatsAppChunks("**aaaa\\*bbbb**", 8);
+    expect(chunks.every((chunk) => chunk.length <= 8)).toBe(true);
+    expect(chunks.join("")).toContain("\\*");
+    expect(chunks.join("")).not.toMatch(/\p{Co}/u);
+  });
+
+  it("applies the chunk limit to whitespace-only text", () => {
+    expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
+  });
+
+  it("does not count the parse-only indentation guard toward the chunk limit", () => {
+    expect(markdownToWhatsAppChunks(`  ${"x".repeat(8)}`, 10)).toEqual([`  ${"x".repeat(8)}`]);
   });
 });
 

@@ -1,13 +1,13 @@
-import "../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
+  lobsterLookStyle,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -18,6 +18,7 @@ import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/about.css";
 import { brandIcons } from "./brand-icons.ts";
 
@@ -45,7 +46,7 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
     label: () => t("aboutPage.linkGitHub"),
   },
   {
-    href: "https://discord.gg/clawd",
+    href: COMMUNITY_DISCORD_URL,
     icon: brandIcons.discord,
     label: () => t("aboutPage.linkDiscord"),
   },
@@ -146,9 +147,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="about-sr-only" role="status" aria-live="polite"
-        >${copyStatus(props.copyState)}</span
-      >
+      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
     </span>
   `;
 }
@@ -165,7 +164,7 @@ function renderHero(props: AboutProps) {
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        style=${lobsterLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >
@@ -173,9 +172,11 @@ function renderHero(props: AboutProps) {
       </button>
       <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
-      ${props.buildInfo.version
-        ? html`<code class="about-hero__version" dir="ltr">v${props.buildInfo.version}</code>`
-        : nothing}
+      ${
+        props.buildInfo.version
+          ? html`<code class="about-hero__version" dir="ltr">v${props.buildInfo.version}</code>`
+          : nothing
+      }
       <nav class="about-hero__links" aria-label=${t("aboutPage.linksLabel")}>
         ${ABOUT_LINKS.map(
           (link) => html`
@@ -205,32 +206,40 @@ export function renderAbout(props: AboutProps) {
     >
       <dt>${t("aboutPage.version")}</dt>
       <dd>
-        ${props.buildInfo.version
-          ? html`<code dir="ltr" title=${props.buildInfo.version}>${props.buildInfo.version}</code>`
-          : renderUnavailable()}
+        ${
+          props.buildInfo.version
+            ? html`<code dir="ltr" title=${props.buildInfo.version}
+                >${props.buildInfo.version}</code
+              >`
+            : renderUnavailable()
+        }
       </dd>
       <dt>${t("aboutPage.commit")}</dt>
       <dd>${renderCommit(props)}</dd>
-      ${props.buildInfo.branch
-        ? html`
-            <dt>${t("aboutPage.branch")}</dt>
-            <dd>
-              <code dir="ltr" title=${props.buildInfo.branch}
-                >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
-              >
-            </dd>
-          `
-        : nothing}
+      ${
+        props.buildInfo.branch
+          ? html`
+              <dt>${t("aboutPage.branch")}</dt>
+              <dd>
+                <code dir="ltr" title=${props.buildInfo.branch}
+                  >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
+                >
+              </dd>
+            `
+          : nothing
+      }
       <dt>${t("aboutPage.built")}</dt>
       <dd>
-        ${buildDate && props.buildInfo.builtAt
-          ? html`<time
-              dir="auto"
-              datetime=${props.buildInfo.builtAt}
-              title=${props.buildInfo.builtAt}
-              >${buildDate}</time
-            >`
-          : renderUnavailable()}
+        ${
+          buildDate && props.buildInfo.builtAt
+            ? html`<time
+                dir="auto"
+                datetime=${props.buildInfo.builtAt}
+                title=${props.buildInfo.builtAt}
+                >${buildDate}</time
+              >`
+            : renderUnavailable()
+        }
       </dd>
     </dl>
   `;

@@ -4,6 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import {
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildTalkTestProviderConfig,
@@ -165,6 +172,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
+    collectConfigAssignments?: NonNullable<
+      Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0]["collectConfigAssignments"]
+    >;
     resolveManifestContractOwnerPluginId?: NonNullable<
       Parameters<
         typeof commandSecretGatewayTesting.setDepsForTest
@@ -206,9 +216,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 ],
         } as never;
       },
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push({ path: params.path } as never);
-      },
+      collectConfigAssignments:
+        params.collectConfigAssignments ??
+        (({ context }) => {
+          context.assignments.push({ path: params.path } as never);
+        }),
       discoverConfigSecretTargetsByIds: (config) =>
         [
           {
@@ -270,30 +282,31 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   it("skips gateway resolution when all configured target refs are inactive", async () => {
     const config = {
       agents: {
-        list: [
-          {
-            id: "main",
-            memorySearch: {
-              enabled: false,
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "AGENT_MEMORY_API_KEY" },
+        entries: {
+          main: {
+            memory: {
+              search: {
+                enabled: false,
+                remote: {
+                  apiKey: { source: "env", provider: "default", id: "AGENT_MEMORY_API_KEY" },
+                },
               },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "status",
-      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+      targetIds: new Set(["agents.entries.*.memory.search.remote.apiKey"]),
     });
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(result.resolvedConfig).toEqual(config);
     expect(result.diagnostics).toEqual([
-      "agents.list.0.memorySearch.remote.apiKey: agent or memorySearch override is disabled.",
+      "agents.entries.main.memory.search.remote.apiKey: agent or memorySearch override is disabled.",
     ]);
   });
 
@@ -327,6 +340,99 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       targetIds: ["talk.providers.*.apiKey"],
     });
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
+  });
+
+  it.each(["$OTHER", "${OTHER}"])(
+    "preserves source provenance while gateway assignments materialize literal %s",
+    async (resolvedLiteral) => {
+      const read = resolveConfigForRead(buildTalkTestProviderConfig("$SOURCE"), {});
+      const config = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(config, read.resolutionFacts);
+      callGateway.mockResolvedValueOnce({
+        assignments: [
+          {
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            value: resolvedLiteral,
+          },
+        ],
+      });
+
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe(resolvedLiteral);
+      expect(getAuthoredConfigSecretRef(config, TALK_TEST_PROVIDER_API_KEY_PATH)?.id).toBe(
+        "SOURCE",
+      );
+      expect(
+        getAuthoredConfigSecretRef(result.resolvedConfig, TALK_TEST_PROVIDER_API_KEY_PATH),
+      ).toBeNull();
+      expect(result.hadUnresolvedTargets).toBe(false);
+    },
+  );
+
+  it("uses the explicit agent owner during channels resolve secret preflight", async () => {
+    const channelPath = "channels.telegram.botToken";
+    const channelPathSegments = ["channels", "telegram", "botToken"];
+    const config = {
+      agents: {
+        entries: {
+          ops: { sandbox: { backend: "docker" } },
+          research: { sandbox: { backend: "docker" } },
+        },
+        defaults: {
+          sandbox: {
+            backend: "ssh",
+            ssh: {
+              identityData: {
+                source: "env",
+                provider: "default",
+                id: "STALE_SANDBOX_IDENTITY",
+              },
+            },
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const restoreDeps = setSingleSecretTargetDeps({
+      path: channelPath,
+      pathSegments: channelPathSegments,
+      collectConfigAssignments: (params) => collectRuntimeConfigAssignments(params),
+    });
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: channelPath,
+          pathSegments: channelPathSegments,
+          value: "resolved-telegram-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "channels resolve",
+        targetIds: new Set([channelPath]),
+        agentId: "ops",
+        mode: "read_only_operational",
+      });
+
+      expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+      expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
+    } finally {
+      restoreDeps();
+    }
   });
 
   it("enforces unresolved checks only for allowed paths when provided", async () => {
@@ -582,17 +688,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     await withEnvValue(envKey, undefined, async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      await expect(
-        resolveCommandSecretRefsViaGateway({
-          config: buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: envKey,
-          }),
-          commandName: "memory status",
-          targetIds: new Set(["talk.providers.*.apiKey"]),
+      const resolution = resolveCommandSecretRefsViaGateway({
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: envKey,
         }),
-      ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+      await expect(resolution).rejects.toThrow(
+        /failed to resolve secrets from the active gateway snapshot/i,
+      );
+      await expect(resolution).rejects.toThrow(/local resolution also failed/i);
+      await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
+      await expect(resolution).rejects.not.toThrow(envKey);
     });
   });
 
@@ -626,76 +736,104 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("keeps local exec SecretRef fallback enabled by default", async () => {
-    const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+  it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
+    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
+      callGateway.mockImplementation(
+        (request: { timeoutMs: number }) =>
+          new Promise((_resolve, reject) => {
+            // A reachable gateway that never replies fails only at the request deadline it was given.
+            setTimeout(() => reject(new Error("gateway timeout")), request.timeoutMs);
+          }),
+      );
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
+        commandName: "status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        gatewaySecretResolveTimeoutMs: 50,
+      });
 
-    const result = await resolveCommandSecretRefsViaGateway({
-      config,
-      commandName: "memory status",
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-      mode: "read_only_status",
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 50 });
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
+  });
 
-    expect(await markerExists(markerPath)).toBe(true);
-    expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
-    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+  it("keeps local exec SecretRef fallback enabled by default", async () => {
+    await withSecureTestNodeExecPath(async () => {
+      const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        mode: "read_only_status",
+      });
+
+      expect(await markerExists(markerPath)).toBe(true);
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
-    const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    await withSecureTestNodeExecPath(async () => {
+      const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
-    const result = await resolveCommandSecretRefsViaGateway({
-      config,
-      commandName: "doctor preview",
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-      mode: "read_only_status",
-      allowLocalExecSecretRefs: false,
-    });
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "doctor preview",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        mode: "read_only_status",
+        allowLocalExecSecretRefs: false,
+      });
 
-    expect(await markerExists(markerPath)).toBe(false);
-    expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
-    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
-    expect(result.diagnostics).toContain(
-      `doctor preview: ${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path; continuing with degraded read-only config.`,
-    );
-    expect(
-      result.diagnostics.some((entry) =>
-        entry.includes(
-          "doctor preview: skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
+      expect(await markerExists(markerPath)).toBe(false);
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
+      expect(result.diagnostics).toContain(
+        `doctor preview: ${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path; continuing with degraded read-only config.`,
+      );
+      expect(
+        result.diagnostics.some((entry) =>
+          entry.includes(
+            "doctor preview: skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
+          ),
         ),
-      ),
-    ).toBe(true);
-    expect(
-      result.diagnostics.some((entry) =>
-        entry.includes("attempted local command-secret resolution"),
-      ),
-    ).toBe(true);
+      ).toBe(true);
+      expect(
+        result.diagnostics.some((entry) =>
+          entry.includes("attempted local command-secret resolution"),
+        ),
+      ).toBe(true);
+    });
   });
 
   it("can preserve unresolved SecretRefs when local exec fallback is disabled", async () => {
-    const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    await withSecureTestNodeExecPath(async () => {
+      const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
-    const result = await resolveCommandSecretRefsViaGateway({
-      config,
-      commandName: "doctor preview",
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-      mode: "read_only_status",
-      allowLocalExecSecretRefs: false,
-      scrubUnresolvedSecretRefs: false,
-    });
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "doctor preview",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        mode: "read_only_status",
+        allowLocalExecSecretRefs: false,
+        scrubUnresolvedSecretRefs: false,
+      });
 
-    expect(await markerExists(markerPath)).toBe(false);
-    expect(readTalkProviderApiKey(result.resolvedConfig)).toEqual({
-      source: "exec",
-      provider: "default",
-      id: "talk/providers/api-key",
+      expect(await markerExists(markerPath)).toBe(false);
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toEqual({
+        source: "exec",
+        provider: "default",
+        id: "talk/providers/api-key",
+      });
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
+      expect(result.hadUnresolvedTargets).toBe(true);
     });
-    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
-    expect(result.hadUnresolvedTargets).toBe(true);
   });
 
   it("skips gateway resolution when gateway credentials would execute exec SecretRefs", async () => {
@@ -1158,31 +1296,32 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: ["memory search ref inactive"],
-      inactiveRefPaths: ["agents.list.0.memorySearch.remote.apiKey"],
+      inactiveRefPaths: ["agents.entries.main.memory.search.remote.apiKey"],
     });
 
     const config = {
       agents: {
-        list: [
-          {
-            id: "main",
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+        entries: {
+          main: {
+            memory: {
+              search: {
+                remote: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+                },
               },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
-      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+      targetIds: new Set(["agents.entries.*.memory.search.remote.apiKey"]),
     });
 
-    expect(result.resolvedConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(result.resolvedConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_MEMORY_API_KEY",
@@ -1307,6 +1446,46 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     }
   });
 
+  it("keeps generic agent turns running when an active web tool credential is unavailable", async () => {
+    const restoreDeps = setFirecrawlWebFetchTargetDeps();
+    const webPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
+    try {
+      callGateway.mockResolvedValueOnce({
+        assignments: [],
+        diagnostics: [],
+        inactiveRefPaths: [webPath],
+      });
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: { web: { fetch: { provider: "firecrawl" } } },
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "missing-optional-firecrawl-ref",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        commandName: "reply",
+        targetIds: new Set([webPath]),
+        optionalActivePaths: new Set([webPath]),
+      });
+
+      expect(result.hadUnresolvedTargets).toBe(false);
+      expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
+    } finally {
+      restoreDeps();
+    }
+  });
+
   it.each([
     {
       label: "search",
@@ -1418,6 +1597,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           talk: {
+            provider: "gateway",
             providers: {
               gateway: {
                 apiKey: {
@@ -1426,21 +1606,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                   id: "GATEWAY_ONLY_TALK_KEY",
                 },
               },
-              local: {
-                apiKey: { source: "env", provider: "default", id: localEnvKey },
+            },
+            realtime: {
+              provider: "local",
+              providers: {
+                local: {
+                  apiKey: { source: "env", provider: "default", id: localEnvKey },
+                },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "reply",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
+        targetIds: new Set(["talk.providers.*.apiKey", "talk.realtime.providers.*.apiKey"]),
       });
 
       expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
-      expect(result.resolvedConfig.talk?.providers?.local?.apiKey).toBe("local-fallback-key");
+      expect(result.resolvedConfig.talk?.realtime?.providers?.local?.apiKey).toBe(
+        "local-fallback-key",
+      );
       expect(result.targetStatesByPath).toMatchObject({
         "talk.providers.gateway.apiKey": "resolved_gateway",
-        "talk.providers.local.apiKey": "resolved_local",
+        "talk.realtime.providers.local.apiKey": "resolved_local",
       });
       expect(
         result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),

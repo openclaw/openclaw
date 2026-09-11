@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
@@ -40,6 +40,14 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "qwen3.8-max" }, { id: "qwen3.8-flash" }] })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
 
@@ -53,6 +61,8 @@ describe("qwen provider plugin", () => {
           { id: QWEN_36_PLUS_MODEL_ID },
           { id: QWEN_37_MAX_MODEL_ID },
           { id: QWEN_37_PLUS_MODEL_ID },
+          { id: "qwen3.8-max" },
+          { id: "qwen3.8-flash" },
         ],
       },
     } as never);
@@ -115,7 +125,9 @@ describe("qwen provider plugin", () => {
     } as never);
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
-    expect(catalogProvider.models).toHaveLength(14);
+    expect(catalogProvider.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash"]),
+    );
 
     const legacy = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID);
     expect(legacy.auth).toEqual([]);
@@ -196,19 +208,30 @@ describe("qwen provider plugin", () => {
       apiKey: "canonical-key",
       baseUrl: QWEN_TOKEN_PLAN_CN_BASE_URL,
     });
-    expect(catalogProvider.models).toHaveLength(14);
+    expect(catalogProvider.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["qwen3.8-max", "qwen3.8-flash"]),
+    );
     expect(catalogProvider.models?.map((model) => model.id)).not.toContain("legacy-only");
     expect(resolveProviderApiKey).toHaveBeenCalledTimes(1);
     expect(resolveProviderApiKey).toHaveBeenCalledWith(QWEN_TOKEN_PLAN_PROVIDER_ID);
   });
 
-  it("exposes on-only thinking controls for thinking-only Token Plan models", async () => {
+  it("preserves thinking controls for catalog and uncataloged Token Plan refs", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: qwenPlugin,
       id: "qwen",
       name: "Qwen Provider",
     });
     const provider = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_PROVIDER_ID);
+    for (const ownerId of ["qwen", QWEN_TOKEN_PLAN_PROVIDER_ID]) {
+      const owner = requireRegisteredProvider(providers, ownerId);
+      for (const modelId of ["qwen3.8-max", "qwen3.8-flash"]) {
+        expect(owner.resolveThinkingProfile?.({ modelId } as never)).toEqual({
+          levels: ["off", "low", "medium", "xhigh"].map((id) => ({ id })),
+          defaultLevel: "xhigh",
+        });
+      }
+    }
     const expected = {
       levels: [{ id: "low", label: "on" }],
       defaultLevel: "low",
@@ -239,18 +262,18 @@ describe("qwen provider plugin", () => {
   });
 
   it("switches Token Plan regions without replacing custom catalog rows", () => {
-    const initialGlobal = applyQwenTokenPlanConfig({}, "global");
+    const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
     const globalProvider = initialGlobal.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
     if (!globalProvider) {
       throw new Error("Token Plan provider missing after onboarding");
     }
     const globalModels = [...(globalProvider.models ?? [])];
-    const glmIndex = globalModels.findIndex((model) => model.id === "glm-5.2");
-    const glmModel = globalModels[glmIndex];
-    if (!glmModel) {
-      throw new Error("GLM 5.2 missing from Token Plan catalog");
+    const qwenIndex = globalModels.findIndex((model) => model.id === "qwen3.7-plus");
+    const qwenModel = globalModels[qwenIndex];
+    if (!qwenModel) {
+      throw new Error("Qwen3.7-Plus missing from Token Plan catalog");
     }
-    globalModels[glmIndex] = { ...glmModel, name: "Custom GLM 5.2" };
+    globalModels[qwenIndex] = { ...qwenModel, name: "Custom Qwen3.7-Plus" };
     globalModels.push({
       id: "custom-model",
       name: "Custom model",
@@ -264,6 +287,7 @@ describe("qwen provider plugin", () => {
       ...initialGlobal,
       models: {
         ...initialGlobal.models,
+        mode: "merge",
         providers: {
           ...initialGlobal.models?.providers,
           [QWEN_TOKEN_PLAN_PROVIDER_ID]: {
@@ -278,16 +302,17 @@ describe("qwen provider plugin", () => {
 
     const tokenPlanProvider = (config: OpenClawConfig) =>
       config.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
-    const glmContext = (config: OpenClawConfig) =>
-      tokenPlanProvider(config)?.models?.find((model) => model.id === "glm-5.2")?.contextWindow;
-    expect(glmContext(global)).toBe(1_000_000);
-    expect(glmContext(cnFromGlobal)).toBe(1_000_000);
-    expect(glmContext(globalAgain)).toBe(1_000_000);
+    const qwenContext = (config: OpenClawConfig) =>
+      tokenPlanProvider(config)?.models?.find((model) => model.id === "qwen3.7-plus")
+        ?.contextWindow;
+    expect(qwenContext(global)).toBe(1_000_000);
+    expect(qwenContext(cnFromGlobal)).toBe(1_000_000);
+    expect(qwenContext(globalAgain)).toBe(1_000_000);
     expect(tokenPlanProvider(cnFromGlobal)?.baseUrl).toBe(QWEN_TOKEN_PLAN_CN_BASE_URL);
     expect(tokenPlanProvider(globalAgain)?.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
     expect(
-      tokenPlanProvider(globalAgain)?.models?.find((model) => model.id === "glm-5.2")?.name,
-    ).toBe("Custom GLM 5.2");
+      tokenPlanProvider(globalAgain)?.models?.find((model) => model.id === "qwen3.7-plus")?.name,
+    ).toBe("Custom Qwen3.7-Plus");
     expect(tokenPlanProvider(globalAgain)?.models?.map((model) => model.id)).toContain(
       "custom-model",
     );

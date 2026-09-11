@@ -1,26 +1,140 @@
+import {
+  bucketRelativeTimeMs,
+  formatCompactTokenCount as formatTokenUnits,
+  type RelativeTimeUnit,
+} from "@openclaw/normalization-core";
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  formatDurationCompact,
-  formatDurationHuman,
-} from "../../../src/infra/format-time/format-duration.ts";
-import {
-  formatRelativeTimestamp,
-  formatTimeAgo,
-} from "../../../src/infra/format-time/format-relative.ts";
-import { t } from "../i18n/index.ts";
+  resolveCompactDurationParts,
+  resolveSingleUnitDurationParts,
+  type DurationPart,
+} from "../../../src/infra/format-time/format-duration-internal.ts";
+import { i18n, t } from "../i18n/index.ts";
+import { formatUiError } from "./format-error.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
-export { formatRelativeTimestamp, formatTimeAgo, formatDurationCompact, formatDurationHuman };
 
-export function formatUnknownText(
-  value: unknown,
-  opts: { fallback?: string; pretty?: boolean } = {},
+export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
+  const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  const minutes = String(Math.floor(totalSeconds / 60));
+  return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+type FormatTimeAgoOptions = {
+  suffix?: boolean;
+  fallback?: string;
+};
+
+type FormatRelativeTimestampOptions = {
+  dateFallback?: boolean;
+  timezone?: string;
+  fallback?: string;
+  suffix?: boolean;
+};
+
+let localeFormatters:
+  | {
+      locale: string;
+      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      relative?: Intl.RelativeTimeFormat;
+    }
+  | undefined;
+
+function getLocaleFormatters() {
+  const locale = i18n.getLocale();
+  // Keep one locale's closed unit set; switching languages releases the old
+  // formatters without retaining labels or subscribing to component lifetimes.
+  if (localeFormatters?.locale !== locale) {
+    localeFormatters = { locale, units: {} };
+  }
+  return localeFormatters;
+}
+
+export function formatUnit({ value, unit }: DurationPart): string {
+  const formatters = getLocaleFormatters();
+  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
+    style: "unit",
+    unit,
+    unitDisplay: "narrow",
+    maximumFractionDigits: 0,
+  })).format(value);
+}
+
+function formatRelative(value: number, unit: RelativeTimeUnit): string {
+  const formatters = getLocaleFormatters();
+  return (formatters.relative ??= new Intl.RelativeTimeFormat(formatters.locale, {
+    numeric: "auto",
+    style: "narrow",
+  })).format(value, unit);
+}
+
+export function formatTimeAgo(
+  durationMs: number | null | undefined,
+  options: FormatTimeAgoOptions = {},
 ): string {
-  const fallback = opts.fallback ?? "";
-  if (value == null) {
+  const fallback = options.fallback ?? t("common.unknown");
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
     return fallback;
+  }
+
+  const { value, unit } = bucketRelativeTimeMs(durationMs);
+  if (unit === "second" && options.suffix !== false) {
+    return t("common.justNow");
+  }
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(-value, unit);
+}
+
+export function formatRelativeTimestamp(
+  timestampMs: number | null | undefined,
+  options: FormatRelativeTimestampOptions = {},
+): string {
+  const fallback = options.fallback ?? t("common.na");
+  if (timestampMs == null || !Number.isFinite(timestampMs)) {
+    return fallback;
+  }
+
+  const diff = timestampMs - Date.now();
+  const isPast = diff <= 0;
+  const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
+  if (unit === "second") {
+    if (options.suffix === false) {
+      return formatUnit({ value, unit });
+    }
+    return isPast ? t("common.justNow") : formatRelative(value, unit);
+  }
+
+  if (options.dateFallback && unit === "day" && value > 7) {
+    try {
+      return new Intl.DateTimeFormat(i18n.getLocale(), {
+        month: "short",
+        day: "numeric",
+        ...(options.timezone ? { timeZone: options.timezone } : {}),
+      }).format(new Date(timestampMs));
+    } catch {
+      // Invalid time zones should still leave a useful localized relative value.
+    }
+  }
+
+  const signedValue = isPast ? -value : value;
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
+}
+
+export function formatDurationCompact(ms?: number | null): string | undefined {
+  return resolveCompactDurationParts(ms)?.map(formatUnit).join(" ");
+}
+
+export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) {
+    return fallback;
+  }
+  return resolveSingleUnitDurationParts(ms).map(formatUnit).join(" ");
+}
+
+export function formatUnknownText(value: unknown): string {
+  if (value == null) {
+    return "";
   }
   if (typeof value === "string") {
     return value;
@@ -32,7 +146,7 @@ export function formatUnknownText(
     return value.description ? `Symbol(${value.description})` : "Symbol()";
   }
   try {
-    const serialized = JSON.stringify(value, null, opts.pretty ? 2 : undefined);
+    const serialized = JSON.stringify(value);
     if (serialized !== undefined) {
       return serialized;
     }
@@ -40,30 +154,9 @@ export function formatUnknownText(
     // Fall back when value is not JSON-serializable.
   }
   if (value instanceof Error) {
-    return value.message || value.name;
+    return formatUiError(value);
   }
   return Object.prototype.toString.call(value);
-}
-
-type UiTimeFormatPreference = "auto" | "12" | "24";
-
-// Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
-// (or unset) keeps the browser locale default so existing deployments render
-// unchanged; only "12"/"24" force an hour cycle across Control UI timestamps.
-let uiTimeFormatPreference: UiTimeFormatPreference = "auto";
-
-export function setUiTimeFormatPreference(value: UiTimeFormatPreference | null | undefined): void {
-  uiTimeFormatPreference = value === "12" || value === "24" ? value : "auto";
-}
-
-export function resolveUiHourCycleOptions(): Intl.DateTimeFormatOptions {
-  if (uiTimeFormatPreference === "12") {
-    return { hour12: true };
-  }
-  if (uiTimeFormatPreference === "24") {
-    return { hour12: false };
-  }
-  return {};
 }
 
 export function formatMs(ms?: number | null): string {
@@ -71,7 +164,13 @@ export function formatMs(ms?: number | null): string {
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString([], resolveUiHourCycleOptions());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale(), {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export function formatDateMs(
@@ -82,7 +181,7 @@ export function formatDateMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleDateString([], options);
+    : new Date(timestampMs).toLocaleDateString(i18n.getLocale(), options);
 }
 
 export function formatTimeMs(
@@ -93,7 +192,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString([], { ...resolveUiHourCycleOptions(), ...options });
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options ?? { timeStyle: "short" });
 }
 
 export function formatDateTimeMs(
@@ -104,12 +203,12 @@ export function formatDateTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleString([], { ...resolveUiHourCycleOptions(), ...options });
+    : new Date(timestampMs).toLocaleString(i18n.getLocale(), options);
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
   if (!values || values.length === 0) {
-    return "none";
+    return t("common.none");
   }
   return values.filter((v): v is string => Boolean(v && v.trim())).join(", ");
 }
@@ -160,70 +259,25 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   return `$${cost.toFixed(2)}`;
 }
 
-export function formatTokens(tokens: number | null | undefined, fallback = "0"): string {
-  if (tokens == null || !Number.isFinite(tokens)) {
-    return fallback;
-  }
-  if (tokens < 1000) {
-    return String(Math.round(tokens));
-  }
-  if (tokens < 1_000_000) {
-    const k = tokens / 1000;
-    if (k < 10) {
-      return `${k.toFixed(1)}k`;
-    }
-    const rounded = Math.round(k);
-    // 999_500..999_999 rounds to 1000k; roll it over to the M branch instead of emitting "1000k".
-    if (rounded < 1000) {
-      return `${rounded}k`;
-    }
-  }
-  const m = tokens / 1_000_000;
-  return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
-}
-
+// Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
-  tokens: number,
+  tokens: number | null | undefined,
   options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
-  const thousandsSuffix = options.thousandsSuffix ?? "k";
-  const millionsSuffix = options.millionsSuffix ?? "M";
-  const trimTrailingZero = options.trimTrailingZero ?? true;
-  const trim = (value: string) => (trimTrailingZero ? value.replace(/\.0$/, "") : value);
-  if (tokens >= 1_000_000) {
-    return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
+  if (tokens == null || !Number.isFinite(tokens)) {
+    return "0";
   }
-  if (tokens >= 1_000) {
-    const thousands = (tokens / 1_000).toFixed(1);
-    if (Number(thousands) >= 1_000) {
-      return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
-    }
-    return `${trim(thousands)}${thousandsSuffix}`;
-  }
-  return String(tokens);
+  return formatTokenUnits(tokens, {
+    thousandsSuffix: options.thousandsSuffix,
+    millionsSuffix: options.millionsSuffix ?? "M",
+    trimTrailingZero: options.trimTrailingZero ?? true,
+    maxUnit: "billion",
+  });
 }
 
-export function parseSessionKeyParts(
-  key: string,
-): { agentId: string; channel: string; accountId: string } | null {
-  if (!key.startsWith("agent:")) {
-    return null;
+export function formatContextTokenCapacity(tokens: number): string {
+  if (tokens < 1_000_000) {
+    return formatCompactTokenCount(tokens);
   }
-  const rest = key.slice("agent:".length);
-  const firstColon = rest.indexOf(":");
-  if (firstColon < 1) {
-    return null;
-  }
-  const agentId = rest.slice(0, firstColon);
-  const afterAgent = rest.slice(firstColon + 1);
-  const secondColon = afterAgent.indexOf(":");
-  if (secondColon < 1) {
-    return null;
-  }
-  const channel = afterAgent.slice(0, secondColon);
-  const accountId = afterAgent.slice(secondColon + 1);
-  if (!accountId) {
-    return null;
-  }
-  return { agentId, channel, accountId };
+  return `${Math.floor(tokens / 100_000) / 10}M`;
 }

@@ -9,6 +9,7 @@ import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
   BrowserTargetAmbiguousError,
+  toBrowserErrorResponse,
 } from "../errors.js";
 import {
   assertBrowserNavigationAllowed,
@@ -17,6 +18,7 @@ import {
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
 import { readRouteNonNegativeInteger } from "./route-numeric.js";
@@ -128,11 +130,16 @@ async function redactBlockedTabUrls(params: {
         ...params.navigationPolicy,
       });
       redactedTabs.push(tab);
-    } catch {
-      // Hide blocked URLs while preserving tab identity for safe operations.
+    } catch (error) {
+      const failure = toBrowserErrorResponse(error);
+      // Preserve safe tab management without turning a DNS failure into a policy denial.
       redactedTabs.push({
         ...tab,
         url: "",
+        urlUnavailableReason:
+          failure && "reason" in failure && failure.reason === "navigation_blocked"
+            ? "navigation_blocked"
+            : "navigation_check_failed",
       });
     }
   }
@@ -230,7 +237,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           return { running: false, tabs: [] as unknown[] };
         }
         const tabs = await redactBlockedTabUrls({
-          tabs: await profileCtx.listTabs(),
+          tabs: await profileCtx.listTabs({ signal }),
           navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         signal.throwIfAborted();
@@ -260,7 +267,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         await profileCtx.ensureBrowserAvailable({ signal });
-        const opened = await profileCtx.openTab(url, { label });
+        const opened = await profileCtx.openTab(url, { label, signal });
         return { ...opened, resolvedProfile: profileCtx.profile.name };
       },
     });
@@ -279,8 +286,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       res,
       ctx,
       targetId,
-      mutate: async (profileCtx, id) => {
-        const tabs = await profileCtx.listTabs();
+      mutate: async (profileCtx, id, signal) => {
+        const tabs = await profileCtx.listTabs({ signal });
         const resolved = resolveTargetIdFromTabs(id, tabs);
         if (!resolved.ok) {
           if (resolved.reason === "ambiguous") {
@@ -299,7 +306,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             ...ssrfPolicyOpts,
           });
         }
-        await profileCtx.focusTab(resolved.targetId, { exactTargetId: true });
+        signal.throwIfAborted();
+        await profileCtx.focusTab(resolved.targetId, { exactTargetId: true, signal });
         return resolved.targetId;
       },
     });
@@ -319,8 +327,14 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       res,
       ctx,
       targetId,
-      mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id, targetIdMode === "raw" ? { exactTargetId: true } : undefined);
+      mutate: async (profileCtx, id, signal) => {
+        signal.throwIfAborted();
+        const canonicalTargetId = await profileCtx.closeTab(id, {
+          ...(targetIdMode === "raw" ? { exactTargetId: true } : {}),
+          signal,
+        });
+        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, canonicalTargetId);
+        return canonicalTargetId;
       },
     });
   });
@@ -370,7 +384,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             return { ok: true, tabs: [] as unknown[] };
           }
           const tabs = await redactBlockedTabUrls({
-            tabs: await profileCtx.listTabs(),
+            tabs: await profileCtx.listTabs({ signal }),
             navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
           });
           signal.throwIfAborted();
@@ -379,7 +393,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
 
         if (action === "new") {
           await profileCtx.ensureBrowserAvailable({ signal });
-          const tab = await profileCtx.openTab("about:blank", { label });
+          const tab = await profileCtx.openTab("about:blank", { label, signal });
           return { ok: true, tab };
         }
 
@@ -391,17 +405,19 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
 
         if (action === "close") {
           await ensureBrowserRunning(ctx, profileCtx, signal);
-          const tabs = await profileCtx.listTabs();
+          const tabs = await profileCtx.listTabs({ signal });
           const target = resolveIndexedTab(tabs, index);
           if (!target) {
             throw new BrowserTabNotFoundError();
           }
-          await profileCtx.closeTab(target.targetId, { exactTargetId: true });
+          signal.throwIfAborted();
+          await profileCtx.closeTab(target.targetId, { exactTargetId: true, signal });
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, target.targetId);
           return { ok: true, targetId: target.targetId };
         }
 
         await ensureBrowserRunning(ctx, profileCtx, signal);
-        const tabs = await profileCtx.listTabs();
+        const tabs = await profileCtx.listTabs({ signal });
         const target = tabs[index!];
         if (!target) {
           throw new BrowserTabNotFoundError();
@@ -413,7 +429,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             ...ssrfPolicyOpts,
           });
         }
-        await profileCtx.focusTab(target.targetId, { exactTargetId: true });
+        signal.throwIfAborted();
+        await profileCtx.focusTab(target.targetId, { exactTargetId: true, signal });
         return { ok: true, targetId: target.targetId };
       },
     });

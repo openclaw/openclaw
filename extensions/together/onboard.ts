@@ -1,27 +1,29 @@
 // Together setup module handles plugin onboarding behavior.
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
-  type OpenClawConfig,
+  createProviderConnectionPresetAppliers,
 } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  buildTogetherModelDefinition,
-  TOGETHER_BASE_URL,
-  TOGETHER_MODEL_CATALOG,
-} from "./models.js";
+import { TOGETHER_BASE_URL, TOGETHER_MODEL_CATALOG } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const TOGETHER_DEFAULT_MODEL_REF = "together/meta-llama/Llama-3.3-70B-Instruct-Turbo";
+export const TOGETHER_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "together",
+)!;
 
-const togetherPresetAppliers = createModelCatalogPresetAppliers({
+const togetherPreset = {
   primaryModelRef: TOGETHER_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: "together",
     api: "openai-completions",
     baseUrl: TOGETHER_BASE_URL,
-    catalogModels: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
+    catalogModels: () => structuredClone(TOGETHER_MODEL_CATALOG),
     aliases: [{ modelRef: TOGETHER_DEFAULT_MODEL_REF, alias: "Together AI" }],
   }),
-});
+} satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];
 
-export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return togetherPresetAppliers.applyConfig(cfg);
-}
+export const { applyConfig: applyTogetherConfig } =
+  createModelCatalogPresetAppliers(togetherPreset);
+export const { applyConfig: applyTogetherConnectionConfig } =
+  createProviderConnectionPresetAppliers(togetherPreset);

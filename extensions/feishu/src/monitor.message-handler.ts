@@ -1,4 +1,4 @@
-// Feishu plugin module implements monitor.message handler behavior.
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
@@ -23,6 +23,7 @@ type FeishuMessageReceiveHandlerContext = {
   handleMessage: (params: {
     cfg: ClawdbotConfig;
     event: FeishuMessageEvent;
+    preparedContent?: string;
     botOpenId?: string;
     botName?: string;
     runtime?: RuntimeEnv;
@@ -48,6 +49,7 @@ type FeishuMessageReceiveHandlerContext = {
   resolveSequentialKey?: (params: {
     accountId: string;
     event: FeishuMessageEvent;
+    preparedContent?: string;
     botOpenId?: string;
     botName?: string;
   }) => string;
@@ -83,8 +85,9 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   const chatId = readString(message.chat_id);
   const chatType = normalizeFeishuChatType(message.chat_type);
   const messageType = readString(message.message_type);
-  const content = readString(message.content);
-  if (!messageId || !chatId || !chatType || !messageType || !content) {
+  // Feishu can deliver a legitimately empty message body; keep absent or
+  // non-string bodies malformed instead of inventing fallback content.
+  if (!messageId || !chatId || !chatType || !messageType || typeof message.content !== "string") {
     return null;
   }
   return value as FeishuMessageEvent;
@@ -185,10 +188,9 @@ export function createFeishuMessageReceiveHandler({
 }: FeishuMessageReceiveHandlerContext): (
   data: unknown,
 ) => Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> {
-  const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
-    cfg,
-    channel: "feishu",
-  });
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    channelRuntime.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "feishu" });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createSequentialQueue({
@@ -204,10 +206,12 @@ export function createFeishuMessageReceiveHandler({
     messageDedupeKey?: string,
     processingClaim?: FeishuMessageProcessingClaim,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
+    preparedContent?: string,
   ) => {
     const sequentialKey = resolveSequentialKey({
       accountId,
       event,
+      preparedContent,
       botOpenId: getBotOpenId(accountId),
       botName: getBotName(accountId),
     });
@@ -219,6 +223,7 @@ export function createFeishuMessageReceiveHandler({
       await handleMessage({
         cfg,
         event,
+        preparedContent,
         botOpenId: getBotOpenId(accountId),
         botName: getBotName(accountId),
         runtime,
@@ -273,15 +278,16 @@ export function createFeishuMessageReceiveHandler({
 
   const inboundDebouncer =
     channelRuntime.debounce.createInboundDebouncer<FeishuMessageDebounceEntry>({
-      debounceMs: inboundDebounceMs,
+      debounceMs: resolveDebounceMs(),
+      resolveDebounceMs,
       buildKey: ({ event }) => {
         const chatId = event.message.chat_id?.trim();
         const senderId = resolveSenderDebounceId(event);
         if (!chatId || !senderId) {
           return null;
         }
-        const rootId = event.message.root_id?.trim();
-        const threadKey = rootId ? `thread:${rootId}` : "chat";
+        const threadId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+        const threadKey = threadId ? `thread:${threadId}` : "chat";
         return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
       },
       shouldDebounce: ({ event }) => {
@@ -291,12 +297,9 @@ export function createFeishuMessageReceiveHandler({
         const text = resolveDebounceText(event);
         return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
       },
-      onFlush: async (entries) => {
+      onFlush: (entries, createFlush) => {
         const activeEntries = entries.filter((entry) => !entry.abandoned);
         const last = activeEntries.at(-1);
-        if (!last) {
-          return;
-        }
         const { lifecycle, settle } = buildFeishuFlushIngressLifecycle(
           activeEntries.map((entry) => ({
             lifecycle: entry.turnAdoptionLifecycle,
@@ -307,74 +310,77 @@ export function createFeishuMessageReceiveHandler({
               error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
           },
         );
-        if (lifecycle?.abortSignal.aborted) {
-          await lifecycle.onAbandoned();
-          return;
-        }
-        try {
-          if (activeEntries.length === 1) {
-            await dispatchFeishuMessage(
-              last.event,
-              resolveFeishuMessageDedupeKey(last.event),
-              last.processingClaim,
-              lifecycle,
-            );
-            await settle();
-            return;
-          }
-          const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
-          const freshEntries: FeishuMessageDebounceEntry[] = [];
-          for (const entry of dedupedEntries) {
-            if (
-              !(await hasProcessedMessage(
-                resolveFeishuMessageDedupeKey(entry.event),
-                accountId,
-                log,
-              ))
-            ) {
-              freshEntries.push(entry);
+        return createFlush({
+          lifecycle,
+          dispatch: async (admissionLifecycle) => {
+            if (!last) {
+              return;
             }
-          }
-          const dispatchEntry = freshEntries.at(-1);
-          if (!dispatchEntry) {
-            await settle();
-            return;
-          }
-          const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
-          if (!lifecycle) {
-            await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
-          }
-          const combinedText = freshEntries
-            .map((entry) => resolveDebounceText(entry.event))
-            .filter(Boolean)
-            .join("\n");
-          const mergedMentions = resolveFeishuDebounceMentions({
-            entries: freshEntries.map((entry) => entry.event),
-            botOpenId: getBotOpenId(accountId),
-          });
-          await dispatchFeishuMessage(
-            {
-              ...dispatchEntry.event,
-              message: {
-                ...dispatchEntry.event.message,
-                ...(combinedText.trim()
-                  ? {
-                      message_type: "text",
-                      content: JSON.stringify({ text: combinedText }),
-                    }
-                  : {}),
-                mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
-              },
-            },
-            dispatchDedupeKey,
-            dispatchEntry.processingClaim,
-            lifecycle,
-          );
-          await settle();
-        } catch (err) {
-          await lifecycle?.onAbandoned();
-          throw err;
-        }
+            if (admissionLifecycle.abortSignal.aborted) {
+              await admissionLifecycle.onAbandoned();
+              return;
+            }
+            try {
+              if (activeEntries.length === 1) {
+                await dispatchFeishuMessage(
+                  last.event,
+                  resolveFeishuMessageDedupeKey(last.event),
+                  last.processingClaim,
+                  admissionLifecycle,
+                );
+                await settle();
+                return;
+              }
+              const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
+              const freshEntries: FeishuMessageDebounceEntry[] = [];
+              for (const entry of dedupedEntries) {
+                if (
+                  !(await hasProcessedMessage(
+                    resolveFeishuMessageDedupeKey(entry.event),
+                    accountId,
+                    log,
+                  ))
+                ) {
+                  freshEntries.push(entry);
+                }
+              }
+              const dispatchEntry = freshEntries.at(-1);
+              if (!dispatchEntry) {
+                await settle();
+                return;
+              }
+              const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
+              if (!lifecycle) {
+                await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
+              }
+              const combinedText = freshEntries
+                .map((entry) => resolveDebounceText(entry.event))
+                .filter(Boolean)
+                .join("\n");
+              const mergedMentions = resolveFeishuDebounceMentions({
+                entries: freshEntries.map((entry) => entry.event),
+                botOpenId: getBotOpenId(accountId),
+              });
+              await dispatchFeishuMessage(
+                {
+                  ...dispatchEntry.event,
+                  message: {
+                    ...dispatchEntry.event.message,
+                    mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                  },
+                },
+                dispatchDedupeKey,
+                dispatchEntry.processingClaim,
+                admissionLifecycle,
+                combinedText,
+              );
+              await settle();
+            } catch (err) {
+              await admissionLifecycle.onAbandoned();
+              throw err;
+            }
+          },
+        });
       },
       onError: (err, entries) => {
         for (const entry of entries) {

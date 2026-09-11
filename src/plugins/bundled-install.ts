@@ -1,51 +1,41 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
-import {
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
+import { persistPluginInstall, prepareConfigForDisabledInstall } from "./install-persistence.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
-function hasValidBundledPluginConfig(params: {
+type BundledPluginConfigEnablement =
+  | { mode: "ready" }
+  | { mode: "missing" }
+  | { mode: "invalid"; error: string };
+
+function resolveBundledPluginConfigEnablement(params: {
   bundledSource: BundledPluginSource;
   existingEntry: unknown;
-}): boolean {
+}): BundledPluginConfigEnablement {
   if (!params.bundledSource.requiresConfig) {
-    return true;
+    return { mode: "ready" };
   }
-  if (!isRecord(params.existingEntry)) {
-    return false;
+  const entry = isRecord(params.existingEntry) ? params.existingEntry : undefined;
+  if (!entry || !Object.hasOwn(entry, "config")) {
+    return { mode: "missing" };
   }
-  const config = params.existingEntry.config;
-  if (!isRecord(config)) {
-    return false;
-  }
+  const config = entry.config;
   if (!params.bundledSource.configSchema) {
-    return Object.keys(config).length > 0;
+    return isRecord(config) && Object.keys(config).length > 0
+      ? { mode: "ready" }
+      : { mode: "invalid", error: "config must be a non-empty object" };
   }
-  return validateJsonSchemaValue({
+  const result = validateJsonSchemaValue({
     schema: params.bundledSource.configSchema,
     cacheKey: `bundled-install:${params.bundledSource.pluginId}`,
     value: config,
     applyDefaults: true,
-  }).ok;
-}
-
-function prepareConfigForDisabledBundledInstall(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const entries = config.plugins?.entries ?? {};
-  const { [pluginId]: _removedEntry, ...nextEntries } = entries;
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: nextEntries,
-    },
-  };
+  });
+  return result.ok
+    ? { mode: "ready" }
+    : { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
 }
 
 export async function installBundledPluginSource(params: {
@@ -55,16 +45,23 @@ export async function installBundledPluginSource(params: {
   warning?: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }): Promise<{ pluginId: string; warnings: string[] }> {
   // Bundled plugins with required config are recorded but not enabled until config validates.
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
-  const shouldEnable = hasValidBundledPluginConfig({
+  const configEnablement = resolveBundledPluginConfigEnablement({
     bundledSource: params.bundledSource,
     existingEntry,
   });
+  if (configEnablement.mode === "invalid") {
+    throw new Error(
+      `Plugin "${params.bundledSource.pluginId}" has invalid configured settings: ${configEnablement.error}. Fix plugins.entries.${params.bundledSource.pluginId}.config, then rerun the install.`,
+    );
+  }
+  const shouldEnable = configEnablement.mode === "ready";
   const configBase = shouldEnable
     ? params.snapshot.config
-    : prepareConfigForDisabledBundledInstall(params.snapshot.config, params.bundledSource.pluginId);
+    : prepareConfigForDisabledInstall(params.snapshot.config, params.bundledSource.pluginId);
   const configWarning = shouldEnable
     ? undefined
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
@@ -72,6 +69,7 @@ export async function installBundledPluginSource(params: {
     Boolean(warning),
   );
   await persistPluginInstall({
+    ...params,
     snapshot: {
       ...params.snapshot,
       config: configBase,
@@ -84,9 +82,7 @@ export async function installBundledPluginSource(params: {
       installPath: params.bundledSource.localPath,
     },
     enable: shouldEnable,
-    invalidateRuntimeCache: params.invalidateRuntimeCache,
     ...(warnings.length > 0 ? { warningMessage: warnings.join("\n") } : {}),
-    runtime: params.runtime,
   });
   return { pluginId: params.bundledSource.pluginId, warnings };
 }

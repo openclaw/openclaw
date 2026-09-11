@@ -39,6 +39,7 @@ describe("minimax model definitions", () => {
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toEqual({
+      compat: { codeMode: "preferred" },
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",
@@ -86,11 +87,6 @@ describe("minimax model definitions", () => {
     expect(model.input).toEqual(["text"]);
     expect(model.cost).toEqual({ input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 });
     expect(model.contextWindow).toBe(EXPECTED_DEFAULT_CONTEXT_WINDOW);
-  });
-
-  it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
-    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
-    expect(model.input).toEqual(["text"]);
   });
 
   it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {

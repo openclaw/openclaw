@@ -3,6 +3,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -11,6 +12,8 @@ import {
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -161,6 +164,17 @@ describe("resolveGatewayRequestContext", () => {
       }),
     ).toThrow("Unknown agent '!!!'.");
   });
+
+  it("rejects invalid model syntax before accepting an explicit agent header", () => {
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "main" }),
+        model: "gpt-4o",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+  });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {
@@ -210,6 +224,72 @@ describe("resolveTrustedHttpOperatorScopes", () => {
 
     expect(scopes).toStrictEqual([]);
   });
+
+  it.each<{
+    label: string;
+    roleScopes: GatewayOperatorRoleDefinition["scopes"];
+    expectedScopes: string[];
+    expectedDefaults: string[];
+  }>([
+    {
+      label: "read",
+      roleScopes: ["operator.read"],
+      expectedScopes: ["operator.read"],
+      expectedDefaults: ["operator.read"],
+    },
+    {
+      label: "admin",
+      roleScopes: ["operator.admin"],
+      expectedScopes: [
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.talk",
+        "operator.approvals",
+        "operator.talk.secrets",
+      ],
+      expectedDefaults: [...CLI_DEFAULT_OPERATOR_SCOPES],
+    },
+    {
+      label: "write",
+      roleScopes: ["operator.write"],
+      expectedScopes: ["operator.read", "operator.write", "operator.talk"],
+      expectedDefaults: ["operator.read", "operator.write"],
+    },
+    { label: "empty", roleScopes: [], expectedScopes: [], expectedDefaults: [] },
+  ])(
+    "caps trusted-proxy headers and defaults to the verified profile's $label role",
+    ({ roleScopes, expectedScopes, expectedDefaults }) => {
+      const requestAuth = {
+        trustDeclaredOperatorScopes: true,
+        operatorRolePolicy: {
+          sessions: { others: "view" as const },
+          agents: ["guest"],
+          scopes: roleScopes,
+        },
+      };
+
+      expect(
+        resolveTrustedHttpOperatorScopes(
+          createReq({
+            "x-openclaw-scopes":
+              "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
+          }),
+          requestAuth,
+        ),
+      ).toEqual(expectedScopes);
+      expect(resolveTrustedHttpOperatorScopes(createReq(), requestAuth)).toEqual(expectedDefaults);
+      expect(
+        resolveTrustedHttpOperatorScopes(
+          createReq({ "x-openclaw-scopes": "operator.read" }),
+          requestAuth,
+        ),
+      ).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(
+        resolveTrustedHttpOperatorScopes(createReq({ "x-openclaw-scopes": "" }), requestAuth),
+      ).toEqual([]);
+    },
+  );
 });
 
 describe("resolveHttpSenderIsOwner", () => {
@@ -245,15 +325,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
       { authMethod: "token", trustDeclaredOperatorScopes: false },
     );
 
-    expect(scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("keeps declared scopes for trusted HTTP identity-bearing requests", () => {
