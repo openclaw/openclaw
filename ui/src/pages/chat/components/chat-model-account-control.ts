@@ -203,11 +203,12 @@ export function renderChatModelAccountControl(params: {
           @click=${() => {
             currentInventory.open = !currentInventory.open;
             params.onRequestUpdate();
+            // A loaded inventory is reused across collapse/expand; an empty one
+            // (never loaded, or a failed load) fetches again so reopening retries.
             if (
               currentInventory.open &&
               currentInventory.accounts.length === 0 &&
-              !currentInventory.loading &&
-              !currentInventory.error
+              !currentInventory.loading
             ) {
               void loadAccounts();
             }
