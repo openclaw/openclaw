@@ -3470,6 +3470,7 @@ class ChatComposerLayoutTest {
     val editorId = editor.fetchSemanticsNode().id
     val before = prefs.modelFavorites.value
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription(nativeString("Pin model")))
     val pin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
     val bounds = pin.getUnclippedBoundsInRoot()
     val x = (bounds.left.value + bounds.right.value) / 2f
@@ -3513,6 +3514,7 @@ class ChatComposerLayoutTest {
     composeRule.waitForIdle()
     val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
     assertNotSame(old.window, fresh.window)
+    composeRule.onNode(hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription(nativeString("Pin model")))
     val freshPin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
     freshPin.performTouchInput {
       down(center)

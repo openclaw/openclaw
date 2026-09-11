@@ -47,7 +47,7 @@ class NodeRuntimeAgentSelectionTest {
     runBlocking {
       val runtime = createConnectedRuntime()
       val catalogJobs = Channel<Job>(Channel.UNLIMITED)
-      val response = AtomicReference("""{"models":[{"id":"previous","provider":"fixture","available":true}]}""")
+      val response = AtomicReference("""{"models":[{"id":"previous","name":"Previous","provider":"fixture","available":true}]}""")
       try {
         runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
           assertEquals(
@@ -77,7 +77,7 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
         assertEquals(listOf("previous"), runtime.providerModelCatalog.value.map { it.id })
 
-        response.set("""{"models":[{"id":"compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
+        response.set("""{"models":[{"id":"compatible","name":"Compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
         runtime.refreshProviderModels(refresh = true)
         withTimeout(2_000) { catalogJobs.receive().join() }
 
@@ -105,7 +105,7 @@ class NodeRuntimeAgentSelectionTest {
     runBlocking {
       val runtime = createConnectedRuntime()
       val catalogJobs = Channel<Job>(Channel.UNLIMITED)
-      val response = AtomicReference("""{"models":[{"id":"retired-private-model","provider":"fixture","available":true}]}""")
+      val response = AtomicReference("""{"models":[{"id":"retired-private-model","name":"Retired private model","provider":"fixture","available":true}]}""")
       val authResponse = AtomicReference("""{"providers":[{"provider":"fixture","status":"ok","profiles":[]}]}""")
       try {
         runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
@@ -340,11 +340,11 @@ class NodeRuntimeAgentSelectionTest {
                   assertFalse("Owner changes must not request discovery", params.containsKey("refresh"))
                   newReads.send(currentCoroutineContext().job)
                   newResponse.await()
-                  """{"models":[{"id":"$agentId-current","provider":"fixture"}]}"""
+                  """{"models":[{"id":"$agentId-current","name":"$agentId current","provider":"fixture"}]}"""
                 }
 
                 else -> {
-                  """{"models":[{"id":"alpha-model","provider":"fixture"}]}"""
+                  """{"models":[{"id":"alpha-model","name":"Alpha","provider":"fixture"}]}"""
                 }
               }
             }
@@ -374,7 +374,7 @@ class NodeRuntimeAgentSelectionTest {
         assertTrue(runtime.providerModelCatalog.value.isEmpty())
         assertTrue(runtime.modelAuthProviders.value.isEmpty())
 
-        catalogResponse.complete("""{"models":[{"id":"retired-model","provider":"fixture"}],"refreshFailed":true}""")
+        catalogResponse.complete("""{"models":[{"id":"retired-model","name":"Retired model","provider":"fixture"}],"refreshFailed":true}""")
         providerCatalogResponse.completeExceptionally(IllegalStateException("Retired model read failed"))
         withTimeout(2_000) {
           catalogJob.join()
@@ -425,7 +425,7 @@ class NodeRuntimeAgentSelectionTest {
           when (method) {
             "models.list" -> {
               jobs.send(currentCoroutineContext().job)
-              if (hold.get() == 1) response.await() else """{"models":[{"id":"retained","provider":"fixture"}]}"""
+              if (hold.get() == 1) response.await() else """{"models":[{"id":"retained","name":"Retained","provider":"fixture"}]}"""
             }
 
             "models.authStatus" -> {
@@ -446,7 +446,7 @@ class NodeRuntimeAgentSelectionTest {
         runtime.selectChatAgent("alpha")
         assertEquals(listOf("retained"), runtime.modelCatalog.value.map { it.id })
         assertEquals(listOf("retained"), runtime.providerModelCatalog.value.map { it.id })
-        response.complete("""{"models":[{"id":"updated","provider":"fixture"}]}""")
+        response.complete("""{"models":[{"id":"updated","name":"Updated","provider":"fixture"}]}""")
         withTimeout(2_000) { pending.join() }
         assertEquals(listOf("updated"), runtime.providerModelCatalog.value.map { it.id })
       } finally {
