@@ -82,5 +82,3 @@ export type {
   SandboxToolPolicy,
   SandboxWorkspaceAccess,
 } from "./sandbox/types.js";
-export { SandboxRuntimeRetiredError } from "./sandbox/provisioning-error.js";
-export { createSshSandboxBackend } from "./sandbox/ssh-backend.js";
