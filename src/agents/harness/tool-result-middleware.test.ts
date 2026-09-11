@@ -636,6 +636,54 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
+  it("preserves empty output from a nested tool_result instead of failing closed", async () => {
+    // A tool that legitimately produced no output (`echo` printing nothing, reading an
+    // empty file) still returns a valid text block whose text is "". Flattening used to
+    // drop that block, leaving zero blocks, which the validator read as invalid and
+    // turned into a post-processing error. Empty output must stay empty output.
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (eventValue) => ({ result: eventValue.result }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: {
+        content: [{ type: "tool_result", content: [{ type: "text", text: "" }] }],
+        details: {},
+      } as never,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "" }],
+      details: {},
+    });
+  });
+
+  it("still fails closed when nested content is malformed rather than empty", async () => {
+    // The empty-output carve-out above must not weaken the fail-closed path: content
+    // that flattens to nothing because it is malformed still has to be rejected.
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (eventValue) => ({ result: eventValue.result }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: {
+        content: [{ type: "tool_result", content: [null] }],
+        details: {},
+      } as never,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Tool output unavailable due to post-processing error." }],
+      details: { status: "error", middlewareError: true },
+    });
+  });
+
   it("accepts well-formed middleware results", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       (eventValue, ctx) => ({

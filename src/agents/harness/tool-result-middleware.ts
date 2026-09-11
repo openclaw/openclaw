@@ -212,6 +212,13 @@ function coerceMiddlewareContentArray(
   options: MiddlewareToolResultCoerceOptions = {},
 ): MiddlewareContentBlock[] {
   const blocks: MiddlewareContentBlock[] = [];
+  // A tool that legitimately produced no output (`echo` with nothing to print,
+  // reading an empty file) still returns a valid text block whose text is "".
+  // `appendMiddlewareContentBlock` skips those while merging, which is correct
+  // mid-array but collapses an all-empty nested result to zero blocks. The
+  // caller reads zero blocks as "invalid" and fails the result closed, so empty
+  // output would surface as a post-processing error instead of empty output.
+  let sawValidEmptyText = false;
   for (const entry of content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
     if (blocks.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
       break;
@@ -221,8 +228,17 @@ function coerceMiddlewareContentArray(
     for (const block of text
       ? [{ type: "text" as const, text: truncateUtf16Safe(text, MAX_MIDDLEWARE_TEXT_CHARS) }]
       : coerced) {
+      if (block.type === "text" && !block.text) {
+        sawValidEmptyText = true;
+      }
       appendMiddlewareContentBlock(blocks, block);
     }
+  }
+  // Preserve emptiness only when every block was a valid-but-empty text block.
+  // Content that coerced to nothing because it was malformed still returns [],
+  // keeping the fail-closed path intact for genuinely invalid middleware output.
+  if (blocks.length === 0 && sawValidEmptyText) {
+    return [{ type: "text", text: "" }];
   }
   return blocks;
 }
