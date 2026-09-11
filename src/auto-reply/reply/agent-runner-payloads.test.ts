@@ -1473,6 +1473,63 @@ describe("buildReplyPayloads media filter integration", () => {
     }
   });
 
+  // Issue #144006: a block that carries explicit-TTS audio delivers its text as
+  // the channel caption. The later text-only final repeats that exact text, so a
+  // media-less final must consult the same recorded sent-text evidence as a
+  // media-bearing one.
+  it.each<DirectBlockDedupeCase>([
+    {
+      name: "suppresses a text-only final already delivered as a captioned voice block",
+      keyPayloads: [{ text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true }],
+      directlySentBlockPayloads: [
+        { text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      ],
+      payloads: [{ text: "Spoken answer." }],
+      params: { blockStreamingEnabled: false, blockReplyPipeline: null, replyToMode: "off" },
+    },
+    {
+      name: "suppresses a text-only final already delivered as a captioned voice block while streaming",
+      keyPayloads: [{ text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true }],
+      directlySentBlockPayloads: [
+        { text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      ],
+      payloads: [{ text: "Spoken answer." }],
+      params: { blockStreamingEnabled: true, blockReplyPipeline: null, replyToMode: "off" },
+    },
+    {
+      name: "keeps a text-only final whose text was never delivered",
+      keyPayloads: [{ text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true }],
+      directlySentBlockPayloads: [
+        { text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      ],
+      payloads: [{ text: "Supplementary closing line." }],
+      params: { blockStreamingEnabled: false, blockReplyPipeline: null, replyToMode: "off" },
+      expected: { text: "Supplementary closing line." },
+    },
+    {
+      name: "keeps an error final whose text matches a delivered voice block",
+      keyPayloads: [{ text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true }],
+      directlySentBlockPayloads: [
+        { text: "Spoken answer.", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      ],
+      payloads: [{ text: "Spoken answer.", isError: true }],
+      params: { blockStreamingEnabled: false, blockReplyPipeline: null, replyToMode: "off" },
+      expected: { text: "Spoken answer.", isError: true },
+    },
+  ])("$name", async ({ keyPayloads, payloads, directlySentBlockPayloads, params, expected }) => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      directlySentBlockKeys: new Set(keyPayloads.map(createBlockReplyContentKey)),
+      ...(directlySentBlockPayloads ? { directlySentBlockPayloads } : {}),
+      payloads,
+      ...params,
+    });
+
+    expect(replyPayloads).toHaveLength(expected ? 1 : 0);
+    if (expected) {
+      expectFields(replyPayloads[0], expected);
+    }
+  });
+
   it("preserves final text when internal whitespace changed", async () => {
     const directlySentBlockPayloads = [
       setReplyPayloadMetadata({ text: "constx=1" }, { assistantMessageIndex: 1 }),

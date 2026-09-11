@@ -15,6 +15,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -373,9 +374,12 @@ export async function buildReplyPayloads(params: {
         { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
         { trimText: true },
       );
+      // A media-bearing block delivers its text as the channel caption, so the
+      // same recorded sent-text evidence covers a matching text-only final.
       const wasSent = hasRichContent
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
-        : params.blockReplyPipeline?.hasSentPayload(payload);
+        : params.blockReplyPipeline?.hasSentPayload(payload) ||
+          (isReplyPayloadTerminalContent(payload) && hasDirectlySentText(payload));
       if (wasSent) {
         return null;
       }
@@ -404,7 +408,7 @@ export async function buildReplyPayloads(params: {
   };
   const preserveDirectlyUnsentPayload = (payload: ReplyPayload): ReplyPayload | null => {
     const reply = resolveSendableOutboundReplyParts(payload);
-    if (!reply.hasMedia || !reply.trimmedText) {
+    if (reply.hasMedia && !reply.trimmedText) {
       return payload;
     }
     return preserveUnsentMediaAfterBlockSend(payload);
