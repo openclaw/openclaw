@@ -9,12 +9,14 @@ import * as processParents from "../../infra/restart-stale-pids.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as recoveryBackups from "../../infra/update-recovery-backup.js";
 import {
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import * as recoveryStore from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
@@ -40,6 +42,79 @@ import {
 } from "./update-command-terminal.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["current", "revoked", "replaced-run", "rebound-recovery"] as const)(
+  "checks capture ownership without repeated recovery snapshots: %s",
+  async (scenario) => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const temporary = state.path("coordinator");
+      await fs.mkdir(temporary, { mode: 0o700 });
+      vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
+      const root = state.path("install");
+      await fs.mkdir(root);
+      const inventoryRoot = state.path("inventory");
+      await fs.mkdir(inventoryRoot);
+      await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          fs.writeFile(path.join(inventoryRoot, `entry-${index}.txt`), "synthetic capture input"),
+        ),
+      );
+      const run: NonNullable<UpdateCommandOptions["run"]> = {
+        runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+        env: state.env,
+      };
+      const opts: UpdateCommandOptions = { run };
+      const readRecovery = vi.spyOn(recoveryStore, "loadUpdateRecovery");
+      const capture = recoveryBackups.createUpdateRecoveryBackup;
+      let ownershipChecks = 0;
+      let readsAfterCapture = 0;
+      vi.spyOn(recoveryBackups, "createUpdateRecoveryBackup").mockImplementation(async (params) => {
+        const recoveryReads = readRecovery.mock.calls.length;
+        expect(recoveryReads).toBeGreaterThan(0);
+        const result = await capture({
+          ...params,
+          assertOwned() {
+            if (++ownershipChecks === 8) {
+              if (scenario === "revoked") {
+                const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
+                try {
+                  db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+                    "replacement",
+                    root,
+                  );
+                } finally {
+                  db.close();
+                }
+              } else if (scenario === "replaced-run") {
+                opts.run = { ...run };
+              } else if (scenario === "rebound-recovery") {
+                opts.recovery = {};
+              }
+            }
+            params.assertOwned();
+          },
+        });
+        expect(ownershipChecks).toBeGreaterThan(8);
+        expect(readRecovery.mock.calls.length).toBe(recoveryReads);
+        readsAfterCapture = readRecovery.mock.calls.length;
+        return result;
+      });
+      const execution = withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(root);
+        const backup = await createUpdateCommandBackup({ opts, root, env: state.env });
+        expect((await fs.stat(backup.manifestPath)).isFile()).toBe(true);
+      });
+      if (scenario === "current") {
+        await execution;
+        expect(readRecovery.mock.calls.length).toBeGreaterThan(readsAfterCapture);
+      } else {
+        await expect(execution).rejects.toThrow(/ownership|executor|recovery/i);
+        expect(ownershipChecks).toBe(8);
+      }
+    });
+  },
+);
 
 it.each([
   "owned child",

@@ -222,11 +222,16 @@ export async function createUpdateCommandBackup(params: {
   }
   assertCaptureStateOwner(run.env, params.env);
   const executor = run.executorFence;
+  const recovery = params.opts.recovery;
   const assertOwned = () => {
-    if (params.opts.run !== run || run.executorFence !== executor) {
-      throw new Error("Update recovery backup lost its original executor.");
+    if (
+      params.opts.run !== run ||
+      run.executorFence !== executor ||
+      params.opts.recovery !== recovery
+    ) {
+      throw new Error("Update recovery backup lost its original executor or recovery context.");
     }
-    assertUpdateCommandRecovery(params.opts);
+    executor?.assertCurrent();
   };
   await reconcileUpdateCommandBackups(params);
   assertOwned();
@@ -243,6 +248,9 @@ export async function createUpdateCommandBackup(params: {
     }
     let outcome: { ok: true; value: UpdateRecoveryBackupRef } | { ok: false; error: unknown };
     try {
+      assertOwned();
+      maintenance.assertCurrent();
+      assertUpdateCommandRecovery(params.opts);
       outcome = {
         ok: true,
         value: await createUpdateRecoveryBackup({
@@ -254,6 +262,9 @@ export async function createUpdateCommandBackup(params: {
           },
         }),
       };
+      assertOwned();
+      maintenance.assertCurrent();
+      assertUpdateCommandRecovery(params.opts);
     } catch (error) {
       outcome = { ok: false, error };
     }
