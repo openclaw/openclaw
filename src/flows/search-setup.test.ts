@@ -254,16 +254,21 @@ describe("runSearchSetupFlow", () => {
     });
 
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([mockGrokProvider]);
+    const beforePersistentEffect = vi.fn(async () => {});
     const skipped = await runSearchSetupFlow(
       original,
       createNonExitingRuntime(),
       createWizardPrompter({ select: vi.fn(async () => "__skip__") as never }),
+      { beforePersistentEffect },
     );
     expect(skipped).toEqual({
       outcome: "kept-current",
       config: original,
       reason: "user-skipped",
     });
+    expect(skipped.config).toBe(original);
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
+    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
   });
 
   it("localizes setup copy for web search provider selection", async () => {

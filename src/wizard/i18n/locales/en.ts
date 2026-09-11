@@ -315,6 +315,8 @@ export const en = {
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
+      optionalSearch:
+        "Web search setup is optional. Choose a provider with `{command}`, or say `configure search` in Settings > Ask OpenClaw. You can skip without changing your setup.",
       hatchingNow: "Hatching your agent now…",
       lookAroundManual: "No — I'll configure it manually",
       lookAroundQuestion: "May I look around to find your AI access?",

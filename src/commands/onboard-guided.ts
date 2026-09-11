@@ -601,6 +601,14 @@ async function runGuidedOnboardingFlow(
     }
     recommendationOutcome.commitResult();
   }
+  if (!alreadyConfigured) {
+    await prompter.note(
+      t("wizard.guided.optionalSearch", {
+        command: formatCliCommand("openclaw configure --section web"),
+      }),
+      t("wizard.setup.searchTitle"),
+    );
+  }
   const hatchWorkspace = alreadyConfigured
     ? resolveUserPath(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,

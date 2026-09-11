@@ -330,6 +330,7 @@ export function formatSystemAgentOnboardingWelcome(overview: SystemAgentOverview
     `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not configured or reachable yet."}`,
     "- I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
     "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    "- Web search setup is optional: say `configure search` to choose a provider, or skip for now.",
     "",
     "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
   ].join("\n");

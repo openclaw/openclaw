@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
+import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 
 describe("SystemAgentChatEngine runtime", () => {
   it("hosts a channel setup wizard as chat turns", async () => {
@@ -370,9 +371,25 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(handoff.handoff).toEqual({ kind: "open-setup", target: "gateway" });
   });
 
-  it("reports a failed hosted search-provider install without writing or auditing", async () => {
-    const baseConfig: OpenClawConfig = {};
+  it.each([
+    {
+      label: "user skip",
+      answer: "Skip for now",
+      expected: "Web search setup kept the current configuration. Nothing was changed.",
+    },
+    {
+      label: "failed provider install",
+      answer: "Brave",
+      expected: "Web search setup stopped: Error: web search provider brave installation failed",
+    },
+  ])("keeps completed onboarding unchanged after search $label", async ({ answer, expected }) => {
+    const baseConfig: OpenClawConfig = {
+      ...structuredClone(sharedVerifiedInferenceConfig),
+      wizard: { securityAcknowledgedAt: "2026-08-01T00:00:00.000Z" },
+    };
+    const original = structuredClone(baseConfig);
     const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot(baseConfig) as never);
     mocks.readSetupConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
@@ -380,27 +397,51 @@ describe("SystemAgentChatEngine runtime", () => {
       config: baseConfig,
       sourceConfig: baseConfig,
     });
-    mocks.runSearchSetupFlow.mockResolvedValue({
-      outcome: "install-failed",
-      config: baseConfig,
-      providerId: "brave",
-      reason: "failed",
-    });
+    mocks.runSearchSetupFlow.mockImplementation(
+      async (config: OpenClawConfig, _runtime: unknown, prompter: WizardPrompter) => {
+        const provider = await prompter.select({
+          message: "Search provider",
+          options: [
+            { value: "brave", label: "Brave" },
+            { value: "__skip__", label: "Skip for now" },
+          ],
+          initialValue: "__skip__",
+        });
+        return provider === "__skip__"
+          ? { outcome: "kept-current", config, reason: "user-skipped" }
+          : { outcome: "install-failed", config, providerId: provider, reason: "failed" };
+      },
+    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
       appendAuditEntry,
-      deps: { loadOverview: fakeOverviewLoader() },
+      deps: {
+        loadOverview: async () =>
+          ({
+            config: { path: "/tmp/openclaw.json", exists: true, valid: true },
+            defaultModel: "example/test-model",
+            gateway: { reachable: true, url: "ws://127.0.0.1:18789" },
+          }) as never,
+      },
     });
+    const propose = vi.spyOn(engine, "propose");
+    const welcome = await buildOnboardingWelcome({ engine });
+    const search = welcome.question.options.find(({ label }) => label === "Set up web search");
+    expect(search?.reply).toBeTypeOf("string");
+    expect(propose).not.toHaveBeenCalled();
+    expect(mocks.runSearchSetupFlow).not.toHaveBeenCalled();
 
-    const reply = await engine.handle("configure search");
+    const providerStep = await engine.handle(search!.reply!);
+    expect(providerStep.question?.question).toBe("Search provider");
+    expect(mocks.runSearchSetupFlow).toHaveBeenCalledOnce();
+    const reply = await engine.handle(answer);
 
-    expect(reply.text).toContain(
-      "Web search setup stopped: Error: web search provider brave installation failed",
-    );
+    expect(reply.text).toContain(expected);
     expect(reply.text).not.toContain("Done — web search setup is complete");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
     expect(appendAuditEntry).not.toHaveBeenCalled();
+    expect(baseConfig).toEqual(original);
   });
 
   it("hands CLI search credentials to the masked terminal wizard", async () => {

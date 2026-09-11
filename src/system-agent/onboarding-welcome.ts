@@ -21,8 +21,11 @@ const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
       recommended: true,
       description: "Meet your agent right here.",
     },
-    { label: "Connect WhatsApp", reply: "connect whatsapp" },
-    { label: "Connect Telegram", reply: "connect telegram" },
+    {
+      label: "Set up web search",
+      reply: "configure search",
+      description: "Choose a provider, or skip for now.",
+    },
     { label: "See all channels", reply: "channels" },
   ],
   isOther: true,

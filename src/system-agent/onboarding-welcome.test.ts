@@ -143,7 +143,7 @@ describe("buildOnboardingWelcome", () => {
       completedAtMs: 2,
     });
     const propose = vi.fn();
-    const { question } = await buildOnboardingWelcome({
+    const { text, question } = await buildOnboardingWelcome({
       engine: {
         loadOverview: vi.fn(async () => ({
           config: { path: "/tmp/openclaw.json", exists: true, valid: true },
@@ -162,6 +162,16 @@ describe("buildOnboardingWelcome", () => {
     );
     expect(propose).not.toHaveBeenCalled();
     expect(question.id).toBe("onboarding-next-step");
+    expect(question.options).toEqual([
+      expect.objectContaining({ reply: "talk to agent", recommended: true }),
+      expect.objectContaining({ label: "Set up web search", reply: "configure search" }),
+      { label: "See all channels", reply: "channels" },
+    ]);
+    expect(question.options.length).toBeLessThanOrEqual(4);
+    expect(question.isOther).toBe(true);
+    expect(question.skipAction).toBe("exit");
+    expect(text).toContain("`configure search` to choose a provider, or skip for now");
+    expect(text).toContain("`connect whatsapp`, `connect telegram`");
   });
 
   it("ignores a pending receipt from a replaced configuration", async () => {
