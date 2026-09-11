@@ -53,7 +53,7 @@ Capabilities are the public **native plugin** model inside OpenClaw. Native plug
 | Migration              | `api.registerMigrationProvider(...)`             | `migrate-claude`, `migrate-hermes`                          |
 
 <Note>
-A plugin that registers only hooks is **hook-only**. Plugins with tools, commands, background services, or routes but no capabilities are **non-capability** plugins. Both patterns remain supported; gateway discovery is an explicit capability listed above.
+A plugin that registers only hooks is **hook-only**. Plugins with tools, commands, background services, or routes but no capabilities are **non-capability** plugins. Both patterns remain supported. Gateway discovery is an explicit capability listed above.
 </Note>
 
 ### External compatibility stance
@@ -114,7 +114,7 @@ OpenClaw's plugin system has four layers:
     Core decides whether a discovered plugin is enabled, disabled, blocked, or selected for an exclusive slot such as memory.
   </Step>
   <Step title="Runtime loading">
-    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`; third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
+    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`. Third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
   </Step>
   <Step title="Surface consumption">
     The rest of OpenClaw reads the registry to expose tools, channels, provider setup, hooks, HTTP routes, CLI commands, and services.
@@ -158,21 +158,21 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy. Retaining metadata does not activate every discovered plugin.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then restart the Gateway to load the repaired plugin.
 
 Read-only model validation, effective tool inventory, and isolated model probes acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations.
 
-Each plugin service startup attempt owns one cleanup operation, including failed starts. Cleanup waits for the issued startup work to settle, even if a caller has stopped waiting. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown waits up to five seconds before continuing independent teardown, then joins the same cleanup before retiring shared plugin state, registries, secrets, and metadata. It does not invoke the service's stop handler again. If a service restart fails, an explicit reload retry still includes selected services whose restart had not begun.
+Each plugin service startup attempt owns one cleanup operation, including failed starts. Cleanup waits for the issued startup work to settle, even if a caller has stopped waiting. Hot replacement uses a five-second cleanup deadline. A timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown waits up to five seconds before continuing independent teardown, then joins the same cleanup before retiring shared plugin state, registries, secrets, and metadata. It does not invoke the service's stop handler again. If a service restart fails, an explicit reload retry still includes selected services whose restart had not begun.
 
-Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
+Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup. They do not restore a retired plugin's runtime authority.
 
 Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
 
-Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.
+Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller. Closing and reconnecting the same server does not dispose them.
 
-Hot registry publication does not wait for retired host cleanup; terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
+Hot registry publication does not wait for retired host cleanup. Terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
@@ -190,7 +190,7 @@ The planner keeps current manifest behavior compatible:
 - the plan API reports reason labels so diagnostics can distinguish explicit hints from ownership fallback
 
 <Warning>
-Do not treat `activation` as a lifecycle hook or a replacement for `register(...)`. It is metadata used to narrow loading. Prefer ownership fields when they already describe the relationship; use `activation` only for extra planner hints.
+Do not treat `activation` as a lifecycle hook or a replacement for `register(...)`. It is metadata used to narrow loading. Prefer ownership fields when they already describe the relationship. Use `activation` only for extra planner hints.
 </Warning>
 
 ### Channel plugins and the shared message tool
@@ -222,7 +222,7 @@ Core passes runtime scope into that discovery step. Important fields include:
 - `agentId`
 - trusted inbound `requesterSenderId`
 
-That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, authoritative conversation type, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool. Treat `chatType` as discovery scope supplied by the current inbound route, not something to infer again from an opaque channel id; it is absent when that route did not establish the conversation type.
+That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, authoritative conversation type, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool. Treat `chatType` as discovery scope supplied by the current inbound route, not something to infer again from an opaque channel id. It is absent when that route did not establish the conversation type.
 
 This is why embedded-runner routing changes are still plugin work: the runner is responsible for forwarding the current chat/session identity into the plugin discovery boundary so the shared `message` tool exposes the right channel-owned surface for the current turn.
 
@@ -267,7 +267,7 @@ The intended end state is:
 
 - a vendor's OpenClaw-facing surface lives in one plugin even if it spans text models, speech, images, and video
 - other vendors can do the same for their own surface area
-- channels do not care which vendor plugin owns the provider; they consume the shared capability contract exposed by core
+- channels do not care which vendor plugin owns the provider. They consume the shared capability contract exposed by core
 
 This is the key distinction:
 
@@ -384,7 +384,7 @@ OpenClaw already treats image/audio/video understanding as one shared capability
   </Step>
 </Steps>
 
-That avoids baking one provider's video assumptions into core. The plugin owns the vendor surface; core owns the capability contract and fallback behavior.
+That avoids baking one provider's video assumptions into core. The plugin owns the vendor surface. Core owns the capability contract and fallback behavior.
 
 Video generation already uses that same sequence: core owns the typed capability contract and runtime helper, and vendor plugins register `api.registerVideoGenerationProvider(...)` implementations against it.
 
@@ -412,7 +412,7 @@ There are two layers of enforcement:
   </Accordion>
 </AccordionGroup>
 
-The practical effect is that OpenClaw knows, up front, which plugin owns which surface. That lets core and channels compose seamlessly because ownership is declared, typed, and testable rather than implicit.
+The practical effect is that OpenClaw knows, up front, which plugin owns which surface. That lets core and channels compose because ownership is declared, typed, and testable rather than implicit.
 
 ### What belongs in a contract
 
@@ -452,11 +452,11 @@ Use allowlists and explicit install/load paths for non-bundled plugins. Treat wo
 For bundled workspace package names, keep the plugin id anchored in the npm name: `@openclaw/<id>` by default, or an approved typed suffix such as `-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when the package intentionally exposes a narrower plugin role.
 
 <Note>
-**Trust note:** `plugins.allow` permits **plugin ids** to load; it does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
+**Trust note:** `plugins.allow` permits **plugin ids** to load. It does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
 
 For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies, while bundled plugins from `OPENCLAW_DEV_SOURCE_ROOT` retain priority over tracked globals. See [Discovery precedence](/plugins/manifest/package-json#discovery-precedence-duplicate-plugin-ids) for the full order.
 
-A configured path or install record pointing to the host’s own bundled plugin tree retains bundled provenance, including source and compiled entries; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
+A configured path or install record pointing to the host’s own bundled plugin tree retains bundled provenance, including source and compiled entries. A different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 
 Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
 </Note>
@@ -472,7 +472,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and injected plugin API capabilities.
+Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package. Promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and injected plugin API capabilities.
 
 ## Internals and reference
 

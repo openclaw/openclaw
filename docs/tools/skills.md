@@ -49,7 +49,7 @@ identity and revision rather than discovered by scanning every user's files.
 
 When a session uses a different execution workspace, OpenClaw also loads that
 workspace's `skills/` and `.agents/skills/` directories. These skills follow the
-entire agent catalog in precedence and prompt order; within the execution
+entire agent catalog in precedence and prompt order. Within the execution
 workspace, `skills/` wins over `.agents/skills/`. Both directories participate in
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
@@ -90,7 +90,7 @@ A connected headless node can publish skills installed in its active OpenClaw
 skills directory (`~/.openclaw/skills` by default; profile environment overrides
 apply). They appear in the normal agent skill list while the node is connected
 and disappear when it disconnects. A local or Gateway skill keeps its name on
-collision; the node skill receives a deterministic node-prefixed name.
+collision. The node skill receives a deterministic node-prefixed name.
 Node-hosted v1 requires the directory name to match the skill's `name`
 frontmatter field. The published name, description, and instructions come from
 the same captured file content.
@@ -153,7 +153,7 @@ silently replacing another.
 <Warning>
 A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
-storage. Library ownership governs management and discovery; it does not grant
+storage. Library ownership governs management and discovery. It does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway
 operator. Keep credentials out of skill content.
 </Warning>
@@ -162,18 +162,18 @@ operator. Keep credentials out of skill content.
 
 Saving publishes a complete immutable revision: `SKILL.md` and every supporting
 file. The revision hash includes portable file paths, exact content, sizes, and
-executable flags. Editing only a helper script still changes the revision;
-sharing, ownership changes, ZIP timestamps, and archive entry order do not.
+executable flags. Editing only a helper script still changes the revision.
+Sharing, ownership changes, ZIP timestamps, and archive entry order do not.
 Identical saves are no-ops. A stale edit fails with a conflict instead of
 overwriting a newer revision.
 
 A session retains its selected skill IDs and revisions. Another person joining
 or taking ownership of the session does not replace that selection. Published
-changes are available to new sessions; explicitly attach or refresh a skill to
+changes are available to new sessions. Explicitly attach or refresh a skill to
 use it on the next turn of an existing session. Rollback selects a retained
 revision. Removing a skill from the library excludes it from new selections
 without deleting a revision already selected by a session. Disabling a skill
-removes it from new-session defaults; explicit attachment remains available.
+removes it from new-session defaults. Explicit attachment remains available.
 
 A new session selects up to 64 enabled library skills, with personal skills
 first and stable ID ordering within each group. If the library exceeds that
@@ -182,7 +182,7 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
+Worker resource delivery also has an 8 MiB aggregate limit. Narrow the session
 selection if its complete bundles exceed that limit. Published revisions are
 retained, including revisions still selected by older sessions.
 
@@ -255,7 +255,7 @@ For multi-account channel plugins, gate general messaging skills on the channel
 subtree (for example, `channels.discord`), not a root token field: credentials
 may live under a named account. This is a coarse skill-visibility check. The
 plugin still owns credential resolution, account enablement, action availability,
-and authorization; an eligible skill does not grant tool access.
+and authorization. An eligible skill does not grant tool access.
 
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
@@ -274,19 +274,19 @@ OpenClaw resolves explicit references from authorized senders on every channel
 and on generic Gateway, CLI, and webhook agent turns. It matches the current
 agent's eligible, user-invocable skills and tells the model to read each
 referenced `SKILL.md` before acting. A single message can reference up to eight
-distinct skills; OpenClaw returns a visible error instead of ignoring extra or
+distinct skills. OpenClaw returns a visible error instead of ignoring extra or
 allowlist-hidden references. The `$` form is composable prompt text. On channel
 messages, `/release_notes ...` remains the standalone command form and may use
 direct tool dispatch when the skill declares `command-dispatch: tool`; generic
 agent turns expand the same leading skill command as model instructions without
 running the channel command dispatcher. Common uppercase shell variables such
-as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text. Use lowercase `$home`,
 `$path`, or `$editor` to reference skills with those names. Escape a reference
 as `\$name` when it should stay literal.
 
 Skills with `disable-model-invocation: true` stay out of the `$` picker and the
 model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
+explicit `$skill-name` reference still invokes them. The flag only hides the
 skill from model-initiated selection.
 
 ## Skill Workshop
@@ -419,7 +419,7 @@ When the user asks to generate an image, use the `image_generate` tool...
 
 <Note>
   OpenClaw follows the [AgentSkills](https://agentskills.io) spec. Frontmatter
-  is parsed as YAML first; if that fails, it falls back to a single-line-only
+  is parsed as YAML first. If that fails, it falls back to a single-line-only
   parser. Nested `metadata` blocks (including multi-line YAML mappings) are
   flattened to a JSON string and re-parsed as JSON5, so the block form shown
   under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
@@ -572,18 +572,18 @@ metadata:
     - Specs can include `os: ["darwin"|"linux"|"win32"]` to filter by platform.
     - Node installs honor `skills.install.nodeManager` in `openclaw.json`
       (default: npm; options: npm / pnpm / yarn / bun). This only affects skill
-      installs; the Gateway runtime should still be Node.
+      installs. The Gateway runtime should still be Node.
     - Gateway installer preference: Homebrew → uv → configured node manager →
       go → download.
   </Accordion>
   <Accordion title="Per-installer details">
     - **Homebrew:** OpenClaw does not auto-install Homebrew or translate brew
       formulas into system package commands. In Linux containers without
-      `brew`, brew-only installers are hidden; use a custom image or install
+      `brew`, brew-only installers are hidden. Use a custom image or install
       the dependency manually.
     - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs.
       If `go` is missing and Homebrew is available, OpenClaw installs Go via
-      Homebrew first; on Linux without Homebrew it can instead use `apt-get`
+      Homebrew first. On Linux without Homebrew it can instead use `apt-get`
       as root or through passwordless `sudo` when the refreshed `golang-go`
       candidate meets the minimum version. The actual `go install` for the
       dependency always targets a dedicated OpenClaw-managed bin directory
@@ -788,7 +788,7 @@ Keep descriptions short and descriptive to minimize prompt overhead.
 For small context windows, the OpenClaw embedded runtime further shortens the
 descriptions in the already-admitted catalog. It retains every admitted name,
 location, and loading note, even when these exceed the description budget.
-Full skill instructions and saved snapshots are unchanged; Code Mode can still
+Full skill instructions and saved snapshots are unchanged. Code Mode can still
 read every admitted skill. Native harnesses retain their own prompt policy.
 
 ## Related

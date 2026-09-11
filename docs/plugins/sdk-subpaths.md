@@ -9,7 +9,7 @@ title: "Plugin SDK subpaths"
 
 The plugin SDK contains narrow public subpaths and repository-only bundled
 helpers under `openclaw/plugin-sdk/`. This page catalogs every typed public
-subpath and labels selected private-local entries explicitly; it is not an
+subpath and labels selected private-local entries explicitly. It is not an
 inventory of every internal runtime helper. Four files define the boundary:
 
 - `scripts/lib/plugin-sdk-entrypoints.json`: the maintained entrypoint inventory
@@ -17,7 +17,7 @@ inventory of every internal runtime helper. Four files define the boundary:
 - `scripts/lib/plugin-sdk-private-local-only-subpaths.json`: internal subpaths
   excluded from the typed, documented SDK. Production entries remain available
   as JavaScript-only host runtime exports for separately published official
-  plugins; test-only entries stay unexported.
+  plugins. Test-only entries stay unexported.
 - `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`: public compatibility
   subpaths retained only through their documented removal windows.
 - `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
@@ -34,7 +34,7 @@ exclusions when entries become public or are removed. Nested paths, glob or esca
 syntax, non-entrypoint metadata, and other file rules retain their order; unrelated
 mappings and XAI's intentional private-alias omissions are preserved.
 These local declaration aliases do not add types to JavaScript-only published
-SDK exports; test-only entries remain unexported.
+SDK exports. Test-only entries remain unexported.
 
 Maintainers audit the public export count with `pnpm plugin-sdk:surface` and
 the compatibility queue with `pnpm plugins:boundary-report:summary`.
@@ -46,7 +46,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 Native feature authoring uses `plugin-sdk/feature-contract`
 (`defineFeatureContract`, `createFeatureClient`), `plugin-sdk/feature-plugin`
 (`defineFeaturePlugin`), and `plugin-sdk/control-ui` (`defineControlUiPlugin`,
-host and view types). The contract and Control UI subpaths are browser safe;
+host and view types). The contract and Control UI subpaths are browser safe.
 `feature-plugin` is backend only. See [Feature plugins](/plugins/feature-plugins).
 
 | Subpath                             | Key exports                                                                                                                                                                                             |
@@ -74,20 +74,20 @@ export default {
 ```
 
 The optional collections are `speechProviders`, `realtimeTranscriptionProviders`,
-and `realtimeVoiceProviders`. Use the same provider factories as full registration;
-retain their configuration, aliases, readiness functions, execution methods, and
+and `realtimeVoiceProviders`. Use the same provider factories as full registration.
+Retain their configuration, aliases, readiness functions, execution methods, and
 non-enumerable internal methods. The host registers descriptors through the normal
 registrar, preserving its ownership and registration lifecycle.
 
 The export may instead be a synchronous factory receiving
 `PluginCapabilityCatalogContext`. It supplies native host operations for readiness,
 auth resolution, provider headers, bounded HTTP responses, WebSocket transcription,
-and capture/logging. Pass the operations used by a provider into its shared factory;
-keep synchronous constructors and invoke the operations only when needed. This
+and capture/logging. Pass the operations used by a provider into its shared factory.
+Keep synchronous constructors and invoke the operations only when needed. This
 avoids transforming host runtime modules through the plugin source loader during
 catalog construction or connection setup. Construction must not query auth stores,
 start sessions, or import broad host or plugin runtime modules. Cold discovery does
-not receive a live broker; active registrations retain their broker-bound behavior.
+not receive a live broker. Active registrations retain their broker-bound behavior.
 
 See [manifest capability catalogs](/plugins/manifest#capability-catalogs) for family
 coverage, compatibility, artifact selection, and failure behavior.
@@ -99,7 +99,7 @@ and retention blockers. July 2026 aliases and unused subpaths were deleted,
 while bundled-only helpers were excluded from the typed public SDK and are
 labeled private-local below. Production-private JavaScript exports remain
 available for official plugin runtimes. The maintained list is
-`scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; CI rejects bundled
+`scripts/lib/plugin-sdk-deprecated-public-subpaths.json`. CI rejects bundled
 imports of these compatibility-only subpaths. The broad domain barrels
 `plugin-sdk/agent-runtime`, `plugin-sdk/channel-lifecycle`,
 `plugin-sdk/conversation-runtime`, `plugin-sdk/hook-runtime`,
@@ -116,14 +116,14 @@ longer package exports: `agent-runtime-test-contracts`,
 `test-live`, `test-live-auth`, `test-media-generation`,
 `test-media-understanding`, `test-node-mocks`, and `testing`.
 `ssrf-runtime-internal` is a JavaScript-only host runtime reserved for exact
-trusted local-service plugins; it is not a public plugin authoring API.
+trusted local-service plugins. It is not a public plugin authoring API.
 
 ### Bundled plugin helper subpaths
 
 Bundled-only helper modules are private-local after the July 2026 sweep.
 Package contract guardrails classify the supported bundled facades that remain
 public until generic contracts replace them. Those facades are deprecated for
-new code; see the per-row notes below.
+new code. See the per-row notes below.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -188,7 +188,7 @@ new code; see the per-row notes below.
   </Accordion>
 
 The September channel facades remain public as `removal-pending` records until
-their recorded blockers are resolved; a registry date does not automatically
+their recorded blockers are resolved. A registry date does not automatically
 remove an export. See the [removal timeline](/plugins/sdk-migration#removal-timeline).
 July aliases such as direct-DM access, reply-options, pairing paths, and channel
 runtime splinters have been removed; bundled-only helpers are private-local.
@@ -233,14 +233,14 @@ Stream cancellation and `release()` start source cancellation, unlock the reader
 and run cleanup once, then wait for both operations. Cancellation propagates
 source failures; `release()` ignores them. Cleanup failures take precedence in
 both cases. Overflow preserves its fitting prefix and error without waiting for
-cleanup; later `release()` reports cleanup failure. After EOF or a read error,
+cleanup. Later `release()` reports cleanup failure. After EOF or a read error,
 the caller must still invoke and await `release()`.
 
 Provider usage snapshots normally report one or more quota `windows`, each with
 a label, percent used, and optional reset time. Providers that expose balance or
 account-state text instead of resettable quota windows should return
 `summary` with an empty `windows` array rather than fabricating percentages.
-OpenClaw displays that summary text in status output; use `error` only when the
+OpenClaw displays that summary text in status output. Use `error` only when the
 usage endpoint failed or returned no usable usage data.
 
   <Accordion title="Auth and security subpaths">
@@ -279,7 +279,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers, canonical Gateway browser-origin acceptance via `resolveAcceptedBrowserOrigin`, and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
-For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
+For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`. A blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
 
 Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.
 
@@ -406,9 +406,9 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 
     Private process callers declare `using prepared = prepareSecretInputStdio(stdio, secretInput)`
     before spawning, then call `await prepared?.deliverTo(child)` once. Delivery closes the writer
-    and zeroes the transient credential buffer; disposal closes any untransferred descriptors,
+    and zeroes the transient credential buffer. Disposal closes any untransferred descriptors,
     including when spawning throws. POSIX uses anonymous pipes that support descriptor-path readers
-    without credential files; Windows retains its overlapped child pipe. Callers own child cleanup
+    without credential files. Windows retains its overlapped child pipe. Callers own child cleanup
     when delivery fails.
 
   </Accordion>

@@ -32,7 +32,7 @@ accepts the same flags.
 
 Human-readable lists and cleanup previews use terminal-width tables. Long model
 names and flags wrap without being truncated, and Unicode keys stay aligned.
-Long keys show their beginning and end; use `openclaw sessions --json` for complete
+Long keys show their beginning and end. Use `openclaw sessions --json` for complete
 session keys.
 
 Flags:
@@ -59,7 +59,7 @@ is set.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
-loop. The CLI returns the newest 100 sessions by default; pass `--limit <n>`
+loop. The CLI returns the newest 100 sessions by default. Pass `--limit <n>`
 for a smaller/larger window or `--limit all` when you intentionally need the
 full store. JSON responses include `totalCount`, `limitApplied`, and `hasMore`
 when callers need to show that more rows exist.
@@ -118,8 +118,8 @@ It keeps the transcript, marks the session archived, and removes the session
 from the default active list. For a cloud-worker session with an active
 placement, the Gateway first stops the worker, reconciles its workspace, and
 reclaims the environment. If the placement is still transitioning or failed
-without proof that its environment is gone, the session remains unarchived;
-wait for the placement to settle, then retry. Agent main sessions remain
+without proof that its environment is gone, the session remains unarchived.
+Wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
@@ -152,7 +152,7 @@ Delete uses the same `sessions.delete` lifecycle operation as the Control UI,
 with transcript cleanup enabled. The Gateway removes the live session row,
 transcript generations, session-owned runtime state, bindings, boards, and
 other lifecycle artifacts. For ordinary sessions it retains the transcript as
-a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
+a verified `.jsonl.deleted.<timestamp>` archive. Incognito transcripts are
 removed without an archive. Retained deleted-session archives can remain
 eligible for memory search. To remove indexed memories, run
 `openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway
@@ -167,13 +167,13 @@ branch and path for manual cleanup.
 
 Both lifecycle commands:
 
-- accept multiple keys and report one ordered result per key;
+- accept multiple keys and report one ordered result per key
 - use `--agent <id>` to select the owning agent, which is required for a
-  `global` key outside the default agent;
+  `global` key outside the default agent
 - support `--url`, `--token`, `--password`, and `--timeout <ms>` Gateway
-  connection overrides;
+  connection overrides
 - return a non-zero exit when any key is unknown or any operation fails, while
-  still processing the other valid keys;
+  still processing the other valid keys
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
 
@@ -216,7 +216,7 @@ openclaw sessions --all-agents tail --follow
 `openclaw sessions tail` renders recent runtime trajectory events as compact
 progress lines. Without `--session-key`, it tails running sessions first, then
 the latest stored session. `--tail <count>` controls how many existing events
-print before follow mode; default `80`, and `0` starts at the current end.
+print before follow mode. The default is `80`, and `0` starts at the current end.
 `--follow` keeps watching the selected SQLite-backed sessions. Session keys use
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
@@ -227,9 +227,9 @@ is rejected instead of selecting an inferred agent.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
-`{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
-model completion lines show provider/model and terminal status. Provider failures
-and turns without delivery show `error`; cancellation shows `aborted`, timeouts
+`{...redacted...}`. Tool results show status such as `ok`, `error`, or `done`.
+Model completion lines show provider/model and terminal status. Provider failures
+and turns without delivery show `error`. Cancellation shows `aborted`, timeouts
 show `timeout`, and successful completions (including delivered partial replies)
 show `done`.
 
@@ -367,7 +367,7 @@ openclaw sessions compact "agent:work:main" --agent work --json
 ```
 
 - Without `--max-lines`, the Gateway LLM-summarizes the transcript. The CLI
-  does not impose a client deadline by default; the Gateway owns the
+  does not impose a client deadline by default. The Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
   last `n` lines. This path does not create a backup archive.

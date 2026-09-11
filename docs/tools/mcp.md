@@ -35,7 +35,7 @@ Saving a definition proves nothing about reachability — the probe does. With G
 
 In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
 
-Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui/chat#composer-capability-menu) for the complete scope and tool-access behavior.
+Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition. Session policy is the per-session layer. See [Composer capability menu](/web/control-ui/chat#composer-capability-menu) for the complete scope and tool-access behavior.
 
 From an active conversation, open **+ → Connectors → Tool access** to inspect
 or deny individual tools for that session. The view follows the session's
@@ -91,7 +91,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved. Choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 ## Approvals
 
@@ -100,13 +100,13 @@ Codex MCP tool approvals follow the session permission posture: the default full
 When durable persistence is offered, **Allow Always** saves a per-agent grant
 for the exact configured server and tool, even when its arguments change.
 This applies to Gateway-hosted Codex runs when OpenClaw can unambiguously match
-the approval to a live Gateway-owned tool call; missing or ambiguous matches retain
+the approval to a live Gateway-owned tool call. Missing or ambiguous matches retain
 Codex's native/session behavior. Codex apps, native plugin servers, and
 computer-use servers are excluded. Grants survive restarts and apply at the
 next thread configuration and hook registration, such as a new session or
-restart; the current session uses Codex's remembered decision.
+restart. The current session uses Codex's remembered decision.
 
-Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode; explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack/rich-messages#native-approvals-in-slack) for Slack button delivery.
+Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`. An explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode. Explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack/rich-messages#native-approvals-in-slack) for Slack button delivery.
 
 ## Troubleshooting
 
@@ -118,7 +118,7 @@ Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition 
 
 Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
 
-For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments; this does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
+For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments. This does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
 
 ### An HTTP server needs authorization
 
@@ -128,7 +128,7 @@ Set `auth: "oauth"` plus any required `oauth` metadata, then:
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically. Use the printed `--code` command when the browser cannot reach the callback listener.
 
 ### Changes do not reach an active agent
 

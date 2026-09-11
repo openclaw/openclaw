@@ -13,11 +13,11 @@ Assistant output carries delivery/render directives through a few dedicated chan
 - `[[reply_to_current]]` / `[[reply_to:<id>]]` for reply metadata.
 - `[embed ...]` for Control UI rich rendering.
 
-Structured media fields and `[[...]]` tags are delivery metadata. `[embed ...]` is the separate web-only rich-render path; it is not a media alias.
+Structured media fields and `[[...]]` tags are delivery metadata. `[embed ...]` is the separate web-only rich-render path. It is not a media alias.
 
 ## Media attachments
 
-Remote attachments must be public `https:` URLs. `http:`, loopback, link-local, private, and internal hostnames are rejected as attachment directives; server-side media fetchers apply their own network guards on top.
+Remote attachments must be public `https:` URLs. `http:`, loopback, link-local, private, and internal hostnames are rejected as attachment directives. Server-side media fetchers apply their own network guards on top.
 
 Local attachments accept absolute paths, workspace-relative paths, or home-relative `~/` paths. They still pass the agent file-read policy and media type checks before delivery.
 
@@ -58,7 +58,7 @@ output, streaming blocks, and message actions.
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
-adapter; Telegram does this so `![alt](url)` can still become a media reply.
+adapter. Telegram does this so `![alt](url)` can still become a media reply.
 
 When block streaming is enabled, media must ride on structured payload fields. If the same media URL appears in a streamed block and again in the final assistant payload, OpenClaw delivers it once and strips the duplicate from the final payload.
 
@@ -74,7 +74,7 @@ Rules:
 
 - `[view ...]` is not valid for new output. `[embed ...]` replaced it in 2026.4.11 ([#64104](https://github.com/openclaw/openclaw/pull/64104)).
 - Embed shortcodes render only in the assistant message surface.
-- Only URL-backed embeds render; use `ref="..."` or `url="..."`.
+- Only URL-backed embeds render. Use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes do not render.
 - The web UI strips the shortcode from visible text and renders the embed inline.
 
@@ -97,7 +97,7 @@ The normalized/stored assistant content block is a structured `canvas` item:
 }
 ```
 
-`present_view` is not recognized; stored/rendered rich blocks always use this `canvas` shape.
+`present_view` is not recognized. Stored/rendered rich blocks always use this `canvas` shape.
 
 ## Related
 

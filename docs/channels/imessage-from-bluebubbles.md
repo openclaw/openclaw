@@ -23,7 +23,7 @@ The shortest safe path when you already know your old BlueBubbles config:
 2. Verify `imsg` directly on the Mac that runs Messages.app (`imsg chats`, `imsg history`, `imsg send`, `imsg rpc --help`).
 3. Copy behavior keys from `channels.bluebubbles` to `channels.imessage`: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `includeAttachments`, `attachmentRoots`, `mediaMaxMb`, `textChunkLimit`, and `actions`.
 4. Drop transport keys that no longer exist: `serverUrl`, `password`, webhook URLs, and BlueBubbles server setup.
-5. If the Gateway is not running on the Messages Mac, set `channels.imessage.cliPath` to the absolute Gateway-local path of an SSH wrapper and keep `dbPath` as an absolute path on that Mac. Set `remoteHost` to the Messages Mac for complex wrappers; OpenClaw auto-detects the simple transparent wrapper shape for compatibility.
+5. If the Gateway is not running on the Messages Mac, set `channels.imessage.cliPath` to the absolute Gateway-local path of an SSH wrapper and keep `dbPath` as an absolute path on that Mac. Set `remoteHost` to the Messages Mac for complex wrappers. OpenClaw auto-detects the simple transparent wrapper shape for compatibility.
 6. Enable `channels.imessage`, restart the Gateway, then run `openclaw channels status --probe --channel imessage`.
 7. Test one DM, one allowed group, attachments if enabled, and every private API action you expect the agent to use.
 8. Delete the BlueBubbles server and the old `channels.bluebubbles` config after the iMessage path is verified.
@@ -65,7 +65,7 @@ Remote `imsg` v0.13.4 has two narrow RPC limits: poll votes must use `pollOption
    imsg rpc --help
    ```
 
-   Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use. If reads work but sends fail with AppleEvents `-1743`, check whether Automation landed on `/usr/libexec/sshd-keygen-wrapper`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#requirements-and-permissions-macos).
+   Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use. If reads work but sends fail with AppleEvents `-1743`, check whether Automation landed on `/usr/libexec/sshd-keygen-wrapper`. See [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#requirements-and-permissions-macos).
 
 3. Enable the private API bridge. It is strongly encouraged for OpenClaw iMessage because replies, tapbacks, effects, polls, attachment replies, and group actions depend on it:
 
@@ -74,7 +74,7 @@ Remote `imsg` v0.13.4 has two narrow RPC limits: poll votes must use `pollOption
    imsg status --json
    ```
 
-   `imsg launch` requires SIP to be disabled (and on modern macOS, library validation relaxed — see [Enabling the imsg private API](/channels/imessage#enabling-the-imsg-private-api)). Basic send, history, and watch work without `imsg launch`; the full OpenClaw iMessage action surface does not.
+   `imsg launch` requires SIP to be disabled (and on modern macOS, library validation relaxed — see [Enabling the imsg private API](/channels/imessage#enabling-the-imsg-private-api)). Basic send, history, and watch work without `imsg launch`. The full OpenClaw iMessage action surface does not.
 
 4. After you enable `channels.imessage` and start the Gateway, verify the bridge through OpenClaw:
 
@@ -82,7 +82,7 @@ Remote `imsg` v0.13.4 has two narrow RPC limits: poll votes must use `pollOption
    openclaw channels status --probe
    ```
 
-   The iMessage account should report `works`; with `--json`, the probe payload includes `privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions). Probing needs a reachable Gateway (the CLI falls back to config-only output otherwise) and only probes configured, enabled accounts.
+   The iMessage account should report `works`. With `--json`, the probe payload includes `privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions). Probing needs a reachable Gateway (the CLI falls back to config-only output otherwise) and only probes configured, enabled accounts.
 
 5. Snapshot your config:
 
@@ -123,17 +123,17 @@ Multi-account configs (`channels.bluebubbles.accounts.*`) translate one-to-one t
 
 The iMessage plugin runs two group gates back to back. A group message must pass both to reach the agent:
 
-1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — matches the sender handle or the chat target (`chat_id:`, `chat_guid:`, `chat_identifier:` entries). When `groupAllowFrom` is unset, this gate falls back to `allowFrom`; an explicit `groupAllowFrom: []` disables that fallback and drops every group message under `groupPolicy: "allowlist"`.
+1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — matches the sender handle or the chat target (`chat_id:`, `chat_guid:`, `chat_identifier:` entries). When `groupAllowFrom` is unset, this gate falls back to `allowFrom`. An explicit `groupAllowFrom: []` disables that fallback and drops every group message under `groupPolicy: "allowlist"`.
 2. **Group registry** (`channels.imessage.groups`) — keyed by numeric iMessage `chat_id`:
-   - No `groups` block (or an empty one): groups pass this gate as long as gate 1 has a non-empty effective sender allowlist; sender filtering governs access and no drop-all startup warning fires.
+   - No `groups` block (or an empty one): groups pass this gate as long as gate 1 has a non-empty effective sender allowlist. Sender filtering governs access and no drop-all startup warning fires.
    - `groups` with entries but no `"*"`: only the listed `chat_id` keys pass. Listing any group turns the registry into an allowlist even under `groupPolicy: "open"`.
    - `groups: { "*": { ... } }`: every group passes this gate.
 
-The migration trap: BlueBubbles keyed `groups` entries by chat GUID / chat identifier, while the iMessage registry keys by numeric `chat_id`. Per-group entries copied verbatim create a non-empty registry whose keys never match, so every group message drops at gate 2. Copy the `"*"` wildcard verbatim; re-key specific group entries with `chat_id` values from `imsg chats`.
+The migration trap: BlueBubbles keyed `groups` entries by chat GUID / chat identifier, while the iMessage registry keys by numeric `chat_id`. Per-group entries copied verbatim create a non-empty registry whose keys never match, so every group message drops at gate 2. Copy the `"*"` wildcard verbatim. Re-key specific group entries with `chat_id` values from `imsg chats`.
 
 Both drop paths are visible at the default log level via `warn` lines:
 
-- Once per account at startup, when `groupPolicy: "allowlist"` is set and the effective group sender allowlist is empty: `imessage: groupPolicy="allowlist" for account "<id>" but no group sender allowlist is configured ...`. Set `groupAllowFrom` (or `allowFrom`) to admit senders; adding `groups` alone does not satisfy the sender gate.
+- Once per account at startup, when `groupPolicy: "allowlist"` is set and the effective group sender allowlist is empty: `imessage: groupPolicy="allowlist" for account "<id>" but no group sender allowlist is configured ...`. Set `groupAllowFrom` (or `allowFrom`) to admit senders. Adding `groups` alone does not satisfy the sender gate.
 - Once per `chat_id` at runtime, when the registry drops a group: `imessage: dropping group message from chat_id=<id> ... not in channels.imessage.groups allowlist`, naming the exact key to add.
 
 DMs keep working either way — they take a different code path, so DM success does not prove group routing.
@@ -151,11 +151,11 @@ The minimum sender-scoped config with `groupPolicy: "allowlist"`:
 }
 ```
 
-This admits the configured senders in any group. Add `groups` entries to scope allowed chats or set per-chat options such as `requireMention`; copy the BlueBubbles `"*"` entry verbatim, but re-key specific entries with numeric iMessage `chat_id` values.
+This admits the configured senders in any group. Add `groups` entries to scope allowed chats or set per-chat options such as `requireMention`. Copy the BlueBubbles `"*"` entry verbatim, but re-key specific entries with numeric iMessage `chat_id` values.
 
 ## Step-by-step
 
-1. Translate the config. Keep the new block disabled while you edit; the old `channels.bluebubbles` block is ignored by current OpenClaw and can sit alongside as reference:
+1. Translate the config. Keep the new block disabled while you edit. The old `channels.bluebubbles` block is ignored by current OpenClaw and can sit alongside as reference:
 
    ```json5
    {
@@ -183,9 +183,9 @@ This admits the configured senders in any group. Add `groups` entries to scope a
 
    The probe requires a reachable Gateway and only probes configured, enabled accounts. Use the direct `imsg` commands in [Before you start](#before-you-start) to validate the Mac itself.
 
-3. **Verify DMs.** Send the agent a direct message; confirm the reply lands.
+3. **Verify DMs.** Send the agent a direct message. Confirm the reply lands.
 
-4. **Verify groups separately.** DMs and groups take different code paths — DM success does not prove groups are routing. Send a message in an allowed group chat and confirm the reply lands. If the group goes silent (no agent reply, no error), check the gateway log for the two `warn` lines from "Group registry footgun" above. The startup warning means the effective sender allowlist is empty; a per-`chat_id` warning means a populated `groups` registry does not contain that chat.
+4. **Verify groups separately.** DMs and groups take different code paths — DM success does not prove groups are routing. Send a message in an allowed group chat and confirm the reply lands. If the group goes silent (no agent reply, no error), check the gateway log for the two `warn` lines from "Group registry footgun" above. The startup warning means the effective sender allowlist is empty. A per-`chat_id` warning means a populated `groups` registry does not contain that chat.
 
 5. **Verify the action surface.** From a paired DM, ask the agent to react, edit, unsend, reply, send a photo, and (in a group) rename the group or add/remove a participant. Each action should land natively in Messages.app. If any action throws `iMessage <action> requires the imsg private API bridge`, run `imsg launch` again and refresh with `openclaw channels status --probe`.
 
@@ -209,13 +209,13 @@ This admits the configured senders in any group. Add `groups` entries to scope a
 | Apple URL-preview split-send coalescing             | ✅                 | ✅ (handled upstream by `imsg` 0.13.1 and newer; no OpenClaw setting)         |
 | Inbound recovery after a restart                    | ✅                 | ✅ (automatic: `since_rowid` replay + GUID dedupe; wider window on local)     |
 
-iMessage recovers messages missed while the gateway was down: on startup it replays from the last dispatched rowid via `imsg watch.subscribe` `since_rowid`, dedupes by GUID, and a stale-backlog age fence suppresses the Push-flush "backlog bomb". This runs over the `imsg` RPC connection, so it works for remote SSH `cliPath` setups too; local setups get a wider recovery window because they can read `chat.db`. See [Inbound recovery after a bridge or gateway restart](/channels/imessage#inbound-recovery-after-a-bridge-or-gateway-restart).
+iMessage recovers messages missed while the gateway was down: on startup it replays from the last dispatched rowid via `imsg watch.subscribe` `since_rowid`, dedupes by GUID, and a stale-backlog age fence suppresses the Push-flush "backlog bomb". This runs over the `imsg` RPC connection, so it works for remote SSH `cliPath` setups too. Local setups get a wider recovery window because they can read `chat.db`. See [Inbound recovery after a bridge or gateway restart](/channels/imessage#inbound-recovery-after-a-bridge-or-gateway-restart).
 
 ## Pairing, sessions, and ACP bindings
 
 - **Allowlists carry over by handle.** `channels.imessage.allowFrom` recognizes the same `+15555550123` / `user@example.com` strings BlueBubbles used — copy them verbatim.
 - **Pairing-store approvals do not transfer.** The pairing store is per channel and nothing migrates the old BlueBubbles store. Senders who were approved only through pairing must pair once more under iMessage, or you add their handles to `allowFrom`.
-- **Sessions** stay scoped per agent + chat. DMs collapse into the agent main session under default `session.dmScope=main`; with default `session.groupScope="per-group"`, group sessions stay isolated per `chat_id` (`agent:<agentId>:imessage:group:<chat_id>`). Old conversation history under BlueBubbles session keys does not carry into iMessage sessions.
+- **Sessions** stay scoped per agent + chat. DMs collapse into the agent main session under default `session.dmScope=main`. With default `session.groupScope="per-group"`, group sessions stay isolated per `chat_id` (`agent:<agentId>:imessage:group:<chat_id>`). Old conversation history under BlueBubbles session keys does not carry into iMessage sessions.
 - **ACP bindings** referencing `match.channel: "bluebubbles"` must change to `"imessage"`. The `match.peer.id` shapes (`chat_id:`, `chat_guid:`, `chat_identifier:`, bare handle) are identical.
 
 ## No rollback channel

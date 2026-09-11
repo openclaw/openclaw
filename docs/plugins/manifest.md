@@ -359,7 +359,7 @@ the full plugin entry. See the [typed SDK contract](/plugins/sdk-subpaths#capabi
 Each supplied family is authoritative, including an empty array. An omitted
 family, or a plugin without this declaration, retains the existing `register()`
 discovery contract for installed plugins. A malformed, missing, or broken declared
-entry fails with a repair diagnostic; it does not fall through to full registration.
+entry fails with a repair diagnostic. It does not fall through to full registration.
 Already registered runtime providers remain authoritative, including live broker
 and readiness closures.
 
@@ -382,13 +382,13 @@ See [Configuration reference](/gateway/configuration-reference#plugins) for the 
 
 ## Notes
 
-- The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
+- The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately. The manifest is only for discovery + validation.
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code. Use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
-- Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins; its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
+- Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins. Its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).

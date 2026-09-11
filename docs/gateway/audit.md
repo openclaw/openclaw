@@ -23,12 +23,12 @@ error text.
 
 The Gateway also keeps an adjacent execution identity context for newly
 admitted agent runs. This context is authoritative for the identity facts it
-contains; it does not make the activity ledger lossless and does not turn audit
+contains. It does not make the audit ledger lossless and does not turn audit
 records into authorization evidence.
 
 Terminal operator approvals are a separate authoritative source. Run
 inspection adapts their existing first-answer-wins rows directly into decision
-receipts; it does not copy approvals into the audit ledger or the generic
+receipts. It does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
 This includes operator-routed native Codex command and file prompts. The Codex
@@ -36,13 +36,13 @@ bridge carries the admitted agent, session key, run, tool, context, and
 execution binding into the same approval owner, then returns only the approved
 native scope. Auto-review, full-access policy, native hook decisions, and
 requests rejected before operator routing have no operator-owned row and remain
-unsupported as operator-approval evidence; later tool events never manufacture
+unsupported as operator-approval evidence. Later tool events never manufacture
 one.
 
 Shared outbound delivery is another owner-native source. Queue admission and
 platform-send start use a lazy progress companion, while terminal message rows
-remain in the activity ledger. Run inspection merges both sources directly;
-neither is copied into the generic decision-fact table.
+remain in the audit ledger. Run inspection merges both sources directly.
+Neither is copied into the generic decision-fact table.
 
 Scheduled runs, background tasks, and task flows are owner-native sources too.
 After exact run admission, a lazy lifecycle metadata table binds the admitted
@@ -51,7 +51,7 @@ context and execution ids to the canonical `cron_run_receipts`, `task_runs`, or
 preserves its status, including skipped, failed, timed-out, cancelled, blocked,
 and lost outcomes. A `runId` alone never joins one of these rows to an
 execution. Legacy, missing, deleted, corrupt, or mismatched bindings remain
-unknown or absent; they never change task behavior and are never copied into
+unknown or absent. They never change task behavior and are never copied into
 `execution_decision_facts`.
 
 ## Run identity inspection
@@ -66,7 +66,7 @@ openclaw gateway restart
 
 Collection requires both `logging.audit.enabled` and
 `logging.audit.executionIdentity` to be true. Setting either to `false`
-stops new contexts after restart; no environment-variable alias or silent
+stops new contexts after restart. No environment-variable alias or silent
 migration enables the feature. Retained contexts remain inspectable until
 their 30-day expiry.
 
@@ -80,7 +80,7 @@ connection. An accepted envelope can therefore be temporarily unavailable to
 inspection while queued work finishes.
 
 Persistence remains best-effort. Queue saturation, storage failure, shutdown
-timeout, and process crashes can lose evidence; they log only a bounded
+timeout, and process crashes can lose evidence. They log only a bounded
 operational warning and never abort the run. Normal Gateway and direct-local
 CLI shutdown flushes accepted work when the writer lifecycle permits, but
 abrupt termination can still lose queued evidence.
@@ -101,14 +101,14 @@ execution with `audit.run.inspect` or
 [`openclaw audit --execution <id> --explain`](/cli/audit). Use `--run <id>
 --explain` to discover executions for a run correlation. One retained match
 resolves directly. Multiple matches return `ambiguous` with at most 50
-candidate execution ids and require exact selection; OpenClaw never chooses the
+candidate execution ids and require exact selection. OpenClaw never chooses the
 first or latest execution silently. The result explicitly states the evidence
 state for these fields:
 
-- trust domain, invoker, and ingress;
-- agent principal, agent definition, and runtime instance;
-- represented subject and sponsor;
-- applicable grants and assurance evidence;
+- trust domain, invoker, and ingress
+- agent principal, agent definition, and runtime instance
+- represented subject and sponsor
+- applicable grants and assurance evidence
 - parent or child lineage when available.
 
 For a child started through `sessions_spawn`, the child owns a new context; it
@@ -117,7 +117,7 @@ parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the
 requester/controller and evaluated local/target policy inputs. Applicable
 grants and runtime assurance remain separate evidence categories. This reports
-the inputs that could narrow child authority; it does not claim that identity
+the inputs that could narrow child authority. It does not claim that identity
 changed an allow or deny decision.
 
 If the private parent token was unavailable, the child remains inspectable but
@@ -126,12 +126,12 @@ itself is observable. Actions performed wholly inside an external ACP runtime
 without a callback are reported as unsupported evidence, never inferred from
 task or transcript text. After admission, the ACP lifecycle owner records that
 receipt when the prompt is submitted, using the exact admitted execution token.
-It does not claim that a native side effect occurred; adapter authors must add
+It does not claim that a native side effect occurred. Adapter authors must add
 an authoritative native-action callback to provide stronger evidence.
 
 Registered plugin runtime calls add bounded facts only after exact run
 admission. A `before_tool_call` hook records its own allow or block as an
-enforced plugin gate; fail-closed hook errors are denials, while a configured
+enforced plugin gate. Fail-closed hook errors are denials, while a configured
 fail-open error remains unknown. Separate owner-native approval rows remain the
 authority when a hook requests approval.
 
@@ -139,7 +139,7 @@ Plugin-owned node actions distinguish the Gateway gate from the action result.
 Pairing, live connection, command capability, plugin policy, and active
 authority checks are enforced. A node-reported success is attribution-only. If
 the plugin policy returns without calling the supplied node callback, the
-action is unknown with `node.action_callback` missing; OpenClaw does not infer a
+action is unknown with `node.action_callback` missing. OpenClaw does not infer a
 send from the plugin result.
 
 An attached worker records its current credential, bundle/version/features,
@@ -153,7 +153,7 @@ The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
 channel run, the trusted active registered native plugin produces the remote
 participant fact. Core accepts it only across an exact record, registry epoch,
-scope, and one-shot handoff; the room, route, account, thread, message, and
+scope, and one-shot handoff. The room, route, account, thread, message, and
 transport remain non-principal facts. `boundary-verified` describes that
 in-process boundary verification, not an independent core query to Telegram,
 Discord, or another remote service. Collected messages retain a person only
@@ -161,7 +161,7 @@ when every contribution proves the same participant. Mixed, missing, invalid,
 stale, replayed, or unminted evidence is unknown, and an adapter that explicitly
 lacks support is unsupported. OpenClaw never reconstructs a participant from
 `SenderId`, `From`, session keys, or routing metadata. Plugins cannot publicly
-mint or upgrade participant evidence; fake, copied, changed, stale, reused, or
+mint or upgrade participant evidence. Fake, copied, changed, stale, reused, or
 lost host carriers remain unknown.
 Other public ingress remains explicitly unknown when its
 boundary cannot prove a more specific source. A direct local execution
@@ -183,7 +183,7 @@ attempt.
 Authenticated Gateway attach records immutable audit facts once. Session
 creation separately reads the live canonical durable profile id so a profile
 link performed after attach cannot orphan session ownership. Ordinary session
-provenance retains that id only; it does not retain a profile display label.
+provenance retains that id only. It does not retain a profile display label.
 When execution identity recording is explicitly enabled, its audit context may
 also retain the prepared display label after secret redaction and the
 128-character bound. A resolved durable profile, including one established by
@@ -203,17 +203,17 @@ Admitted channel runs also project a `channel/admission` decision receipt after
 their exact context/execution/run tuple is queued. Coverage is `enforced` only
 when every contributing ingress decision was participant-aware and
 outcome-affecting. Wildcard/open policy and explicit attribution-only adapters
-remain `attribution-only`; mixed or missing evidence is `unknown`. Identity and
+remain `attribution-only`. Mixed or missing evidence is `unknown`. Identity and
 the corresponding decision share the existing audit-writer FIFO.
 
 An admitted session-tool access denial queues a private `session` decision
 through that same FIFO. The access owner supplies the reason, policy inputs,
-and missing evidence; the audit writer replaces the target session reference
+and missing evidence. The audit writer replaces the target session reference
 with an installation-local HMAC before persistence. The raw session key is not
 retained. A policy denial that changed the outcome is `enforced`, while an
 ownership lookup that cannot supply `session.owner` evidence remains `unknown`.
 Public inspection intentionally renders generic facts as an unverified
-`decision.record`; it does not expose their private reason or target display.
+`decision.record`. It does not expose their private reason or target display.
 Calls without the exact admitted execution and its active receipt authority
 create no selector or fact.
 
@@ -226,15 +226,15 @@ reason or target as trusted evidence.
 
 Direct session-sharing methods do not admit model runs,
 so they do not synthesize run selectors. Sharing events preserve a verified
-profile actor when one exists; an expected but unresolved profile is reported
+profile actor when one exists. An expected but unresolved profile is reported
 as unknown, while omitted principal evidence is unattributed. Neither state is
 reconstructed from operator scope, a shared token, session routing, or room
 metadata. Member listings use the same distinction: `addedBy` contains only a
 real principal id, `addedByState: "unknown"` reports explicit principal-less
 evidence, and omission means no actor evidence was supplied. Internal storage
 markers are never returned by the Gateway. Beta-only `local-operator` and
-`operator.admin` member-attribution values are discarded as absent evidence;
-they are not migrated or presented as principals.
+`operator.admin` member-attribution values are discarded as absent evidence.
+They are not migrated or presented as principals.
 
 For an admitted run with message auditing enabled, run inspection also adapts
 the outbound message lifecycle. It deterministically merges the lazy progress
@@ -242,7 +242,7 @@ owner with terminal ledger rows and reports `queued`, `platform-started`,
 `delivered`, `failed`, `unknown`, and intentionally `suppressed` as distinct
 receipts. Queue and transport results are `attribution-only`: they record what
 the delivery owner observed but do not prove authorization. The existing
-message row keeps its keyed destination reference and `runId`; a lazy companion
+message row keeps its keyed destination reference and `runId`. A lazy companion
 retains the host-validated context/execution/run binding. Inspection requires
 that exact tuple and never assigns run-only delivery evidence to an execution.
 The binding remains diagnostic provenance. Only an exact target-validation,
@@ -252,9 +252,9 @@ record use the generic fact owner on the same audit-writer FIFO.
 
 Cron, task, and flow lifecycle receipts are `attribution-only` and have a
 `not-applicable` decision outcome. They report what the authoritative lifecycle
-owner retained; they do not claim an authorization decision. Their cursors are
+owner retained. They do not claim an authorization decision. Their cursors are
 opaque and source-specific. Existing numeric cursors and `a:`, `m:`, and `g:`
-cursors remain accepted; newer owner stages use `c:`, `t:`, and `f:`.
+cursors remain accepted. Newer owner stages use `c:`, `t:`, and `f:`.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`
@@ -301,15 +301,15 @@ Run inspection returns successful typed diagnostics instead of inventing
 facts:
 
 - `unknown`: the selected run or execution is not known, or expected context is
-  corrupt or unreadable; this also covers a retained decision whose expected
-  context link is missing;
+  corrupt or unreadable. This also covers a retained decision whose expected
+  context link is missing
 - `unsupported`: best-effort activity shows the run, but no context is
   available, as with a pre-feature, disabled, or failed context write. A
   context just beyond retention also uses this state while its bounded cleanup
-  is pending, with an explicit expiry remediation;
-- `ambiguous`: a `runId` has multiple retained executions; select a candidate
-  `executionId` before inspecting identity or decisions;
-- `unattributed`: the supported run has no usable invoker principal;
+  is pending, with an explicit expiry remediation
+- `ambiguous`: a `runId` has multiple retained executions. Select a candidate
+  `executionId` before inspecting identity or decisions
+- `unattributed`: the supported run has no usable invoker principal
 - `attribution-only`: invoker attribution exists but was not evaluated for
   authorization.
 
@@ -318,8 +318,8 @@ The method requires `operator.read`. Requests are closed and select exactly one
 `decisionDisplays` array and never contains the private raw receipt array or a
 `decisions` key. The Gateway builds that result from an explicit safe-field
 allowlist; clients do not classify receipt prose. Decision pages contain at
-most 100 displays;
-ambiguous run-discovery pages contain at most 50 candidate executions. Both use
+most 100 displays.
+Ambiguous run-discovery pages contain at most 50 candidate executions. Both use
 bounded cursors. Approval and message-delivery selectors are minted from the
 same owner-query row metadata as their projected receipts, use the
 `approval-decision:` and `message-decision:` namespaces, and never derive from
@@ -330,7 +330,7 @@ receive this retained identity category. This is intentional: the scope already
 covers logs and session reads, collection is explicit opt-in, retained
 references are bounded and pseudonymized, and optional display labels are
 secret-redacted. `operator.read` is not a hostile multi-tenant isolation
-boundary; use separate Gateway trust domains when operators must not share this
+boundary. Use separate Gateway trust domains when operators must not share this
 diagnostic data.
 
 ## Record families
@@ -346,8 +346,8 @@ Message lifecycle events are opt-in and disabled by default.
 
 Every record carries a stable event id, a monotonic owner sequence, a lifecycle
 timestamp, actor, action, status, `schemaVersion: 1`, and
-`redaction: "metadata_only"`. The activity ledger contains terminal outbound
-rows; run inspection obtains nonterminal outbound progress from its companion.
+`redaction: "metadata_only"`. The audit ledger contains terminal outbound
+rows. Run inspection obtains nonterminal outbound progress from its companion.
 See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
@@ -368,7 +368,7 @@ Two authoritative boundaries produce message records:
   sent, suppressed, failed, or an explicit `unknown` for crash-ambiguous sends.
   Queue recovery and dead-letter outcomes are included. Stable queue-derived
   source ids prevent recovery from duplicating a lifecycle row. Each original
-  logical reply payload gets one row per reached stage; chunking and adapter
+  logical reply payload gets one row per reached stage. Chunking and adapter
   fan-out aggregate into terminal `resultCount`.
 
 ### Conversation-kind classification
@@ -401,8 +401,8 @@ only as installation-local keyed pseudonyms
   the Gateway fails closed and drops new message records instead of silently
   rotating to a new key, which would split correlation.
 
-Run and tool records retain `sessionKey` and `sessionId` for correlation;
-canonical session keys can themselves contain platform account or peer ids.
+Run and tool records retain `sessionKey` and `sessionId` for correlation.
+Canonical session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
@@ -411,7 +411,7 @@ and child-delegation references exist only in bounded private admission
 carriers. The deeply frozen queue payload is capped at 16 KiB and 16 entries
 in each bounded evidence array. A structured clone strips prototypes at the
 queue boundary. The queue drain replaces raw references with keyed
-pseudonyms before persistence; they are never stored, exported, inspected, or
+pseudonyms before persistence. They are never stored, exported, inspected, or
 logged. Configured agent ids plus context, execution, and run ids remain
 operator-visible.
 Contexts never contain prompt or message text, command bodies, arguments,
@@ -438,7 +438,7 @@ what was recorded, not as proof of what happened:
   invented outcomes.
 
 This ledger supports debugging and operational review. It is not a lossless
-compliance archive; if you need one, use an external system fed by
+compliance archive. If you need one, use an external system fed by
 [OpenTelemetry](/gateway/opentelemetry) or channel-level tooling.
 
 ## Storage, retention, and migration
@@ -461,7 +461,7 @@ older Gateway can open and use the database while ignoring the additive table.
 Exact terminal linkage lives in the lazy
 `outbound_message_execution_bindings` companion rather than changing the
 released `audit_events` shape. It is created only for a host-validated exact
-binding; run-only terminal writes leave it absent. Compatible older Gateways
+binding. Run-only terminal writes leave it absent. Compatible older Gateways
 ignore this additive table as well.
 
 Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
@@ -488,8 +488,8 @@ maintenance tick. Maintenance continues when collection is disabled. An older
 build ignores this table.
 
 Immediately after expiry, inspection can report the run as `unsupported` while
-the expired row still proves only that its identity context became unavailable;
-no expired fields or decisions are returned. After bounded cleanup, the same
+the expired row still proves only that its identity context became unavailable.
+No expired fields or decisions are returned. After bounded cleanup, the same
 lookup can become `unknown` if no separately retained best-effort activity
 remains. That transition does not prove the run did not occur. These limits
 make the inspector an operational diagnostic surface, not a compliance
@@ -504,13 +504,13 @@ first generic fact write, retains facts for 30 days, caps the table at 250,000
 rows, and prunes at most 1,024 rows per write or maintenance tick. Approval
 paths never write this table. Its facts and approval rows are authoritative for
 their recorded decisions. Delivery to the generic table uses the bounded audit
-queue and remains best-effort until persisted; approval-owner writes do not
-depend on that queue. The activity ledger cannot recreate either source after
+queue and remains best-effort until persisted. Approval-owner writes do not
+depend on that queue. The audit ledger cannot recreate either source after
 loss.
 
 Every generic decision-fact write rereads the immutable execution context and
 requires the full context, execution, and run tuple. Projection validates the
-same tuple again; a mismatch is `unknown`, not reassigned by context or run
+same tuple again. A mismatch is `unknown`, not reassigned by context or run
 correlation alone.
 
 ## Querying
@@ -518,7 +518,7 @@ correlation alone.
 - CLI: [`openclaw audit`](/cli/audit) with filters for agent, session, run,
   kind, status, direction, channel, time bounds, and cursor paging.
 - Gateway RPC: `audit.activity.list` (requires `operator.read`) returns the
-  versioned V1 activity event union; the shipped `audit.list` RPC is unchanged
+  versioned V1 activity event union. The shipped `audit.list` RPC is unchanged
   for older run/tool clients. See
   [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
@@ -557,7 +557,7 @@ boundaries alongside the operator behavior above:
   validates. After awaited work, synchronously revalidate the exact live owner
   immediately before the sink, with no intervening await. Stale, released,
   replaced, or throwing authority emits no receipt, not `unknown`. Same-run
-  wrappers compose owner predicates; distinct admitted runs start new predicate
+  wrappers compose owner predicates. Distinct admitted runs start new predicate
   roots. Insufficient decision evidence remains `unknown`.
 - Display trust comes from owner-held call-path provenance, never
   receipt-controlled `source.owner` or prose. Pair every selected owner row or

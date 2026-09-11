@@ -5,19 +5,19 @@ read_when:
 title: "WhatsApp"
 ---
 
-Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked session(s); there is no separate Twilio WhatsApp channel.
+Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked session(s). There is no separate Twilio WhatsApp channel.
 
 ## Setup
 
 ### Install
 
-`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
+`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path. Stable/beta installs `@openclaw/whatsapp` from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
 
 ```bash
 openclaw plugins install @openclaw/whatsapp
 ```
 
-Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
+Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source. Pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -57,7 +57,7 @@ Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; 
 openclaw channels login --channel whatsapp
 ```
 
-    Login is QR-only. On remote or headless hosts, have a reliable path to deliver the live QR to the phone before starting login; terminal-rendered QRs, screenshots, or chat attachments can expire in transit.
+    Login is QR-only. On remote or headless hosts, have a reliable path to deliver the live QR to the phone before starting login. Terminal-rendered QRs, screenshots, or chat attachments can expire in transit.
 
     For a specific account:
 
@@ -92,7 +92,7 @@ openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <CODE>
 ```
 
-    DM access requests expire after 1 hour; pending requests are capped at 3 per
+    DM access requests expire after 1 hour. Pending requests are capped at 3 per
     account. This approval is separate from the WhatsApp login QR used to link the
     account itself.
 
@@ -132,7 +132,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 ## Runtime model
 
 - The gateway owns the WhatsApp socket and reconnect loop.
-- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
+- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently. It forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime. Initial startup keeps the short stale-history guard.
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
@@ -145,7 +145,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 The plugin can expose `whatsapp_call` in WhatsApp-originated agent turns. It uses [MeowCaller](https://github.com/purpshell/meowcaller) to place a WhatsApp voice call to the current authorized requester and play an OpenClaw TTS message after they answer. The tool has no destination-number parameter, so a prompt cannot redirect the call. Disabled by default.
 
 <Warning>
-MeowCaller is experimental, has no tagged release, and uses a separately paired whatsmeow linked-device session — it cannot reuse the plugin's Baileys credentials. Pairing adds another linked device to the same WhatsApp account; scan with the identity used by OpenClaw. Personal-number/self-chat mode cannot call itself; use a dedicated OpenClaw number to call your personal number.
+MeowCaller is experimental, has no tagged release, and uses a separately paired whatsmeow linked-device session — it cannot reuse the plugin's Baileys credentials. Pairing adds another linked device to the same WhatsApp account. Scan with the identity used by OpenClaw. Personal-number/self-chat mode cannot call itself. Use a dedicated OpenClaw number to call your personal number.
 </Warning>
 
 <Steps>
@@ -196,7 +196,7 @@ chmod 700 "$state_dir"
 meowcaller pair --store "$state_dir/wa-voip.db"
 ```
 
-    Run this interactively, scan the QR from **WhatsApp > Linked devices**, and wait for `MeowCaller linked device ready`. Keep `wa-voip.db` private — it is the MeowCaller session. Non-default accounts get their own store path from the status action; on Windows, run its PowerShell command.
+    Run this interactively, scan the QR from **WhatsApp > Linked devices**, and wait for `MeowCaller linked device ready`. Keep `wa-voip.db` private — it is the MeowCaller session. Non-default accounts get their own store path from the status action. On Windows, run its PowerShell command.
 
   </Step>
 
@@ -229,13 +229,13 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 }
 ```
 
-`approvals.exec` and `approvals.plugin` are independent; enabling WhatsApp as a channel only links the transport and sends nothing unless the matching approval family is enabled and routed there. Session mode delivers native emoji approvals only for approvals that originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit targets and does not create separate approver-DM fanout.
+`approvals.exec` and `approvals.plugin` are independent. Enabling WhatsApp as a channel only links the transport and sends nothing unless the matching approval family is enabled and routed there. Session mode delivers native emoji approvals only for approvals that originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit targets and does not create separate approver-DM fanout.
 
 WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
 ## Question reactions
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
 
 ## Plugin hooks and privacy
 
@@ -277,8 +277,8 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Runtime notes:
 
     - pairings persist in the channel allow-store and merge with configured `allowFrom`
-    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron/heartbeat recipients
-    - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`; see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
+    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`. DM pairing approvals are not implicit cron/heartbeat recipients
+    - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`. See [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send yourself from the linked device)
 
   </Tab>
@@ -286,7 +286,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
   <Tab title="Group policy and allowlists">
     Group access has two layers:
 
-    1. **Group membership allowlist** (`channels.whatsapp.groups`): if `groups` is omitted, all groups are eligible; if present, it acts as a group allowlist (`"*"` admits all).
+    1. **Group membership allowlist** (`channels.whatsapp.groups`): if `groups` is omitted, all groups are eligible. If present, it acts as a group allowlist (`"*"` admits all).
     2. **Group sender policy** (`channels.whatsapp.groupPolicy` + `groupAllowFrom`): `open` bypasses the sender allowlist, `allowlist` requires a `groupAllowFrom` (or `*`) match, `disabled` blocks all group inbound.
 
     If `groupAllowFrom` is unset, sender checks fall back to `allowFrom` when it has entries. Sender allowlists are evaluated before mention/reply activation.
@@ -294,7 +294,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     If no `channels.whatsapp` block exists at all, runtime falls back to `groupPolicy: "allowlist"` (with a warning log), even if `channels.defaults.groupPolicy` is set to something else.
 
     <Note>
-    Inbound group handling uses `channels.whatsapp.accounts.<id>.groups` when set. Named accounts otherwise inherit `channels.whatsapp.accounts.default.groups`, then `channels.whatsapp.groups`; the default account uses its own map or the root map. Group maps replace one another as a whole, rather than merging individual group entries. An explicitly empty map (`{}`) replaces the inherited map too.
+    Inbound group handling uses `channels.whatsapp.accounts.<id>.groups` when set. Named accounts otherwise inherit `channels.whatsapp.accounts.default.groups`, then `channels.whatsapp.groups`. The default account uses its own map or the root map. Group maps replace one another as a whole, rather than merging individual group entries. An explicitly empty map (`{}`) replaces the inherited map too.
     </Note>
 
   </Tab>
@@ -303,13 +303,13 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Group replies require a mention by default. Mention detection includes:
 
     - explicit WhatsApp mentions of the bot identity
-    - mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`); when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
+    - mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`). When neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
     - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
 
     An explicit `mentionPatterns: []` at the selected agent or global level suppresses identity-derived text patterns. Native mentions and reply-to-bot detection remain separate.
 
-    To process all allowed messages in a group, set `groups["<group-id>"].requireMention: false` in the map already supplying the account's group policy: `channels.whatsapp.groups` or the effective `channels.whatsapp.accounts.<id>.groups` map, including inherited `accounts.default.groups`. Preserve every existing wildcard and per-group setting. If you intentionally create an account-specific map instead of editing an inherited map, copy the complete inherited map first, then change only the target group's `requireMention`. When no map previously applied, include `"*": {}` to keep other chats admitted; retain existing restrictions otherwise. A saved session activation mode takes precedence over this config default; use `/activation always` for that session.
+    To process all allowed messages in a group, set `groups["<group-id>"].requireMention: false` in the map already supplying the account's group policy: `channels.whatsapp.groups` or the effective `channels.whatsapp.accounts.<id>.groups` map, including inherited `accounts.default.groups`. Preserve every existing wildcard and per-group setting. If you intentionally create an account-specific map instead of editing an inherited map, copy the complete inherited map first, then change only the target group's `requireMention`. When no map previously applied, include `"*": {}` to keep other chats admitted. Retain existing restrictions otherwise. A saved session activation mode takes precedence over this config default. Use `/activation always` for that session.
 
     Security: quote/reply only satisfies mention gating — it does **not** grant sender authorization. With `groupPolicy: "allowlist"`, non-allowlisted senders stay blocked even replying to an allowlisted user's message.
 
@@ -354,7 +354,7 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 `channels.whatsapp.selfChatMode` controls same-number DM admission and self-chat safeguards. Set it at the channel level or override it per account with `channels.whatsapp.accounts.<id>.selfChatMode`.
 
 - **`true` or unset:** DMs from the linked number to itself are admitted as agent input, even when that number is absent from `allowFrom`. `dmPolicy: "disabled"` still blocks all DMs.
-- **`false`:** self-originated DMs are ignored, even when your number is in `allowFrom`. Other inbound DMs and group messages still follow their access policies; this setting does not make the account outbound-only.
+- **`false`:** self-originated DMs are ignored, even when your number is in `allowFrom`. Other inbound DMs and group messages still follow their access policies. This setting does not make the account outbound-only.
 
 The implicit self-number allowance applies only to DMs, not group allowlists.
 
@@ -425,7 +425,7 @@ A liveness probe sent to your own number can therefore become agent input with `
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
     - audio is sent as the Baileys `audio` payload with `ptt: true`, rendering as a push-to-talk voice note; `audioAsVoice` is preserved on reply payloads so TTS voice-note output stays on this path regardless of the provider's source format
-    - native Ogg/Opus audio sends as `audio/ogg; codecs=opus`; anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
+    - native Ogg/Opus audio sends as `audio/ogg; codecs=opus`. Anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current chat
     - `gifPlayback: true` on video sends enables animated GIF playback
     - `forceDocument`/`asDocument` routes outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp's media compression, preserving the resolved filename and MIME type
@@ -495,7 +495,7 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 }
 ```
 
-Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups. In a group whose activation is `always`, `"group-mentions"` acks every message rather than only mention-triggered turns, because activation stands in for the mention check.
+Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`. Use `"all"` for direct messages and all eligible groups. In a group whose activation is `always`, `"group-mentions"` acks every message rather than only mention-triggered turns, because activation stands in for the mention check.
 
 ### Lifecycle status reactions
 
@@ -511,7 +511,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 }
 ```
 
-Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
+Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups. The queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
 ### Active-turn typing
 
@@ -557,7 +557,7 @@ opt-in status surface described above.
 
 - Agent tool support includes the WhatsApp reaction action (`react`).
 - Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
-- Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
+- Channel-initiated config writes are enabled by default. Disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting
 
@@ -575,7 +575,7 @@ openclaw channels status
   <Accordion title="Linked but disconnected / reconnect loop">
     Symptom: linked account with repeated disconnects or reconnect attempts.
 
-    Quiet accounts can stay connected past the normal message timeout; the watchdog restarts only when WhatsApp Web transport activity stops, the socket closes, or application-level activity stays silent beyond the longer safety window (see Runtime model above).
+    Quiet accounts can stay connected past the normal message timeout. The watchdog restarts only when WhatsApp Web transport activity stops, the socket closes, or application-level activity stays silent beyond the longer safety window (see Runtime model above).
 
     Fix:
 
@@ -595,7 +595,7 @@ openclaw channels status
     openclaw channels login --channel whatsapp --account <accountId>
     ```
 
-    If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but `openclaw gateway status` and `openclaw channels status --probe` both show healthy, run `openclaw doctor`. On Linux, doctor warns about legacy crontab entries invoking the retired `~/.openclaw/bin/ensure-whatsapp.sh` script; remove those entries with `crontab -e` — cron can lack the systemd user-bus environment and make that old script misreport gateway health.
+    If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but `openclaw gateway status` and `openclaw channels status --probe` both show healthy, run `openclaw doctor`. On Linux, doctor warns about legacy crontab entries invoking the retired `~/.openclaw/bin/ensure-whatsapp.sh` script. Remove those entries with `crontab -e` — cron can lack the systemd user-bus environment and make that old script misreport gateway health.
 
   </Accordion>
 
@@ -611,7 +611,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Reply appears in transcript but not in WhatsApp">
-    Transcript rows record what the agent generated; WhatsApp delivery is checked separately. OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately. OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
 
     Ack reactions are independent pre-reply receipts — a successful reaction does not prove the later text/media reply was accepted. Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
 
@@ -625,7 +625,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in. Doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 
@@ -654,7 +654,7 @@ Important behavior:
 
 - `channels.whatsapp.groups` is both a per-group config map and the chat-level group allowlist. At either root or account scope, `groups["*"]` means "all groups are admitted" for that scope.
 - Only add a wildcard `systemPrompt` when you already want that scope to admit all groups. To keep only a fixed set of group IDs eligible, repeat the prompt on each explicitly allowlisted entry instead of using `groups["*"]`.
-- Group admission and sender authorization are separate checks. `groups["*"]` widens which groups reach group handling; it does not authorize every sender in those groups — that stays controlled by `groupPolicy`/`groupAllowFrom`.
+- Group admission and sender authorization are separate checks. `groups["*"]` widens which groups reach group handling. It does not authorize every sender in those groups — that stays controlled by `groupPolicy`/`groupAllowFrom`.
 - `channels.whatsapp.direct` has no equivalent side effect for DMs: `direct["*"]` only supplies a default config after a DM is already admitted by `dmPolicy` plus `allowFrom` or pairing-store rules.
 
 Example:

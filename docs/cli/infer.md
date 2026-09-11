@@ -88,27 +88,27 @@ Reasons to prefer it over a one-off provider wrapper:
 
 ## Behavior
 
-- Use `--json` when the output feeds another command or script; text output otherwise.
+- Use `--json` when the output feeds another command or script. Otherwise the command prints text.
 - Use `--provider` or `--model provider/model` to pin a specific backend.
 - Explicitly empty or whitespace-only values for `--limit`, `--count`, `--duration`, and `--timeout-ms` are errors. Omit the flag to retain its default behavior.
 - `image edit` and `image describe-many` require at least one `--file`; `embedding create` requires at least one `--text`. Repeat the flag for multiple inputs. Omitting it is a usage error, not an empty successful result, and no inference request is sent.
 - Use `model run --thinking <level>` for a one-shot thinking/reasoning override: `off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
-- For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
+- For `image describe`, `--file` accepts local paths and HTTP(S) URLs. Remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
-  agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
+  agent. Explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
   remains aggregate; `--agent` scopes saved-auth and per-agent selection facts. Gateway-owned TTS
   provider state remains Gateway-global, so `tts providers --gateway` does not accept `--agent`.
 - Commands that resolve agent-owned model or auth state (`model run`, `image generate`, `image edit`,
   `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
-- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written. A failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
-- `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
+- `model run --file` attaches image files (auto-detected MIME type) to the prompt. Repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model probe: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
 
@@ -143,12 +143,12 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health: for non-ChatGPT-Codex providers it sends only the supplied prompt.
-- Local `model run --model <provider/model>` can resolve exact bundled static-catalog rows (the same rows [`openclaw models list --all`](/cli/models) shows) before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
-- For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` with `temperature: 0`; use default temperature or a non-zero value such as `0.7`.
+- Local `model run --model <provider/model>` can resolve exact bundled static-catalog rows (the same rows [`openclaw models list --all`](/cli/models) shows) before that provider is written to config. Provider auth is still required. Missing credentials fail as auth errors, not `Unknown model`.
+- For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` with `temperature: 0`. Use default temperature or a non-zero value such as `0.7`.
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local probes add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model probe.
-- The selected model must support image input; text-only models may reject the request at the provider layer.
-- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- The selected model must support image input. Text-only models may reject the request at the provider layer.
+- `model run --prompt` must contain non-whitespace text. Empty prompts are rejected before any provider or Gateway call.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful probes.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
@@ -227,7 +227,7 @@ openclaw infer tts status --json
 Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
-- Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success. A failed copy leaves an existing file unchanged.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
@@ -247,7 +247,7 @@ Notes:
 
 - `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms`, forwarded to the video-generation runtime.
 - Provider-hosted video downloads reject empty, text, and JSON responses instead of reporting an unusable file as successful output.
-- With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds; a failed stream leaves an existing destination unchanged.
+- With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds. A failed stream leaves an existing destination unchanged.
 - `--model` must be `<provider/model>` for `video describe`.
 
 ## Web

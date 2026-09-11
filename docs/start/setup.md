@@ -151,14 +151,14 @@ openclaw health
 
 ### Common footguns
 
-- **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
+- **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`. Keep app + CLI on the same port.
 - **Wrong developer CLI:** When `PATH` includes `node_modules/.bin`, `codex` can
   resolve to the workspace-pinned CLI instead of your standalone installation.
   For developer workers, use the intended executable's absolute path for both
   `--version` and `exec`, and confirm the worker's startup version. A package
   manifest or a version check in another shell does not identify a running worker.
   OpenClaw's [managed Codex app-server](/plugins/codex-harness-reference#app-server-transport)
-  has a separate pinned-version contract; do not change that pin or your model/auth
+  has a separate pinned-version contract. Do not change that pin or your model/auth
   settings to fix developer CLI selection. If the installed workspace package and
   native executable disagree with the lockfile, repair the install with `pnpm install`
   rather than editing `node_modules`.
@@ -180,14 +180,14 @@ Use this when debugging auth or deciding what to back up:
 - **Pairing allowlists**:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
-- **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
+- **Model auth profiles**: shared and agent-local SQLite auth stores. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security/secrets-and-storage#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 
-- Keep `~/.openclaw/workspace` and `~/.openclaw/` as "your stuff"; don't put personal prompts/config into the `openclaw` repo.
+- Keep `~/.openclaw/workspace` and `~/.openclaw/` as "your stuff". Don't put personal prompts/config into the `openclaw` repo.
 - Updating source: `git pull` + `pnpm install` + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)

@@ -15,8 +15,8 @@ Responses, Azure OpenAI Responses, ChatGPT/Codex Responses, Google Generative
 AI, Google Vertex, Mistral Conversations).
 
 It publishes alongside the root `openclaw` package on every release, pinned to
-the same version. Its exact-pinned direct dependencies resolve at install time;
-the package ships no npm lockfile. Installing `openclaw` installs the matching
+the same version. Its exact-pinned direct dependencies resolve at install time.
+The package ships no npm lockfile. Installing `openclaw` installs the matching
 `@openclaw/ai` automatically, and library consumers can depend on it directly
 without any OpenClaw application code.
 
@@ -47,7 +47,7 @@ A runnable version lives in the repository at `examples/ai-chat`.
 - **Host policy is injected, not bundled.** Request fetch guarding (for
   example SSRF policy), secret redaction of tool-result replay text, OpenAI
   strict-tool defaults, and diagnostics logging are `AiTransportHost` ports
-  configured with `configureAiTransportHost`. The library defaults are inert;
+  configured with `configureAiTransportHost`. The library defaults are inert.
   OpenClaw installs its real implementations in its stream facade.
 - **One event-stream identity.** `@openclaw/ai/event-stream` is the canonical
   `EventStream` constructor shared by OpenClaw core, agent-core, and external

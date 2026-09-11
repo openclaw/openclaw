@@ -8,7 +8,7 @@ read_when:
 
 OpenClaw can route runtime HTTP and WebSocket traffic through an operator-managed forward proxy. This is optional defense in depth: central egress control, stronger SSRF protection, and destination auditability at the network boundary. Because the proxy evaluates the destination at connect time, after DNS resolution and immediately before it opens the upstream connection, it also narrows the gap a DNS-rebinding attack relies on between an earlier application-level DNS check and the actual outbound connection. A single proxy policy also gives operators one place to enforce destination rules, network segmentation, rate limits, or outbound allowlists without rebuilding OpenClaw.
 
-OpenClaw does not ship, download, start, configure, or certify a proxy. You run the proxy technology that fits your environment; OpenClaw routes its own HTTP and WebSocket clients through it.
+OpenClaw does not ship, download, start, configure, or certify a proxy. You run the proxy technology that fits your environment. OpenClaw routes its own HTTP and WebSocket clients through it.
 
 ## Configuration
 
@@ -23,7 +23,7 @@ You can also set the URL through the environment:
 OPENCLAW_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
 ```
 
-`proxy.proxyUrl` takes precedence over `OPENCLAW_PROXY_URL`. A configured URL activates managed proxy routing; removing both URLs disables it.
+`proxy.proxyUrl` takes precedence over `OPENCLAW_PROXY_URL`. A configured URL activates managed proxy routing. Removing both URLs disables it.
 
 | Key                  | Type                                 | Default        | Notes                                                                                                                                 |
 | -------------------- | ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
@@ -71,12 +71,12 @@ Internally, OpenClaw installs [Proxyline](https://github.com/openclaw/proxyline)
 
 The proxy URL scheme describes the hop from OpenClaw to the proxy, not to the final destination:
 
-- `http://proxy.example:3128` — plain TCP to the proxy; OpenClaw sends HTTP proxy requests, including `CONNECT` for HTTPS destinations.
+- `http://proxy.example:3128` — plain TCP to the proxy. OpenClaw sends HTTP proxy requests, including `CONNECT` for HTTPS destinations.
 - `https://proxy.example:8443` — OpenClaw opens TLS to the proxy itself (verifying the proxy's certificate), then sends HTTP proxy requests inside that session.
 
 Destination TLS is independent of proxy-endpoint TLS: for an HTTPS destination, OpenClaw always asks the proxy for a `CONNECT` tunnel and starts destination TLS through that tunnel.
 
-While the proxy is active, OpenClaw clears `no_proxy`/`NO_PROXY`. Those bypass lists are destination-based; leaving `localhost` or `127.0.0.1` there would let SSRF targets skip the proxy entirely. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state.
+While the proxy is active, OpenClaw clears `no_proxy`/`NO_PROXY`. Those bypass lists are destination-based. Leaving `localhost` or `127.0.0.1` there would let SSRF targets skip the proxy entirely. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state.
 
 Some plugins own a custom transport that needs its own proxy wiring even with process-level routing active. Telegram's Bot API client uses its own HTTP/1 undici dispatcher and separately honors process proxy env plus the `OPENCLAW_PROXY_URL` fallback.
 
@@ -116,7 +116,7 @@ For `openclaw --container ...` commands, OpenClaw forwards `OPENCLAW_PROXY_URL` 
 
 ## Validating the proxy
 
-The proxy's destination policy is the actual security boundary; OpenClaw cannot verify that your proxy blocks the right targets. Configure it to:
+The proxy's destination policy is the actual security boundary. OpenClaw cannot verify that your proxy blocks the right targets. Configure it to:
 
 - Bind only to loopback or a private trusted interface, reachable only by the OpenClaw process/host/container/service account.
 - Resolve destinations itself and block by IP after DNS resolution, at connect time, for both plain HTTP and HTTPS `CONNECT` tunnels.
@@ -148,9 +148,9 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 | `--timeout-ms <ms>`      | Per-request timeout.                                                 |
 | `--json`                 | Machine-readable output.                                             |
 
-If no config, environment, or `--proxy-url` value is available, the command reports a config problem; pass `--proxy-url` for a one-off preflight before changing config.
+If no config, environment, or `--proxy-url` value is available, the command reports a config problem. Pass `--proxy-url` for a one-off preflight before changing config.
 
-With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
+With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token. It fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure. Proxy URL credentials are redacted from both text and JSON output.
 
 ```json
 {
@@ -214,8 +214,8 @@ Add any additional metadata hosts or reserved ranges your cloud provider or netw
 
 - This is process-level coverage for JavaScript HTTP/WebSocket clients, not an OS-level network sandbox.
 - Raw `net`, `tls`, `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
-- User local WebUIs and local model servers are not covered by a general local-network bypass — allowlist them in the operator proxy policy if needed. The exception is the bundled Ollama memory embedding provider's guarded direct path, scoped to the exact host-local loopback origin from its configured `baseUrl`; LAN, tailnet, private-network, and public Ollama hosts still use the managed proxy.
-- The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active; enable it only for approved local diagnostics.
+- User local WebUIs and local model servers are not covered by a general local-network bypass — allowlist them in the operator proxy policy if needed. The exception is the bundled Ollama memory embedding provider's guarded direct path, scoped to the exact host-local loopback origin from its configured `baseUrl`. LAN, tailnet, private-network, and public Ollama hosts still use the managed proxy.
+- The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active. Enable it only for approved local diagnostics.
 - OpenClaw does not inspect, test, or certify your proxy policy. Treat proxy policy changes as security-sensitive operational changes.
 
 ## Related

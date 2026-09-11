@@ -9,7 +9,7 @@ doc-schema-version: 1
 
 Field-level reference for `~/.openclaw/openclaw.json`: keys, defaults, and links to deeper subsystem pages. For task-oriented setup guidance, see [Configuration](/gateway/configuration). Channel- and plugin-owned command catalogs and deep memory knobs live on their own pages, not here.
 
-Config format is **JSON5** (comments + trailing commas allowed). All fields are optional; OpenClaw uses safe defaults when omitted.
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional. OpenClaw uses safe defaults when omitted.
 
 Code truth beats this page:
 
@@ -19,7 +19,7 @@ Code truth beats this page:
 
 Schema `uiHints` also carry a resolved `advanced` boolean for every path.
 Control UI uses it to show common fields first and collapse advanced fields per
-section; search still spans both tiers. Tier metadata is presentational only.
+section. Search still spans both tiers. Tier metadata is presentational only.
 When adding a key, declare its tier on the leaf or let it inherit the nearest
 ancestor declaration. A path with no declared ancestor is advanced by default.
 

@@ -7,7 +7,7 @@ title: "Media understanding"
 sidebarTitle: "Media understanding"
 ---
 
-OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. Original media is always delivered to the model as usual; when understanding fails or is disabled, the reply flow continues unchanged.
+OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. Original media is always delivered to the model as usual. When understanding fails or is disabled, the reply flow continues unchanged.
 
 Vendor plugins register capability metadata (which provider supports which media type, default model, priority). OpenClaw core owns the shared `tools.media` config, fallback order, and reply-pipeline integration.
 
@@ -27,7 +27,7 @@ Vendor plugins register capability metadata (which provider supports which media
     If a model errors, times out, or the media exceeds `maxBytes`, try the next entry.
   </Step>
   <Step title="Apply on success">
-    `Body` becomes an `[Image]`, `[Audio]`, or `[Video]` block. Audio also sets `{{Transcript}}`; command parsing uses caption text when present, otherwise the transcript. Captions are preserved as `User text:` inside the block.
+    `Body` becomes an `[Image]`, `[Audio]`, or `[Video]` block. Audio also sets `{{Transcript}}`. Command parsing uses caption text when present, otherwise the transcript. Captions are preserved as `User text:` inside the block.
   </Step>
 </Steps>
 
@@ -68,7 +68,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
 | `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run. It does not hide other enabled providers from provider discovery.
 
 ### Model entries
 
@@ -135,7 +135,7 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 ## Rules and behavior
 
 - Media exceeding `maxBytes` skips that model and tries the next one.
-- Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a deterministic placeholder transcript instead.
+- Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription. The agent gets a deterministic placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
 - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so image/PDF tools or a configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --file <path> --model <provider/model>` (alias: `openclaw capability image describe`) runs that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b` when a matching image-capable model is configured under `models.providers.ollama.models[]`.
@@ -191,12 +191,12 @@ To disable auto-detection for a capability:
 ```
 
 <Note>
-Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (`~` is expanded), or set an explicit CLI model entry with a full command path.
+Binary detection is best-effort across macOS/Linux/Windows. Ensure the CLI is on `PATH` (`~` is expanded), or set an explicit CLI model entry with a full command path.
 </Note>
 
 ### Proxy support (audio/video provider calls)
 
-Provider-based **audio** and **video** understanding honors standard outbound proxy environment variables, including `NO_PROXY`/`no_proxy` bypass rules: `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `https_proxy`, `http_proxy`, `all_proxy`. Lowercase vars take precedence over uppercase. If none are set, media understanding uses direct egress; if the proxy value is malformed, OpenClaw logs a warning and falls back to direct fetch. Image understanding does not go through this proxy path.
+Provider-based **audio** and **video** understanding honors standard outbound proxy environment variables, including `NO_PROXY`/`no_proxy` bypass rules: `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `https_proxy`, `http_proxy`, `all_proxy`. Lowercase vars take precedence over uppercase. If none are set, media understanding uses direct egress. If the proxy value is malformed, OpenClaw logs a warning and falls back to direct fetch. Image understanding does not go through this proxy path.
 
 ## Capabilities
 
@@ -257,19 +257,19 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
 ### File-attachment extraction
 
-- Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
+- Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract. Those stages own their outcomes.
 - Extracted file text is wrapped as untrusted external content before it's appended to the media prompt, using boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` plus a `Source: External` metadata line.
-- This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short; the boundary markers and metadata still apply.
-- Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata; the trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
-- Files rejected by an operator-configured allowlist never include the self-serve path; a policy rejection must not coach the agent around the operator's decision.
+- This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short. The boundary markers and metadata still apply.
+- Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata. The trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
+- Files rejected by an operator-configured allowlist never include the self-serve path. A policy rejection must not coach the agent around the operator's decision.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
 - Read failures get `[Attachment could not be read]`.
 - URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
 - A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
-- At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
+- At most five skip markers render per message. Further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
-- Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
+- Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker. Image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
 
 ## Config examples
 

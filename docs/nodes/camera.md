@@ -9,9 +9,9 @@ title: "Camera capture"
 
 OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
-When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera; run `camera.list` to refresh device IDs, which change when cameras are reconnected.
+When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera. Run `camera.list` to refresh device IDs, which change when cameras are reconnected.
 
-The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
+The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware. It does not rotate, crop, or otherwise transform a captured image.
 
 All camera access is gated behind a user-controlled setting per platform.
 
@@ -67,7 +67,7 @@ openclaw nodes camera clip --node <id> --no-audio
 `--duration` accepts a bare number of milliseconds (`3000`) or a unit suffix
 (`10s`, `1m`, `1h30m`). It defaults to `3000` (3 seconds).
 
-Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`; on non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
+Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`. On non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
 ## Android node
 
@@ -79,8 +79,8 @@ Without `--facing`, `nodes camera snap` captures one photo using the node's defa
 
 ### Permissions
 
-- `CAMERA` is required for both `camera.snap` and `camera.clip`; missing/denied permission returns `CAMERA_PERMISSION_REQUIRED`.
-- `RECORD_AUDIO` is required for `camera.clip` when `includeAudio` is `true`; missing/denied permission returns `MIC_PERMISSION_REQUIRED`.
+- `CAMERA` is required for both `camera.snap` and `camera.clip`. Missing/denied permission returns `CAMERA_PERMISSION_REQUIRED`.
+- `RECORD_AUDIO` is required for `camera.clip` when `includeAudio` is `true`. Missing/denied permission returns `MIC_PERMISSION_REQUIRED`.
 
 The app prompts for runtime permissions when possible.
 
@@ -101,7 +101,7 @@ The Android node only allows `camera.*` commands in the **foreground**. Backgrou
 - `camera.clip`
   - Params: `facing` (default `front`), `durationMs` (default `3000`, clamped to `[200, 60000]`), `includeAudio` (default `true`), `deviceId` (optional).
   - Response payload: `format: "mp4"`, `base64`, `durationMs`, `hasAudio`.
-  - Payload guard: raw MP4 is capped at 18MB before base64 encoding; oversize clips fail with `PAYLOAD_TOO_LARGE` (reduce `durationMs` and retry).
+  - Payload guard: raw MP4 is capped at 18MB before base64 encoding. Oversize clips fail with `PAYLOAD_TOO_LARGE` (reduce `durationMs` and retry).
 
 ## macOS app
 
@@ -132,7 +132,7 @@ openclaw nodes camera clip --node <id> --no-audio
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
 
-If a macOS external camera starts a photo session in portrait, OpenClaw selects an advertised landscape format with transposed dimensions and the same encoding, when one exists. Already-landscape, built-in, and Continuity Camera formats are unchanged. Without an exact counterpart, or if the camera cannot be reconfigured, capture keeps the negotiated format. `--max-width` still only limits the returned JPEG width; it does not choose a camera format.
+If a macOS external camera starts a photo session in portrait, OpenClaw selects an advertised landscape format with transposed dimensions and the same encoding, when one exists. Already-landscape, built-in, and Continuity Camera formats are unchanged. Without an exact counterpart, or if the camera cannot be reconfigured, capture keeps the negotiated format. `--max-width` still only limits the returned JPEG width. It does not choose a camera format.
 
 ### macOS physical PTZ
 
@@ -150,11 +150,11 @@ Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never cho
   - `{ "deviceId": "<camera-id>", "operation": "move", "delta": { "panDegrees": 2, "zoomPercent": -5 } }`
   - `{ "deviceId": "<camera-id>", "operation": "home" }`
 
-`set` and `move` require at least one finite axis value. Omitted axes remain unchanged, and move deltas for zoom are percentage points. `home` restores the device-advertised defaults; it returns `CAMERA_PTZ_UNSUPPORTED` without moving the camera when `canHome` is false. The Mac app clamps and snaps requested values to the camera's range and resolution; the response returns the post-operation `state` and lists changed request fields in `adjusted`. Requesting an unsupported axis returns `CAMERA_PTZ_AXIS_UNSUPPORTED`.
+`set` and `move` require at least one finite axis value. Omitted axes remain unchanged, and move deltas for zoom are percentage points. `home` restores the device-advertised defaults. It returns `CAMERA_PTZ_UNSUPPORTED` without moving the camera when `canHome` is false. The Mac app clamps and snaps requested values to the camera's range and resolution. The response returns the post-operation `state` and lists changed request fields in `adjusted`. Requesting an unsupported axis returns `CAMERA_PTZ_AXIS_UNSUPPORTED`.
 
 Both PTZ commands briefly open a live camera stream because supported cameras only service UVC controls while streaming. This activates the camera and its privacy indicator for the duration, including when `camera.ptz.status` only reads the position. Frames are not retained, and no photo, video, or file is produced.
 
-Pan/tilt and zoom use separate hardware writes and cannot be atomic. OpenClaw verifies the resulting position through a fresh control connection. If a later write or final status read fails, or an axis does not reach its requested position within the camera's reported resolution, `CAMERA_PTZ_PARTIAL` names the acknowledged control groups, includes the independently observed state when readable, and tells the caller to run `camera.ptz.status` before retrying. Position failures also report the requested and observed values; check that a video stream reaches the camera and disable on-camera AI framing or tracking that can override UVC controls.
+Pan/tilt and zoom use separate hardware writes and cannot be atomic. OpenClaw verifies the resulting position through a fresh control connection. If a later write or final status read fails, or an axis does not reach its requested position within the camera's reported resolution, `CAMERA_PTZ_PARTIAL` names the acknowledged control groups, includes the independently observed state when readable, and tells the caller to run `camera.ptz.status` before retrying. Position failures also report the requested and observed values. Check that a video stream reaches the camera and disable on-camera AI framing or tracking that can override UVC controls.
 
 `camera.ptz.control` is dangerous and remains disarmed until the operator explicitly adds it to `gateway.nodes.commands.allow`:
 
@@ -195,14 +195,14 @@ Camera access defaults to off. Enable it under the plugin entry, then restart th
 Requirements:
 
 - FFmpeg with V4L2 input, `libx264`, and AAC support
-- a `/dev/video*` device readable by the node-service user; on common distributions, add that user to the `video` group
+- a `/dev/video*` device readable by the node-service user. On common distributions, add that user to the `video` group
 - for clips with the default `includeAudio: true`, a working PulseAudio server or PipeWire PulseAudio compatibility layer with a default source
 
 Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FFmpeg probes each `/dev/video*` candidate and omits metadata or output-only nodes. Device `position` is `unknown`, so facing requests without `deviceId` produce one `unknown`-position photo or clip instead of claiming a front or back camera. Use `deviceId` when a host has multiple cameras. `camera.snap` uses FFmpeg input warm-up for `delayMs` and preserves aspect ratio while limiting width. `camera.clip` records microphone audio as the MP4 audio track; OpenClaw deliberately exposes no standalone microphone command.
 
 The plugin uses `libx264` for MP4 video and does not silently change codecs. An FFmpeg build without the required input or encoders returns `CAMERA_UNAVAILABLE`. Photos and clips that would exceed the 25MB base64 payload budget fail with `PAYLOAD_TOO_LARGE`.
 
-`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.commands.allow` only when you intend to arm capture; enabling the plugin alone does not bypass Gateway policy.
+`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.commands.allow` only when you intend to arm capture. Enabling the plugin alone does not bypass Gateway policy.
 
 ## Safety + practical limits
 

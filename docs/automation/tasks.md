@@ -27,7 +27,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Tasks are **records**, not schedulers - automations and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all automation jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
-- Automation tasks stay live while the automations runtime still owns the job; if the in-memory runtime state is gone, task maintenance first checks durable automation run history before marking a task lost.
+- Automation tasks stay live while the automations runtime still owns the job. If the in-memory runtime state is gone, task maintenance first checks durable automation run history before marking a task lost.
 - Completion is push-driven: detached work can notify directly or wake the requester session/heartbeat when it finishes, so status polling loops are usually the wrong shape.
 - Isolated automation runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Isolated automation delivery suppresses stale interim parent replies while descendant subagent work is still draining, and it prefers final descendant output when that arrives before delivery.
@@ -107,7 +107,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 <AccordionGroup>
   <Accordion title="Notify defaults for automations and media">
-    Automation tasks (main-session and isolated) use `silent` notify policy - they create records for tracking but do not generate task notifications of their own; the scheduler owns its delivery path.
+    Automation tasks (main-session and isolated) use `silent` notify policy - they create records for tracking but do not generate task notifications of their own. The scheduler owns its delivery path.
 
     Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake. The requester agent follows its current visible-reply contract: successful completion includes a short user-facing caption and every structured generated attachment from the completion event, while failure produces a concise visible failure. Internal task and session details stay private. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
 
@@ -148,7 +148,7 @@ stateDiagram-v2
 | `cancelled` | Stopped by the operator via `openclaw tasks cancel`, or the run was aborted |
 | `lost`      | The runtime lost authoritative backing state after a 5-minute grace period  |
 
-Transitions happen automatically - agent run lifecycle events (start, end, error) update the task status; you do not manage it manually.
+Transitions happen automatically - agent run lifecycle events (start, end, error) update the task status. You do not manage it manually.
 
 Execution and result delivery are separate. A subagent task can remain
 `succeeded` while its `deliveryStatus` is `session_queued` or `failed`. The
@@ -160,7 +160,7 @@ Use `openclaw tasks list --status blocked` to find these tasks. They also remain
 in `--status succeeded` results because the underlying execution succeeded, and
 JSON output preserves the stored status plus the `blocked` terminal outcome.
 Blocked media-generation tasks retain bounded attachment references in the task
-result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
+result. Use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
@@ -181,7 +181,7 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 Notifications retain the recorded requester agent, even when another agent executes
 the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
-with that requester; another agent sharing the `global` session key cannot consume them.
+with that requester. Another agent sharing the `global` session key cannot consume them.
 
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
@@ -241,7 +241,7 @@ The lookup token accepts a task ID, run ID, or session key. Shows the full recor
 openclaw tasks cancel <lookup>
 ```
 
-For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
+For ACP and subagent tasks, this kills the child session. ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
 
 Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. If a crash or restart removed the live owner, keep the Gateway running so its existing maintenance can reconcile the task as `lost`. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot establish Gateway liveness. See [task maintenance](/cli/tasks#maintenance).
 
@@ -256,7 +256,7 @@ openclaw tasks dismiss <lookup> [lookup...]
 
 These commands recover blocked subagent completion deliveries. Each request
 accepts 1-10 task lookups. Retry preserves the canonical result and starts a
-new fenced queue generation; dismiss keeps the task blocked and records that
+new fenced queue generation. Dismiss keeps the task blocked and records that
 the operator intentionally stopped delivery.
 
 ### tasks notify
@@ -271,7 +271,7 @@ openclaw tasks notify <lookup> <done_only|state_changes|silent>
 openclaw tasks audit [--severity <warn|error>] [--code <name>] [--limit <n>] [--json]
 ```
 
-Surfaces operational issues for tasks **and** TaskFlows in one report. Findings also appear in `openclaw status` when issues are detected.
+Surfaces operational issues for tasks **and** Task Flows in one report. Findings also appear in `openclaw status` when issues are detected.
 
 Task findings:
 
@@ -284,7 +284,7 @@ Task findings:
 | `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
 | `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
 
-TaskFlow findings:
+Task Flow findings:
 
 | Finding                   | Severity   | Trigger                                                                       |
 | ------------------------- | ---------- | ----------------------------------------------------------------------------- |
@@ -304,14 +304,14 @@ openclaw tasks maintenance [--json]
 openclaw tasks maintenance --apply [--json]
 ```
 
-Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale automation run session registry rows.
+Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, Task Flow state, and stale automation run session registry rows.
 
 Reconciliation is runtime-aware:
 
-- ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
+- ACP tasks require a live in-process turn in the Gateway. Subagent tasks check their backing child session.
 - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
 - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
-- CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
+- CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check. Standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
 
 Completion cleanup is also runtime-aware:
 
@@ -349,9 +349,9 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
-Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header. Session label and category edits preserve task pagination when session access stays the same. Sharing, role, and session identity changes can still require a fresh page.
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently. If retries are exhausted, use **Refresh** in the Tasks panel header. Session label and category edits preserve task pagination when session access stays the same. Sharing, role, and session identity changes can still require a fresh page.
 
-Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
+Select a task to replace the list with a compact detail view inside the rail. Use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane. Linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**. On Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 
 ## Status integration (task pressure)
 
@@ -361,7 +361,7 @@ Select a task to replace the list with a compact detail view inside the rail; us
 Tasks    2 active · 1 queued · 1 running · 1 issue · audit clean · 6 tracked
 ```
 
-The summary counts active work (`queued` + `running`), failures (`failed` + `timed_out` + `lost`), audit findings, and total tracked records; the JSON payload also breaks counts down by runtime (`acp`, `subagent`, `cron`, `cli`).
+The summary counts active work (`queued` + `running`), failures (`failed` + `timed_out` + `lost`), audit findings, and total tracked records. The JSON payload also breaks counts down by runtime (`acp`, `subagent`, `cron`, `cli`).
 
 Both `/status` and the `session_status` tool use a cleanup-aware task snapshot: active tasks are preferred, expired rows are hidden, and terminal tasks only appear for a short recent window (5 minutes), with failures focused when no active work remains. This keeps the status card on what matters right now.
 
@@ -375,7 +375,7 @@ Task records and delivery state persist in the shared OpenClaw SQLite state data
 ~/.openclaw/state/openclaw.sqlite   (tables: task_runs, task_delivery_state, flow_runs)
 ```
 
-Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) elsewhere; the shared database path moves with it.
+Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) elsewhere. The shared database path moves with it.
 
 The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts. WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
@@ -393,13 +393,13 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
-    Sets a `cleanupAfter` timestamp on terminal tasks (terminal time + retention window). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they become errors.
+    Sets a `cleanupAfter` timestamp on terminal tasks (terminal time + retention window). During retention, lost tasks still appear in audit as warnings. After `cleanupAfter` expires or when cleanup metadata is missing, they become errors.
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
   </Step>
   <Step title="Task Flow retention">
-    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`. Resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 

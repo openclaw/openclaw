@@ -9,16 +9,16 @@ title: "Google Meet plugin"
 
 The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent. It is deliberately narrow:
 
-- It only joins `https://meet.google.com/...` URLs; it never dials into a meeting from a phone number it discovers itself.
+- It only joins `https://meet.google.com/...` URLs. It never dials into a meeting from a phone number it discovers itself.
 - `googlemeet create` can mint a new Meet URL through the Google Meet API (or a browser fallback) and join it by default.
-- Chrome participation uses a signed-in Chrome profile, optionally on a paired node. Twilio participation dials a phone number plus PIN/DTMF through the [Voice call plugin](/plugins/voice-call); it cannot dial a Meet URL directly.
+- Chrome participation uses a signed-in Chrome profile, optionally on a paired node. Twilio participation dials a phone number plus PIN/DTMF through the [Voice call plugin](/plugins/voice-call). It cannot dial a Meet URL directly.
 - `mode: "agent"` (default) transcribes participant speech with a realtime provider, routes it to the configured OpenClaw agent, and speaks the answer with regular OpenClaw TTS. `mode: "bidi"` lets a realtime voice model answer directly. `mode: "transcribe"` joins observe-only with no talk-back.
 - There is no automatic consent announcement when the plugin joins a call.
 - The CLI command is `googlemeet`; `meet` is reserved for broader agent teleconference workflows.
 
 ## Quick start
 
-Install the plugin and the native audio dependencies for the Chrome host, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider. On macOS:
+Install the plugin and the native audio dependencies for the Chrome host, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode. Google Gemini Live is available as the `bidi`-mode voice provider. On macOS:
 
 ```bash
 openclaw plugins install @openclaw/google-meet
@@ -110,7 +110,7 @@ openclaw googlemeet create --no-join
 `create` has two paths, reported in the result's `source` field:
 
 - **`api`**: used when Google Meet OAuth credentials are configured. Deterministic; does not depend on browser UI state.
-- **`browser`**: used without OAuth credentials. OpenClaw opens `https://meet.google.com/new` on the pinned Chrome node and waits for Google to redirect to a real meeting-code URL; the OpenClaw Chrome profile on that node must already be signed in to Google. Join and create both reuse an existing Meet tab (or an in-progress `.../new` / Google account prompt tab) before opening a new one; tab matching ignores harmless query strings like `authuser`.
+- **`browser`**: used without OAuth credentials. OpenClaw opens `https://meet.google.com/new` on the pinned Chrome node and waits for Google to redirect to a real meeting-code URL. The OpenClaw Chrome profile on that node must already be signed in to Google. Join and create both reuse an existing Meet tab (or an in-progress `.../new` / Google account prompt tab) before opening a new one. Tab matching ignores harmless query strings like `authuser`.
 
 `create` joins by default and returns `joined: true` plus the join session. Pass `--no-join` (CLI) or `"join": false` (tool) to mint the URL only.
 
@@ -132,7 +132,7 @@ If the browser fallback hits a Google login or Meet permission blocker, the tool
 
 ### Observe-only join
 
-Set `"mode": "transcribe"` to skip the duplex realtime bridge (no virtual-audio requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports install a best-effort Meet caption observer in every mode so durable notes are available without changing the live agent-consult path. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
+Set `"mode": "transcribe"` to skip the duplex realtime bridge (no virtual-audio requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path. If Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports install a best-effort Meet caption observer in every mode so durable notes are available without changing the live agent-consult path. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.
 
 For the bounded session transcript, read the exact tracked Meet tab:
 
@@ -141,10 +141,10 @@ openclaw googlemeet transcript <session-id>
 openclaw googlemeet transcript <session-id> --since <next-index> --json
 ```
 
-The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion; leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The bounded `googlemeet transcript` tail still keeps only the four most recently ended sessions and resets with the Gateway. Separately, OpenClaw appends completed caption rows to the shared state database throughout the meeting and writes a derived summary on leave. Use [`openclaw transcripts`](/cli/transcripts) to inspect or export those durable notes.
+The observer keeps at most 2,000 completed caption lines in the Meet page. Visible progressive text stays in the status health tail until the caption row completes, so saving `nextIndex` cannot skip a later text expansion. Leaving finalizes visible rows before the snapshot. `droppedLines` reports lines lost from the head when the cap is exceeded. The bounded `googlemeet transcript` tail still keeps only the four most recently ended sessions and resets with the Gateway. Separately, OpenClaw appends completed caption rows to the shared state database throughout the meeting and writes a derived summary on leave. Use [`openclaw transcripts`](/cli/transcripts) to inspect or export those durable notes.
 
 Automatic notes are enabled by default. Set `transcripts.enabled: false` to
-disable durable notes globally; explicit `transcribe` mode still exposes only
+disable durable notes globally. Explicit `transcribe` mode still exposes only
 its bounded live tail. Twilio joins do not have the browser caption stream and
 are not captured by this path.
 
@@ -160,7 +160,7 @@ It joins in transcribe mode, waits for fresh caption/transcript movement, and re
 
 ## Audio bridge architecture
 
-Google Meet's official media API is receive-oriented, so speaking into a call still needs a participant path. This plugin keeps that boundary visible: Chrome handles browser participation and local audio routing; Twilio handles phone dial-in participation.
+Google Meet's official media API is receive-oriented, so speaking into a call still needs a participant path. This plugin keeps that boundary visible: Chrome handles browser participation and local audio routing. Twilio handles phone dial-in participation.
 
 Chrome talk-back modes need a supported native virtual-audio backend plus either:
 
@@ -169,15 +169,15 @@ Chrome talk-back modes need a supported native virtual-audio backend plus either
 
 With the command-pair Chrome bridge, `chrome.bargeInInputCommand` can listen to a separate local microphone and clear assistant playback when a human starts talking, keeping human speech ahead of assistant output even while the shared virtual loopback input is temporarily suppressed during assistant playback. Like `chrome.audioInputCommand`/`chrome.audioOutputCommand`, it is an operator-configured local command: use an explicit trusted command path or argument list, never a script from an untrusted location.
 
-For clean duplex audio, route Meet output and Meet microphone through separate virtual devices or a Loopback-style virtual device graph; the default shared loopback device can echo other participants back into the call.
+For clean duplex audio, route Meet output and Meet microphone through separate virtual devices or a Loopback-style virtual device graph. The default shared loopback device can echo other participants back into the call.
 
 `googlemeet speak` triggers the active talk-back audio bridge for a Chrome session; `googlemeet leave` stops it (and, for Twilio sessions delegated through Voice Call, hangs up the underlying call). Use `googlemeet end-active-conference` to also close the active Google Meet conference for an API-managed space.
 
 ### Realtime session health
 
-During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
+During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`. Otherwise health reports `speechReady: false`, and the speech attempt is blocked rather than silently no-opping.
 
-Local Chrome joins through the signed-in OpenClaw browser profile and routes its microphone and speaker through the native backend selected by `chrome.audioBackend`. The default shared loopback device is enough for a first smoke test but can echo; use separate virtual devices or a Loopback-style graph for clean duplex audio.
+Local Chrome joins through the signed-in OpenClaw browser profile and routes its microphone and speaker through the native backend selected by `chrome.audioBackend`. The default shared loopback device is enough for a first smoke test but can echo. Use separate virtual devices or a Loopback-style graph for clean duplex audio.
 
 ## Where each section moved
 

@@ -57,11 +57,11 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 
 - `SOUL.md` defines identity, tone, and boundaries. Keep it current.
 - If you change `SOUL.md`, tell the user.
-- You are a fresh instance each session; continuity lives in these files.
+- You are a fresh instance each session. Continuity lives in these files.
 
 ## Shared spaces (recommended)
 
-- You're not the user's voice; be careful in group chats or public channels.
+- You're not the user's voice. Be careful in group chats or public channels.
 - Don't share private data, contact info, or internal notes.
 
 ## Memory system (recommended)
@@ -69,17 +69,17 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
 - User model: `USER.md` for dated active or superseded directives about stable preferences and profile facts.
 - Long-term memory: `MEMORY.md` for durable non-profile facts and decisions.
-- Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
+- Lowercase `memory.md` is legacy repair input only. Do not keep both root files on purpose.
 - On session start, read today + yesterday + `MEMORY.md` when present.
-- Before writing memory files, read them first; write only concrete updates, never empty placeholders.
-- Capture preferences as directives in `USER.md`; capture decisions, constraints, and open loops in durable or daily memory as appropriate.
+- Before writing memory files, read them first. Write only concrete updates, never empty placeholders.
+- Capture preferences as directives in `USER.md`. Capture decisions, constraints, and open loops in durable or daily memory as appropriate.
 - Avoid secrets unless explicitly requested.
 
 ## Tools
 
 ### Local notes
 
-- Tools live in skills; follow each skill's `SKILL.md` when you need it.
+- Tools live in skills. Follow each skill's `SKILL.md` when you need it.
 - Keep environment-specific notes in this file's `## Tools` section.
 
 ## Backup tip (recommended)
@@ -102,7 +102,7 @@ git commit -m "Add workspace"
 
 ## Core skills (enable in Settings → Skills)
 
-Example roster for a personal-assistant workspace, last reviewed for 2026.9.3; swap in whichever skills fit your setup. These are third-party skills, so availability changes independently of OpenClaw releases.
+Example roster for a personal-assistant workspace, last reviewed for 2026.9.3. Swap in whichever skills fit your setup. These are third-party skills, so availability changes independently of OpenClaw releases.
 
 - **mcporter** - tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** - fast macOS screenshots with optional AI vision analysis.
@@ -124,13 +124,13 @@ Example roster for a personal-assistant workspace, last reviewed for 2026.9.3; s
 
 ## Usage notes
 
-- Prefer the `openclaw` CLI for scripting; the desktop app handles permissions.
-- Run installs from the Skills tab; the install button is hidden once a required binary is already present.
+- Prefer the `openclaw` CLI for scripting. The desktop app handles permissions.
+- Run installs from the Skills tab. The install button is hidden once a required binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
 - For browser-driven verification, use the `openclaw browser` CLI (bundled `browser` plugin) with the OpenClaw-managed Chrome/Brave/Edge/Chromium profile.
 - Manage: `status`, `doctor [--deep]`, `start [--headless]`, `stop`, `tabs`, `tab [new|select|close]`, `open <url>`, `focus <id>`, `close <id>`.
 - Inspect: `screenshot [--full-page|--ref|--labels]`, `snapshot [--format ai|aria|--interactive|--efficient]`, `console`, `errors`, `requests`, `pdf`, `responsebody`.
-- Act: `navigate`, `click <ref>`, `type <ref> <text>`, `press`, `hover`, `drag`, `select`, `upload`, `download`, `fill`, `dialog`, `wait`, `evaluate --fn <js>`, `highlight`. Actions need a `ref` from `snapshot` (CSS selectors are not accepted for actions); use `evaluate` when you need `document.querySelector`-style targeting.
+- Act: `navigate`, `click <ref>`, `type <ref> <text>`, `press`, `hover`, `drag`, `select`, `upload`, `download`, `fill`, `dialog`, `wait`, `evaluate --fn <js>`, `highlight`. Actions need a `ref` from `snapshot` (CSS selectors are not accepted for actions). Use `evaluate` when you need `document.querySelector`-style targeting.
 - Add `--json` for machine-readable output on any inspection command.
 
 ## Related
