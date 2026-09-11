@@ -7111,12 +7111,8 @@ describe("chat model controls", () => {
     });
     idReads = 0;
     const container = renderModelControls(state);
-    const rows = container.querySelectorAll<HTMLButtonElement>(
-      '[data-chat-model-option^="example/"]',
-    );
+    const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
     expect(rows).toHaveLength(size);
-    expect(container.querySelectorAll('[data-chat-model-default="true"]')).toHaveLength(1);
-    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(size + 1);
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
     expect(rows[size - 1]?.textContent).toContain(`Model ${size - 1}`);
     expect(rows[size - 1]?.textContent).toContain("128k");
@@ -7141,10 +7137,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
-    expect(
-      container.querySelectorAll('[data-chat-model-option]:not([data-chat-model-default="true"])'),
-    ).toHaveLength(3);
-    expect(container.querySelectorAll('[data-chat-model-default="true"]')).toHaveLength(1);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
     const shared = container.querySelector('[data-chat-model-option="example/shared"]');
     expect(shared?.textContent).toContain("Last label");
     expect(shared?.textContent).toContain("111k");
@@ -8258,7 +8251,7 @@ describe("chat model controls", () => {
     const providerLabels = providerButtons.map((button) =>
       button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
     );
-    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode", "Moonshot AI"]);
+    expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
       container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,

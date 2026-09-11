@@ -297,7 +297,16 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
-  if (defaultModel && modelOptions.length > 0 && !modelOptions.some((option) => option.isDefault)) {
+  // A pin recorded on the session row must stay clearable even when the configured
+  // default is absent from this catalog. Without such a pin the row has no job (New
+  // Session drafts have no row, and an agent-scoped catalog may legitimately omit the
+  // Gateway default), so nothing is synthesized.
+  if (
+    defaultModel &&
+    props.selectedSession?.modelOverrideSource === "user" &&
+    modelOptions.length > 0 &&
+    !modelOptions.some((option) => option.isDefault)
+  ) {
     modelOptions.unshift({
       commitValue: "",
       isDefault: true,
