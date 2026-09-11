@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   IMAGE_GENERATION_TASK_KIND,
   MUSIC_GENERATION_TASK_KIND,
@@ -23,8 +24,12 @@ vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 
-const { imageGenerationTaskLifecycle, musicGenerationTaskLifecycle, videoGenerationTaskLifecycle } =
-  await import("./media-generate-background.js");
+const {
+  imageGenerationTaskLifecycle,
+  musicGenerationTaskLifecycle,
+  videoGenerationTaskLifecycle,
+  runMediaGenerationTask,
+} = await import("./media-generate-background.js");
 
 describe("image generate background helpers", () => {
   beforeEach(() => {
@@ -470,4 +475,68 @@ describe("video generate background helpers", () => {
     expect(replyInstruction).not.toContain("NO_REPLY");
     expect(replyInstruction).not.toContain("MEDIA:");
   });
+});
+
+describe("media task failure resource cleanup", () => {
+  it.each(["admission", "generation"] as const)(
+    "awaits cleanup and retains both errors after %s fails",
+    async (phase) => {
+      const error = new Error(phase);
+      const cleanupError = new Error("cleanup failed");
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const release = vi.fn(async () => {
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+        throw cleanupError;
+      });
+      const lifecycle = {
+        createTaskRun: vi.fn(() => {
+          if (phase === "admission") {
+            throw error;
+          }
+          return null;
+        }),
+        recordTaskProgress: vi.fn(),
+        completeTaskRun: vi.fn(),
+        failTaskRun: vi.fn(),
+        wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+      };
+      const run = vi.fn(async () => {
+        throw error;
+      });
+      const scheduleBackgroundWork = vi.fn();
+      const observed = vi.fn();
+      const outcome = runMediaGenerationTask({
+        lifecycle,
+        generationLabel: "image",
+        prompt: "synthetic cleanup proof",
+        requestKey: "cleanup-proof",
+        scheduleBackgroundWork,
+        onFailure: vi.fn(),
+        resources: {
+          run: async <T>(work: () => T | Promise<T>) => await work(),
+          release,
+        },
+        run,
+      }).catch(observed);
+      await cleanupStarted.promise;
+      expect(observed).not.toHaveBeenCalled();
+      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      await outcome;
+      expect(release).toHaveBeenCalledOnce();
+      expect(observed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: `Media ${phase} and cleanup failed`,
+          errors: [error, cleanupError],
+          cause: error,
+        }),
+      );
+      expect(run).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+      expect(lifecycle.failTaskRun).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+      expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    },
+  );
 });
