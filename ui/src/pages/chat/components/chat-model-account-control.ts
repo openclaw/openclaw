@@ -5,11 +5,13 @@ import type {
   UsersListModelAccountsResult,
 } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { highlightModelRow, pickerMenu } from "./chat-model-picker-search.ts";
 
 registerModelAccountsEnglish();
@@ -33,6 +35,7 @@ export type ChatModelAccountSection = {
 };
 
 export function renderChatModelAccountControl(params: {
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
   owner: object;
   client: GatewayBrowserClient | null | undefined;
   selection: ChatAccountSelection | null | undefined;
@@ -104,8 +107,22 @@ export function renderChatModelAccountControl(params: {
     ? normalizeChatModelProviderId(params.model.slice(0, params.model.indexOf("/")))
     : "";
   const currentId = selection.kind === "automatic" ? undefined : selection.authProfileId;
+  const profiles =
+    params.modelAuthStatusResult?.providers
+      .filter(
+        (p) =>
+          canonicalModelAuthProviderId(normalizeChatModelProviderId(p.provider)) ===
+          canonicalModelAuthProviderId(provider),
+      )
+      .flatMap((p) => p.profiles) ?? [];
+  const subscriptions = profiles.filter((p) => p.type === "oauth" || p.type === "token");
+  const email = (profileId: string | undefined) =>
+    subscriptions.length > 1
+      ? subscriptions.find((p) => p.profileId === profileId)?.email
+      : undefined;
   const description = (account: UserModelAccount | undefined) =>
-    account &&
+    email(account?.authProfileId) ??
+    (account &&
     currentInventory.accounts.some(
       (candidate) =>
         candidate.authProfileId !== account.authProfileId &&
@@ -113,16 +130,18 @@ export function renderChatModelAccountControl(params: {
         candidate.label === account.label,
     )
       ? account.authProfileId
-      : undefined;
+      : undefined);
   const currentValue = "current";
   const options: Array<{ value: string; label: string; description?: string; disabled?: boolean }> =
     [
       {
         value: currentValue,
         label: selection.label,
-        description: description(
-          currentInventory.accounts.find((account) => account.authProfileId === currentId),
-        ),
+        description:
+          email(currentId) ??
+          description(
+            currentInventory.accounts.find((account) => account.authProfileId === currentId),
+          ),
       },
       ...currentInventory.accounts
         .filter((account) => account.provider === provider && account.authProfileId !== currentId)
@@ -233,9 +252,8 @@ export function renderChatModelAccountControl(params: {
                   >${icons.users}</span
                 >
                 <span class="chat-controls__model-option-copy">
-                  <span class="chat-controls__model-option-name"
-                    >${option.label}${option.description ? html`<br /><small>${option.description}</small>` : nothing}</span
-                  >
+                  <span class="chat-controls__model-option-name">${option.label}</span>
+                  ${option.description ? html`<span class="chat-controls__auth-meta" title=${option.description}><span class="chat-controls__model-option-name">${option.description}</span></span>` : nothing}
                 </span>
                 <span class="chat-controls__model-option-action">
                   ${option.value === currentValue ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">${icons.check}</span>` : nothing}

@@ -34,6 +34,7 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -58,6 +59,7 @@ import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
+import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import {
   resetThreadPresentation,
@@ -7093,6 +7095,213 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
+  const subscriptionProfiles = [
+    { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
+    { profileId: "openai:personal", type: "oauth", status: "ok", email: "peter@steipete.me" },
+  ] satisfies ModelAuthStatusResult["providers"][number]["profiles"];
+  const authStatus: ModelAuthStatusResult = {
+    ts: 1,
+    providers: [
+      {
+        provider: "openai-codex",
+        displayName: "OpenAI",
+        status: "ok",
+        profiles: subscriptionProfiles,
+        profileOrder: ["openai:personal", "openai:work"],
+        usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
+      },
+      {
+        provider: "anthropic",
+        displayName: "Anthropic",
+        status: "ok",
+        profiles: [
+          {
+            profileId: "anthropic:personal",
+            type: "oauth",
+            status: "ok",
+            email: "claude@example.com",
+          },
+        ],
+        usage: { providerId: "anthropic", windows: [], plan: "Claude Max" },
+      },
+      {
+        provider: "google",
+        displayName: "Google",
+        status: "static",
+        profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
+      },
+    ],
+  };
+
+  it.each([true, false])(
+    "shows provider auth kinds only with loaded auth status (%s)",
+    (loaded) => {
+      const { state } = createChatHeaderState({
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+          { id: "claude-sonnet-4-5", name: "Claude Sonnet", provider: "anthropic" },
+          { id: "gemini", name: "Gemini", provider: "google" },
+          { id: "unknown", name: "Unknown", provider: "example" },
+        ],
+      });
+      const container = renderModelControls(state, {
+        modelAuthStatusResult: loaded ? authStatus : undefined,
+        accountSelection: { kind: "personal", label: "Personal", authProfileId: "openai:personal" },
+      });
+      for (const [provider, expected] of [
+        ["openai", "ChatGPT Pro · peter@steipete.me"],
+        ["anthropic", "Claude Max"],
+        ["google", "API"],
+        ["example", ""],
+      ]) {
+        const heading = container.querySelector(`[data-chat-model-provider="${provider}"]`)!;
+        expect(heading.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+          loaded ? expected : "",
+        );
+        expect(heading.getAttribute("title")).toBe(loaded && expected ? expected : null);
+        expect(heading.textContent).not.toContain("claude@example.com");
+      }
+    },
+  );
+
+  it.each([
+    { selected: "openai:work", order: ["openai:personal"], expected: "work@example.com" },
+    { selected: undefined, order: ["openai:personal"], expected: "peter@steipete.me" },
+    { selected: "anthropic:personal", order: ["openai:personal"], expected: "peter@steipete.me" },
+    { selected: undefined, order: undefined, expected: "work@example.com" },
+    { selected: "openai:key", order: ["openai:personal"], expected: "" },
+    { selected: undefined, order: ["openai:key"], expected: "" },
+  ])(
+    "resolves subscription identity for $selected with profile order $order",
+    ({ selected, order, expected }) => {
+      const { state } = createChatHeaderState({
+        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      });
+      const container = renderModelControls(state, {
+        accountSelection: { kind: "personal", label: "Personal", authProfileId: selected },
+        modelAuthStatusResult: {
+          ts: 1,
+          providers: [
+            {
+              ...authStatus.providers[0]!,
+              usage: undefined,
+              profileOrder: order,
+              profiles: [
+                ...subscriptionProfiles,
+                { profileId: "openai:key", type: "api_key", status: "static" },
+              ],
+            },
+          ],
+        },
+      });
+      expect(
+        container
+          .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
+          ?.textContent?.trim(),
+      ).toBe(["Subscription", expected].filter(Boolean).join(" · "));
+    },
+  );
+
+  it.each([false, true])("does not duplicate a row sign-in warning (%s)", (rowWarning) => {
+    const { state } = createChatHeaderState({
+      models: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          ...(rowWarning ? { available: false, unavailableReason: "missing-auth" as const } : {}),
+        },
+      ],
+    });
+    const container = renderModelControls(state, {
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profiles: [{ profileId: "openai:expired", type: "oauth", status: "expired" }],
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="openai"]')
+        ?.textContent?.includes("Sign-in needed"),
+    ).toBe(!rowWarning);
+    expect(container.querySelectorAll("[data-chat-model-auth-warning]").length > 0).toBe(
+      rowWarning,
+    );
+  });
+
+  it.each([1, 2])(
+    "shows account emails only for multiple subscription profiles (%i)",
+    async (count) => {
+      const profiles = subscriptionProfiles.slice(0, count);
+      const accounts = profiles.map((profile) => ({
+        authProfileId: profile.profileId,
+        provider: "openai",
+        label: "Workspace",
+        authType: profile.type,
+        selected: false,
+      }));
+      const { state } = createChatHeaderState({
+        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      });
+      const request = vi.fn().mockResolvedValue({ profileId: "test", accounts, links: [] });
+      const client = createTestGatewayClient(request);
+      const container = document.createElement("div");
+      const status: ModelAuthStatusResult = {
+        ts: 1,
+        providers: [{ ...authStatus.providers[0]!, profiles }],
+      };
+      const selection = {
+        kind: "personal" as const,
+        label: "Workspace",
+        authProfileId: profiles[0]!.profileId,
+      };
+      const draw = () =>
+        renderModelControls(
+          state,
+          {
+            modelAuthStatusResult: status,
+            renderAccountSection: (model) =>
+              renderChatModelAccountControl({
+                owner: state,
+                client,
+                selection,
+                model,
+                modelAuthStatusResult: status,
+                disabled: false,
+                ownsSelection: () => true,
+                onSelect: vi.fn(),
+                onRequestUpdate: draw,
+              }),
+          },
+          container,
+        );
+      draw();
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(container.querySelectorAll("[data-chat-account-option]")).toHaveLength(count),
+      );
+      for (const [index, row] of [
+        ...container.querySelectorAll("[data-chat-account-option]"),
+      ].entries()) {
+        expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
+          "Workspace",
+        );
+        expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+          count > 1 ? profiles[index]!.email : "",
+        );
+        expect(row.textContent).not.toContain(profiles[index]!.profileId);
+      }
+    },
+  );
+
   it.each([100, 400])("prepares %i catalog rows without per-option catalog rescans", (size) => {
     let idReads = 0;
     const models: ModelCatalogEntry[] = Array.from({ length: size }, (_, index) => ({

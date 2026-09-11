@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   normalizeChatModelProviderId,
@@ -15,13 +20,18 @@ import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
+import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
   ChatModelPickerOption,
   ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-picker.ts";
+import {
+  renderChatModelPicker,
+  type ChatModelCatalogState,
+  type ChatModelProviderAuth,
+} from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
@@ -31,6 +41,8 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
   agentDefaultModel?: string;
@@ -199,6 +211,41 @@ function resolveCatalogTriggerStatus(
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
+  const providerAuth = new Map<string, ChatModelProviderAuth>();
+  for (const provider of props.modelAuthStatusResult?.providers ?? []) {
+    const subscriptions = provider.profiles.filter((p) => p.type === "oauth" || p.type === "token");
+    const selectedId =
+      props.accountSelection?.kind === "automatic"
+        ? undefined
+        : props.accountSelection?.authProfileId;
+    const active =
+      provider.profiles.find((p) => p.profileId === selectedId) ??
+      provider.profiles.find((p) => p.profileId === provider.profileOrder?.[0]) ??
+      subscriptions[0];
+    const missing =
+      ["missing", "expired"].includes(provider.status) &&
+      !provider.apiKey &&
+      !provider.profiles.some((p) => ["ok", "expiring", "static"].includes(p.status));
+    const auth: ChatModelProviderAuth | undefined = missing
+      ? { kind: "missing", label: t("modelSetup.candidates.signInNeeded") }
+      : subscriptions.length
+        ? {
+            kind: "subscription",
+            label: provider.usage?.plan || t("chat.modelControls.subscription"),
+            detail: subscriptions.length > 1 ? active?.email : undefined,
+          }
+        : provider.apiKey || provider.profiles.some((p) => p.type === "api_key")
+          ? { kind: "api", label: t("chat.modelControls.api") }
+          : undefined;
+    if (auth) {
+      providerAuth.set(
+        normalizeChatModelProviderGroupId(
+          canonicalModelAuthProviderId(normalizeChatModelProviderId(provider.provider)),
+        ),
+        auth,
+      );
+    }
+  }
   const {
     currentOverride,
     defaultModel,
@@ -440,6 +487,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1

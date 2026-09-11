@@ -147,11 +147,14 @@ export function renderChatPaneComposerControls(params: {
     composerControls: html`
       <div class="chat-composer-model-control">
         ${renderChatModelControls({
+          modelAuthStatusResult: state.modelAuthStatusResult,
+          accountSelection,
           renderAccountSection: (accountModel) =>
             renderChatModelAccountControl({
               owner: state,
               client,
               selection: accountSelection,
+              modelAuthStatusResult: state.modelAuthStatusResult,
               model: accountModel,
               disabled:
                 !modelAccess.allowed ||

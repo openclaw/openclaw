@@ -33,6 +33,8 @@ navigable without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` retain workspace file handling.
 
+The chat model picker shows each provider’s subscription plan (or **Subscription**) or **API** beside its name when authentication status is available. With multiple subscription accounts, the heading and **Account** rows also show the account email when the Gateway supplies it. Hover over a truncated heading to read the full plan and email.
+
 ## Composer capability menu
 
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
