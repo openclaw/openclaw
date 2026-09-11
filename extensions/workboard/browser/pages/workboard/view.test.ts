@@ -2255,6 +2255,10 @@ describe("renderWorkboard", () => {
       expect(state.draftOpen).toBe(true);
       expect(state.draftStatus).toBe("ready");
       expect(state.draftAgentId).toBe(scopeAgentId === "main" ? "" : scopeAgentId);
+      expectDefined(buttonByLabel(container, "Cancel"), "cancel unedited column draft").click();
+      renderView();
+      expect(state.draftOpen).toBe(false);
+      expect(state.draftDiscardOpen).toBe(false);
     },
   );
 
