@@ -17,6 +17,7 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   setPreparedModelFullCatalogAuth,
@@ -67,6 +68,7 @@ export type PreparedModelWorkerResult =
       snapshot: ModelCatalogSnapshot;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
+      providerAuthLabels: ModelCatalogAuthLabels;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
@@ -379,6 +381,7 @@ export function createPreparedModelCatalogWorker(
         authStore: message.authStore,
         authModes: message.authModes,
         credentials: message.credentials,
+        providerAuthLabels: message.providerAuthLabels,
       });
       return { modelCatalog, configuredRuntimeModels: message.configuredRuntimeModels };
     },

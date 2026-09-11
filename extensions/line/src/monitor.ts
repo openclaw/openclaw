@@ -254,7 +254,7 @@ export async function monitorLineProvider(
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,
                 // so this path resolves them before either branch reads channelData.
-                preparePayload: prepareLineReplyPayload,
+                preparePayload: (payload) => prepareLineReplyPayload(payload, ctxPayload.From),
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
                     payload,

@@ -102,6 +102,13 @@ A **Debug** tab appears while the developer toggle in **This Mac → Developer**
 is enabled. **About OpenClaw** opens the standard macOS About panel with the app
 version, build information, and credits.
 
+If the app-managed local Gateway is missing, outdated, or broken, the Connection
+tab offers **Install Gateway**, **Update Gateway**, or **Repair Gateway**. The
+action opens the existing setup prompt, shows installation progress, and checks
+the Gateway afterward. You can retry here after cancelling an earlier prompt.
+For an incompatible Gateway newer than the app, **Set Up Gateway** lets you review
+the setup choice. Independently managed Gateways retain their own update workflow.
+
 App-local settings (permissions, Quick Chat, voice, updates) live in
 Dashboard → Settings → This Mac and require a Gateway release that includes those pages.
 The Connection tab's **Open Dashboard Settings** button opens that Dashboard.

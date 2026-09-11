@@ -1,6 +1,6 @@
 {
   "id": "openrouter",
-  "categories": ["models", "voice", "media"],
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

@@ -294,12 +294,12 @@ async function prepareHeartbeatDispatchReply(
       wakeReason: opts.reason,
       occurredAt: startedAt,
     });
-  const unconfirmed = (reason: string) => {
+  const unconfirmed = async (reason: string) => {
     if (outcome.kind !== "delivery" || !outcome.response) {
       return;
     }
     const value = outcome.response;
-    record({
+    await record({
       ...value,
       outcome: "blocked",
       notify: false,
@@ -312,7 +312,7 @@ async function prepareHeartbeatDispatchReply(
   const suppressSelected = () => suppressPendingFinalDelivery(selected, { preserveActivity: true });
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
-      record(outcome.response);
+      await record(outcome.response);
     }
     await restoreActivity();
     await suppressSelected();
@@ -419,7 +419,9 @@ async function prepareHeartbeatDispatchReply(
   }
   if (!channel || !delivery.to || !visibility.showAlerts || (failed && outcome.shouldSkipMain)) {
     if (!failed) {
-      unconfirmed(!channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled");
+      await unconfirmed(
+        !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
+      );
       if (!visibility.showAlerts) {
         await restoreActivity();
       }
@@ -446,7 +448,7 @@ async function prepareHeartbeatDispatchReply(
     ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
     .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }));
   if (readiness && !readiness.ok) {
-    unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
+    await unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
     await restoreActivity();
     finish(
       {
@@ -484,7 +486,7 @@ async function prepareHeartbeatDispatchReply(
     settle: async (result) => {
       const sent = result === "delivered";
       if (!sent) {
-        unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
+        await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
       if (sent && !failed && deliveryText.trim()) {
         await patchSessionEntryCore(

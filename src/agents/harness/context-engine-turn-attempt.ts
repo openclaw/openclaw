@@ -17,6 +17,7 @@ import {
   enqueueContextEngineTurnIntent,
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
+  type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
@@ -31,6 +32,7 @@ export type ContextEngineTurnAttemptFacts = {
   aborted: boolean;
   yieldAborted: boolean;
   isHeartbeat?: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
@@ -207,6 +209,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       engineId: params.lease.effectiveEngineId,
       isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+      runtimeContext: params.facts.runtimeContext,
     });
     const closedTurn = readClosedTranscriptTurn({
       boundary: params.facts.boundary,
@@ -234,6 +237,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         boundary: params.facts.boundary,
         isHeartbeat: params.facts.isHeartbeat === true,
         messages: closedTurn.messages,
+        runtimeContext: params.facts.runtimeContext,
       },
     });
     await drainContextEngineTurnOutbox({

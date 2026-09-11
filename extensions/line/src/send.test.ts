@@ -731,6 +731,60 @@ describe("LINE send helpers", () => {
     expect(bodies[1]?.messages).toEqual([{ type: "text", text: "answering you" }]);
   });
 
+  it.each(
+    (["push", "reply"] as const).flatMap((operation) => [
+      { operation, stage: "initial denial", allowed: false, allowFallback: false, attempts: 0 },
+      {
+        operation,
+        stage: "revoked quote fallback",
+        allowed: true,
+        allowFallback: false,
+        attempts: 1,
+      },
+      {
+        operation,
+        stage: "allowed quote fallback",
+        allowed: true,
+        allowFallback: true,
+        attempts: 2,
+      },
+    ]),
+  )("authorizes $operation at each attempt: $stage", async (testCase) => {
+    let allowed = testCase.allowed;
+    const authorize = vi.fn(async () => allowed);
+    lineFetchMock.mockImplementationOnce(async () => {
+      allowed = testCase.allowFallback;
+      return new Response("invalid quote", { status: 400, statusText: "Bad Request" });
+    });
+    const options = { cfg: LINE_TEST_CFG, quoteToken: "stale-token", authorize };
+    const messages = [{ type: "text" as const, text: "answering you" }];
+    const sending =
+      testCase.operation === "push"
+        ? sendModule.pushMessagesLine("U0123456789abcdef0123456789abcdef", messages, options)
+        : sendModule.replyMessageLine("reply-token", messages, options);
+
+    if (testCase.allowFallback) {
+      await sending;
+    } else {
+      await expect(sending).rejects.toThrow("LINE send authorization denied");
+    }
+    expect(lineFetchMock).toHaveBeenCalledTimes(testCase.attempts);
+    expect(authorize).toHaveBeenCalledTimes(testCase.allowed ? 2 : 1);
+    if (testCase.allowFallback) {
+      const messagesSent = lineFetchMock.mock.calls.map(([, init]) => {
+        const body = (init as RequestInit).body;
+        if (typeof body !== "string") {
+          throw new Error("Expected LINE request JSON");
+        }
+        return (JSON.parse(body) as { messages: unknown[] }).messages;
+      });
+      expect(messagesSent).toEqual([
+        [{ type: "text", text: "answering you", quoteToken: "stale-token" }],
+        [{ type: "text", text: "answering you" }],
+      ]);
+    }
+  });
+
   it("does not resend a rejected send that carried no quote", async () => {
     lineFetchMock.mockResolvedValueOnce(
       new Response("invalid payload", { status: 400, statusText: "Bad Request" }),

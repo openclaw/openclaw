@@ -404,6 +404,31 @@ Each select keeps its prompt and any overflow options together in that text.
 Prompts and overflow option names remain complete. Only native quick-reply button
 labels are shortened to LINE's 20-character limit.
 
+In direct chats, the options an `ask_user` question offers become tappable controls
+on the same Flex card, and a tap answers the question directly. LINE carries the option
+index the Gateway assigned rather than the label, so a reply whose choices the Gateway no longer
+lists falls back to readable text instead of drawing a tap that answers the wrong
+option. The eligible shape is one single-select, non-secret question offering two to
+four distinct options — the same bound Telegram, Discord and Slack use; anything else
+stays readable text that a typed reply still answers. Groups, multi-person chats, and
+unrecognized destinations also use this readable fallback. LINE's group and room
+postbacks do not include the sender identity needed to admit a question answer;
+reply with the option text instead.
+
+The **Other…** free-text control is not drawn. Tapping it resolves nothing by itself, and LINE
+cannot take a control back off a card it already delivered, so the button would add a tap that
+changes nothing the question's own text does not already offer. Discord and Slack leave that
+route in text for the same reason. In eligible direct chats, each declared option keeps
+a native control, and **Other…** stays named in the card's text under `Actions:` whatever the option count.
+
+LINE cannot edit a message it already delivered, so the controls stay on screen after
+the question ends. A tap that arrives then is answered with `That question is no longer
+waiting for an answer.` Initial taps follow the channel's normal admission and
+pairing rules. If pairing is revoked while the question is being read, the answer
+is ignored without an answer notice or a new pairing challenge. The Gateway reports one
+terminal state for answered, cancelled and expired questions alike, so the notice does
+not claim which one it was.
+
 ```json5
 {
   action: "send",

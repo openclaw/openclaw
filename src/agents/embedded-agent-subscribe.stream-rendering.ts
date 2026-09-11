@@ -461,9 +461,13 @@ export function createStreamRendering({
       markBlockReplyTextHandled();
       return;
     }
-    let splitResult = replyDirectiveAccumulator.consume(chunk, {
-      final: options?.finalReply !== undefined,
-    });
+    // Prepared chunks already removed real directives with full source context;
+    // a chunk boundary can separate a remaining literal from its code opener.
+    let splitResult: ReplyDirectiveParseResult | null = state.blockState.textIsVisible
+      ? { text: chunk, replyToTag: false, isSilent: false }
+      : replyDirectiveAccumulator.consume(chunk, {
+          final: options?.finalReply !== undefined,
+        });
     if (options?.finalReply) {
       let pendingText = splitResult?.text ?? "";
       if (pendingText && !options.finalReply.text.endsWith(pendingText)) {

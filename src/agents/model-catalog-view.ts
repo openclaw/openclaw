@@ -1,17 +1,23 @@
 /** Keeps public and private runtime projections on the same captured catalog. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createModelProviderRouteOverrideResolver,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { modelKey as pickerModelKey } from "../shared/model-key.js";
-import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentWorkspaceDir,
+} from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
@@ -122,7 +128,19 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
     }
   }
   const isCurrent = () => params.isCurrent?.() ?? params.observationConfig === undefined;
+  const providerEndpoints = new Map<string, { endpoint?: string; api?: string }>();
+  for (const [id, configured] of Object.entries(params.cfg.models?.providers ?? {})) {
+    const provider = normalizeProviderId(id);
+    if (!providerEndpoints.has(provider)) {
+      // Status headers describe provider configuration, not private per-model route provenance.
+      providerEndpoints.set(provider, {
+        endpoint: normalizeOptionalString(configured.baseUrl),
+        api: normalizeOptionalString(configured.api),
+      });
+    }
+  }
   return {
+    providerEndpoints,
     snapshot: params.snapshot,
     catalog,
     defaultModel,
@@ -297,16 +315,121 @@ type PickerModelCatalogViewRequest = {
   env?: NodeJS.ProcessEnv;
 };
 
+type StatusModelCatalogViewRequest = {
+  kind: "status";
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir?: string;
+  entries: readonly Pick<ModelCatalogEntry, "provider" | "id">[];
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+};
+
+type StatusModelCatalogView = ReturnType<typeof prepareModelCatalogView> & {
+  providerAuthLabels: Map<string, string>;
+};
+
 export function loadPreparedModelCatalogView(
   params: PreparedModelCatalogViewRequest,
 ): Promise<ReturnType<typeof prepareModelCatalogView>>;
 export function loadPreparedModelCatalogView(
   params: PickerModelCatalogViewRequest,
 ): Promise<{ snapshot: ModelCatalogSnapshot }>;
+export function loadPreparedModelCatalogView(
+  params: StatusModelCatalogViewRequest,
+): Promise<StatusModelCatalogView>;
 /** Acquires requested catalog facts before constructing a local view. */
 export async function loadPreparedModelCatalogView(
-  params: PreparedModelCatalogViewRequest | PickerModelCatalogViewRequest,
-): Promise<ReturnType<typeof prepareModelCatalogView> | { snapshot: ModelCatalogSnapshot }> {
+  params:
+    | PreparedModelCatalogViewRequest
+    | PickerModelCatalogViewRequest
+    | StatusModelCatalogViewRequest,
+): Promise<
+  | ReturnType<typeof prepareModelCatalogView>
+  | StatusModelCatalogView
+  | { snapshot: ModelCatalogSnapshot }
+> {
+  if (params.kind === "status") {
+    const {
+      getPublishedPreparedModelCatalogOwnerSnapshot,
+      loadPreparedModelCatalogOwnerSnapshot,
+      materializePreparedModelCatalogOwner,
+    } = await import("./prepared-model-catalog.js");
+    const { getPreparedModelRuntimeAuthLabels, getPreparedModelRuntimeAuthStore } =
+      await import("./prepared-model-runtime-auth.js");
+    const { formatModelCatalogAuthLabel } = await import("./model-catalog-auth-labels.js");
+    const { resolveSessionRuntimeOverrideForProvider } =
+      await import("./session-runtime-compat.js");
+    const { buildAgentRuntimeAuthPlan } = await import("./runtime-plan/auth.js");
+    const owner = materializePreparedModelCatalogOwner(
+      getPublishedPreparedModelCatalogOwnerSnapshot(params) ??
+        (await loadPreparedModelCatalogOwnerSnapshot({ ...params, readOnly: true })),
+    );
+    const capturedLabels = getPreparedModelRuntimeAuthLabels(owner);
+    const store = getPreparedModelRuntimeAuthStore(owner);
+    if (!store) {
+      throw new Error("Prepared model runtime omitted auth display facts");
+    }
+    const authContext = { cfg: owner.config, store, metadataSnapshot: owner.metadataSnapshot };
+    const providerAuthLabels = new Map<string, string>();
+    for (const entry of params.entries) {
+      const provider = normalizeProviderId(entry.provider);
+      if (providerAuthLabels.has(provider)) {
+        continue;
+      }
+      const runtime =
+        resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: params.sessionEntry,
+          cfg: owner.config,
+        }) ??
+        resolveAgentHarnessPolicy({
+          provider,
+          modelId: entry.id,
+          config: owner.config,
+          agentId: params.agentId,
+        }).runtime;
+      const labels = capturedLabels.get(provider);
+      let label = formatModelCatalogAuthLabel(
+        (provider === "openai" && runtime !== "codex" ? labels?.apiKey : labels?.all) ?? "missing",
+        authContext,
+      );
+      if (label === "missing") {
+        const authProvider = buildAgentRuntimeAuthPlan({
+          provider,
+          config: owner.config,
+          workspaceDir: owner.workspaceDir,
+          metadataSnapshot: owner.metadataSnapshot,
+          harnessRuntime: runtime,
+        }).harnessAuthProvider;
+        const runtimeLabel = formatModelCatalogAuthLabel(
+          (authProvider && authProvider !== provider
+            ? capturedLabels.get(authProvider)?.all
+            : undefined) ?? "missing",
+          authContext,
+        );
+        if (runtimeLabel !== "missing") {
+          label = `via ${runtime} runtime / ${authProvider} ${runtimeLabel}`;
+        }
+      }
+      providerAuthLabels.set(provider, label);
+    }
+    return {
+      ...prepareModelCatalogView({
+        cfg: owner.config,
+        agentId: params.agentId,
+        agentDir: owner.agentDir,
+        workspaceDir:
+          owner.workspaceDir ??
+          params.workspaceDir ??
+          resolveAgentWorkspaceDir(owner.config, params.agentId),
+        snapshot: owner.modelCatalog,
+        metadataSnapshot: owner.metadataSnapshot,
+        isCurrent: owner.isCurrent,
+      }),
+      providerAuthLabels,
+    };
+  }
   if (params.kind === "prepared") {
     let snapshot = params.snapshot;
     if (params.refreshNative) {

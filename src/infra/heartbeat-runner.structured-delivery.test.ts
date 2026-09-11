@@ -19,10 +19,11 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { addTestHook } from "../plugins/hooks.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import * as heartbeatOutcomeStore from "./heartbeat-outcome-store.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -96,6 +97,54 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
       },
     });
   }
+
+  it.each([false, true])("awaits outcome persistence failures (notify=%s)", async (notify) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig(tmpDir, storePath);
+      cfg.agents!.defaults!.heartbeat!.target = "none";
+      const sessionKey = await seedTelegramSession(storePath, cfg);
+      replySpy.mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: notify ? "needs_attention" : "progress",
+          notify,
+          summary: "Synthetic outcome awaiting persistence",
+        }),
+      );
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const persist = vi
+        .spyOn(heartbeatOutcomeStore, "persistHeartbeatOutcome")
+        .mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+      const sendTelegram = vi.fn();
+      const pending = runHeartbeat(cfg, replySpy, sendTelegram);
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("heartbeat completed without awaiting persistence");
+          }),
+        ]);
+        release.reject(new Error("outcome storage unavailable"));
+        expect(await pending).toMatchObject({ status: "failed" });
+        expect(sendTelegram).not.toHaveBeenCalled();
+        expect(
+          await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
+            agentId: "main",
+            sessionKey,
+            storePath,
+            runId: "next-user",
+          }),
+        ).toBeUndefined();
+      } finally {
+        release.resolve();
+        await pending;
+        persist.mockRestore();
+      }
+    });
+  });
 
   it.each(["none", "new-id", "same-id"] as const)(
     "records the first non-isolated delivery only for its initialized session (replacement: %s)",
@@ -240,7 +289,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           expect.soft(isRetryableHeartbeatSkipReason("channel-not-ready")).toBe(true);
         }
         closeOpenClawAgentDatabasesForTest();
-        const stored = claimHeartbeatOutcomeForRun({
+        const stored = await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
           agentId: "main",
           sessionKey,
           storePath,

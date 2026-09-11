@@ -44,29 +44,13 @@ function nextIntradayDue(nowMs: number, everyHours: number): number | undefined 
   return today + Math.min(DAY_MS, (Math.floor((nowMs - today) / interval) + 1) * interval);
 }
 
-function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const abort = () => {
-      const reason: unknown = signal.reason;
-      reject(
-        reason instanceof Error
-          ? reason
-          : new Error(typeof reason === "string" ? reason : "Team Reports run aborted"),
-      );
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) {
-      abort();
-    }
-    void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
-}
-
 export class TeamReportsScheduler {
   private accepting = false;
   private closed = false;
   private active?: ActiveRun;
   private stopPromise?: Promise<void>;
+  private startPromise?: Promise<void>;
+  private scheduledWork = new Set<Promise<void>>();
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private due: { closedDay?: number; intraday?: number; catchUp?: number } = {};
   private deferred = new Set<"closed-day" | "intraday">();
@@ -85,20 +69,30 @@ export class TeamReportsScheduler {
     this.roster = options.resolved.people;
   }
 
-  start(): void {
-    if (this.closed || this.accepting) {
+  async start(): Promise<void> {
+    if (this.closed || this.accepting || this.stopPromise) {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
+    return (this.startPromise = this.startOnce().catch((error: unknown) => {
+      this.accepting = false;
+      throw error;
+    }));
+  }
+
+  private async startOnce(): Promise<void> {
+    const yesterday = describePeriod("day", Date.now() - DAY_MS);
+    const completed = await this.closedDayCompleted(yesterday.key);
+    if (!this.accepting) {
+      return;
+    }
     this.armClosedDay();
     this.armIntraday();
-    const yesterday = describePeriod("day", Date.now() - DAY_MS);
-    const completed = this.closedDayCompleted(yesterday.key);
     if (!completed) {
       this.due.catchUp = Date.now() + 60_000;
       this.schedule(this.due.catchUp, () => {
         delete this.due.catchUp;
-        this.tick("closed-day", true);
+        return this.tick("closed-day", true);
       });
     }
   }
@@ -111,21 +105,21 @@ export class TeamReportsScheduler {
     return this.roster;
   }
 
-  status() {
+  async status() {
     return {
       running: this.accepting,
       activeRunId: this.active?.id,
       nextDue: { ...this.due },
-      runs: this.options.store.listRuns(),
-      periods: this.options.store.listPeriods(),
-      sourceWarnings: this.sourceWarnings(),
+      runs: await this.options.store.listRuns(),
+      periods: await this.options.store.listPeriods(),
+      sourceWarnings: await this.sourceWarnings(),
     };
   }
 
-  health(): TeamReportsHealth {
+  async health(): Promise<TeamReportsHealth> {
     const finished = [
-      ...this.options.store.listRuns(1, { status: "ok" }),
-      ...this.options.store.listRuns(1, { status: "error" }),
+      ...(await this.options.store.listRuns(1, { status: "ok" })),
+      ...(await this.options.store.listRuns(1, { status: "error" })),
     ].toSorted(
       (a, b) => (b.finishedAtMs ?? 0) - (a.finishedAtMs ?? 0) || b.startedAtMs - a.startedAtMs,
     )[0];
@@ -142,13 +136,13 @@ export class TeamReportsScheduler {
           }
         : {}),
       ...(due.length ? { nextDueMs: Math.min(...due) } : {}),
-      warnings: this.sourceWarnings().length,
+      warnings: (await this.sourceWarnings()).length,
     };
   }
 
-  private sourceWarnings(): string[] {
-    const latest = this.options.store.listPeriods({ period: "day", limit: 1 })[0];
-    const stored = latest ? this.options.store.getPeriod("day", latest.key) : undefined;
+  private async sourceWarnings(): Promise<string[]> {
+    const latest = (await this.options.store.listPeriods({ period: "day", limit: 1 }))[0];
+    const stored = latest ? await this.options.store.getPeriod("day", latest.key) : undefined;
     return stored
       ? stored.report.sources.github.warnings.concat(
           stored.report.sources.discord?.warnings ?? [],
@@ -157,7 +151,7 @@ export class TeamReportsScheduler {
       : [];
   }
 
-  generate(params: { date?: string; intraday?: boolean } = {}): string {
+  async generate(params: { date?: string; intraday?: boolean } = {}): Promise<string> {
     const now = Date.now();
     const day = describePeriod("day", params.date ?? now - (params.intraday ? 0 : DAY_MS));
     const today = describePeriod("day", now);
@@ -183,30 +177,35 @@ export class TeamReportsScheduler {
     this.timers.clear();
     this.deferred.clear();
     const active = this.active;
-    try {
-      if (active) {
-        const timeout = setTimeout(
+    const timeout = active
+      ? setTimeout(
           () => active.controller.abort(new Error("Team Reports stopped after 30 seconds")),
           STOP_TIMEOUT_MS,
-        );
-        try {
-          await active.done;
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
+        )
+      : undefined;
+    try {
+      await this.startPromise?.catch(() => undefined);
+      await Promise.all(this.scheduledWork);
+      await active?.done;
     } finally {
+      clearTimeout(timeout);
       this.closed = true;
-      this.options.store.close();
+      await this.options.store.close();
     }
   }
 
-  private schedule(atMs: number, callback: () => void): void {
+  private schedule(atMs: number, callback: () => void | Promise<void>): void {
     const timer = setTimeout(
       () => {
         this.timers.delete(timer);
         if (this.accepting) {
-          callback();
+          const work = Promise.resolve()
+            .then(callback)
+            .catch((error: unknown) => {
+              this.options.context.logger.error(`team-reports: ${this.safeError(error)}`);
+            });
+          this.scheduledWork.add(work);
+          void work.finally(() => this.scheduledWork.delete(work));
         }
       },
       Math.max(0, atMs - Date.now()),
@@ -218,8 +217,11 @@ export class TeamReportsScheduler {
   private armClosedDay(afterMs = Date.now()): void {
     const due = nextClosedDayDue(afterMs, this.options.config.schedule);
     this.due.closedDay = due;
-    this.schedule(due, () => {
-      this.tick("closed-day");
+    this.schedule(due, async () => {
+      await this.tick("closed-day");
+      if (!this.accepting) {
+        return;
+      }
       this.armClosedDay(describePeriod("day", due).untilMs - 1);
     });
   }
@@ -230,15 +232,23 @@ export class TeamReportsScheduler {
       this.options.config.schedule.intradayEveryHours,
     );
     if (this.due.intraday !== undefined) {
-      this.schedule(this.due.intraday, () => {
-        this.tick("intraday");
-        this.armIntraday();
+      this.schedule(this.due.intraday, async () => {
+        await this.tick("intraday");
+        if (this.accepting) {
+          this.armIntraday();
+        }
       });
     }
   }
 
-  private tick(kind: "closed-day" | "intraday", catchUp = false): void {
-    if (catchUp && this.closedDayCompleted(describePeriod("day", Date.now() - DAY_MS).key)) {
+  private async tick(kind: "closed-day" | "intraday", catchUp = false): Promise<void> {
+    if (
+      catchUp &&
+      (await this.closedDayCompleted(describePeriod("day", Date.now() - DAY_MS).key))
+    ) {
+      return;
+    }
+    if (!this.accepting) {
       return;
     }
     if (this.active) {
@@ -246,7 +256,7 @@ export class TeamReportsScheduler {
         this.deferred.add(kind);
         this.schedule(Date.now() + 60_000, () => {
           this.deferred.delete(kind);
-          this.tick(kind, catchUp);
+          return this.tick(kind, catchUp);
         });
       }
       return;
@@ -256,22 +266,20 @@ export class TeamReportsScheduler {
       kind === "closed-day"
         ? [describePeriod("day", now - DAY_MS), describePeriod("day", now)]
         : [describePeriod("day", now)];
-    this.begin(kind, days);
+    await this.begin(kind, days);
   }
 
-  private closedDayCompleted(key: string): boolean {
+  private async closedDayCompleted(key: string): Promise<boolean> {
     const untilMs = describePeriod("day", key).untilMs;
     // Include older completions even when newer successful runs cover other days.
-    return this.options.store
-      .listRuns(-1, { status: "ok" })
-      .some(
-        (run) =>
-          run.startedAtMs >= untilMs &&
-          run.periods.some((period) => period.period === "day" && period.key === key),
-      );
+    return (await this.options.store.listRuns(-1, { status: "ok" })).some(
+      (run) =>
+        run.startedAtMs >= untilMs &&
+        run.periods.some((period) => period.period === "day" && period.key === key),
+    );
   }
 
-  private begin(kind: RunKind, days: PeriodDescriptor[]): string {
+  private async begin(kind: RunKind, days: PeriodDescriptor[]): Promise<string> {
     if (!this.accepting) {
       throw new Error("Team Reports service is not running");
     }
@@ -281,7 +289,7 @@ export class TeamReportsScheduler {
     const id = randomUUID();
     const periods = runPeriods(this.options.config, days);
     const controller = new AbortController();
-    this.options.store.startRun({
+    const started = this.options.store.startRun({
       id,
       kind,
       startedAtMs: Date.now(),
@@ -293,24 +301,26 @@ export class TeamReportsScheduler {
     );
     const done = Promise.resolve().then(async () => {
       let stats: Record<string, SourceStatus> | undefined;
+      let recorded = false;
       try {
-        stats = await untilAborted(
-          generateReportPeriods({
-            ...this.options,
-            periods,
-            sources:
-              this.options.sources ??
-              ((runtime) => createReportSources(runtime, Boolean(this.options.resolved.discord))),
-            runtime: { logger: this.options.context.logger, signal: controller.signal },
-            onRoster: (people) => {
-              this.roster = people;
-            },
-          }),
-          controller.signal,
-        );
+        await started;
+        recorded = true;
+        controller.signal.throwIfAborted();
+        stats = await generateReportPeriods({
+          ...this.options,
+          periods,
+          sources:
+            this.options.sources ??
+            ((runtime) => createReportSources(runtime, Boolean(this.options.resolved.discord))),
+          runtime: { logger: this.options.context.logger, signal: controller.signal },
+          onRoster: (people) => {
+            this.roster = people;
+          },
+        });
         controller.signal.throwIfAborted();
         if (kind === "closed-day") {
-          this.options.store.prune(this.options.config.retention.days);
+          await this.options.store.prune(this.options.config.retention.days);
+          controller.signal.throwIfAborted();
         }
         const failed = Object.values(stats).some((source) => !source.ok);
         if (failed) {
@@ -318,17 +328,19 @@ export class TeamReportsScheduler {
             "An activity source failed; inspect report source warnings and check access",
           );
         }
-        this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });
+        await this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });
         this.options.context.serviceHealth?.clearFailure();
       } catch (error) {
         const message = this.safeError(error);
         try {
-          this.options.store.finishRun(id, {
-            status: "error",
-            finishedAtMs: Date.now(),
-            error: message,
-            stats,
-          });
+          if (recorded) {
+            await this.options.store.finishRun(id, {
+              status: "error",
+              finishedAtMs: Date.now(),
+              error: message,
+              stats,
+            });
+          }
         } catch {
           this.options.context.logger.error(
             "team-reports: failed to record run outcome; check database access and disk space",
@@ -344,6 +356,7 @@ export class TeamReportsScheduler {
       }
     });
     this.active = { id, controller, done };
+    await started;
     return id;
   }
 

@@ -1,6 +1,6 @@
 {
   "id": "xai",
-  "categories": ["models", "voice", "media"],
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true

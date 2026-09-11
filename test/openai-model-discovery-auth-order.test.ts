@@ -105,6 +105,11 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
+    // These fixtures supply refreshable providers and mock their refresh operation.
+    // Keep capability discovery at the same boundary instead of loading the full runtime.
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
   });
 
   afterEach(async () => {
@@ -310,6 +315,12 @@ describe("Provider model discovery auth preparation", () => {
         ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
       });
 
+      expect(
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+      ).toHaveBeenCalledOnce();
+      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: providerId }),
+      );
       expect(refresh).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -516,6 +527,7 @@ describe("Provider model discovery auth preparation", () => {
       }
       const auth = {
         authStore: store,
+        providerAuthLabels: new Map(),
         authModes: { [providerId]: "oauth" as const },
         credentials: { [providerId]: previousCredential },
       };
@@ -810,6 +822,9 @@ describe("provider catalog late-result finalization", () => {
     };
     await state.writeAuthProfiles(store);
     vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
     vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
       new Error("fixture refresh failed"),
     );

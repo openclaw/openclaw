@@ -122,7 +122,6 @@ export function commitSubagentTaskReplacement(params: {
   const deferredObserverEvents: Array<() => void> = [];
   publishSubagentRunsAfterAtomicStore(params.runs, params.changedRunIds, deferredObserverEvents);
   publishTaskRecordAfterAtomicStore(params.task.next, {
-    syncTaskFlow: false,
     deferredObserverEvents,
   });
   if (flow) {

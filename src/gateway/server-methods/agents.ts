@@ -1469,11 +1469,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
                   assertCurrent: deletion.assertCurrent,
                 });
                 deletion.assertCurrent();
-                deleteWorkspaceState(statePlan);
+                await deleteWorkspaceState(statePlan, { assertCurrent: deletion.assertCurrent });
               } catch {
                 // Best-effort cleanup. A later explicit reset can remove stale rows.
               }
             }
+            deletion.assertCurrent();
             const agentDirCleanupPaths = cleanupPaths.filter((cleanupPath) =>
               cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath),
             );

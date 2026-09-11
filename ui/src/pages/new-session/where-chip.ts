@@ -254,7 +254,6 @@ export function renderWhereChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        title=${t("newSession.where")}
         aria-label="${t("newSession.where")}: ${params.state.label}"
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}

@@ -58,7 +58,7 @@ function sourceChanged(): never {
   );
 }
 
-/** Admit public source before capacity selection; verified private source keeps cold preparation. */
+/** Admit source before capacity selection; credentials remain with this Gateway owner. */
 export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequest) {
   const expected = params.expected && readRepositoryWorkerProjectSnapshot(params.expected);
   const request = expected
@@ -165,7 +165,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       typeof value.clone_url !== "string" ||
       parseProjectGitUrl(value.clone_url)?.url !== url ||
       typeof value.private !== "boolean" ||
-      (readIdentity.selection.source === "anonymous" && value.private)
+      (value.private && (readIdentity.selection.source === "anonymous" || !readIdentity.token))
     ) {
       sourceChanged();
     }
@@ -176,15 +176,6 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     };
   };
   const metadata = await readRepository(identity, assertAdmission, params.signal);
-  if (metadata.private) {
-    // Only new private requests retain the supported cold repository flow. An
-    // existing public preparation cannot become access to newly private contents.
-    if (expected) {
-      sourceChanged();
-    }
-    assertAdmission();
-    return undefined;
-  }
   const repositoryId = metadata.repositoryId;
   if (expected && repositoryId !== expected.source.repositoryId) {
     sourceChanged();
@@ -215,7 +206,14 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   const source = { kind: "repository" as const, url, repositoryId, owner };
   const project = readRepositoryWorkerProjectSnapshot({
     key: createHash("sha256")
-      .update(stableStringify([params.namespace, source]))
+      // Preserve public cache keys, but never reinterpret them as private content.
+      .update(
+        stableStringify(
+          metadata.private
+            ? ["private-repository", params.namespace, source]
+            : [params.namespace, source],
+        ),
+      )
       .digest("hex"),
     baseCommit,
     source,
@@ -277,7 +275,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   // A name can be deleted and recreated while immutable objects are being read.
   // Confirm the repository instance again before advertising reusable capacity.
   const confirmed = await readRepository(identity, assertAdmission, params.signal);
-  if (confirmed.private || confirmed.repositoryId !== repositoryId) {
+  if (confirmed.private !== metadata.private || confirmed.repositoryId !== repositoryId) {
     sourceChanged();
   }
   assertAdmission();
@@ -293,7 +291,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       sourceChanged();
     }
     const before = await readRepository(current, assertSource, signal);
-    if (before.private || before.repositoryId !== repositoryId) {
+    if (before.private !== metadata.private || before.repositoryId !== repositoryId) {
       sourceChanged();
     }
     const observed = await read(`/git/commits/${baseCommit}`, current, assertSource, signal);
@@ -301,7 +299,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       sourceChanged();
     }
     const after = await readRepository(current, assertSource, signal);
-    if (after.private || after.repositoryId !== repositoryId) {
+    if (after.private !== metadata.private || after.repositoryId !== repositoryId) {
       sourceChanged();
     }
     assertSource();
@@ -312,5 +310,36 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     setupRecipe,
     assertCurrent,
     revalidate,
+    ...(metadata.private
+      ? {
+          prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
+            assertAdmission();
+            await revalidate(input.signal);
+            const readIdentity = identity;
+            const assertFetchCurrent = () => {
+              input.signal.throwIfAborted();
+              assertAdmission();
+              readIdentity.assertSelected();
+            };
+            const token = readIdentity.token;
+            if (!token) {
+              throw new GitHubIdentityError("unavailable");
+            }
+            const { prepareRepositoryWorkerGitPack } = await import("./repository-git-pack.js");
+            assertFetchCurrent();
+            const pack = await prepareRepositoryWorkerGitPack({
+              ...input,
+              url,
+              baseCommit,
+              token,
+              assertCurrent: assertFetchCurrent,
+            });
+            assertFetchCurrent();
+            await revalidate(input.signal);
+            assertAdmission();
+            return pack;
+          },
+        }
+      : {}),
   };
 }

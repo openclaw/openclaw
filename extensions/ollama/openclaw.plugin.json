@@ -1,6 +1,6 @@
 {
   "id": "ollama",
-  "categories": ["models", "memory", "web"],
+  "categories": ["models"],
   "doctorContract": {
     "configRepair": true
   },

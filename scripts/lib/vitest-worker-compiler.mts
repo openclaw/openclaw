@@ -12,10 +12,10 @@ import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts"
 import {
   hashVitestWorkerArtifact,
   verifyVitestWorkerArtifacts,
-  vitestWorkerDeclarationEntries,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import { vitestWorkerBuildEntries } from "./vitest-worker-build-entries.mts";
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -44,6 +44,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "package.json",
     "pnpm-lock.yaml",
     "scripts/lib/vitest-worker-artifacts.mts",
+    "scripts/lib/vitest-worker-declarations.mts",
     "scripts/lib/managed-handoff-build-config.mts",
     "scripts/lib/vitest-worker-run.mts",
     "scripts/lib/vitest-worker-compiler.mts",

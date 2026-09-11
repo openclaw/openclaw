@@ -103,7 +103,7 @@ describe("workspace move migration recovery", () => {
         expect(fs.readFileSync(receipt!.archivePath!, "utf8")).toBe(raw);
       }
       expect(db.prepare("SELECT * FROM migration_runs ORDER BY id").all()).toEqual(runs);
-      expect(readWorkspaceStateSnapshot(alias).setup).toEqual(milestones);
+      expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(milestones);
       const row = db
         .prepare("SELECT report_json FROM migration_sources WHERE source_key = ?")
         .get(receipt!.sourceKey)!;
@@ -134,7 +134,7 @@ describe("workspace move migration recovery", () => {
         JSON.stringify({ setupCompletedAt: "2026-07-16T00:00:00.000Z" }),
       );
       expect((await migrate(configured)).warnings).toEqual([]);
-      expect(readWorkspaceStateSnapshot(alias).setup).toEqual(milestones);
+      expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(milestones);
       expect(readReceipt(movedSource, context.env)?.removedSource).toBe(true);
     },
   );

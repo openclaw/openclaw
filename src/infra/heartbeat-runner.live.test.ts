@@ -71,7 +71,7 @@ describeLive("session event wake through a live Gateway", () => {
       instance.state.applyEnv();
       await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
       await fs.rm(path.join(workspace, "BOOTSTRAP.md"), { force: true });
-      mergeWorkspaceSetupState(workspace, { setupCompletedAt: new Date().toISOString() });
+      await mergeWorkspaceSetupState(workspace, { setupCompletedAt: new Date().toISOString() });
       await fs.writeFile(
         path.join(workspace, "AGENTS.md"),
         "Follow exact reply instructions. This workspace contains only synthetic live-test data.\n",

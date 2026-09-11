@@ -111,12 +111,14 @@ interface LineSendOpts {
   trackingId?: string;
   replyToken?: string;
   quoteToken?: string;
+  /** Revalidate immediately before every provider attempt, including retries. */
+  authorize?: () => boolean | Promise<boolean>;
 }
 
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
 type LinePushOpts = Pick<
   LineSendOpts,
-  "cfg" | "channelAccessToken" | "accountId" | "verbose" | "quoteToken"
+  "cfg" | "channelAccessToken" | "accountId" | "verbose" | "quoteToken" | "authorize"
 >;
 
 interface LinePushBehavior {
@@ -221,9 +223,10 @@ async function sendLineProviderMessages(
   token: string,
   request: LineProviderRequest,
   retryKey?: string,
+  authorize?: LineSendOpts["authorize"],
 ): Promise<LineProviderResponse> {
   try {
-    return await postLineProviderMessages(operation, token, request, retryKey);
+    return await postLineProviderMessages(operation, token, request, retryKey, authorize);
   } catch (error) {
     // LINE refuses the whole request for a quote token it no longer accepts and
     // names no field in the answer, so a quoted reply would simply disappear.
@@ -241,6 +244,7 @@ async function sendLineProviderMessages(
       token,
       { ...request, messages: unquoted },
       retryKey,
+      authorize,
     );
   }
 }
@@ -250,7 +254,11 @@ async function postLineProviderMessages(
   token: string,
   request: LineProviderRequest,
   retryKey?: string,
+  authorize?: LineSendOpts["authorize"],
 ): Promise<LineProviderResponse> {
+  if (authorize && !(await authorize())) {
+    throw new Error("LINE send authorization denied");
+  }
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
     {
@@ -412,6 +420,7 @@ async function pushLineMessages(
         token,
         { to: chatId, messages: normalizedMessages },
         retryKey,
+        opts.authorize,
       );
     } catch (err) {
       if (behavior.errorContext) {
@@ -455,10 +464,13 @@ async function replyLineMessages(
     normalizeLineMessage,
   );
 
-  const response = await sendLineProviderMessages("reply", token, {
-    replyToken,
-    messages: normalizedMessages,
-  });
+  const response = await sendLineProviderMessages(
+    "reply",
+    token,
+    { replyToken, messages: normalizedMessages },
+    undefined,
+    opts.authorize,
+  );
   const result = resolveLineProviderMessageIds(response, "reply");
   return { ...result, accountId: account.accountId };
 }
