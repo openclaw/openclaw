@@ -255,7 +255,7 @@ function getOpusInputRate(buf: Buffer): number | undefined {
   if (buf.length < 32 || buf.subarray(0, 4).toString("ascii") !== "OggS") {
     return undefined;
   }
-  const nSegs = buf[26];
+  const nSegs = buf.readUInt8(26);
   const bodyStart = 27 + nSegs;
   if (buf.subarray(bodyStart, bodyStart + 8).toString("ascii") !== "OpusHead") {
     return undefined;
@@ -268,21 +268,18 @@ function getOpusInputRate(buf: Buffer): number | undefined {
 // páginas (OpusHead + áudio) ficam byte a byte intactas; CRC Ogg recalculado.
 function fixWhatsAppOpusVendor(buf: Buffer): Buffer {
   const POLY = 0x04c11db7;
-  const table = new Array<number>(256);
-  for (let i = 0; i < 256; i++) {
+  const table = Array.from({ length: 256 }, (_, i) => {
     let r = (i << 24) >>> 0;
     for (let j = 0; j < 8; j++) {
-      r =
-        (r & 0x80000000) !== 0
-          ? (((r << 1) >>> 0) ^ POLY) >>> 0
-          : ((r << 1) >>> 0);
+      r = (r & 0x80000000) !== 0 ? (((r << 1) >>> 0) ^ POLY) >>> 0 : (r << 1) >>> 0;
     }
-    table[i] = r >>> 0;
-  }
+    return r >>> 0;
+  });
   const oggCrc = (data: Buffer): number => {
     let c = 0;
-    for (let i = 0; i < data.length; i++) {
-      c = (((c << 8) >>> 0) ^ table[((c >>> 24) ^ data[i]) & 0xff]) >>> 0;
+    for (const byte of data) {
+      const idx = ((c >>> 24) ^ byte) & 0xff;
+      c = (((c << 8) >>> 0) ^ (table[idx] ?? 0)) >>> 0;
     }
     return c >>> 0;
   };
@@ -332,15 +329,12 @@ function fixWhatsAppOpusVendor(buf: Buffer): Buffer {
     raw: Buffer;
   }> = [];
   let off = 0;
-  while (
-    off + 27 <= buf.length &&
-    buf.subarray(off, off + 4).toString("ascii") === "OggS"
-  ) {
-    const htype = buf[off + 5];
+  while (off + 27 <= buf.length && buf.subarray(off, off + 4).toString("ascii") === "OggS") {
+    const htype = buf.readUInt8(off + 5);
     const granule = buf.readBigUInt64LE(off + 6);
     const serial = buf.readUInt32LE(off + 14);
     const seq = buf.readUInt32LE(off + 18);
-    const nSegs = buf[off + 26];
+    const nSegs = buf.readUInt8(off + 26);
     const segs = Array.from(buf.subarray(off + 27, off + 27 + nSegs));
     const bodyLen = segs.reduce((a, b) => a + b, 0);
     const body = buf.subarray(off + 27 + nSegs, off + 27 + nSegs + bodyLen);
@@ -358,18 +352,9 @@ function fixWhatsAppOpusVendor(buf: Buffer): Buffer {
   let out = Buffer.alloc(0);
   let fixed = false;
   for (const p of pages) {
-    if (
-      !fixed &&
-      p.body.length >= 8 &&
-      p.body.subarray(0, 8).toString("ascii") === "OpusTags"
-    ) {
+    if (!fixed && p.body.length >= 8 && p.body.subarray(0, 8).toString("ascii") === "OpusTags") {
       const vendor = Buffer.from("WhatsApp");
-      const newBody = Buffer.concat([
-        Buffer.from("OpusTags"),
-        u32(vendor.length),
-        vendor,
-        u32(0),
-      ]);
+      const newBody = Buffer.concat([Buffer.from("OpusTags"), u32(vendor.length), vendor, u32(0)]);
       out = Buffer.concat([
         out,
         makePage(p.htype, p.granule, p.serial, p.seq, lace(newBody), newBody),
