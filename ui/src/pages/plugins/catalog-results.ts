@@ -1,6 +1,7 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -51,12 +52,15 @@ export type PluginCatalogResultsProps = {
 
 const SECTION_SIZE = 8;
 
+// Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   activity: icons.activity,
   "book-open": icons.book,
   brain: icons.brain,
   bot: icons.bot,
-  database: icons.database,
+  database: strokeIcon(svg` <ellipse cx="12" cy="5" rx="9" ry="3" />
+    <path d="M3 5V19A9 3 0 0 0 21 19V5" />
+    <path d="M3 12A9 3 0 0 0 21 12" />`),
   "git-branch": icons.gitPullRequest,
   globe: icons.globe,
   "message-circle": icons.messageSquare,
@@ -66,16 +70,46 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   shield: icons.shield,
   wrench: icons.settings,
   plug: icons.plug,
-  "code-xml": icons.codeXml,
+  "code-xml": strokeIcon(svg` <path d="m18 16 4-4-4-4" />
+    <path d="m6 8-4 4 4 4" />
+    <path d="m14.5 4-5 16" />`),
   server: icons.server,
-  files: icons.files,
+  files: strokeIcon(svg` <path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" />
+    <path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" />
+    <path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />`),
   inbox: icons.inbox,
-  "list-todo": icons.listTodo,
-  "calendar-days": icons.calendarDays,
-  "wallet-cards": icons.walletCards,
-  megaphone: icons.megaphone,
-  "chart-no-axes-combined": icons.chartNoAxesCombined,
-  workflow: icons.workflow,
+  "list-todo": strokeIcon(svg` <path d="M13 5h8" />
+    <path d="M13 12h8" />
+    <path d="M13 19h8" />
+    <path d="m3 17 2 2 4-4" />
+    <rect x="3" y="4" width="6" height="6" rx="1" />`),
+  "calendar-days": strokeIcon(svg` <path d="M8 2v3" />
+    <path d="M16 2v3" />
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M3 9h18" />
+    <path d="M8 13h.01" />
+    <path d="M12 13h.01" />
+    <path d="M16 13h.01" />
+    <path d="M8 17h.01" />
+    <path d="M12 17h.01" />
+    <path d="M16 17h.01" />`),
+  "wallet-cards":
+    strokeIcon(svg` <path d="M3 11h3.75a2 2 0 0 1 1.6.8l.45.6a4 4 0 0 0 6.4 0l.45-.6a2 2 0 0 1 1.6-.8H21" />
+    <path d="M3 7h18" />
+    <rect x="3" y="3" width="18" height="18" rx="2" />`),
+  megaphone:
+    strokeIcon(svg` <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+    <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" />
+    <path d="M8 6v8" />`),
+  "chart-no-axes-combined": strokeIcon(svg` <path d="M12 16v5" />
+    <path d="M16 14.639V21" />
+    <path d="M20 10.656V21" />
+    <path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15" />
+    <path d="M4 18.463V21" />
+    <path d="M8 14.656V21" />`),
+  workflow: strokeIcon(svg` <rect width="8" height="8" x="3" y="3" rx="2" />
+    <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+    <rect width="8" height="8" x="13" y="13" rx="2" />`),
   search: icons.search,
 };
 
