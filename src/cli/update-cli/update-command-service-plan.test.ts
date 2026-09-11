@@ -28,6 +28,32 @@ describe("package runtime compatibility guidance", () => {
     vi.mocked(resolveNodeRuntimeInfo).mockReset();
   });
 
+  it.each([
+    [">=24.16.0 <25 || >=26.1.0", "24.16.0"],
+    [null, "unspecified"],
+    ["invalid", "unspecified"],
+  ])(
+    "preserves the runtime refusal with diagnostic engine floor %s",
+    async (nodeEngine, engineFloor) => {
+      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
+        status: "probe-failed",
+        error: new Error("probe timed out"),
+      });
+      const preflight = await resolvePackageRuntimePreflight({
+        target: { version: "2026.9.4", nodeEngine },
+        nodeRunner: "/fixture/bin/node",
+      });
+      expect(preflight).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("probe timed out"),
+        errorDetails: {
+          "Target package": "openclaw@2026.9.4",
+          "Minimum Node engine": engineFloor,
+        },
+      });
+    },
+  );
+
   it.each([false, true])(
     "admits only a compatible explicit replacement (fallback=%s)",
     async (fallback) => {
@@ -77,6 +103,10 @@ describe("package runtime compatibility guidance", () => {
       expect(await resolvePackageRuntimePreflight({ installedRoot: root })).toMatchObject({
         ok: false,
         error: expect.stringContaining("The requested package requires >=90.0.0."),
+        errorDetails: {
+          "Target package": "openclaw@2027.1.0",
+          "Minimum Node engine": "90.0.0",
+        },
       });
     });
   });
@@ -99,6 +129,10 @@ describe("package runtime compatibility guidance", () => {
           "Bare `npm i -g openclaw` can silently install an older compatible release.",
           "After switching Node versions, use `npm i -g openclaw@latest`.",
         ].join("\n"),
+        errorDetails: {
+          "Target package": "openclaw@2026.9.3",
+          "Minimum Node engine": "24.16.0",
+        },
       });
     },
   );

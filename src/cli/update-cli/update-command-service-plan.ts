@@ -4,6 +4,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { minVersion } from "semver";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
@@ -108,7 +109,7 @@ export async function resolvePackageRuntimePreflight(params: {
   timeoutMs?: number;
   nodeRunner?: string;
   fallbackNodeRunner?: string;
-}): Promise<Result<PackageRuntimePreflight, string>> {
+}): Promise<Result<PackageRuntimePreflight, string> & { errorDetails?: Record<string, string> }> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
   const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
   let target = params.target;
@@ -167,18 +168,34 @@ export async function resolvePackageRuntimePreflight(params: {
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return resultError(
-    [
-      `${runtimeLabel} is incompatible with openclaw@${targetVersion}.`,
-      ...(runtime.failure ? [runtime.failure] : []),
-      `The requested package requires ${target.nodeEngine}.`,
-      runtime.nodeRunner
-        ? "Use a compatible version of the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-        : "Use a Node runtime that satisfies the engine range above, then rerun `openclaw update`.",
-      "Bare `npm i -g openclaw` can silently install an older compatible release.",
-      "After switching Node versions, use `npm i -g openclaw@latest`.",
-    ].join("\n"),
-  );
+  // Refusal prose is redacted from public reports. Record the inspected target
+  // and engine floor here so reporting callers do not reconstruct the decision.
+  let engineFloor = "unspecified";
+  try {
+    if (target.nodeEngine) {
+      engineFloor = minVersion(target.nodeEngine)?.version ?? engineFloor;
+    }
+  } catch {
+    // Malformed registry engines must not replace the runtime refusal.
+  }
+  return {
+    ...resultError<PackageRuntimePreflight, string>(
+      [
+        `${runtimeLabel} is incompatible with openclaw@${targetVersion}.`,
+        ...(runtime.failure ? [runtime.failure] : []),
+        `The requested package requires ${target.nodeEngine}.`,
+        runtime.nodeRunner
+          ? "Use a compatible version of the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
+          : "Use a Node runtime that satisfies the engine range above, then rerun `openclaw update`.",
+        "Bare `npm i -g openclaw` can silently install an older compatible release.",
+        "After switching Node versions, use `npm i -g openclaw@latest`.",
+      ].join("\n"),
+    ),
+    errorDetails: {
+      "Target package": `openclaw@${targetVersion}`,
+      "Minimum Node engine": engineFloor,
+    },
+  };
 }
 
 async function resolvePackageRuntimeForPreflight(params: {

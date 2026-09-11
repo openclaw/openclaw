@@ -1,6 +1,5 @@
 // Main update orchestration for source checkouts and package installs.
 import { randomUUID } from "node:crypto";
-import { minVersion } from "semver";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -390,7 +389,6 @@ async function updateCommandInternal(
     requestedChannel,
     controlPlaneUpdateSentinelMeta,
     discoveredRoot,
-    installKind,
   } = prepared;
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const run = opts.run!;
@@ -549,33 +547,16 @@ async function updateCommandInternal(
       shouldRestart &&
       managedServiceNodeRunner !== undefined &&
       (await gatewayServiceCommandUsesRoot({ root })) === true;
-    const runtimePreflight = await resolvePackageRuntimePreflight({
+    const runtime = await resolvePackageRuntimePreflight({
       target: packageRuntimeTarget,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
-    if (!runtimePreflight.ok) {
-      // Free-form refusal prose is redacted from the public report, so the
-      // diagnostic facts a maintainer needs travel as sanitized scalars:
-      // the exact target build and the engine floor it requires.
-      const engineFloor = (() => {
-        const engine = packageRuntimeTarget?.nodeEngine;
-        if (!engine) {
-          return "unspecified";
-        }
-        try {
-          return minVersion(engine)?.version ?? "unspecified";
-        } catch {
-          return "unspecified";
-        }
-      })();
-      return await refuseUpdate("node-runtime-preflight", runtimePreflight.error, {
-        "Target package": `openclaw@${packageRuntimeTarget?.version ?? "unknown"}`,
-        "Minimum Node engine": engineFloor,
-      });
+    if (!runtime.ok) {
+      return await refuseUpdate("node-runtime-preflight", runtime.error, runtime.errorDetails);
     }
-    const runtimeSelection = runtimePreflight.value;
+    const runtimeSelection = runtime.value;
     packageUpdateNodeRunner = runtimeSelection.nodeRunner;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     if (runtimeSelection.replacedNodeRunner && !opts.json) {
@@ -637,7 +618,7 @@ async function updateCommandInternal(
   const execution = await executeMutableUpdate({
     legacyConfigPlan,
     root,
-    installKind,
+    installKind: prepared.installKind,
     updateInstallKind,
     switchToGit,
     timeoutMs,
