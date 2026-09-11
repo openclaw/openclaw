@@ -592,7 +592,7 @@ function resetRunConfigMocks(): void {
         pluginMetadataSnapshot: metadata,
         pluginRegistry: registry,
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     };
   });
   loadModelCatalogOwnerMock.mockImplementation(

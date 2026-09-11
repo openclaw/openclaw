@@ -1,9 +1,11 @@
 // Covers migration provider runtime hooks supplied by plugins.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRecord } from "./loader-records.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -118,6 +120,33 @@ function createMigrationProvider(id: string) {
     plan: vi.fn(),
     apply: vi.fn(),
   };
+}
+
+function createOwnedMigrationRegistry(
+  pluginId: string,
+  provider: ReturnType<typeof createMigrationProvider>,
+) {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: pluginId,
+    source: `/plugins/${pluginId}/index.js`,
+    origin: "config",
+    enabled: true,
+    configSchema: false,
+  });
+  const instance = new PluginInstance(pluginId, { record, registry });
+  registry.plugins.push(record);
+  registry.migrationProviders.push({
+    pluginId,
+    source: record.source,
+    provider: instance.wrap(provider),
+  });
+  const release = async () => {
+    await instance.dispose();
+  };
+  mocks.release.mockImplementation(release);
+  onTestFinished(release);
+  return registry;
 }
 
 function requireMockCallArg(
@@ -320,13 +349,7 @@ describe("migration provider runtime", () => {
     } as OpenClawConfig;
     const provider = createMigrationProvider("external-import");
     const active = createEmptyPluginRegistry();
-    const loaded = createEmptyPluginRegistry();
-    loaded.migrationProviders.push({
-      pluginId: "external-migration",
-      pluginName: "External Migration",
-      source: "test",
-      provider,
-    } as never);
+    const loaded = createOwnedMigrationRegistry("external-migration", provider);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : undefined,
     );
@@ -376,7 +399,7 @@ describe("migration provider runtime", () => {
       { providerId: "external-import", cfg },
       async (providers) => {
         const resolved = providers.find((entry) => entry.id === "external-import");
-        expect(resolved).not.toBe(provider);
+        expect(resolved).toBe(loaded.migrationProviders[0]?.provider);
         provider.plan.mockImplementationOnce(() => {
           expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loaded);
           return {} as never;
@@ -413,13 +436,7 @@ describe("migration provider runtime", () => {
   it("discovers newly bundled migration providers from current metadata", async () => {
     const provider = createMigrationProvider("hermes");
     const active = createEmptyPluginRegistry();
-    const loaded = createEmptyPluginRegistry();
-    loaded.migrationProviders.push({
-      pluginId: "migrate-hermes",
-      pluginName: "Hermes Migration",
-      source: "test",
-      provider,
-    } as never);
+    const loaded = createOwnedMigrationRegistry("migrate-hermes", provider);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : undefined,
     );
@@ -438,7 +455,9 @@ describe("migration provider runtime", () => {
     ] as never);
 
     await withPluginMigrationProviders({ providerId: "hermes" }, async (providers) => {
-      expect(providers.find((entry) => entry.id === "hermes")).not.toBe(provider);
+      expect(providers.find((entry) => entry.id === "hermes")).toBe(
+        loaded.migrationProviders[0]?.provider,
+      );
     });
     expect(mocks.listBundledPluginMetadata).toHaveBeenCalledWith({
       includeChannelConfigs: false,
@@ -458,13 +477,7 @@ describe("migration provider runtime", () => {
       source: "test",
       provider: activeProvider,
     } as never);
-    const loaded = createEmptyPluginRegistry();
-    loaded.migrationProviders.push({
-      pluginId: "external-migration",
-      pluginName: "External Migration",
-      source: "test",
-      provider: externalProvider,
-    } as never);
+    const loaded = createOwnedMigrationRegistry("external-migration", externalProvider);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : undefined,
     );

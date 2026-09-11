@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
@@ -42,6 +43,72 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("1.0", "1.0.0")).toBeNull();
     expect(compareSemverStrings("latest", "1.0.0")).toBeNull();
   });
+});
+
+describe("historical package schema compatibility", () => {
+  it("does not assign OpenClaw historical schemas to an npm alias", async () => {
+    const result = await fetchNpmPackageTargetStatus({
+      target: "2026.7.1",
+      spec: "openclaw@npm:@example/replacement@2026.7.1",
+      runCommand: async () => ({
+        stdout: JSON.stringify({ version: "2026.7.1" }),
+        stderr: "",
+        code: 0,
+      }),
+    });
+    expect(result.schemaVersions).toBeUndefined();
+  });
+
+  it.each([
+    { version: "2026.7.1", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.35", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.34", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.33", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.11", expected: { state: 1, agent: 1 } },
+    { version: "2026.7.2", expected: undefined },
+    { version: "2026.6.35-beta.1", expected: undefined },
+    { version: "2026.7.1-1", expected: undefined },
+    { version: "1.0.4", expected: undefined },
+    { version: "2026.07.1", expected: undefined },
+    { version: "2026.0.1", expected: undefined },
+    { version: "2026.7.1", packageName: "@example/openclaw", expected: undefined },
+    {
+      version: "2026.7.1",
+      schemaVersions: { state: 3, agent: 11 },
+      expected: { state: 3, agent: 11 },
+    },
+    { version: "2026.7.1", schemaVersions: null, expected: undefined },
+    { version: "2026.7.1", schemaVersions: { state: "1", agent: 1 }, expected: undefined },
+  ])(
+    "retains shipped legacy schema limits across metadata readers: $version $packageName $schemaVersions",
+    async ({ version, packageName = "openclaw", schemaVersions, expected }) => {
+      const manifest = {
+        name: packageName,
+        version,
+        ...(schemaVersions === undefined ? {} : { openclaw: { schemaVersions } }),
+      };
+      expect(parsePackageOpenClawSchemaVersions(manifest)).toEqual(expected);
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`,
+        reply: { json: manifest },
+      });
+      const registry = await fetchNpmPackageTargetStatus({ target: version, packageName });
+      const npm = await fetchNpmPackageTargetStatus({
+        target: version,
+        spec: `${packageName}@${version}`,
+        runCommand: async () => ({
+          stdout: JSON.stringify({
+            version,
+            ...(schemaVersions === undefined ? {} : { "openclaw.schemaVersions": schemaVersions }),
+          }),
+          stderr: "",
+          code: 0,
+        }),
+      });
+      expect(registry.schemaVersions).toEqual(expected);
+      expect(npm.schemaVersions).toEqual(expected);
+    },
+  );
 });
 
 describe("resolveNpmChannelTag", () => {
@@ -203,6 +270,7 @@ describe("resolveNpmChannelTag", () => {
           target: "latest",
           version: "2026.6.6",
           nodeEngine: ">=22.19.0",
+          schemaVersions: { state: 1, agent: 1 },
         });
 
         expect(requests.some((request) => request.url.startsWith("/user/openclaw"))).toBe(true);
@@ -235,6 +303,7 @@ describe("resolveNpmChannelTag", () => {
       target: "latest",
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
+      schemaVersions: { state: 1, agent: 1 },
     });
   });
 

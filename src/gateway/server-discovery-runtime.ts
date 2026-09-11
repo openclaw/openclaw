@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import { getPluginValueInstance, runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
   formatBonjourInstanceName,
@@ -179,29 +180,37 @@ export async function startGatewayDiscovery(params: {
       const entry = next.value;
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const started = (async () => entry.service.advertise(context))()
-        .then(async (handle) => {
-          if (handle?.stop) {
-            if (isCurrent(generation)) {
-              generation.stops.push(handle.stop);
-              if (!generation.claim.isCurrent()) {
-                waitForClaim(generation);
-              }
-            } else {
-              await stopService(handle.stop);
+      const instance = entry.instance ?? getPluginValueInstance(entry.service);
+      const start = async () => {
+        const handle = await entry.service.advertise(context);
+        if (handle?.stop) {
+          const stop = handle.stop;
+          const invokeStop = () => stop.call(handle);
+          const stopOwned = () =>
+            instance ? instance.runCleanup(invokeStop) : runPluginCleanup(stop, invokeStop);
+          if (isCurrent(generation)) {
+            generation.stops.push(stopOwned);
+            if (!generation.claim.isCurrent()) {
+              waitForClaim(generation);
             }
+          } else {
+            await stopService(stopOwned);
           }
-          if (timedOut) {
-            params.logDiscovery.warn(
-              `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
-            );
-          }
-        })
-        .catch((err: unknown) => {
+        }
+        if (timedOut) {
+          params.logDiscovery.warn(
+            `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
+          );
+        }
+      };
+      // Admission spans handle adoption, including cleanup of a late acquisition.
+      const started = (async () => (instance ? instance.run(start) : start()))().catch(
+        (err: unknown) => {
           params.logDiscovery.warn(
             `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
           );
-        });
+        },
+      );
       await Promise.race([
         started,
         new Promise<void>((resolve) => {

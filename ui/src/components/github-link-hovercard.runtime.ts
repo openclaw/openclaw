@@ -8,10 +8,12 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import "../styles/github-link-hovercard.css";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
   githubLinkAnchorFromEvent,
+  gitHubPreviewKey,
   gitHubProfileUrl,
   parseGitHubLinkTarget,
   type GitHubLinkTarget,
@@ -33,7 +35,8 @@ type CacheEntry = {
   failed?: boolean;
   expiresAt: number;
   promise: Promise<ControlUiGitHubPreview>;
-  signal: AbortSignal;
+  controller: AbortController;
+  subscribers: Set<object>;
 };
 
 type PreviewContext = {
@@ -319,7 +322,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     }
     this.invalidatePreviewContext();
     this.close();
-    this.cache.clear();
+    this.clearPreviews();
     this.gatewayClient = value;
   }
 
@@ -333,7 +336,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     }
     this.invalidatePreviewContext();
     this.close();
-    this.cache.clear();
+    this.clearPreviews();
     this.selectedAgentId = value;
   }
 
@@ -353,11 +356,26 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     const context = this.client ? previewContextFor(this.client, this.agentId) : null;
     if (context !== this.previewContext) {
       this.close();
-      this.cache.clear();
+      this.clearPreviews();
       this.previewContext = context;
     }
     return context;
   }
+  private clearPreviews(): void {
+    for (const entry of this.cache.values()) {
+      entry.controller.abort();
+    }
+    this.cache.clear();
+  }
+
+  async prefetch(target: GitHubLinkTarget, signal: AbortSignal): Promise<void> {
+    if (!this.isConnected || !this.client?.connected || signal.aborted) {
+      return;
+    }
+    this.syncPreviewContext();
+    await this.loadPreview(target, signal);
+  }
+
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: GitHubLinkTarget | null = null;
   // Which surface opened the current card: gates whether focus landing inside
@@ -411,6 +429,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.stopI18n?.();
     this.stopI18n = null;
     this.close();
+    this.clearPreviews();
     super.disconnectedCallback();
   }
 
@@ -624,29 +643,28 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     }
   }
 
-  private cacheKey(target: GitHubLinkTarget): string {
-    return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
-  }
-
   private cachedPreview(target: GitHubLinkTarget): CacheEntry | undefined {
-    const cached = this.cache.get(this.cacheKey(target));
-    return cached && !cached.signal.aborted && cached.expiresAt > Date.now() ? cached : undefined;
+    const cached = this.cache.get(gitHubPreviewKey(target));
+    return cached && !cached.controller.signal.aborted && cached.expiresAt > Date.now()
+      ? cached
+      : undefined;
   }
 
   private loadPreview(
     target: GitHubLinkTarget,
     signal: AbortSignal,
   ): Promise<ControlUiGitHubPreview> {
-    const key = this.cacheKey(target);
+    const key = gitHubPreviewKey(target);
     const now = Date.now();
     const cached = this.cachedPreview(target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
     if (cached) {
       this.cache.set(key, cached);
-      return cached.promise;
+      return subscribeToSharedRequest(cached, {}, signal);
     }
 
+    const controller = new AbortController();
     const load = async (): Promise<ControlUiGitHubPreview> => {
       if (!this.client) {
         throw new Error("GitHub preview requires a connected Gateway");
@@ -660,14 +678,15 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
           owner: target.owner,
           repo: target.repo,
         },
-        { signal },
+        { signal: controller.signal },
       );
       return parsePreviewResponse(target, response);
     };
 
     const entry: CacheEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
-      signal,
+      controller,
+      subscribers: new Set(),
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.
@@ -684,7 +703,8 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       }
       this.cache.delete(oldestKey);
     }
-    return entry.promise;
+    // Each visible transcript or popup owns its subscription, not the shared fetch.
+    return subscribeToSharedRequest(entry, {}, signal);
   }
 
   private close(): void {

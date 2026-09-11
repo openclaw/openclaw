@@ -581,7 +581,7 @@ describe("memory manager reindex recovery", () => {
         /another reindex is active/,
       );
     } finally {
-      lock.release();
+      await lock.release();
     }
   });
 
@@ -663,13 +663,13 @@ describe("memory manager reindex recovery", () => {
 
       await timer;
       expect(timerFired).toBe(true);
-      lock.release();
+      await lock.release();
       lockReleased = true;
       const waitedLock = await wait;
-      waitedLock.release();
+      await waitedLock.release();
     } finally {
       if (!lockReleased) {
-        lock.release();
+        await lock.release();
       }
     }
   });

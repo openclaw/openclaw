@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as gatewayService from "../../daemon/service.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 
@@ -164,3 +167,58 @@ it.each([
       expect(getUpdateRun(runId, { env })?.status).toBe("running");
     }),
 );
+
+it("retains the live update run while recovering a failed update before reporting", async () => {
+  await withTestDir({ prefix: "failed-update-recovery-owner-" }, async (dir) => {
+    const home = await fs.realpath(dir);
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const control = path.join(home, "leases");
+    await fs.mkdir(control);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const env = { HOME: home, OPENCLAW_STATE_DIR: home };
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+    const service = gatewayService.resolveGatewayService();
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+      ...service,
+      readRuntime: async () => ({ status: "stopped" }),
+    });
+    let recoveryRun: typeof run | undefined;
+    const recoverService = vi
+      .spyOn(
+        await import("./update-command-service.js"),
+        "maybeRestartServiceAfterFailedMutableUpdate",
+      )
+      .mockImplementation(async (request) => {
+        recoveryRun = request.updateRun;
+        recoveryRun?.executorFence?.assertCurrent();
+        return "healthy";
+      });
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      run.executorFence = await executor.enter(home);
+      await expect(
+        finishSuccessfulPackageSwitch(
+          { packageRoot: home, restartEnvironment: env, run },
+          {
+            mutationStarted: false,
+            result: {
+              status: "error",
+              mode: "npm",
+              root: home,
+              reason: "fixture-install-failed",
+              steps: [],
+              durationMs: 1,
+              recovery: { serviceRestartSafe: true, version: "1.0.0" },
+            },
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        result: { reason: "fixture-install-failed", recovery: { service: "healthy" } },
+      });
+      expect(recoverService).toHaveBeenCalledOnce();
+      expect(recoveryRun).toBe(run);
+    });
+  });
+});

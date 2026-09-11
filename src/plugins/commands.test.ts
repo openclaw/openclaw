@@ -137,7 +137,7 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
 beforeEach(() => {
   completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
   completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
-    release: vi.fn(),
+    async [Symbol.asyncDispose]() {},
     selection: {
       provider: "openai",
       modelId: "gpt-5.5",

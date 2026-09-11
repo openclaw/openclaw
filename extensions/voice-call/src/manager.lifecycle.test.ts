@@ -56,10 +56,10 @@ describe("CallManager termination lifecycle", () => {
         new FakeProvider(providerName),
       );
       const managers = [manager];
-      onTestFinished(() => {
+      onTestFinished(async () => {
         try {
           for (const owner of managers) {
-            finalizeTestManagerCalls(owner);
+            await finalizeTestManagerCalls(owner);
           }
         } finally {
           resetPluginStateStoreForTests();
@@ -104,7 +104,7 @@ describe("CallManager termination lifecycle", () => {
         }
         return event;
       };
-      manager.processEvent(callback(initialProviderId, "in-progress", true));
+      await manager.processEvent(callback(initialProviderId, "in-progress", true));
       await expect(
         manager.speak(started.callId, "Preserve this call transcript."),
       ).resolves.toEqual({
@@ -136,7 +136,7 @@ describe("CallManager termination lifecycle", () => {
         providerName === "plivo" ? "ringing" : "completed",
         providerName === "twilio",
       );
-      expect(current.processEvent(late).kind).not.toBe("final-speech");
+      expect((await current.processEvent(late)).kind).not.toBe("final-speech");
 
       const history = await current.getCallHistory();
       expect(new Set(history.map((call) => call.callId))).toEqual(new Set([started.callId]));
@@ -159,7 +159,7 @@ describe("CallManager termination lifecycle", () => {
     try {
       expect(provider.attempts).toHaveLength(1);
 
-      manager.processEvent({
+      await manager.processEvent({
         id: "provider-terminal",
         type: "call.ended",
         callId: call.callId,

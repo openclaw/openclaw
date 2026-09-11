@@ -755,23 +755,29 @@ childProcess.spawnSync = function(command, args, options) {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects a symlinked coordinator directory before running the updater",
-    async () => {
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "rejects invalid coordinator input before running the updater (symlinked: %s)",
+    async (symlinked) => {
       const { execFile } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const { tmpDir, helperScriptPath, baseParams } = await prepareConcurrentHandoffHelper();
       const leaseTarget = path.join(tmpDir, "lease-target");
       const leaseLink = path.join(tmpDir, "lease-link");
       const commandStartedPath = path.join(tmpDir, "unsafe-command-started");
-      await fs.mkdir(leaseTarget);
-      await fs.symlink(leaseTarget, leaseLink, "dir");
+      if (symlinked) {
+        await fs.mkdir(leaseTarget);
+        await fs.symlink(leaseTarget, leaseLink, "dir");
+      } else {
+        delete baseParams.updateLeaseDatabaseIdentity;
+      }
       const paramsPath = await writeConcurrentHandoffParams({
         tmpDir,
         baseParams,
         name: "unsafe-lease-path",
         owner: "unsafe-lease-owner",
-        leaseDatabasePath: path.join(leaseLink, "managed-update-handoffs.sqlite"),
+        ...(symlinked
+          ? { leaseDatabasePath: path.join(leaseLink, "managed-update-handoffs.sqlite") }
+          : {}),
         commandArgv: [
           process.execPath,
           "-e",

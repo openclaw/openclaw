@@ -52,11 +52,14 @@ export async function runWriteConfigHealth(
     return;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { transformConfigFile } = await import("../config/config.js");
+  const { ConfigMutationConflictError, transformConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
+  const confirmedConfigSource = configResultWritePending
+    ? ctx.configResult.confirmedConfigSource
+    : undefined;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
@@ -79,6 +82,7 @@ export async function runWriteConfigHealth(
       await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
       await transformConfigFile({
+        ...(confirmedConfigSource ? { baseHash: confirmedConfigSource.hash } : {}),
         transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
           // Revalidate the copied source under the config lock; never import after plugin repair.
           assertShippedPluginInstallConfigImportCurrent(
@@ -90,6 +94,7 @@ export async function runWriteConfigHealth(
         },
         afterWrite: { mode: "auto" },
         writeOptions: {
+          ...(confirmedConfigSource ? { expectedConfigPath: confirmedConfigSource.path } : {}),
           auditOrigin: "doctor",
           allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
           skipPluginValidation:
@@ -107,6 +112,18 @@ export async function runWriteConfigHealth(
         },
       });
     } catch (error) {
+      if (confirmedConfigSource && error instanceof ConfigMutationConflictError) {
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        note(
+          [
+            "The config changed after Doctor prepared these repairs.",
+            'These config fixes were not written. Rerun "openclaw doctor" to review repairs for the current config.',
+          ].join("\n"),
+          "Doctor warnings",
+        );
+        ctx.configWriteRefusal = "config-conflict";
+        return;
+      }
       const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
         await import("../config/io.write-errors.js");
       // A refused write persisted nothing. Queued "Doctor changes" panels stay
@@ -185,6 +202,7 @@ export async function runWriteConfigHealth(
     ctx.cfgForPersistence = structuredClone(ctx.cfg);
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
+      delete ctx.configResult.confirmedConfigSource;
     }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);

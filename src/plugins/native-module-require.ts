@@ -1,11 +1,9 @@
-// Resolves native module require paths for plugin runtime loading.
-import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const nodeRequire = createRequire(import.meta.url);
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -103,19 +101,19 @@ export function tryNativeRequireModule(
     return { ok: false };
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
+  // A process-wide require retains evicted graphs through its parent's children.
+  // Keep that parent scoped to this load so retired graphs can be collected.
+  const require = createRequire(import.meta.url);
   if (
     isPluginSourceModulePath(modulePath) &&
     !process.features.typescript &&
-    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+    typeof require.extensions?.[path.extname(modulePath)] !== "function"
   ) {
     return { ok: false };
   }
   let resolvedPath = modulePath;
   try {
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => {
-      // A process-wide require retains evicted graphs through its parent's children.
-      // Keep that parent scoped to this load so retired graphs can be collected.
-      const require = createRequire(import.meta.url);
       resolvedPath = require.resolve(modulePath);
       // Requiring the resolved target could apply a second alias to the same request.
       return require(modulePath);
@@ -144,21 +142,91 @@ export function tryNativeRequireModule(
   }
 }
 
-/** Clears native and source-transformed modules within the plugin dependency root. */
-export function clearPluginModuleRequireCache(
-  modulePath: string,
-  options: { dependencyRoot?: string } = {},
-): void {
-  try {
-    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
-    clearRequireCacheSubtree(
-      resolved,
-      resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
-      new Set(),
-    );
-  } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
+// Native and transformed host helpers share the same native-cache lifetime barrier.
+const nativeModuleCache = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginNativeModuleCache"),
+  () => ({ activeOwners: 0, retiringModules: new Set<NodeJS.Module>() }),
+);
+
+/** Managed loaders retain exact records; Jiti can share children without recording every edge. */
+export function createPluginModuleRequireCacheOwner(dependencyRoot: string) {
+  const entries = new Set<NodeJS.Module>();
+  let disposed = false;
+  nativeModuleCache.activeOwners += 1;
+  return {
+    retain: (module: NodeJS.Module | undefined) => {
+      if (module) {
+        entries.add(module);
+      }
+    },
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      const seen = new Set<NodeJS.Module>();
+      const retire = (module: NodeJS.Module) => {
+        if (seen.has(module) || !isPathInside(dependencyRoot, module.id)) {
+          return;
+        }
+        seen.add(module);
+        nativeModuleCache.retiringModules.add(module);
+        for (const child of module.children) {
+          retire(child);
+        }
+      };
+      for (const entry of entries) {
+        retire(entry);
+      }
+      entries.clear();
+      // Jiti cache hits omit parent/child edges. Keep native records until every
+      // managed native loader closes rather than evicting an unrecorded shared dependency.
+      if (--nativeModuleCache.activeOwners !== 0) {
+        return;
+      }
+      const cache = createRequire(import.meta.url).cache;
+      for (const module of nativeModuleCache.retiringModules) {
+        if (cache[module.id] === module) {
+          delete cache[module.id];
+        }
+      }
+      nativeModuleCache.retiringModules.clear();
+    },
+  };
+}
+
+/** Record native cache identity with the load result, before another load can replace it. */
+export function getPluginModuleRequireCacheEntry(modulePath: string): NodeJS.Module | undefined {
+  const require = createRequire(import.meta.url);
+  const filename = toNativeRequirePath(modulePath);
+  if (require.cache[filename]) {
+    return require.cache[filename];
   }
+  try {
+    return require.cache[require.resolve(filename)];
+  } catch {
+    // Custom loaders and native ESM do not necessarily publish a CJS record.
+    return undefined;
+  }
+}
+
+/** Explicit public-library invalidation refreshes the current path synchronously.
+ * Managed retirement instead releases exact records through its cache owner above.
+ */
+export function clearPluginModuleRequireCache(modulePath: string, dependencyRoot: string): void {
+  const require = createRequire(import.meta.url);
+  const seen = new Set<string>();
+  const clear = (id: string) => {
+    if (seen.has(id) || !isPathInside(dependencyRoot, id)) {
+      return;
+    }
+    seen.add(id);
+    for (const child of require.cache[id]?.children ?? []) {
+      clear(child.id);
+    }
+    delete require.cache[id];
+  };
+  clear(modulePath);
 }
 
 // Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
@@ -168,34 +236,6 @@ function toNativeRequirePath(specifier: string): string {
   } catch {
     return specifier;
   }
-}
-
-function resolveRequireCachePath(targetPath: string): string {
-  try {
-    return fs.realpathSync.native(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
-
-function clearRequireCacheSubtree(
-  resolvedPath: string,
-  dependencyRoot: string,
-  seen: Set<string>,
-): void {
-  if (seen.has(resolvedPath)) {
-    return;
-  }
-  seen.add(resolvedPath);
-  const cached = nodeRequire.cache[resolvedPath];
-  if (cached) {
-    for (const child of cached.children) {
-      if (isPathInside(dependencyRoot, child.id)) {
-        clearRequireCacheSubtree(child.id, dependencyRoot, seen);
-      }
-    }
-  }
-  delete nodeRequire.cache[resolvedPath];
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */

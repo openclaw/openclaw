@@ -44,7 +44,7 @@ vi.mock("../../commands/agent.js", () => ({
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
     snapshot: {},
   })),
   loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({

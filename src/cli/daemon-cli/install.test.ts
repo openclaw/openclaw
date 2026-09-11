@@ -9,7 +9,6 @@ const {
   expectFirstInstallPlanCallOmitsToken,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
-  loadConfigMock,
   mockResolvedGatewayTokenSecretRef,
   randomTokenMock,
   readConfigFileSnapshotMock,
@@ -18,7 +17,6 @@ const {
   replaceConfigFileMock,
   resolveGatewayAuthMock,
   resolveGatewayBindHostMock,
-  resolveSecretInputRefMock,
   resolveSecretRefValuesMock,
   runDaemonInstall,
   service,
@@ -50,9 +48,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("fails install when token auth requires an unresolved token SecretRef", async () => {
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
+    mockResolvedGatewayTokenSecretRef();
     resolveSecretRefValuesMock.mockRejectedValue(new Error("secret unavailable"));
 
     await runDaemonInstall({ json: true });
@@ -215,10 +211,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
-    });
-    mockResolvedGatewayTokenSecretRef();
+    mockResolvedGatewayTokenSecretRef("${OPENCLAW_GATEWAY_TOKEN}");
 
     await runDaemonInstall({ json: true });
 

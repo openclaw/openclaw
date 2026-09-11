@@ -623,6 +623,7 @@ describe("parallel cache lease completion", () => {
     async (outcome) => {
       const groupJoined = process.platform !== "win32";
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+      commands.prepare.mockResolvedValue(0);
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const first = createDeferred<{
         code: number;

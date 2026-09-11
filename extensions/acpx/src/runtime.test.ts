@@ -29,6 +29,13 @@ type TestSessionStore = {
   save(record: Record<string, unknown>): Promise<void>;
 };
 
+function makeEmptySessionStore(): TestSessionStore {
+  return {
+    load: vi.fn(async () => undefined),
+    save: vi.fn(async () => {}),
+  };
+}
+
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
 const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.6.2";
@@ -266,10 +273,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("rejects unsupported runtime session modes with a clear AcpRuntimeError (issue #73071)", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore);
     const ensureSpy = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
       sessionKey: "agent:claude:acp:test",
@@ -364,10 +368,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime } = makeRuntime(baseStore, {
       pluginToolsMcpBridgeEnabled: true,
       openclawToolsMcpBridgeEnabled: true,
@@ -414,10 +415,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime } = makeRuntime(baseStore, {
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [
@@ -445,10 +443,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [
@@ -484,10 +479,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     "leases generated-wrapper probes before delegate entry ($wrapperRoot)",
     async ({ wrapperRoot, command }) => {
       const events: string[] = [];
-      const baseStore: TestSessionStore = {
-        load: vi.fn(async () => undefined),
-        save: vi.fn(async () => {}),
-      };
+      const baseStore: TestSessionStore = makeEmptySessionStore();
       const leaseStore = makeLeaseStore();
       leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
         events.push("lease-saved");
@@ -532,10 +524,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   );
 
   it("reaps a fulfilled probe wrapper that exact live evidence still finds", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     let launchedCommand = "";
     const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
@@ -580,10 +569,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("retains a fulfilled probe lease when live evidence is unavailable", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     const { runtime, delegate } = makeRuntime(
       baseStore,
@@ -615,10 +601,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("coalesces repeated probe uncertainty before it can evict a live lease", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     leaseStore.leases.set("lease-live", {
       leaseId: "lease-live",
@@ -704,10 +687,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("leases generated-wrapper doctor probes and keeps uncertain failures open", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       openclawGatewayInstanceId: "gateway-test",
@@ -739,10 +719,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -808,10 +785,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
     },
   ])("$name", async ({ model, expectedModel }) => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) =>
@@ -842,10 +816,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -892,10 +863,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     const leaseStore = makeLeaseStore();
     const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       openclawGatewayInstanceId: "gateway-test",
       openclawProcessLeaseStore: leaseStore.store,
@@ -1211,10 +1179,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("passes model startup through sessionOptions for non-Codex ACP agents", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "main" ? CODEX_ACP_COMMAND : agentName),
@@ -1246,10 +1211,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it.each([undefined, true])(
     "handles missing model capability with explicit selection=%s",
     async (modelExplicit) => {
-      const baseStore: TestSessionStore = {
-        load: vi.fn(async () => undefined),
-        save: vi.fn(async () => {}),
-      };
+      const baseStore: TestSessionStore = makeEmptySessionStore();
       const { runtime, delegate } = makeRuntime(baseStore, {
         agentRegistry: {
           resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
@@ -1297,10 +1259,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   );
 
   it("does not retry when ACPX rejects an explicitly unsupported model id", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
@@ -1328,10 +1287,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("does not retry an unrelated error with similar wording", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore);
     const ensure = vi
       .spyOn(delegate, "ensureSession")
@@ -1366,10 +1322,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1399,10 +1352,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("passes gpt-5.6-sol and medium as separate Codex ACP startup controls", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1490,10 +1440,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   );
 
   it("drops inherited max only after resolving the maintained Codex ACP command", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1520,10 +1467,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("preserves inherited max for a custom non-Codex command registered as codex", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? "custom-acp" : agentName),
@@ -1550,10 +1494,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps rejecting an explicit max request for the maintained Codex ACP command", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1575,10 +1516,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("starts Codex ACP without injecting a leaked non-openai default model", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1609,10 +1547,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("reports a dropped leaked non-openai default on the returned handle", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1636,10 +1571,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("reports a supported codex model as applied on the returned handle", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1663,10 +1595,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("applies explicit Codex ACP thinking while dropping a leaked non-openai default model", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1694,10 +1623,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("drops a leaked malformed Codex ACP default at spawn instead of failing the session", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1725,10 +1651,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it.each(["google/gemini-3.1-flash-lite", "gpt-5.4/ultra"])(
     "fails closed on an explicit unsupported Codex ACP spawn model %s without calling the delegate",
     async (model) => {
-      const baseStore: TestSessionStore = {
-        load: vi.fn(async () => undefined),
-        save: vi.fn(async () => {}),
-      };
+      const baseStore: TestSessionStore = makeEmptySessionStore();
       const { runtime, delegate } = makeRuntime(baseStore, {
         agentRegistry: {
           resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -1755,10 +1678,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   );
 
   it("passes an explicit supported Codex ACP spawn model through without leaking the provenance flag", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
@@ -2410,10 +2330,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
   it("does not create launch leases for direct plugin-local ACP adapter commands", async () => {
     const launchCommands: string[] = [];
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
       openclawGatewayInstanceId: "gateway-test",
@@ -2824,10 +2741,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps pending process leases when a fresh launch fails after spawn may have occurred", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       openclawGatewayInstanceId: "gateway-test",
@@ -4072,10 +3986,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4103,10 +4014,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("routes non-openclaw sessions through the default delegate", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4134,10 +4042,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4162,10 +4067,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps MCP-enabled routing when the openclaw agent is overridden to a non-bridge adapter", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4197,10 +4099,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("uses the bridge-safe delegate for any agent mapped to the openclaw bridge command", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4232,10 +4131,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("uses the bridge-safe delegate for documented env-wrapped openclaw bridge commands", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4268,10 +4164,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("uses the bridge-safe delegate for local node openclaw entrypoints", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
@@ -4340,10 +4233,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("probes through the bridge-safe delegate when probeAgent resolves to openclaw bridge", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => undefined),
-      save: vi.fn(async () => {}),
-    };
+    const baseStore: TestSessionStore = makeEmptySessionStore();
 
     const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,

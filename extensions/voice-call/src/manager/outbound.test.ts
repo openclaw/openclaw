@@ -1,38 +1,27 @@
 // Voice Call tests cover outbound plugin behavior.
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CallRecordSchema, type CallRecord } from "../types.js";
 
 const {
-  addTranscriptEntryMock,
   clearMaxDurationTimerMock,
-  ensureMaxDurationTimerForLiveCallMock,
+  startMaxDurationTimerMock,
   generateDtmfRedirectTwimlMock,
   generateNotifyTwimlMock,
   getCallByProviderCallIdMock,
   mapVoiceToPollyMock,
   persistCallRecordMock,
   rejectTranscriptWaiterMock,
-  transitionStateMock,
 } = vi.hoisted(() => ({
-  addTranscriptEntryMock: vi.fn(),
   clearMaxDurationTimerMock: vi.fn(),
-  ensureMaxDurationTimerForLiveCallMock: vi.fn(
-    (params: { call: { answeredAt?: number }; liveAt: number }) => {
-      params.call.answeredAt ??= params.liveAt;
-    },
-  ),
+  startMaxDurationTimerMock: vi.fn(),
   generateDtmfRedirectTwimlMock: vi.fn(),
   generateNotifyTwimlMock: vi.fn(),
   getCallByProviderCallIdMock: vi.fn(),
   mapVoiceToPollyMock: vi.fn(),
   persistCallRecordMock: vi.fn(),
   rejectTranscriptWaiterMock: vi.fn(),
-  transitionStateMock: vi.fn(),
-}));
-
-vi.mock("./state.js", () => ({
-  addTranscriptEntry: addTranscriptEntryMock,
-  transitionState: transitionStateMock,
 }));
 
 vi.mock("./store.js", () => ({
@@ -42,7 +31,7 @@ vi.mock("./store.js", () => ({
 vi.mock("./timers.js", () => ({
   clearMaxDurationTimer: clearMaxDurationTimerMock,
   clearTranscriptWaiter: vi.fn(),
-  ensureMaxDurationTimerForLiveCall: ensureMaxDurationTimerForLiveCallMock,
+  startMaxDurationTimer: startMaxDurationTimerMock,
   rejectTranscriptWaiter: rejectTranscriptWaiterMock,
   waitForFinalTranscript: vi.fn(),
 }));
@@ -69,10 +58,31 @@ import {
   speakInitialMessage,
 } from "./outbound.js";
 
+function createCall(overrides: Partial<CallRecord> = {}): CallRecord {
+  return CallRecordSchema.parse({
+    callId: "call-1",
+    providerCallId: "provider-1",
+    provider: "plivo",
+    direction: "outbound",
+    state: "active",
+    from: "+15550000000",
+    to: "+15550000001",
+    startedAt: Date.now(),
+    transcript: [],
+    processedEventIds: [],
+    ...overrides,
+  });
+}
+
 function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
-  const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+  const call = createCall();
   const hangupCall = params.hangupCall ?? vi.fn(async () => {});
   const ctx = {
+    mutationQueue: new KeyedAsyncQueue(),
+    isStopping: () => false,
+    trackCallWork: vi.fn(),
+    notifyHangupTimers: new Map(),
+    pendingCallAdmissions: new Set<string>(),
     activeCalls: new Map([["call-1", call]]),
     providerCallIdMap: new Map([["provider-1", "call-1"]]),
     provider: { hangupCall },
@@ -88,6 +98,7 @@ function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn>
 describe("voice-call outbound helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    persistCallRecordMock.mockReset().mockResolvedValue(undefined);
     mapVoiceToPollyMock.mockReturnValue("Polly.Joanna");
     generateDtmfRedirectTwimlMock.mockReturnValue("<DtmfRedirect />");
     generateNotifyTwimlMock.mockReturnValue("<Response />");
@@ -95,6 +106,11 @@ describe("voice-call outbound helpers", () => {
 
   it("guards initiateCall when provider, webhook, capacity, or fromNumber are missing", async () => {
     const base = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       config: {
@@ -126,6 +142,11 @@ describe("voice-call outbound helpers", () => {
 
     const saturated = {
       ...base,
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["existing", {}]]),
       provider: { name: "twilio" },
     };
@@ -154,6 +175,11 @@ describe("voice-call outbound helpers", () => {
   it("initiates notify-mode calls with inline TwiML and records provider ids", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
@@ -194,6 +220,11 @@ describe("voice-call outbound helpers", () => {
   it("persists the configured agent on outbound call records", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
@@ -221,6 +252,11 @@ describe("voice-call outbound helpers", () => {
 
   it("uses the per-call agent for explicit session normalization", async () => {
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: {
@@ -253,6 +289,11 @@ describe("voice-call outbound helpers", () => {
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
@@ -298,6 +339,11 @@ describe("voice-call outbound helpers", () => {
   it("rejects DTMF sequences outside conversation mode", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
@@ -327,6 +373,11 @@ describe("voice-call outbound helpers", () => {
 
   it("fails initiateCall cleanly when provider initiation throws", async () => {
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: {
@@ -352,9 +403,14 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("speaks through connected calls and rolls back to listening on provider errors", async () => {
-    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const call = createCall();
     const playTts = vi.fn(async () => {});
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", playTts },
@@ -365,7 +421,7 @@ describe("voice-call outbound helpers", () => {
     await expect(
       speak(ctx as never, "call-1", "hello", { listenAfterPlayback: true }),
     ).resolves.toEqual({ success: true });
-    expect(transitionStateMock).toHaveBeenCalledWith(call, "speaking");
+    expect(call.state).toBe("speaking");
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
       providerCallId: "provider-1",
@@ -373,7 +429,7 @@ describe("voice-call outbound helpers", () => {
       voice: "alloy",
       listenAfterPlayback: true,
     });
-    expect(addTranscriptEntryMock).toHaveBeenCalledWith(call, "bot", "hello");
+    expect(call.transcript).toEqual([expect.objectContaining({ speaker: "bot", text: "hello" })]);
 
     playTts.mockImplementationOnce(async () => {
       throw new Error("tts failed");
@@ -382,17 +438,22 @@ describe("voice-call outbound helpers", () => {
       success: false,
       error: "tts failed",
     });
-    expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
+    expect(call.state).toBe("listening");
   });
 
   it("reports telephony queue overflow without starting a silent listening turn", async () => {
-    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const call = createCall();
     const playTts = vi.fn(async () => {
       throw new Error("Telephony TTS queue is full for stream; maxPending=8");
     });
     const startListening = vi.fn(async () => {});
     const activeTurnCalls = new Set<string>();
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map([["provider-1", "call-1"]]),
       provider: {
@@ -417,13 +478,18 @@ describe("voice-call outbound helpers", () => {
     expect(playTts).toHaveBeenCalledOnce();
     expect(startListening).not.toHaveBeenCalled();
     expect(activeTurnCalls.size).toBe(0);
-    expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
+    expect(call.state).toBe("listening");
   });
 
   it("passes configured voice ids through to Telnyx speak", async () => {
-    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const call = createCall();
     const playTts = vi.fn(async () => {});
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "telnyx", playTts },
@@ -451,18 +517,18 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("caps notify-mode auto-hangup delay before scheduling", async () => {
-    const call = {
-      callId: "call-1",
-      providerCallId: "provider-1",
-      state: "active",
-      metadata: { initialMessage: "hello", mode: "notify" },
-    };
+    const call = createCall({ metadata: { initialMessage: "hello", mode: "notify" } });
     const playTts = vi.fn(async () => {});
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
     getCallByProviderCallIdMock.mockReturnValue(call);
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map([["provider-1", "call-1"]]),
       provider: { name: "twilio", playTts },
@@ -483,16 +549,18 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("uses per-number route TTS voice for routed inbound calls", async () => {
-    const call = {
-      callId: "call-1",
-      providerCallId: "provider-1",
+    const call = createCall({
       direction: "inbound",
-      state: "active",
       to: "+15550002222",
       metadata: { numberRouteKey: "+15550002222" },
-    };
+    });
     const playTts = vi.fn(async () => {});
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", playTts },
@@ -522,15 +590,14 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("keeps top-level TTS for outbound calls to a number with an inbound route", async () => {
-    const call = {
-      callId: "call-1",
-      providerCallId: "provider-1",
-      direction: "outbound",
-      state: "active",
-      to: "+15550002222",
-    };
+    const call = createCall({ direction: "outbound", to: "+15550002222" });
     const playTts = vi.fn(async () => {});
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", playTts },
@@ -556,9 +623,14 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("sends DTMF through connected provider calls", async () => {
-    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const call = createCall();
     const sendDtmfProvider = vi.fn(async () => {});
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", sendDtmf: sendDtmfProvider },
@@ -577,8 +649,13 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("rejects invalid or unsupported outbound DTMF", async () => {
-    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const call = createCall();
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "telnyx" },
@@ -614,7 +691,7 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeGreaterThanOrEqual(beforeEndMs);
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
-    expect(transitionStateMock).toHaveBeenCalledWith(call, "hangup-bot");
+    expect(call.state).toBe("hangup-bot");
     expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
       { maxDurationTimers: ctx.maxDurationTimers },
       "call-1",
@@ -648,7 +725,7 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeGreaterThanOrEqual(beforeEndMs);
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
-    expect(transitionStateMock).toHaveBeenCalledWith(call, "timeout");
+    expect(call.state).toBe("timeout");
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
       { transcriptWaiters: ctx.transcriptWaiters },
       "call-1",
@@ -660,6 +737,11 @@ describe("voice-call outbound helpers", () => {
     await expect(
       speak(
         {
+          mutationQueue: new KeyedAsyncQueue(),
+          isStopping: () => false,
+          trackCallWork: vi.fn(),
+          notifyHangupTimers: new Map(),
+          pendingCallAdmissions: new Set<string>(),
           activeCalls: new Map(),
           providerCallIdMap: new Map(),
           provider: { name: "twilio", playTts: vi.fn() },
@@ -674,6 +756,11 @@ describe("voice-call outbound helpers", () => {
     await expect(
       endCall(
         {
+          mutationQueue: new KeyedAsyncQueue(),
+          isStopping: () => false,
+          trackCallWork: vi.fn(),
+          notifyHangupTimers: new Map(),
+          pendingCallAdmissions: new Set<string>(),
           activeCalls: new Map([
             ["call-1", { callId: "call-1", state: "completed", providerCallId: "provider-1" }],
           ]),
@@ -696,6 +783,11 @@ describe("voice-call outbound helpers", () => {
       streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
     }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "telnyx", initiateCall: initiateProviderCall },
@@ -738,6 +830,11 @@ describe("voice-call outbound helpers", () => {
       streamUrl: "wss://example.test/should-not-be-used",
     }));
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
@@ -767,6 +864,11 @@ describe("voice-call outbound helpers", () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
     const streamSessionIssuer = vi.fn();
     const ctx = {
+      mutationQueue: new KeyedAsyncQueue(),
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      notifyHangupTimers: new Map(),
+      pendingCallAdmissions: new Set<string>(),
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "telnyx", initiateCall: initiateProviderCall },

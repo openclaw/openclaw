@@ -121,6 +121,51 @@ Use `createPluginRuntimeStore` to store the runtime reference for use outside th
 Prefer `pluginId` for the runtime-store identity. The lower-level `key` form is for uncommon cases where one plugin intentionally needs more than one runtime slot.
 </Note>
 
+## Plugin lifecycle and cleanup
+
+A managed plugin instance owns its registered callables, runtime-store slots,
+and loaded source generation. Retiring the instance stops new calls through
+its managed handles. Already admitted calls and streams have a bounded chance
+to finish before disposal; retaining an old function does not make it a current
+runtime handle.
+
+Managed instances expose `api.lifecycle.signal` and
+`api.lifecycle.onDispose(cleanup)`. The signal aborts when disposal reaches
+explicit cleanup. `onDispose` accepts a synchronous or asynchronous callback and
+returns a function that unregisters it. Callbacks run once, in reverse registration
+order, within a shared cleanup budget. A throwing or unfinished callback is
+recorded as a cleanup failure while the remaining cleanup is attempted. These
+fields are optional in the SDK type because an API host without a managed
+instance may omit them; feature-detect them before relying on instance cleanup.
+The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
+available for plugin-owned host state.
+
+Cleanup is best effort. Plugins must explicitly release their own timers,
+listeners, sockets, watchers, and child processes in `onDispose` or their
+service's `stop()` method. OpenClaw does not intercept those native resources or
+prove that they have stopped when managed retirement completes. Native plugins
+remain trusted, in-process code. Plain data and native byte buffers retain their
+normal identities; lifecycle fencing applies to the managed callable surfaces,
+not every object a plugin can retain.
+
+Opaque values returned by a plugin can be passed back directly or in data-only
+records and arrays. Caller-owned objects with methods or accessors are passed
+unchanged, including any handles inside them.
+
+Memory runtimes can implement `prepareReload` to fence and drain managers that
+use retiring embedding adapters. For older runtimes, OpenClaw calls the existing
+`closeAllMemorySearchManagers` method, when provided, if the runtime or an embedding
+adapter retires. This fallback closes all of that runtime's managers as best-effort
+cleanup; it cannot identify dependencies or prevent concurrent manager acquisition.
+
+`createPluginRuntimeStore` resolves its slot from the invoking managed instance.
+Preparing another instance does not overwrite that instance's runtime. Calls
+outside managed instance scope retain the store's existing standalone behavior.
+
+SDK helpers that return bare results retain their resources until the owning
+host closes. Callers do not need to dispose those results; see
+[Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
+
 ## Other top-level `api` fields
 
 Beyond `api.runtime`, the API object also provides:

@@ -4,6 +4,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
@@ -16,6 +17,7 @@ import type {
 export function acquirePreparedMediaCapabilityProviders(
   source: PreparedMediaCapabilityProviderSource,
   providers: PreparedMediaCapabilityProviderAcquisition["providers"],
+  registry: PreparedMediaCapabilityProviderSource["registry"],
 ): PreparedMediaCapabilityProviderAcquisition {
   const isCurrent = capturePluginLifecycleAuthority(source.registry, undefined, {
     scopedRuntime: true,
@@ -29,12 +31,28 @@ export function acquirePreparedMediaCapabilityProviders(
     }
   };
   assertOpen();
+  // Execute through the composed view so nested lookups retain adopted donor registrations.
+  const invocations = source.resources.createInvocationScope(registry);
   const claim = source.resources.retain();
   return {
-    providers,
+    providers: {
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      imageGenerationProviders: providers.imageGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      videoGenerationProviders: providers.videoGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      musicGenerationProviders: providers.musicGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+    },
     assertOpen,
     release: () => {
       released = true;
+      invocations.release();
       return claim.release();
     },
   };
@@ -122,9 +140,10 @@ export function createPreparedPluginGeneration(params: {
     if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
       derivedGenerationBases.set(derived, reusable);
     }
+    ownPreparedPluginGeneration(derived);
     return derived;
   }
-  return Object.freeze({
+  const generation = Object.freeze({
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),
@@ -147,6 +166,8 @@ export function createPreparedPluginGeneration(params: {
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
       : {}),
   });
+  ownPreparedPluginGeneration(generation);
+  return generation;
 }
 
 export async function buildPreparedPluginModelCatalog(params: {

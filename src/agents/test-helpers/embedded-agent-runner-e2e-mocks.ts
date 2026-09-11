@@ -170,7 +170,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
-        release: vi.fn(),
+        [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
     return {

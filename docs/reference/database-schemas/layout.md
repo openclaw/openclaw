@@ -257,6 +257,34 @@ The restart sentinel carries `stats.runId` and remains the continuation owner;
 consuming it does not delete the run row. Chat, CLI, and status reports read that
 row. See [Run history and reports](/cli/update#run-history-and-reports).
 
+### Update installation control
+
+Managed update leases use a separate machine-local `managed-update-handoffs.sqlite`
+database under the secure OpenClaw temporary directory. This owner must remain
+available while an update replaces an installation or changes its runtime state.
+The update history above remains in the profile's shared state database.
+
+First creation exclusively creates a private file with one filesystem link.
+Concurrent initializers use that same file without replacing it. SQLite commits
+the existing schema atomically; ordinary lease inspection reports no lease while
+the first-use schema is empty. Reads of an absent database create no state.
+Existing lease rows, claim transactions, and the rule that one updater owns an
+installation are unchanged.
+
+The normal handoff parent prepares this database before launching its sealed
+helper. The helper receives the captured database identity and operates only on
+that existing database, without resolving installation packages or recreating
+missing or empty state.
+
+File creation applies private permissions before SQLite opens the file, including
+a protected ACL on Windows. Initialization follows the existing directory-durability
+policy and does not require the optional fs-safe native binding. Failure stops
+lease admission before its operation runs. After an interrupted first creation,
+the normal owner can finish initialization through its existing empty-database
+recovery path; committed rows remain governed by SQLite's normal transactions.
+This change requires no schema migration. See the
+[accepted initialization design](https://github.com/openclaw/openclaw/pull/144155).
+
 ### Cloud repository workspaces
 
 Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.

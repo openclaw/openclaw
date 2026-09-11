@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 /**
  * Shared detached-task lifecycle for media generation tools.
  *
@@ -45,6 +46,9 @@ const log = createSubsystemLogger("agents/tools/media-generate-background-shared
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
+const detachedMediaGenerationAsyncRoot = new AsyncResource(
+  "openclaw.media-generation.detached-root",
+);
 
 /** Schedules detached media generation work. */
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
@@ -375,9 +379,11 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
-    queueMicrotask(() => {
-      void work().catch((error: unknown) => {
-        params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+    detachedMediaGenerationAsyncRoot.runInAsyncScope(() => {
+      queueMicrotask(() => {
+        void work().catch((error: unknown) => {
+          params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+        });
       });
     });
   };

@@ -41,7 +41,7 @@ suite.define(() => {
         const trigger = page.locator("#new-session-where-trigger");
         const picker = page.locator("wa-popover.new-session-page__where-popover");
         await trigger.click();
-        await picker.getByRole("button", { name: "Cloud · aws" }).click();
+        await picker.getByRole("button", { name: "aws", exact: true }).click();
         await trigger.click();
         await picker.getByRole("button", { name: /Standard/ }).waitFor();
         expect(await picker.locator('[data-value^="os:"]').count()).toBe(0);

@@ -86,6 +86,50 @@ describe("browser action observe commands", () => {
   });
 
   it.each([
+    { label: "truncated prefix", body: "ABC", truncated: true, json: false },
+    { label: "empty truncated prefix", body: "", truncated: true, json: false },
+    { label: "complete at the limit", body: "ABC", truncated: undefined, json: false },
+    { label: "explicitly complete", body: "ABC", truncated: false, json: false },
+    { label: "empty complete body", body: "", truncated: undefined, json: false },
+    { label: "JSON truncated prefix", body: "ABC", truncated: true, json: true },
+  ])("reports completeness for $label without changing body output", async (testCase) => {
+    const program = createActionObserveProgram();
+    const result = {
+      ok: true,
+      response: {
+        url: "https://example.com/api",
+        status: 200,
+        body: testCase.body,
+        ...(testCase.truncated === undefined ? {} : { truncated: testCase.truncated }),
+      },
+    };
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+
+    await program.parseAsync(
+      [
+        "browser",
+        ...(testCase.json ? ["--json"] : []),
+        "responsebody",
+        "**/api",
+        "--max-chars",
+        "3",
+      ],
+      { from: "user" },
+    );
+
+    const { runtimeLogs, runtimeErrors } = getBrowserCliRuntimeCapture();
+    expect(runtimeLogs).toHaveLength(1);
+    if (testCase.json) {
+      expect(JSON.parse(runtimeLogs[0]!)).toEqual(result);
+    } else {
+      expect(runtimeLogs).toEqual([testCase.body]);
+    }
+    expect(runtimeErrors).toEqual(
+      testCase.truncated && !testCase.json ? [expect.stringMatching(/truncat/i)] : [],
+    );
+  });
+
+  it.each([
     {
       label: "default",
       timeout: undefined,

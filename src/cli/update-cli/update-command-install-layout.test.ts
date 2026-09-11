@@ -13,7 +13,11 @@ import { runGatewayUpdate } from "../../infra/update-runner.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as shared from "./shared.js";
 import { updateCommand } from "./update-command.js";
 
@@ -80,6 +84,7 @@ it.each([
 ])(
   "records the $reason non-outcome in CLI JSON, history and report eligibility",
   async ({ containerized, reason, action }) => {
+    openOpenClawStateDatabase();
     vi.spyOn(container, "isContainerEnvironment").mockReturnValue(containerized);
     await expect(updateCommand({ json: true, yes: true, channel: "stable" })).rejects.toMatchObject(
       { code: 0 },
@@ -106,6 +111,27 @@ it.each([
       '"2026.9.4"',
     );
     await expect(fs.stat(process.env.OPENCLAW_CONFIG_PATH!)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  },
+);
+
+it.each([true, false])(
+  "reports an untouched fresh profile (container: %s)",
+  async (containerized) => {
+    vi.spyOn(container, "isContainerEnvironment").mockReturnValue(containerized);
+    await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 0 });
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      status: "skipped",
+      reason: containerized ? "container-image-install" : "unmanaged-package-install",
+      before: { version: "2026.9.4" },
+      steps: [],
+    });
+    expect(output[0]).not.toHaveProperty("recovery");
+    expect(output[0]).not.toHaveProperty("runId");
+    expect(triage).not.toHaveBeenCalled();
+    await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
       code: "ENOENT",
     });
   },

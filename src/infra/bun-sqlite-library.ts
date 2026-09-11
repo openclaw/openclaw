@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
@@ -158,20 +157,25 @@ function inheritedSelection(): SqliteLibrarySelection | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (isRecord(value)) {
-    if (value.source === "runtime") {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const source = "source" in value ? value.source : undefined;
+    if (source === "runtime") {
       return { source: "runtime" };
     }
+    const path = "path" in value ? value.path : undefined;
+    const version = "version" in value ? value.version : undefined;
+    const extensionLoadingSupported =
+      "extensionLoadingSupported" in value ? value.extensionLoadingSupported : undefined;
     if (
-      (value.source === "env" || value.source === "discovered") &&
-      typeof value.path === "string" &&
-      typeof value.version === "string" &&
-      value.extensionLoadingSupported === true
+      (source === "env" || source === "discovered") &&
+      typeof path === "string" &&
+      typeof version === "string" &&
+      extensionLoadingSupported === true
     ) {
       return {
-        source: value.source,
-        path: value.path,
-        version: value.version,
+        source,
+        path,
+        version,
         extensionLoadingSupported: true,
       };
     }

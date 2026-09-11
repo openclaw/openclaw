@@ -234,7 +234,7 @@ describe("prepared reply fallback ownership", () => {
             }),
           ).rejects.toThrow("reason=owner-plugin-degraded, ownerPluginId=broken-harness");
         }
-        nested.release();
+        await nested[Symbol.asyncDispose]();
         return { text: "fallback admitted" };
       });
       const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
