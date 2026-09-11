@@ -277,13 +277,16 @@ The entry payload retains the original `workspaceDir` and records `runtimeState`
 as `pending`, `ready`, `removing`, or `removing-pending`;
 no schema version, table, or column is added. Older entries are adopted on first
 use, and backends without reservation keep their existing registry behavior.
+Factories receive the reserved workspace on replay and shared-scope reuse, rather
+than the latest caller's local workspace. Provider execution and repository-scoped
+cleanup therefore use the same original owner.
 
 Reservation and publication use synchronous SQLite transactions. Provider work
 runs outside the transaction under a per-runtime file lock beside the shared
 database. Lock contenders wait up to 15 minutes, covering the backend's warmup
-and inspection budgets. Concurrent creators reuse the same generation. Failed provisioning
-retains its pending ID for replay after restart. Recreate and prune record removal
-intent before waiting for provisioning, then remove the provider runtime before
+and inspection budgets. Concurrent creators reuse the same generation. Failed
+provisioning retains its pending ID for replay after restart. Recreate and prune
+record removal intent before waiting for provisioning, then remove the provider runtime before
 deleting the row. Cleanup failures retain that intent for retry; stale handles
 cannot publish readiness or start new operations after removal begins.
 

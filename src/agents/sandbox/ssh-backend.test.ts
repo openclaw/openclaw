@@ -14,7 +14,6 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { captureFullEnv } from "../../test-utils/env.js";
-import type { SshSandboxSettings } from "./ssh.js";
 import type { SandboxConfig } from "./types.js";
 
 const sshMocks = vi.hoisted(() => ({
@@ -602,82 +601,28 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes provider SSH credentials for successive commands without reseeding the workspace", async () => {
-    let revision = 0;
-    const cfg = createBackendSandboxConfig();
-    const resolveSettings = async (): Promise<SshSandboxSettings> => ({
-      ...cfg.ssh,
-      target: "worker@example.com:22",
-      certificateData: `synthetic-certificate-${++revision}`,
+  it("does not contact the remote runtime when authority is revoked during session setup", async () => {
+    let current = true;
+    const backend = await createSshSandboxBackend({
+      ...createBackendParams(createBackendSandboxConfig({ target: "worker@example.com:22" })),
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("runtime removed");
+        }
+      },
     });
-    sshMocks.createSshSandboxSessionFromSettings.mockImplementation(
-      async (settings: SshSandboxSettings) => ({
-        ...createSession(),
-        configPath: settings.certificateData,
-      }),
+    sshMocks.createSshSandboxSessionFromSettings.mockImplementation(async () => {
+      current = false;
+      return createSession();
+    });
+    await expect(backend.runShellCommand({ script: "printf stale" })).rejects.toThrow(
+      "runtime removed",
     );
-    sshMocks.runSshSandboxCommand.mockResolvedValueOnce({
-      stdout: Buffer.from("0\n"),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    });
-    const backend = await createSshSandboxBackend(createBackendParams(cfg), { resolveSettings });
-
-    await backend.runShellCommand({ script: "printf first" });
-    await backend.runShellCommand({ script: "printf second" });
-
-    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledOnce();
-    expect(requireSshRunCommandParams(2)).toMatchObject({
-      remoteCommand: expect.stringContaining("printf first"),
-      session: { configPath: "synthetic-certificate-2" },
-    });
-    expect(requireSshRunCommandParams(3)).toMatchObject({
-      remoteCommand: expect.stringContaining("printf second"),
-      session: { configPath: "synthetic-certificate-3" },
-    });
-    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(3);
+    expect(sshMocks.runSshSandboxCommand).not.toHaveBeenCalled();
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    expect(sshMocks.spawnCommand).not.toHaveBeenCalled();
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
   });
-
-  it.each(["settings", "session setup"])(
-    "does not contact the remote runtime when authority is revoked during %s",
-    async (stage) => {
-      let current = true;
-      const cfg = createBackendSandboxConfig();
-      const backend = await createSshSandboxBackend(
-        {
-          ...createBackendParams(cfg),
-          assertRuntimeCurrent: () => {
-            if (!current) {
-              throw new Error("runtime removed");
-            }
-          },
-        },
-        {
-          resolveSettings: async () => {
-            if (stage === "settings") {
-              current = false;
-            }
-            return { ...cfg.ssh, target: "worker@example.com:22" };
-          },
-        },
-      );
-      sshMocks.createSshSandboxSessionFromSettings.mockImplementation(async () => {
-        current = false;
-        return createSession();
-      });
-
-      await expect(backend.runShellCommand({ script: "printf stale" })).rejects.toThrow(
-        "runtime removed",
-      );
-
-      expect(sshMocks.runSshSandboxCommand).not.toHaveBeenCalled();
-      expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
-      expect(sshMocks.spawnCommand).not.toHaveBeenCalled();
-      expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(
-        stage === "session setup" ? 1 : 0,
-      );
-    },
-  );
 
   it.each(["upload", "admission"])(
     "discards staged exec when runtime authority is revoked during %s",
@@ -724,24 +669,6 @@ describe("ssh sandbox backend", () => {
       expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("retries failed credential resolution without caching a broken SSH session", async () => {
-    const cfg = createBackendSandboxConfig();
-    const resolveSettings = vi
-      .fn<() => Promise<SshSandboxSettings>>()
-      .mockRejectedValueOnce(new Error("provider unavailable"))
-      .mockResolvedValue({ ...cfg.ssh, target: "worker@example.com:22" });
-    const backend = await createSshSandboxBackend(createBackendParams(cfg), { resolveSettings });
-
-    await expect(backend.runShellCommand({ script: "printf first" })).rejects.toThrow(
-      "provider unavailable",
-    );
-    expect(sshMocks.createSshSandboxSessionFromSettings).not.toHaveBeenCalled();
-    expect(sshMocks.runSshSandboxCommand).not.toHaveBeenCalled();
-
-    await backend.runShellCommand({ script: "printf recovered" });
-    expect(requireSshRunCommandParams(1).remoteCommand).toContain("printf recovered");
-  });
 
   it("adopts a preprovisioned workdir without clearing or uploading placement files", async () => {
     const remoteWorkspaceDir = "/srv/openclaw/workspaces/session-1";

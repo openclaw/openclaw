@@ -125,6 +125,38 @@ async function seedLegacyRuntime() {
 }
 
 describe("durable sandbox runtime generations", () => {
+  it("replays a shared reservation from its original provider workspace", async () => {
+    config.agents = {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        sandbox: { ...config.agents?.defaults?.sandbox, scope: "shared" },
+      },
+    };
+    const originalWorkspace = workspaceDir;
+    const factory = vi.fn(async (params: CreateSandboxBackendParams) => {
+      if (params.workspaceDir !== originalWorkspace) {
+        throw new Error("Provider repository owner changed");
+      }
+      return handle(params);
+    });
+    install(factory);
+    const first = await resolve();
+    workspaceDir = path.join(path.dirname(workspaceDir), "another-repository");
+    const second = await resolveSandboxContext({
+      config,
+      sessionKey: "agent:another:shared-reservation",
+      workspaceDir,
+    });
+    expect(second?.runtimeId).toBe(first?.runtimeId);
+    expect(second?.workspaceDir).toBe(workspaceDir);
+    expect(second?.agentWorkspaceDir).toBe(workspaceDir);
+    expect(factory.mock.calls.map(([params]) => params.workspaceDir)).toEqual([
+      originalWorkspace,
+      originalWorkspace,
+    ]);
+  });
+
   it("rejects a prepared exec removed during supervisor admission and finalizes its artifacts", async () => {
     const marker = path.join(tempDirs.make("sandbox-admission-"), "spawned");
     const finalizeExec = vi.fn(async () => {});

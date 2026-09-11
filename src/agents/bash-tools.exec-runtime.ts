@@ -882,6 +882,7 @@ export async function runExecProcess({
         mode: "child" as const,
         argv: backendExecSpec.argv,
         env: backendExecSpec.env,
+        cwd: backendExecSpec.cwd,
         stdinMode: backendExecSpec.stdinMode,
       };
     }
@@ -909,6 +910,7 @@ export async function runExecProcess({
       mode: opts.usePty ? ("pty" as const) : ("child" as const),
       argv,
       env: shellRuntimeEnv,
+      cwd: opts.workdir,
       stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
     };
   };
@@ -943,7 +945,7 @@ export async function runExecProcess({
       runId: sessionId,
       ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
-      cwd: opts.workdir,
+      cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
       captureOutput: false,

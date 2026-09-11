@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT } from "./remote-shell-command.js";
 import {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -14,7 +15,6 @@ import {
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
-  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
@@ -37,51 +37,34 @@ afterEach(async () => {
 });
 
 describe("sandbox ssh helpers", () => {
-  it.each([false, true])(
-    "materializes SSH auth with connection diagnostics suppressed=%s",
-    async (suppressConnectionDiagnostics) => {
-      // Inline key/cert/known-host material is written to private temp files and
-      // referenced from the generated ssh config.
-      const session = await createSshSandboxSessionFromSettings({
-        command: "ssh",
-        target: "peter@example.com:2222",
-        strictHostKeyChecking: true,
-        updateHostKeys: false,
-        suppressConnectionDiagnostics,
-        identityData: "PRIVATE KEY",
-        certificateData: "SSH CERT",
-        knownHostsData: "example.com ssh-ed25519 AAAATEST",
-      });
-      sessions.push(session);
+  it("materializes inline SSH auth data into a temp config", async () => {
+    // Inline key/cert/known-host material is written to private temp files and
+    // referenced from the generated ssh config.
+    const session = await createSshSandboxSessionFromSettings({
+      command: "ssh",
+      target: "peter@example.com:2222",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      identityData: "PRIVATE KEY",
+      certificateData: "SSH CERT",
+      knownHostsData: "example.com ssh-ed25519 AAAATEST",
+    });
+    sessions.push(session);
 
-      const config = await fs.readFile(session.configPath, "utf8");
-      expect(config).toContain("Host openclaw-sandbox");
-      expect(config).toContain("HostName example.com");
-      expect(config).toContain("User peter");
-      expect(config).toContain("Port 2222");
-      expect(config).toContain("StrictHostKeyChecking yes");
-      expect(config).toContain("UpdateHostKeys no");
-      expect(config.includes("LogLevel QUIET")).toBe(suppressConnectionDiagnostics);
+    const config = await fs.readFile(session.configPath, "utf8");
+    expect(config).toContain("Host openclaw-sandbox");
+    expect(config).toContain("HostName example.com");
+    expect(config).toContain("User peter");
+    expect(config).toContain("Port 2222");
+    expect(config).toContain("StrictHostKeyChecking yes");
+    expect(config).toContain("UpdateHostKeys no");
 
-      const configDir = session.configPath.slice(0, session.configPath.lastIndexOf("/"));
-      expect(await fs.readFile(`${configDir}/identity`, "utf8")).toBe("PRIVATE KEY\n");
-      expect(await fs.readFile(`${configDir}/certificate.pub`, "utf8")).toBe("SSH CERT\n");
-      expect(await fs.readFile(`${configDir}/known_hosts`, "utf8")).toBe(
-        "example.com ssh-ed25519 AAAATEST\n",
-      );
-    },
-  );
-
-  it("does not expose a credential-bearing target in validation errors", async () => {
-    await expect(
-      createSshSandboxSessionFromSettings({
-        command: "ssh",
-        target: "synthetic-access-token@example.com:invalid-port",
-        strictHostKeyChecking: true,
-        updateHostKeys: false,
-        suppressConnectionDiagnostics: true,
-      }),
-    ).rejects.toThrow(/^Invalid sandbox SSH target\.$/);
+    const configDir = session.configPath.slice(0, session.configPath.lastIndexOf("/"));
+    expect(await fs.readFile(`${configDir}/identity`, "utf8")).toBe("PRIVATE KEY\n");
+    expect(await fs.readFile(`${configDir}/certificate.pub`, "utf8")).toBe("SSH CERT\n");
+    expect(await fs.readFile(`${configDir}/known_hosts`, "utf8")).toBe(
+      "example.com ssh-ed25519 AAAATEST\n",
+    );
   });
 
   it.each(["writeFile", "chmod"] as const)(

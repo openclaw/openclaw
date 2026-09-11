@@ -104,11 +104,11 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         };
       }
 
-      async function resolve(session: string) {
+      async function resolve(session: string, callerWorkspaceDir = workspaceDir) {
         const context = await resolveSandboxContext({
           config,
           sessionKey: `agent:main:crabbox-e2e:${session}`,
-          workspaceDir,
+          workspaceDir: callerWorkspaceDir,
         });
         if (!context?.backend || !context.fsBridge) {
           throw new Error("The registered Crabbox backend did not provide exec and file tools.");
@@ -118,9 +118,25 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
 
       let stopGeneration = registerGeneration(path.join(root, "missing-crabbox"));
       let leasesReleased = false;
+      let transferredLease: { id: string; workspaceDir: string } | undefined;
       const errors: unknown[] = [];
+      async function crabbox(args: string[], cwd: string): Promise<string> {
+        try {
+          const result = await promisify(execFile)(sandbox.binary ?? "crabbox", args, {
+            cwd,
+            timeout: 10 * 60_000,
+            maxBuffer: 1024 * 1024,
+          });
+          return result.stdout;
+        } catch {
+          // Provider diagnostics can contain credentials; retain only the action.
+          throw new Error(`Live Crabbox ${args[0]} failed`);
+        }
+      }
       try {
-        await expect(resolve("before-config-repair")).rejects.toThrow(/could not start/);
+        await expect(resolve("before-config-repair")).rejects.toThrow(
+          /requires a build with claim-owned/,
+        );
         const pending = (await readRegistry()).entries[0];
         expect(pending?.runtimeState).toBe("pending");
         if (!pending) {
@@ -143,6 +159,12 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         const first = contexts[0]!;
         expect(contexts[1]!.runtimeId).toBe(first.runtimeId);
         expect((await readRegistry()).entries).toHaveLength(1);
+        const otherWorkspaceDir = path.join(root, "other-workspace");
+        await fs.mkdir(otherWorkspaceDir);
+        await promisify(execFile)("git", ["init", "--quiet", otherWorkspaceDir]);
+        const shared = await resolve("other-workspace", otherWorkspaceDir);
+        expect(shared.runtimeId).toBe(first.runtimeId);
+        expect(shared.workspaceDir).toBe(otherWorkspaceDir);
         console.log(`Crabbox live: concurrent creators share ${first.runtimeId}`);
 
         const execution = await runExecProcess({
@@ -207,10 +229,75 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
           (await recreated.fsBridge.readFile({ filePath: "marker.txt" })).toString("utf8"),
         ).toBe("changed-host-marker\n");
         console.log(`Crabbox live: adopted ${first.runtimeId}; recreated ${recreated.runtimeId}`);
+
+        const admitted = await runExecProcess({
+          command: "true",
+          workdir: workspaceDir,
+          env: {},
+          sandbox: {
+            ...recreated.backend,
+            containerName: recreated.runtimeId,
+            workspaceDir,
+            containerWorkdir: recreated.containerWorkdir,
+          },
+          usePty: false,
+          warnings: [],
+          maxOutput: 10_000,
+          pendingMaxOutput: 10_000,
+          notifyOnExit: false,
+          timeoutSec: 60,
+          beforeSpawn: async () => {
+            await crabbox(
+              [
+                "warmup",
+                ...(sandbox.provider ? ["--provider", sandbox.provider] : []),
+                ...(sandbox.class ? ["--class", sandbox.class] : []),
+                "--lease-id",
+                recreated.runtimeId,
+                "--slug",
+                "openclaw-sandbox",
+                "--keep",
+                "--ttl",
+                sandbox.ttl,
+                "--idle-timeout",
+                sandbox.idleTimeout,
+                "--reclaim",
+              ],
+              otherWorkspaceDir,
+            );
+            transferredLease = { id: recreated.runtimeId, workspaceDir: otherWorkspaceDir };
+            return undefined;
+          },
+        });
+        const denied = await admitted.promise;
+        expect(denied.exitCode).not.toBe(0);
+        expect(denied.aggregated).toMatch(/repository|owned|claim/i);
+        await expect(recreated.fsBridge.readFile({ filePath: "marker.txt" })).rejects.toThrow();
+        await expect(removeSandboxContainer(recreated.runtimeId)).rejects.toThrow();
+        expect((await readRegistry()).entries).toHaveLength(1);
+        expect(
+          await crabbox(
+            ["exec", "--id", recreated.runtimeId, "--", "/bin/sh", "-c", "printf current-owner"],
+            otherWorkspaceDir,
+          ),
+        ).toBe("current-owner");
+        await crabbox(["stop", "--current-repo", "--id", recreated.runtimeId], otherWorkspaceDir);
+        transferredLease = undefined;
+        await removeSandboxContainer(recreated.runtimeId);
+        expect((await readRegistry()).entries).toEqual([]);
+        console.log(
+          "Crabbox live: prepared exec, file access, and cleanup respect repository transfer; current owner succeeds",
+        );
       } catch (error) {
         errors.push(error);
       } finally {
         try {
+          if (transferredLease) {
+            await crabbox(
+              ["stop", "--current-repo", "--id", transferredLease.id],
+              transferredLease.workspaceDir,
+            );
+          }
           const cleanup = await Promise.allSettled(
             (await readRegistry()).entries.map((entry) =>
               removeSandboxContainer(entry.containerName),

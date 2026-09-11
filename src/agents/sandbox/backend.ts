@@ -209,6 +209,7 @@ export async function createSandboxBackend(
         try {
           const backend = await factory({
             ...params,
+            workspaceDir: reservation.workspaceDir ?? params.workspaceDir,
             runtimeId: reservation.containerName,
             assertRuntimeCurrent: () => assertSandboxRegistryEntryCurrent(reservation),
           });
