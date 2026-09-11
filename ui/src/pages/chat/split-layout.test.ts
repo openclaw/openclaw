@@ -225,18 +225,15 @@ describe("chat split layout", () => {
             { id: "p1", sessionKey: "second" },
           ],
           paneWeights: [2 / 3, 1 / 3],
-          customPaneWeights: false,
         },
         {
           id: "c1",
           panes: [{ id: "p2", sessionKey: "third" }],
           paneWeights: [1],
-          customPaneWeights: false,
         },
       ],
       columnWeights: [0.5, 0.5],
       activePaneId: "same",
-      customColumnWeights: false,
     });
     const manual = normalizeChatSplitLayout({
       columns: [
@@ -253,7 +250,10 @@ describe("chat split layout", () => {
       customColumnWeights: true,
     });
     expect(manual?.customColumnWeights).toBe(true);
-    expect(manual?.columns.map((column) => column.customPaneWeights)).toEqual([true, false]);
+    expect(manual?.columns.map((column) => column.customPaneWeights === true)).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it("balances every column and stacked pane and clears manual sizing", () => {
