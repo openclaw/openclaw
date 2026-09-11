@@ -103,6 +103,7 @@ export function loadTranscriptReadSnapshotSync(scope: SessionTranscriptReadScope
       return {
         events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
           beforeEventSeq: fence?.beforeRawSeq,
+          maxEventBytes: scope.maxEventBytes,
         }),
         version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
       };
@@ -266,10 +267,31 @@ export function readTranscriptEventAtSeqSync(
 export function loadTranscriptEventsFromDatabase(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  options: { beforeEventSeq?: number; projection?: "reset-boundary" } = {},
+  options: {
+    beforeEventSeq?: number;
+    projection?: "reset-boundary";
+    maxEventBytes?: number;
+  } = {},
 ): TranscriptEvent[] {
-  const { beforeEventSeq } = options;
+  const { beforeEventSeq, maxEventBytes } = options;
   const db = getSessionKysely(database.db);
+  if (maxEventBytes !== undefined && Number.isFinite(maxEventBytes) && maxEventBytes >= 0) {
+    const budget = Math.floor(maxEventBytes);
+    const aggregate: { size_bytes: number | null } | undefined = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select(sqliteTranscriptJsonlByteSize())
+        .where("session_id", "=", sessionId)
+        .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!)),
+    );
+    const totalBytes = aggregate?.size_bytes ?? 0;
+    if (totalBytes > budget) {
+      throw new Error(
+        `Trajectory transcript store is too large to export (${totalBytes} bytes; limit ${budget})`,
+      );
+    }
+  }
   const rows = iterateSqliteQuerySync(
     database.db,
     db
