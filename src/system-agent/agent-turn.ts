@@ -58,6 +58,8 @@ export type SystemAgentTurnRunner = (params: {
   approvalArmed: boolean;
   /** The host authorizes delegated proposals; chat replies cannot self-approve. */
   operatorApprovalOnly?: boolean;
+  /** Conversation owner used only for agent-scoped memory prompt preparation. */
+  memoryPromptAgentId?: string;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -408,6 +410,7 @@ async function runSystemAgentTurnWithDeps(
         ...shared,
         lane: CommandLane.SystemAgentInference,
         preparedRunAdmission,
+        memoryPromptAgentId: params.memoryPromptAgentId ?? plan.agentId,
         extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
         toolsAllow: ["openclaw"],
         // The helper cannot read workspace skills; skip their discovery and environment setup.
