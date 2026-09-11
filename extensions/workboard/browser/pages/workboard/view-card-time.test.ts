@@ -33,12 +33,12 @@ it("updates idle card times at their boundaries without replacing focused contro
     container,
   );
   expect(vi.getTimerCount()).toBe(1);
-  const input = expectDefined(container.querySelector("input"));
+  const input = expectDefined(container.querySelector("input"), "focused draft input");
   input.focus();
   input.setSelectionRange(2, 5);
   const times = container.querySelectorAll("time");
-  const first = expectDefined(times[0]);
-  const second = expectDefined(times[1]);
+  const first = expectDefined(times[0], "first card timestamp");
+  const second = expectDefined(times[1], "second card timestamp");
   expect(first.textContent).toBe("just now");
   vi.advanceTimersByTime(40_000);
   expect(first.textContent).toBe("just now");
