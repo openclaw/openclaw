@@ -66,7 +66,7 @@ function renderPicker(
       onPopoverHide: vi.fn(),
       onPopoverAfterHide: vi.fn(),
       onSelectDevice: vi.fn(),
-      onToggleAutoDevice: vi.fn(),
+      onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
       ...presentation,
@@ -189,10 +189,13 @@ describe("Where chip", () => {
     );
 
     expect(
-      [...container.querySelectorAll(".new-session-page__environment-list [data-value]")].map(
-        (row) => row.getAttribute("data-value"),
-      ),
+      [
+        ...container.querySelectorAll(
+          '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
+        ),
+      ].map((row) => row.getAttribute("data-value")),
     ).toEqual(expected);
+    expect(container.querySelector('[data-value="auto-device"]')).not.toBeNull();
   });
 
   it("keeps matching Local, Devices and Cloud in order with device facts searchable", () => {
@@ -229,21 +232,28 @@ describe("Where chip", () => {
       [...container.querySelectorAll(".new-session-page__environment-list [data-value]")].map(
         (row) => row.getAttribute("data-value"),
       ),
-    ).toEqual(["gateway", "device:alpha", "device:zulu", "cloud:linux-worker"]);
+    ).toEqual(["gateway", "device:alpha", "device:zulu", "auto-device", "cloud:linux-worker"]);
     expect(container.querySelector('[data-value="device:alpha"]')?.textContent).toContain("Linux");
+    const cloudTitle = container.querySelector(".new-session-page__menu-title");
+    expect(cloudTitle?.textContent).toBe("Cloud");
+    expect(cloudTitle?.previousElementSibling?.getAttribute("data-value")).toBe("auto-device");
+    expect(cloudTitle?.nextElementSibling?.getAttribute("data-value")).toBe("cloud:linux-worker");
+    expect(
+      cloudTitle?.nextElementSibling?.querySelector(".session-menu__text")?.textContent?.trim(),
+    ).toBe("linux-worker");
   });
 
-  it("keeps Auto and Connect outside search results and reports an empty search", () => {
+  it("keeps Auto selectable and Connect available when no environments match", () => {
     const container = renderPicker(true, undefined, {}, { environmentQuery: "no-such-runner" });
     const results = container.querySelector(".new-session-page__environment-list");
 
-    expect(results?.querySelectorAll("[data-value]")).toHaveLength(0);
+    expect(results?.querySelectorAll("[data-value]")).toHaveLength(1);
     expect(results?.textContent).toContain("No matching environments");
     for (const value of ["auto-device", "connect-machine"]) {
       const action = container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
       expect(action).not.toBeNull();
       expect(action?.disabled).toBe(false);
-      expect(results?.contains(action)).toBe(false);
+      expect(results?.contains(action)).toBe(value === "auto-device");
     }
   });
 
@@ -278,6 +288,8 @@ describe("Where chip", () => {
     expect(selected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "1 of 2 slots busy",
     );
+    expect(selected?.getAttribute("aria-pressed")).toBe("true");
+    expect(unselected?.getAttribute("aria-pressed")).toBe("false");
     expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
     expect(unselected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "0 of 1 slots busy",
@@ -286,27 +298,28 @@ describe("Where chip", () => {
     expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
   });
 
-  it.each([false, true])("toggles automatic placement from %s", (autoDevice) => {
+  it.each([false, true])("selects automatic placement with Auto initially %s", (autoDevice) => {
     const onSelectDevice = vi.fn();
-    const onToggleAutoDevice = vi.fn();
+    const onSelectAutoDevice = vi.fn();
     const container = renderPicker(
       true,
       undefined,
       { autoDevice },
-      { onSelectDevice, onToggleAutoDevice },
+      { onSelectDevice, onSelectAutoDevice },
     );
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]')!;
 
-    expect(automatic.getAttribute("role")).toBe("switch");
-    expect(automatic.getAttribute("aria-checked")).toBe(String(autoDevice));
-    expect(automatic.textContent).toContain("Connected devices only");
+    expect(automatic.getAttribute("role")).toBeNull();
+    expect(automatic.getAttribute("aria-pressed")).toBe(String(autoDevice));
+    expect(automatic.textContent).toContain("Auto");
+    expect(automatic.textContent).toContain("Least-busy device");
     automatic.click();
 
-    expect(onToggleAutoDevice).toHaveBeenCalledExactlyOnceWith(!autoDevice);
+    expect(onSelectAutoDevice).toHaveBeenCalledExactlyOnceWith(expect.any(MouseEvent));
     expect(onSelectDevice).not.toHaveBeenCalled();
   });
 
-  it("requires turning off Auto before choosing a destination without locking search or Connect", () => {
+  it("allows choosing a destination directly while Auto is selected", () => {
     const onSelectDevice = vi.fn();
     const onSelectCloudProfile = vi.fn();
     const onEnvironmentQueryInput = vi.fn();
@@ -321,13 +334,18 @@ describe("Where chip", () => {
       ".new-session-page__environment-list [data-value]",
     );
 
-    expect(destinations).toHaveLength(5);
+    expect(destinations).toHaveLength(6);
     for (const destination of destinations) {
-      expect(destination.disabled).toBe(true);
+      expect(destination.disabled).toBe(false);
       destination.click();
     }
-    expect(onSelectDevice).not.toHaveBeenCalled();
-    expect(onSelectCloudProfile).not.toHaveBeenCalled();
+    expect(onSelectDevice.mock.calls).toEqual([
+      [""],
+      ["runner"],
+      ["alpha-device"],
+      ["beta-device"],
+    ]);
+    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws");
 
     const meter = container.querySelector('[data-value="device:runner"] [role="img"]');
     expect(meter?.getAttribute("aria-label")).toBe("1 of 2 slots busy");
@@ -382,7 +400,7 @@ describe("Where chip", () => {
 
     for (const value of ["gateway", "device:ready", "cloud:aws"]) {
       expect(container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)?.disabled).toBe(
-        autoDevice,
+        false,
       );
     }
     for (const value of ["device:offline", "cloud:blocked"]) {
@@ -390,33 +408,25 @@ describe("Where chip", () => {
         true,
       );
     }
+    expect(
+      container.querySelector('[data-value="cloud:blocked"] .session-menu__description')
+        ?.textContent,
+    ).toBe(" · Runtime unavailable");
     expect(container.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
       String(!autoDevice),
     );
   });
 
-  it.each([
-    { submitting: false, pendingPlacement: false, disabled: false },
-    { submitting: true, pendingPlacement: false, disabled: true },
-    { submitting: false, pendingPlacement: true, disabled: true },
-  ])("allows turning off Auto without devices except during submission: %j", (presentation) => {
-    const onToggleAutoDevice = vi.fn();
-    const container = renderPicker(
-      true,
-      undefined,
-      { environments: [], autoDevice: true },
-      { ...presentation, onToggleAutoDevice },
-    );
-    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]')!;
-
-    expect(automatic.disabled).toBe(presentation.disabled);
-    automatic.click();
-    if (presentation.disabled) {
-      expect(onToggleAutoDevice).not.toHaveBeenCalled();
-    } else {
-      expect(onToggleAutoDevice).toHaveBeenCalledExactlyOnceWith(false);
-    }
-  });
+  it.each([false, true])(
+    "omits Auto without devices even when its remembered state is %s",
+    (autoDevice) => {
+      const container = renderPicker(true, undefined, { environments: [], autoDevice });
+      expect(container.querySelector('[data-value="auto-device"]')).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>('[data-value="gateway"]')?.disabled).toBe(
+        false,
+      );
+    },
+  );
 
   it("keeps unavailable operating systems visible with the provider's repair hint", () => {
     const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
@@ -535,9 +545,8 @@ describe("Where chip", () => {
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
-    expect(autoRow?.textContent).toContain("Choose a device automatically");
-    expect(autoRow?.getAttribute("role")).toBe("switch");
-    expect(autoRow?.getAttribute("aria-checked")).toBe("false");
+    expect(autoRow?.textContent).toContain("Auto");
+    expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(autoRow?.querySelector(".session-menu__description")?.textContent).toContain(
       "Least-busy device",
     );
@@ -602,7 +611,7 @@ describe("Where chip", () => {
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
         onSelectDevice: () => undefined,
-        onToggleAutoDevice: () => undefined,
+        onSelectAutoDevice: () => undefined,
         onSelectCloudProfile: () => undefined,
         onConnectMachine: () => undefined,
       }),
@@ -611,45 +620,11 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("This runtime does not support paired devices");
+    expect(device?.querySelector(".session-menu__description")?.textContent).toBe(
+      " · This runtime does not support paired devices",
+    );
     // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
     expect(device?.title).toBe("This runtime does not support paired devices");
-  });
-
-  it("omits automatic placement when no devices are paired and Auto is off", () => {
-    const state = resolveWhereChip({
-      environments: [],
-      cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
-    });
-    const emptyContainer = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        environmentQuery: "",
-        onEnvironmentQueryInput: vi.fn(),
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onToggleAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-      }),
-      emptyContainer,
-    );
-    expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
   it.each([
@@ -706,7 +681,7 @@ describe("Where chip", () => {
         onPopoverHide: vi.fn(),
         onPopoverAfterHide: vi.fn(),
         onSelectDevice: vi.fn(),
-        onToggleAutoDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
         onSelectCloudProfile: vi.fn(),
         onConnectMachine: vi.fn(),
       }),
@@ -716,7 +691,7 @@ describe("Where chip", () => {
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
     expect(automatic?.title).toMatch(reason);
-    expect(automatic?.textContent).toMatch(reason);
+    expect(automatic?.querySelector(".session-menu__description")?.textContent).toMatch(reason);
   });
 
   it.each([
@@ -830,7 +805,7 @@ describe("Where chip", () => {
           onPopoverHide: vi.fn(),
           onPopoverAfterHide: vi.fn(),
           onSelectDevice: vi.fn(),
-          onToggleAutoDevice: vi.fn(),
+          onSelectAutoDevice: vi.fn(),
           onSelectCloudProfile: vi.fn(),
           onConnectMachine: vi.fn(),
         }),

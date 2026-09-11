@@ -40,7 +40,7 @@ export {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
-const { relays, relayBridges, pendingBridgeOperations } = nativeHookRelayState;
+const { relays, relayBridges, pendingOperations } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
@@ -106,22 +106,19 @@ export function registerNativeHookRelayBridge(
     });
   });
   bridge.pending = bridge.ready;
-  retainNativeHookRelayBridgeOperation(bridge, bridge.ready);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.ready);
   server.listen(0, "127.0.0.1");
   server.unref();
   return bridge;
 }
 
-function retainNativeHookRelayBridgeOperation(
-  bridge: NativeHookRelayBridgeRegistration,
-  operation: Promise<void>,
-): void {
-  pendingBridgeOperations.add(operation);
+export function retainNativeHookRelayOperation(relayId: string, operation: Promise<void>): void {
+  pendingOperations.add(operation);
   void operation.then(
-    () => pendingBridgeOperations.delete(operation),
+    () => pendingOperations.delete(operation),
     (error: unknown) => {
-      pendingBridgeOperations.delete(operation);
-      log.debug("native hook relay bridge operation failed", { error, relayId: bridge.relayId });
+      pendingOperations.delete(operation);
+      log.debug("native hook relay operation failed", { error, relayId });
     },
   );
 }
@@ -222,7 +219,7 @@ export async function renewNativeHookRelayBridgeRecord(
         : "ownership-changed";
     });
   bridge.pending = renewal.then(() => undefined);
-  retainNativeHookRelayBridgeOperation(bridge, bridge.pending);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.pending);
   return await renewal;
 }
 
@@ -273,7 +270,7 @@ export function unregisterNativeHookRelayBridge(
       }
     });
   bridge.pending = bridge.closing;
-  retainNativeHookRelayBridgeOperation(bridge, bridge.closing);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.closing);
   return bridge.closing;
 }
 
@@ -387,8 +384,8 @@ export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
   for (const relayId of relayBridges.keys()) {
     void unregisterNativeHookRelayBridge(relayId);
   }
-  while (pendingBridgeOperations.size > 0) {
-    await Promise.allSettled(pendingBridgeOperations);
+  while (pendingOperations.size > 0) {
+    await Promise.allSettled(pendingOperations);
   }
   await clearNativeHookRelayBridgeRecordsForTests();
 }

@@ -176,8 +176,12 @@ it("invalidates cached custody notices when workspace sync ownership changes", (
   });
   const active = buildCachedChatItems(input);
 
-  expect(waiting.some((item) => item.kind === "notice")).toBe(true);
-  expect(active.some((item) => item.kind === "notice")).toBe(false);
+  expect(waiting.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+    "Received · waiting for workspace sync",
+  ]);
+  expect(active.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+    "Queued · waiting for the agent",
+  ]);
 });
 
 function queuedSend(

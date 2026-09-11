@@ -254,9 +254,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
     const retain = metadataModule.retainGatewayPluginMetadata;
     const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation(() => {
-      const release = retain();
+      const owner = retain();
       metadataRetains++;
-      return () => { release(); metadataReleases++; };
+      return { ...owner, close: async (...args) => {
+        await own(owner.close(...args));
+        metadataReleases++;
+      } };
     });
     restorers.push(() => metadataSpy.mockRestore());
     const prepare = lifecycleModule.prepareGatewayLifecycle;

@@ -176,6 +176,7 @@ function fixture(
       headRefOid: head,
       baseRefName: "main",
       isDraft: false,
+      author: { login: "fixture-contributor", __typename: "User" },
       mergeCommit: null as { oid: string } | null,
       autoMergeRequest: null as { mergeMethod: string } | null,
       isInMergeQueue: false,
@@ -378,6 +379,9 @@ else if(args[0]==="pr"&&args[1]==="view") {
     save();
     out([[...s.issueComments,...s.comments]]);
   }
+} else if(args[0]==="api"&&new RegExp("^repos/fixture/repo/commits/[0-9a-f]{40}$").test(args[1])&&args.includes("--jq")) {
+  const oid=args[1].split("/").at(-1);
+  out({name:git(["show","-s","--format=%an",oid]),email:git(["show","-s","--format=%ae",oid]),user:{login:s.pr.author.login,type:"User"}});
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
   out({parents:[{sha:git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
@@ -2015,7 +2019,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   ])(
     "submits verified attribution with pinned head for %j",
     ({ auto, admin, mergeState, route }) => {
-      const credit = "Co-authored-by: Fixture Contributor <contributor@example.invalid>";
+      const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
       const f = fixture(`Source change\n\n${credit}\n`);
       f.save({
         ...f.state(),

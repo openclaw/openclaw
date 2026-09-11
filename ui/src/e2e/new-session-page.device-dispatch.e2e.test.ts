@@ -24,7 +24,7 @@ const gitRepository = {
 };
 
 suite.define(() => {
-  it("lists Local, devices, then Cloud with Auto outside the destination list", async () => {
+  it("lists Local, devices, Auto, then grouped Cloud profiles", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -63,11 +63,31 @@ suite.define(() => {
               elements.map((element) => element.getAttribute("data-value")),
             ),
         )
-        .toEqual(["gateway", "device:paired-runner", "cloud:aws"]);
-      expect(await picker.locator(".new-session-page__menu-title").count()).toBe(0);
-      const auto = picker.getByRole("switch", { name: "Choose a device automatically" });
-      expect(await auto.getAttribute("aria-checked")).toBe("false");
-      expect(await destinations.getByRole("switch").count()).toBe(0);
+        .toEqual(["gateway", "device:paired-runner", "auto-device", "cloud:aws"]);
+      expect(await picker.locator(".new-session-page__menu-title").allTextContents()).toEqual([
+        "Cloud",
+      ]);
+      const auto = destinations.getByRole("button", {
+        name: "Auto · Least-busy device",
+        exact: true,
+      });
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
+      expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
+      await auto.click();
+      const trigger = page.locator("#new-session-where-trigger");
+      await expect.poll(() => trigger.getAttribute("data-auto-device")).toBe("true");
+      await trigger.click();
+      await expect.poll(() => auto.getAttribute("aria-pressed")).toBe("true");
+      await destinations.locator('[data-value="device:paired-runner"]').click();
+      await expect.poll(() => trigger.getAttribute("data-device-id")).toBe("paired-runner");
+      expect(await trigger.getAttribute("data-auto-device")).toBeNull();
+      await trigger.click();
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
+      expect(
+        await destinations
+          .locator('[data-value="device:paired-runner"]')
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
     } finally {
       await context.close();
     }
@@ -240,9 +260,8 @@ suite.define(() => {
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
-        // Active Auto remains switchable off even when its inventory is unavailable.
-        expect(await automaticDevice.isEnabled()).toBe(value === "auto-device");
-        expect(await localDevice.isDisabled()).toBe(value === "auto-device");
+        expect(await automaticDevice.isDisabled()).toBe(true);
+        expect(await localDevice.isEnabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.deferNext("environments.list");
@@ -264,7 +283,7 @@ suite.define(() => {
         });
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 2 });
         await expect.poll(() => start.isEnabled()).toBe(true);
-        expect(await selectedDevice.isDisabled()).toBe(value === "auto-device");
+        expect(await selectedDevice.isEnabled()).toBe(true);
         expect(await automaticDevice.isEnabled()).toBe(true);
       } finally {
         await context.close();
@@ -471,17 +490,10 @@ suite.define(() => {
 
         await where.click();
         const local = page.locator('[data-value="gateway"]');
-        if (preference.kind === "auto-device") {
-          expect(await local.isDisabled()).toBe(true);
-          const auto = page.getByRole("switch", { name: "Choose a device automatically" });
-          expect(await auto.getAttribute("aria-checked")).toBe("true");
-          await auto.click();
-          await expect.poll(() => auto.getAttribute("aria-checked")).toBe("false");
-          await expect.poll(() => local.getAttribute("aria-pressed")).toBe("true");
-          await page.keyboard.press("Escape");
-        } else {
-          await local.click();
-        }
+        expect(await local.isEnabled()).toBe(true);
+        await local.click();
+        await expect.poll(() => where.getAttribute("data-auto-device")).toBeNull();
+        await expect.poll(() => where.getAttribute("data-device-id")).toBeNull();
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
         await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({

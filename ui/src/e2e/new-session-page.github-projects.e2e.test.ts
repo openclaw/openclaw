@@ -381,7 +381,9 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => metadataRequested).toBe(true);
-      expect(await page.locator(".chat-notice").count()).toBe(0);
+      await expect
+        .poll(async () => (await page.locator(".chat-notice").textContent())?.trim())
+        .toBe("Queued · waiting for the agent");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
       if (artifactDir) {

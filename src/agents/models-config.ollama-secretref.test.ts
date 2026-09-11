@@ -8,6 +8,7 @@ import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-sh
 import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawPluginDefinition, ProviderPlugin } from "../plugins/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -15,7 +16,6 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 

@@ -112,8 +112,8 @@ export async function validateUpdateCandidateCanary(params: {
 }): Promise<CanaryResult> {
   const started = Date.now();
   const budget = Math.max(1, params.timeoutMs ?? 300_000);
-  const deadline = started + budget;
-  const workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
+  let deadline = started + budget;
+  let workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
   const remaining = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -263,15 +263,21 @@ export async function validateUpdateCandidateCanary(params: {
     if (!policy.fix) {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
+    const snapshotStarted = Date.now();
     rehearsal ??= await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,
       nodeRunner: params.nodeRunner,
-      timeoutMs: remaining(),
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
     });
+    // Copying private state has its own size/progress budget; preserve the
+    // runtime validation budget after large snapshots finish.
+    const snapshotDuration = Date.now() - snapshotStarted;
+    deadline += snapshotDuration;
+    workDeadline += snapshotDuration;
     env = { ...rehearsal.env };
     const { port } = rehearsal;
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [

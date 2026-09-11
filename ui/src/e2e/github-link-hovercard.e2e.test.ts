@@ -1,6 +1,7 @@
 // Control UI tests cover GitHub link hover card behavior.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -367,32 +368,42 @@ describeControlUiE2e("GitHub link hover cards", () => {
     },
   );
 
-  it("reloads a dismissed pending preview on rehover and caches the successful response", async () => {
+  it("warms visible links before first hover and shares data across permalinks", async () => {
+    const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage(true);
+
+    await gateway.waitForRequest("controlUi.githubPreview");
+    expect(await card.count()).toBe(0);
+    expect(await pullLink.evaluate((element) => element.matches(":hover, :focus"))).toBe(false);
+    await gateway.resolveDeferred("controlUi.githubPreview");
+    await pullLink.hover();
+    await expectText(card, pullPreviewResponse.title);
+    await page.mouse.move(1, 1);
+    await expect.poll(() => card.count()).toBe(0);
+    await commentLink.focus();
+    await expectText(card, pullPreviewResponse.title);
+    expect(await card.locator(".github-link-hovercard__title").getAttribute("href")).toBe(
+      PULL_COMMENT_HREF,
+    );
+    expect(await gateway.getRequests("controlUi.githubPreview")).toHaveLength(1);
+  });
+
+  it("keeps a pending prefetch alive across dismissal and reuses it on rehover", async () => {
     const proofDir =
       artifactDir ?? createControlUiE2eArtifactDir("github-link-hovercard-cancellation");
     const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
 
-    await pullLink.hover();
     await gateway.waitForRequest("controlUi.githubPreview");
     expect(await card.count()).toBe(0);
     expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+    await pullLink.hover();
+    await page.clock.runFor(300);
     await page.mouse.move(1, 1);
     await expect.poll(() => card.count()).toBe(0);
 
-    await gateway.deferNext("controlUi.githubPreview");
     await pullLink.hover();
-    await expect
-      .poll(async () => (await gateway.getRequests("controlUi.githubPreview")).length)
-      .toBe(2);
-    expect(await card.count()).toBe(0);
-    // The abandoned response arrives after rehover; a fresh request must own
-    // the rendered result, and the retired response must not poison its cache.
-    await gateway.resolveDeferred("controlUi.githubPreview", {
-      ...pullPreviewResponse,
-      title: "Stale result",
-    });
     await page.clock.runFor(300);
-    expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+    expect(await card.count()).toBe(0);
+    // The transcript still owns this request after the popup activation ends.
     await gateway.resolveDeferred("controlUi.githubPreview");
     await expectText(card, pullPreviewResponse.title);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
@@ -401,13 +412,13 @@ describeControlUiE2e("GitHub link hover cards", () => {
       path: path.join(proofDir, "github-hovercard-cancellation-rehover.png"),
     });
     await expectText(card, pullPreviewResponse.title);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
 
     await page.mouse.move(1, 1);
     await expect.poll(() => card.count()).toBe(0);
     await pullLink.hover();
     await expectText(card, pullPreviewResponse.title);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
   });
 
   it("previews issue and pull request links while preserving navigation", async () => {
@@ -503,6 +514,10 @@ describeControlUiE2e("GitHub link hover cards", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
 
+    const previewRequestsFor = async (number: number) =>
+      (await gateway.getRequests("controlUi.githubPreview")).filter(
+        (request) => isRecord(request.params) && request.params.number === number,
+      );
     const message = page.locator(".chat-text").filter({ hasText: "Review" });
     if (artifactDir) {
       await message.screenshot({ path: path.join(artifactDir, "github-references-light.png") });
@@ -542,7 +557,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     expect(await pullLink.getAttribute("title")).toBeNull();
     await expect.poll(() => card.locator("img").count()).toBe(1);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
+    expect(await previewRequestsFor(99816)).toHaveLength(1);
     const pullBox = await card.boundingBox();
     expect(pullBox).not.toBeNull();
     expect(pullBox!.x).toBeGreaterThanOrEqual(0);
@@ -557,13 +572,13 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "4 comments");
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect(await previewRequestsFor(99815)).toHaveLength(1);
 
     await page.mouse.move(1, 1);
     await expect.poll(() => card.count()).toBe(0);
     await issueLink.hover();
     await expectText(card, "4 comments");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect(await previewRequestsFor(99815)).toHaveLength(1);
 
     await page.mouse.move(1, 1);
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
@@ -578,9 +593,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
-    await expect
-      .poll(async () => (await gateway.getRequests("controlUi.githubPreview")).length)
-      .toBe(3);
+    await expect.poll(() => previewRequestsFor(999999)).toHaveLength(1);
     await expect.poll(() => card.count()).toBe(0);
     expect(await missingLink.getAttribute("aria-haspopup")).toBeNull();
     expect(await missingLink.getAttribute("href")).toBe(
@@ -592,7 +605,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
     await pullLink.hover();
     await expectText(card, "Merged");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(3);
+    expect(await previewRequestsFor(99816)).toHaveLength(1);
     await page.mouse.move(1, 1);
 
     await pullLink.focus();

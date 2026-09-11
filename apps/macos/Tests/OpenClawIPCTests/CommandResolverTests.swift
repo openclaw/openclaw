@@ -687,3 +687,39 @@ import Testing
         #expect(settings.identity == "/tmp/id_ed25519")
     }
 }
+
+struct CommandResolverLocalRoutingTests {
+    @Test(arguments: [
+        ["/fixture/managed/openclaw"],
+        ["/fixture/node", "/fixture/project/openclaw.mjs"],
+        ["/fixture/pnpm", "--silent", "openclaw"],
+    ])
+    func `local service resolution ignores an SSH primary while ordinary commands retain SSH`(
+        prefix: [String]) async
+    {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "routing-proof"])
+        let settings = CommandResolver.RemoteSettings(
+            mode: .remote, transport: .ssh, target: "operator@remote.example", identity: "",
+            projectRoot: "", cliPath: "", sshHostKeyPolicy: .strict)
+        let local = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway", extraArgs: ["install", "--allow-unconfigured"], profile: profile,
+            resolveCLI: { _, _ in .executable(prefix) })
+        #expect(local == prefix + [
+            "--profile", "routing-proof", "gateway", "install", "--allow-unconfigured",
+        ])
+        let remote = await CommandResolver.openclawCommand(
+            subcommand: "gateway", extraArgs: ["status"], settings: settings,
+            localCommand: { local })
+        #expect(remote.first == "/usr/bin/ssh")
+        #expect(remote.contains("operator@remote.example"))
+        #expect(remote.last?.contains("'gateway' 'status'") == true)
+    }
+
+    @Test func `a missing local CLI fails locally instead of falling back to the primary`() async {
+        let command = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway", profile: AppProfile(environment: [:]),
+            resolveCLI: { _, _ in .unavailable("fixture CLI unavailable") })
+        #expect(command.prefix(2) == ["/bin/sh", "-c"])
+        #expect(command.last?.contains("fixture CLI unavailable") == true)
+    }
+}

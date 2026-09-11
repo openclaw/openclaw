@@ -8,12 +8,13 @@ import {
   FakeProvider,
   finalizeTestManagerCalls,
 } from "./manager.test-harness.js";
+import * as callStore from "./manager/store.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { connectWs, waitForClose } from "./websocket-test-support.js";
 
-type ResponseParams = { onEarlyText?: (text: string) => Promise<boolean> };
+type ResponseParams = { userMessage: string; onEarlyText?: (text: string) => Promise<boolean> };
 type ResponseResult = { text: string; deliveredEarly: boolean };
 const mocks = vi.hoisted(() => ({
   generate: vi.fn<(params: ResponseParams) => Promise<ResponseResult>>(),
@@ -164,9 +165,9 @@ afterEach(async () => {
     await server.stop();
   }
   for (const manager of managers.splice(0)) {
-    finalizeTestManagerCalls(manager);
+    await finalizeTestManagerCalls(manager);
   }
-  state.cleanup();
+  await state.cleanup();
 });
 
 describe("automatic phone reply ownership", () => {
@@ -189,6 +190,162 @@ describe("automatic phone reply ownership", () => {
       await second.finish("current reply");
       expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
       expect(call.provider.clearTtsQueue).toHaveBeenCalled();
+    },
+  );
+
+  it.each(["native", "partial", "final"] as const)(
+    "revokes a reply waiting for persistence when %s stream speech arrives",
+    async (signal) => {
+      const call = await startCall(true);
+      const { callbacks } = await call.openStream("stream-pending-write");
+      callbacks.onTranscript?.("first question");
+      const first = await responseAt(0);
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const persist = callStore.persistCallRecord;
+      const persistence = vi
+        .spyOn(callStore, "persistCallRecord")
+        .mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          await persist(...args);
+        });
+      try {
+        const delivery = first.early("obsolete early reply");
+        await entered.promise;
+        expect(call.provider.playTtsCalls).toEqual([]);
+        if (signal === "native") {
+          callbacks.onSpeechStart?.();
+        } else if (signal === "partial") {
+          callbacks.onPartial?.("wait");
+        } else {
+          callbacks.onTranscript?.("replacement question");
+        }
+        release.resolve();
+        expect(await delivery).toBe(false);
+        expect(call.provider.playTtsCalls).toEqual([]);
+        await first.finish("obsolete final reply");
+        if (signal !== "final") {
+          callbacks.onTranscript?.("replacement question");
+        }
+        const second = await responseAt(1);
+        await second.finish("current reply");
+        expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
+      } finally {
+        release.resolve();
+        persistence.mockRestore();
+      }
+    },
+  );
+
+  it.each(["native", "partial", "final"] as const)(
+    "does not revive a pending transcript reply after newer %s stream speech",
+    async (signal) => {
+      const call = await startCall(true);
+      const { callbacks } = await call.openStream("stream-pending-transcript");
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const persist = callStore.persistCallRecord;
+      const persistence = vi
+        .spyOn(callStore, "persistCallRecord")
+        .mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          await persist(...args);
+        });
+      const processEvent = vi.spyOn(call.manager, "processEvent");
+      try {
+        callbacks.onTranscript?.("obsolete question");
+        await entered.promise;
+        const firstEvent = processEvent.mock.results.at(0);
+        if (!firstEvent || firstEvent.type !== "return") {
+          throw new Error("Expected admitted transcript persistence");
+        }
+        if (signal === "native") {
+          callbacks.onSpeechStart?.();
+        } else if (signal === "partial") {
+          callbacks.onPartial?.("wait");
+        } else {
+          // Stream transcript IDs use milliseconds; keep these two fixture events distinct.
+          const firstTimestamp = processEvent.mock.calls.at(0)?.[0].timestamp;
+          if (firstTimestamp === undefined) {
+            throw new Error("Expected first transcript timestamp");
+          }
+          await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(firstTimestamp));
+          callbacks.onTranscript?.("replacement question");
+        }
+        release.resolve();
+        await firstEvent.value;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (signal !== "final") {
+          callbacks.onTranscript?.("replacement question");
+        }
+        await vi.waitFor(() =>
+          expect(
+            mocks.generate.mock.calls.some(
+              ([params]) => params.userMessage === "replacement question",
+            ),
+          ).toBe(true),
+        );
+        expect(mocks.generate.mock.calls.map(([params]) => params.userMessage)).toEqual([
+          "replacement question",
+        ]);
+        expect(call.manager.getCall(call.callId)?.transcript.map((entry) => entry.text)).toEqual([
+          "obsolete question",
+          "replacement question",
+        ]);
+        const current = await responseAt(0);
+        await current.finish("current reply");
+        expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
+      } finally {
+        release.resolve();
+        persistence.mockRestore();
+        processEvent.mockRestore();
+      }
+    },
+  );
+
+  it.each(["partial", "final"] as const)(
+    "orders automatic playback behind queued carrier %s speech",
+    async (signal) => {
+      const call = await startCall();
+      await call.speech("first question");
+      const first = await responseAt(0);
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const persist = callStore.persistCallRecord;
+      const persistence = vi
+        .spyOn(callStore, "persistCallRecord")
+        .mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          await persist(...args);
+        });
+      const processEvent = vi.spyOn(call.manager, "processEvent");
+      try {
+        const delivery = first.early("obsolete reply");
+        await entered.promise;
+        const speech = call.speech("replacement question", signal === "final");
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+        expect(call.provider.playTtsCalls).toEqual([]);
+        release.resolve();
+        await speech;
+        expect(await delivery).toBe(false);
+        expect(call.provider.playTtsCalls).toEqual([]);
+        await first.finish("");
+        if (signal === "partial") {
+          await call.speech("replacement question");
+        }
+        const replacement = await responseAt(1);
+        await replacement.finish("current reply");
+        expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
+      } finally {
+        release.resolve();
+        persistence.mockRestore();
+        processEvent.mockRestore();
+      }
     },
   );
 
@@ -250,25 +407,71 @@ describe("automatic phone reply ownership", () => {
     if (!turnToken) {
       throw new Error("Expected explicit turn token");
     }
-    await call.speech("obsolete input", true, "mismatched-event", "old-token");
-    await first.finish("current reply");
-    expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual([
-      "explicit prompt",
-      "current reply",
-    ]);
-    expect(await first.early("late callback after completion")).toBe(false);
-    await call.speech("accepted input", true, "accepted-event", turnToken);
-    expect(await waiting).toMatchObject({ success: true, transcript: "accepted input" });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const persist = callStore.persistCallRecord;
+    const persistence = vi
+      .spyOn(callStore, "persistCallRecord")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        await persist(...args);
+      });
+    const processEvent = vi.spyOn(call.manager, "processEvent");
+    try {
+      const delivery = first.early("current reply");
+      await entered.promise;
+      const rejectedSpeech = call.speech("obsolete input", true, "mismatched-event", "old-token");
+      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+      release.resolve();
+      await rejectedSpeech;
+      expect(await delivery).toBe(true);
+      await first.finish("");
+      expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual([
+        "explicit prompt",
+        "current reply",
+      ]);
+      expect(await first.early("late callback after completion")).toBe(false);
+      await call.speech("accepted input", true, "accepted-event", turnToken);
+      expect(await waiting).toMatchObject({ success: true, transcript: "accepted input" });
+    } finally {
+      release.resolve();
+      persistence.mockRestore();
+      processEvent.mockRestore();
+    }
   });
 
   it("does not invalidate on a replayed transcript", async () => {
     const call = await startCall();
     await call.speech("first question", true, "same-event");
     const first = await responseAt(0);
-    await call.speech("first question", true, "same-event");
-    await first.finish("current reply");
-    expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
-    expect(mocks.generate).toHaveBeenCalledTimes(1);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const persist = callStore.persistCallRecord;
+    const persistence = vi
+      .spyOn(callStore, "persistCallRecord")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        await persist(...args);
+      });
+    const processEvent = vi.spyOn(call.manager, "processEvent");
+    try {
+      const delivery = first.early("current reply");
+      await entered.promise;
+      const replay = call.speech("first question", true, "same-event");
+      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+      release.resolve();
+      await replay;
+      expect(await delivery).toBe(true);
+      await first.finish("");
+      expect(call.provider.playTtsCalls.map((entry) => entry.text)).toEqual(["current reply"]);
+      expect(mocks.generate).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
+      persistence.mockRestore();
+      processEvent.mockRestore();
+    }
   });
 
   it.each(["native", "partial", "final"] as const)(

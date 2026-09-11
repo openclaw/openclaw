@@ -35,6 +35,7 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
+import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -78,6 +79,8 @@ export type MemorySemanticProviderGeneration = Extract<
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
+  protected abstract readonly createProvider: MemoryManagerProviderFactory;
+  protected abstract releaseProvider(provider: EmbeddingProvider): void;
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
@@ -472,6 +475,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     let fallbackResult;
     try {
       fallbackResult = await createEmbeddingProvider({
+        createProvider: this.createProvider,
         config: this.cfg,
         agentDir: resolveAgentDir(this.cfg, this.agentId),
         ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),

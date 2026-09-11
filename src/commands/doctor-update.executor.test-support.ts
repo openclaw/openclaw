@@ -50,8 +50,20 @@ export async function runDoctorUpdateChild(
           onOutputChunk: (chunk) => onOutput?.(chunk.toString()),
         },
       );
-      if (result.code !== 0 || result.cleanup !== "normal") {
-        throw new Error(result.stderr || "Doctor child did not settle normally");
+      if (
+        result.code !== 0 ||
+        result.termination !== "exit" ||
+        result.signal !== null ||
+        result.killed ||
+        (result.cleanup !== "normal" && result.cleanup !== "cooperative")
+      ) {
+        const { code, signal, killed, termination, cleanup } = result;
+        throw Object.assign(
+          new Error(
+            `Doctor child did not settle successfully: ${JSON.stringify({ code, signal, killed, termination, cleanup })}${result.stderr ? `\n${result.stderr}` : ""}`,
+          ),
+          { result },
+        );
       }
       return result;
     },

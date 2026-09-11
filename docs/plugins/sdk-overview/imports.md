@@ -60,6 +60,13 @@ do. Do not copy those import paths into new plugins; use injected runtime helper
 and generic channel SDK subpaths instead.
 </Warning>
 
+For provider discovery that only needs credential values, use
+`openclaw/plugin-sdk/secret-input` for `readProviderEnvValue`,
+`resolveNonEnvSecretRefApiKeyMarker`, and SecretRef coercion/normalization.
+These helpers do not load profile stores, provider transports, or web-search
+execution. Use `provider-web-search-config-contract` to read plugin-owned
+web-search config. Keep full auth and search runtime imports in execution paths.
+
 ## Subpath reference
 
 The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin

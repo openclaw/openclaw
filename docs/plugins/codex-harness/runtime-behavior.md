@@ -124,7 +124,9 @@ work that was actually refused:
 - A turn already running on the configured Daybreak model is never escalated.
 - A turn that already acted is never retried. Escalation requires the attempt's
   own replay-safe verdict, so a turn refused after it sent a message, added a
-  cron entry, spawned a session, or generated media keeps its refusal.
+  cron entry, spawned a session, started a native continuation, or generated
+  media keeps its result. Cancellation, timeout, or a later failure also prevents
+  escalation even if the result retains a refusal diagnostic.
 - Only a refused turn is ever routed to Daybreak. Every turn starts on the model
   the session selected, and a turn that was not refused never reaches the weaker
   tier.
@@ -144,7 +146,11 @@ Authorization stays server-owned. `model/list` advertises Daybreak to every
 client, so catalog presence does not prove entitlement: an unentitled workspace
 still receives `401`/`403` on use, and each such attempt costs the transport's
 full reconnect ladder. OpenClaw therefore treats the retry itself as the only
-evidence and reports an `unavailable` notice rather than a silent block.
+evidence and reports an `unavailable` notice rather than a silent block. If the
+fallback target is denied without tool activity, side effects, native
+continuation, or interruption, OpenClaw keeps the original refusal even when
+the fallback produced no assistant message. Otherwise, its result is preserved
+so those facts reach the runner.
 
 Because entitlement belongs to the authenticated workspace and the target model
 rather than to any one conversation, an unauthorized target is remembered once
@@ -164,10 +170,10 @@ A closed, replaced, or retired client still cannot complete a stale handoff.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including
-for `/codex resume` of that chat's already-bound thread. Provider policy refusals
-end the current request without automatic retry or model fallback. A later user
-message is a separate turn; it does not supply a native policy override or user
-confirmation.
+for `/codex resume` of that chat's already-bound thread. Native provider policy refusals
+end the current attempt without a native retry. OpenClaw's configured cyber
+fallback described above is a separate attempt. A later user message is a
+separate turn; it does not supply a native policy override or user confirmation.
 
 With Codex app-server `0.153.4`, first-time adoption or changed configuration of a
 loaded failed thread still requires native unloading. OpenClaw preserves the

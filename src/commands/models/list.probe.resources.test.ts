@@ -13,6 +13,7 @@ import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
@@ -102,14 +103,16 @@ it.each([
   };
   expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
   await state.writeConfig(cfg);
-  const source = new PluginRegistryInspectionResources();
   const builder = createPluginRegistry({
     runtime: createPluginRuntime(),
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     activateGlobalSideEffects: false,
   });
-  source.attach(builder.registry);
   const record = createPluginRecord({ id: pluginId, source: entry });
+  const source = new PluginRegistryInspectionResources(async () => {
+    await getPluginInstance(record)?.dispose();
+  });
+  source.attach(builder.registry);
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, {
     config: cfg,

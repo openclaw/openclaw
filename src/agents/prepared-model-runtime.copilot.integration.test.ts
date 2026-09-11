@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
@@ -38,7 +39,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   });
   // Reuse Vitest's source graph at the module-loading seam. The real loader
   // still discovers and validates the entrypoint and owns registration.
-  const loadModule = vi.fn((source: string) => {
+  const loadModule = vi.fn<pluginModuleRuntime.PluginModuleLoader>((source) => {
     expect(source).toBe(entrypoint);
     return copilotModule;
   });
@@ -108,7 +109,11 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   );
 
   expect(runtimePluginRegistry).not.toBe(root);
-  expect(loadModule).toHaveBeenCalledWith(entrypoint);
+  expect(loadModule).toHaveBeenCalledOnce();
+  const [, owner] = expectDefined(loadModule.mock.calls[0], "Copilot module load");
+  expect(owner?.registry).toBe(runtimePluginRegistry);
+  expect(owner?.record).toBe(runtimePluginRegistry?.plugins[0]);
+  expect(owner?.rootDir).toBe(path.dirname(entrypoint));
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.agentHarnesses).toEqual([]);
   expect(

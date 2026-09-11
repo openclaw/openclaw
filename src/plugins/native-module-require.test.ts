@@ -1,14 +1,15 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import Module from "node:module";
+import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  clearPluginModuleRequireCache,
+  createPluginModuleRequireCacheOwner,
+  getPluginModuleRequireCacheEntry,
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
@@ -199,7 +200,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     ).toEqual({ ok: false });
   });
 
-  it("loads and evicts path and file-URL modules through plain Node", async () => {
+  it("keeps native path and file-URL modules on the process module graph", async () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const ownerPath = path.join(dir, "native-require.mjs");
     // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
@@ -218,21 +219,19 @@ describe("tryNativeRequireJavaScriptModule", () => {
       `import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { clearPluginModuleRequireCache as clear, tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
 const modulePath = ${JSON.stringify(modulePath)};
 for (const target of [modulePath, pathToFileURL(modulePath).href]) {
   fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\\n');
   assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
   fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\\n');
   assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
-  clear(target);
-  assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "after" } });
-  clear(target);
+  assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
 }
 assert.deepEqual(load(pathToFileURL(modulePath + ".missing.cjs").href, { allowWindows: true }), { ok: false });
-fs.writeFileSync(modulePath, 'require("./missing-dependency.cjs");\\n');
-assert.throws(() => load(pathToFileURL(modulePath).href, { allowWindows: true }), /missing-dependency\\.cjs/);
-console.log("native path + file URL load/cache reload; missing target/dependency controls passed");
+fs.writeFileSync(modulePath + ".broken.cjs", 'require("./missing-dependency.cjs");\\n');
+assert.throws(() => load(pathToFileURL(modulePath + ".broken.cjs").href, { allowWindows: true }), /missing-dependency\\.cjs/);
+console.log("native path + file URL process identity; missing target/dependency controls passed");
 `,
     );
     const result = spawnSync(process.execPath, [probePath], {
@@ -244,7 +243,7 @@ console.log("native path + file URL load/cache reload; missing target/dependency
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "native path + file URL load/cache reload; missing target/dependency controls passed",
+      "native path + file URL process identity; missing target/dependency controls passed",
     );
   });
 
@@ -266,7 +265,9 @@ console.log("native path + file URL load/cache reload; missing target/dependency
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { clearPluginModuleRequireCache as clear, tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+import { createRequire } from "node:module";
+import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+const require = createRequire(import.meta.url);
 const dir = ${JSON.stringify(dir)};
 const brokenPath = path.join(dir, "broken.mjs");
 const missingApi = path.join(dir, "missing-api.mjs");
@@ -284,7 +285,7 @@ assert.throws(() => load(brokenPath, options), error => {
   return error instanceof SyntaxError;
 });
 for (const target of [brokenPath, pathToFileURL(brokenPath).href, "./broken.mjs", path.join(aliasDir, "broken.mjs")]) {
-  clear(brokenPath, { dependencyRoot: dir });
+  delete require.cache[require.resolve(brokenPath)];
   assert.throws(() => load(target, {
     ...options,
     aliasMap: { "fixture-api": currentApi },
@@ -304,7 +305,7 @@ const retried = load(path.join(aliasDir, "retry.cjs"), { allowWindows: true });
 assert.equal(retried.ok, true);
 assert.equal(retried.moduleExport.ready, true);
 delete globalThis.__pluginDependencyReady;
-clear(retryPath);
+delete require.cache[require.resolve(retryPath)];
 fs.writeFileSync(retryPath, 'throw Object.assign(new Error("fresh race"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\\n');
 assert.deepEqual(load(retryPath, { allowWindows: true }), { ok: false });
 const aliasRequest = path.join(dir, "alias-request.cjs");
@@ -330,65 +331,6 @@ console.log("terminal error retained; new generation recovered");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("terminal error retained; new generation recovered");
   });
-
-  it("clears local dependencies loaded by a native JavaScript module", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    const helperPath = path.join(dir, "helper.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = require("./helper.cjs");\n', "utf8");
-    fs.writeFileSync(helperPath, 'module.exports = { marker: "before" };\n', "utf8");
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "before" },
-    });
-
-    fs.writeFileSync(helperPath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearPluginModuleRequireCache(modulePath, { dependencyRoot: dir });
-
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "after" },
-    });
-  });
-
-  it("releases retired native module graphs, including local cycles", () => {
-    const dir = tempDirs.make("openclaw-native-retirement-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    const probePath = path.join(dir, "probe.mjs");
-    fs.writeFileSync(modulePath, 'exports.helper = require("./helper.cjs");\n');
-    fs.writeFileSync(path.join(dir, "helper.cjs"), 'exports.entry = require("./plugin.cjs");\n');
-    const ownerUrl = pathToFileURL(path.resolve("src/plugins/native-module-require.ts")).href;
-    fs.writeFileSync(
-      probePath,
-      `import assert from "node:assert/strict";
-import { setImmediate } from "node:timers/promises";
-import { clearPluginModuleRequireCache, tryNativeRequireJavaScriptModule } from ${JSON.stringify(ownerUrl)};
-const modulePath = ${JSON.stringify(modulePath)};
-function loadAndRetire() {
-  const result = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
-  assert.equal(result.ok, true);
-  assert.equal(result.moduleExport.helper.entry, result.moduleExport);
-  const ref = new WeakRef(result.moduleExport);
-  clearPluginModuleRequireCache(modulePath);
-  return ref;
-}
-const retired = Array.from({ length: 12 }, loadAndRetire);
-await setImmediate();
-for (let index = 0; index < 5; index++) {
-  global.gc();
-  await setImmediate();
-}
-assert.equal(retired.filter(ref => ref.deref() !== undefined).length, 0);
-`,
-    );
-    const result = spawnSync(process.execPath, ["--expose-gc", "--import", "tsx", probePath], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-  });
 });
 
 describe("isJavaScriptModulePath", () => {
@@ -398,4 +340,51 @@ describe("isJavaScriptModulePath", () => {
     expect(isJavaScriptModulePath("/plugin/index.cjs")).toBe(true);
     expect(isJavaScriptModulePath("/plugin/index.ts")).toBe(false);
   });
+});
+
+describe("managed native module cache ownership", () => {
+  it.each(["shared-entry", "shared-child", "replacement"] as const)(
+    "keeps %s records until their final managed owner closes",
+    (mode) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-native-owned-cache-"));
+      const child = path.join(root, "child.cjs");
+      const entry = path.join(root, "index.cjs");
+      const sibling = path.join(root, "nested", "index.cjs");
+      fs.mkdirSync(path.dirname(sibling));
+      fs.writeFileSync(child, 'module.exports = { value: "before" };');
+      fs.writeFileSync(entry, 'exports.read = () => require("./child.cjs");');
+      fs.writeFileSync(sibling, 'exports.read = () => require("../child.cjs");');
+      const require = createRequire(import.meta.url);
+      const first = createPluginModuleRequireCacheOwner(root);
+      const second = createPluginModuleRequireCacheOwner(
+        mode === "shared-child" ? path.dirname(sibling) : root,
+      );
+      try {
+        const initial = require(entry) as { read(): { value: string } };
+        first.retain(getPluginModuleRequireCacheEntry(entry));
+        const before = initial.read();
+        if (mode === "replacement") {
+          delete require.cache[entry];
+          delete require.cache[child];
+        }
+        const selected = mode === "shared-child" ? sibling : entry;
+        const current = require(selected) as typeof initial;
+        second.retain(getPluginModuleRequireCacheEntry(selected));
+        // This dependency is acquired after entry ownership, through ordinary lazy require.
+        const shared = current.read();
+        const record = require.cache[selected];
+        first.dispose();
+        expect(require.cache[selected]).toBe(record);
+        expect(current.read()).toBe(shared);
+        expect(shared === before).toBe(mode !== "replacement");
+        second.dispose();
+        fs.writeFileSync(child, 'module.exports = { value: "after" };');
+        expect(require(child)).toEqual({ value: "after" });
+      } finally {
+        first.dispose();
+        second.dispose();
+        delete require.cache[child];
+      }
+    },
+  );
 });

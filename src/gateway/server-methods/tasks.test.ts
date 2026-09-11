@@ -25,6 +25,7 @@ import {
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
+import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
@@ -905,6 +906,52 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.status).toBe("running");
     expect(payload?.task?.error).toBeUndefined();
   });
+
+  it.each([
+    ["succeeded", "completed"],
+    ["failed", "failed"],
+    ["timed_out", "timed_out"],
+    ["lost", "failed"],
+    ["cancelled", "cancelled"],
+  ] as const)(
+    "tasks.cancel preserves ACP %s and explains refused cancellation",
+    async (status, wireStatus) => {
+      const runId = "run-acp-cancel-race";
+      const task = createSnapshotTask({
+        runtime: "acp",
+        runId,
+        notifyPolicy: "silent",
+        childSessionKey: "agent:main:acp:cancel-race",
+        agentId: "main",
+      });
+      seedTaskRegistryRowsForTests([task]);
+      reloadTaskRegistryFromStore();
+      cancelSessionMock.mockImplementationOnce(async () => {
+        updateTaskStateByRunId({
+          runId,
+          runtime: "acp",
+          sessionKey: task.childSessionKey,
+          status,
+          endedAt: 2_000,
+        });
+      });
+
+      const { calls, payload } = await runTaskHandler("tasks.cancel", { taskId: task.taskId });
+
+      expect(calls[0]?.[0]).toBe(true);
+      expect(payload).toMatchObject({ found: true, cancelled: status === "cancelled" });
+      if (status === "cancelled") {
+        expect(payload).not.toHaveProperty("reason");
+      } else {
+        expect(payload).toHaveProperty(
+          "reason",
+          `Task became ${status} while cancellation was in progress.`,
+        );
+      }
+      expect(payload?.task).toMatchObject({ id: task.taskId, status: wireStatus, endedAt: 2_000 });
+      expect(getTaskById(task.taskId)).toMatchObject({ status, endedAt: 2_000 });
+    },
+  );
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {
     const task = createSnapshotTask({

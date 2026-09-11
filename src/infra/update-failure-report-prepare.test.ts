@@ -53,6 +53,35 @@ describe("update report diagnostic command boundary", () => {
   });
 
   it.each([
+    { service: undefined, outcome: "verified safe to restart" },
+    { service: "healthy", outcome: "verified safe to restart" },
+    {
+      service: "failed",
+      outcome:
+        "runtime files verified; Gateway restart failed. Run `openclaw gateway status --deep` before restarting manually.",
+    },
+  ] as const)(
+    "reports the observed recovery service outcome: $service",
+    async ({ service, outcome }) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "recovery-service-outcome",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "runtime-verification-failed",
+            recovery: { serviceRestartSafe: true, version: "2026.9.4", service },
+            steps: [],
+            durationMs: 1,
+          },
+        },
+        context,
+      );
+      expect(report.body).toContain(`- Recovery outcome: ${outcome}\n`);
+    },
+  );
+
+  it.each([
     'Command failed: python -c "private-customer-text"',
     'ruby -e "private-customer-text"',
     "custom-tool private-customer-text",

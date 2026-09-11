@@ -7,6 +7,7 @@ import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let root: string;
 beforeEach(async () => {
@@ -149,6 +150,14 @@ it.each(
       expect(result.stdout.toString()).toBe("");
       if (scenario.readError) {
         expect(result.stderr.toString()).toContain('no such column: "path"');
+        const [recorded] = updateRunStepsFromResultStep({
+          name: "candidate snapshot",
+          exitCode: result.code,
+          stderrTail: result.stderr.toString(),
+        });
+        expect(recorded?.detail).toContain("ERR_SQLITE_ERROR");
+        expect(recorded?.detail).toContain('no such column: "path"');
+        expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
       }
       if (scenario.cleanup !== "healthy") {
         expect(result.stderr.toString()).toContain("snapshot cleanup failed");

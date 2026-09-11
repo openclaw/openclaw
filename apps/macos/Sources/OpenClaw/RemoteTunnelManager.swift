@@ -46,8 +46,7 @@ actor RemoteTunnelManager {
 
     func controlTunnelRouteIfRunning() async -> Route? {
         guard !self.isShutDown, self.retirementInFlight == nil else { return nil }
-        guard let configuration = try? RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort())
+        guard let configuration = try? RemotePortTunnel.configuration()
         else {
             self.beginRetirement()
             await self.waitForRetirement()
@@ -74,9 +73,8 @@ actor RemoteTunnelManager {
     {
         await self.waitForRetirement()
         guard self.lifecycleGeneration == lifecycleGeneration else { return .none }
-        guard let currentConfiguration = try? RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort()),
-            Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
+        guard let currentConfiguration = try? RemotePortTunnel.configuration(),
+              Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
         else {
             return .staleConfiguration
         }
@@ -103,7 +101,7 @@ actor RemoteTunnelManager {
                   current.configuration == active.configuration,
                   current.route == active.route
             else { return .none }
-            if (try? RemotePortTunnel.configuration(remotePort: GatewayEnvironment.gatewayPort())) != configuration {
+            if (try? RemotePortTunnel.configuration()) != configuration {
                 return .staleConfiguration
             }
             if isListening {
@@ -164,7 +162,7 @@ actor RemoteTunnelManager {
     }
 
     /// Ensure an SSH tunnel is running for the gateway control port.
-    /// Returns the local forwarded port (usually the configured gateway port).
+    /// Returns the local forwarded port configured by gateway.remote.url.
     func ensureControlTunnel() async throws -> UInt16 {
         try await self.ensureControlTunnelRoute().localPort
     }
@@ -184,8 +182,7 @@ actor RemoteTunnelManager {
             guard self.lifecycleGeneration == lifecycleGeneration else {
                 throw CancellationError()
             }
-            let configuration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let configuration = try RemotePortTunnel.configuration()
             if let route = try await self.resolveLookup(
                 self.lookupControlTunnelRoute(
                     configuration: configuration,
@@ -212,13 +209,12 @@ actor RemoteTunnelManager {
             // current configuration in the same actor turn that claims creation.
             try Task.checkCancellation()
             guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
-            let currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let currentConfiguration = try RemotePortTunnel.configuration()
             guard self.retirementInFlight == nil, self.controlTunnel == nil,
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = configuration.preferredLocalPort ?? UInt16(GatewayEnvironment.gatewayPort())
+            let desiredPort = configuration.preferredLocalPort ?? 18789
             let token = UUID()
             let task = Task {
                 try await RemotePortTunnel.create(
@@ -255,8 +251,7 @@ actor RemoteTunnelManager {
         guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
         guard let create = createInFlight else { return .none }
         guard create.configuration == configuration else {
-            let currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            let currentConfiguration = try RemotePortTunnel.configuration()
             guard Self.isCurrentConfiguration(
                 requested: configuration,
                 current: currentConfiguration)
@@ -286,7 +281,7 @@ actor RemoteTunnelManager {
             token: create.token,
             configuration: configuration,
             lifecycleGeneration: create.lifecycleGeneration,
-            fallbackPort: UInt16(GatewayEnvironment.gatewayPort())))
+            fallbackPort: configuration.preferredLocalPort ?? 18789))
     }
 
     @discardableResult
@@ -340,8 +335,7 @@ actor RemoteTunnelManager {
         }
         let currentConfiguration: RemotePortTunnel.Configuration
         do {
-            currentConfiguration = try RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort())
+            currentConfiguration = try RemotePortTunnel.configuration()
         } catch {
             self.beginRetirement()
             await self.waitForRetirement()

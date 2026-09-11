@@ -137,7 +137,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
         current.source = expectDefined(current.registrations[0], "selected registration");
         return lease;
       } catch (error) {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         throw error;
       }
     },

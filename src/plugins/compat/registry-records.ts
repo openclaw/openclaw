@@ -12,6 +12,36 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "plugin-state-sync-keyed-store",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-29",
+    deprecated: "2026-09-11",
+    warningStarts: "2026-09-11",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
+    surfaces: [
+      "api.runtime.state.openSyncKeyedStore",
+      "PluginStateSyncKeyedStore",
+      "createPluginStateSyncKeyedStore",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and state-store migration documentation",
+      "plugin compatibility inventory; no new runtime warnings",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugin-state/plugin-state-store.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
+      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "src/plugins/loader.runtime-registry.test.ts",
+    ],
+    releaseNote:
+      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+  },
+  {
     code: "memory-read-result-statusless-success",
     status: "deprecated",
     owner: "sdk",
