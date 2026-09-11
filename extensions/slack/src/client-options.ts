@@ -199,6 +199,7 @@ export function resolveSlackLookupClientOptions(
   const resolved: WebClientOptions = Object.assign({}, clientOptions);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
   if (signal) {
+    // SAFETY: resolveFetch returns the runtime fetch implementation accepted by WebClient.
     const fetchFn = resolved.fetch ?? (resolveFetch() as NonNullable<WebClientOptions["fetch"]>);
     if (fetchFn) {
       resolved.fetch = (input, init) =>

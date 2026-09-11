@@ -282,6 +282,7 @@ export async function hasMessagingToolDeliveryToSource(
     ) {
       continue;
     }
+    // SAFETY: the preceding guards establish the object shape required by this receipt record.
     const record = target as MessagingToolDeliveryTarget;
     // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
     const sourceTarget =
