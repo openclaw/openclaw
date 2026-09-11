@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -131,32 +132,39 @@ describe("goal commands", () => {
     });
   });
 
-  it("starts a goal from Codex-style bare /goal objective text", async () => {
-    const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
+  it.each(["", "start ", "set ", "create "])(
+    "preserves the objective when starting with /goal %s",
+    async (action) => {
+      const storePath = await createStorePath();
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "sess-main",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      });
 
-    const params = buildGoalParams("/goal build a 3d game", storePath);
-    const result = await handleGoalCommand(params, true);
+      const objective = "build a 3d game\n\nKeep this exact label: a  b\n\tThen verify it.";
+      const params = buildGoalParams(
+        normalizeCommandBody(`/goal ${action}${objective}`),
+        storePath,
+      );
+      const result = await handleGoalCommand(params, true);
 
-    expect(result?.shouldContinue).toBe(true);
-    expect(result?.reply).toBeUndefined();
-    expect(params.command.commandBodyNormalized).toBe("build a 3d game");
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("build a 3d game");
-    expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe("build a 3d game");
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey, reason: "command-metadata" },
-    ]);
-  });
+      expect(result?.shouldContinue).toBe(true);
+      expect(result?.reply).toBeUndefined();
+      expect(params.command.commandBodyNormalized).toBe(objective);
+      expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe(objective);
+      expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe(objective);
+      expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+        { sessionKey, reason: "command-metadata" },
+      ]);
+    },
+  );
 
   it("wraps command-prefixed goal objectives before continuing", async () => {
     const storePath = await createStorePath();

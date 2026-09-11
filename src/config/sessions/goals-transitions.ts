@@ -9,8 +9,6 @@ export class SessionGoalTransitionError extends Error {
   }
 }
 
-const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
-
 function normalizeTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
@@ -39,8 +37,6 @@ export function accountSessionGoalUsage(
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
-  // `goal` is introduced here as a core-owned slot; no shipped plugin-owned
-  // goal state exists to migrate, and plugin slot registration now reserves it.
   const goal = entry.goal;
   if (!goal) {
     return undefined;
@@ -118,7 +114,7 @@ export function buildUpdatedSessionGoalStatus(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
+  if (accounted.status === "complete" && accounted.status !== options.status) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   const resetsBudgetWindow =
@@ -135,7 +131,7 @@ export function buildUpdatedSessionGoalStatus(
     ...(options.note ? { lastStatusNote: options.note } : {}),
     ...(options.status === "paused" ? { pausedAt: now } : {}),
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
-    ...(options.status === "complete" ? { completedAt: now } : {}),
+    ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
   if (resetsBudgetWindow) {
     next.tokenStart = freshTokenStart ?? 0;
@@ -167,7 +163,7 @@ export function buildUpdatedSessionGoalObjective(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
+  if (accounted.status === "complete") {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   // Rewording keeps status and token accounting; only the target moves.
