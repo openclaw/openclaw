@@ -1,0 +1,130 @@
+name: iOS catalog targeted proof
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact source commit to exercise with this branch's UI proof
+        required: true
+        type: string
+  push:
+    branches: [feat/ios-catalog-protocol-consumers]
+    paths: [.github/workflows/ios-catalog-proof.yml]
+permissions:
+  contents: read
+concurrency:
+  group: ios-catalog-targeted-proof
+  cancel-in-progress: false
+jobs:
+  proof:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: blacksmith-12vcpu-macos-26
+    timeout-minutes: 90
+    env:
+      OPENCLAW_STATE_DIR: ${{ runner.temp }}/catalog-proof/state
+      OPENCLAW_CONFIG_PATH: ${{ runner.temp }}/catalog-proof/state/openclaw.json
+      OPENCLAW_GATEWAY_PORT: "19876"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: proof-source
+          persist-credentials: false
+      - name: Retain proof identity and overlay UI test
+        run: |
+          mkdir -p "$RUNNER_TEMP/catalog-proof/state"
+          git rev-parse HEAD > "$RUNNER_TEMP/catalog-proof/source-sha.txt"
+          git -C proof-source rev-parse HEAD > "$RUNNER_TEMP/catalog-proof/harness-sha.txt"
+          cp proof-source/apps/ios/UITests/ChatCatalogUITests.swift apps/ios/UITests/
+          cp proof-source/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatCatalogProjectionTests.swift apps/shared/OpenClawKit/Tests/OpenClawKitTests/
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Prepare Apple tools
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+          brew install xcodegen swiftformat swiftlint
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '\"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+      - name: Swift package tests
+        id: swift
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          swift test --package-path apps/shared/OpenClawKit --scratch-path "$RUNNER_TEMP/catalog-swift" --no-parallel --filter ChatCatalogProjectionTests 2>&1 | tee "$RUNNER_TEMP/catalog-proof/swift-tests.log"
+      - name: Start isolated real Gateway and record catalog
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const config = {
+            gateway: { mode: 'local', bind: 'loopback', port: 19876, auth: { mode: 'token', token: 'catalog-proof-token' } },
+            agents: { defaults: { model: { primary: 'openai/o3' }, models: { 'openai/o3': { agentRuntime: { id: 'openclaw' } } } } },
+            models: { mode: 'replace', providers: { openai: { apiKey: 'catalog-proof-fake-key', baseUrl: 'http://127.0.0.1:9/v1', api: 'openai-completions', models: [{ id: 'o3', name: 'Catalog Proof', reasoning: true, input: ['text', 'image'], contextWindow: 32000, maxTokens: 2048 }] } } },
+          };
+          fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+          NODE
+          pnpm openclaw gateway run --allow-unconfigured > "$RUNNER_TEMP/catalog-proof/gateway.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/catalog-proof/gateway.pid"
+          for attempt in $(seq 1 120); do
+            if curl --silent --fail http://127.0.0.1:19876/healthz > /dev/null; then break; fi
+            kill -0 "$(cat "$RUNNER_TEMP/catalog-proof/gateway.pid")"
+            sleep 2
+          done
+          curl --fail http://127.0.0.1:19876/healthz > "$RUNNER_TEMP/catalog-proof/health.json"
+          pnpm --silent openclaw models list --json > "$RUNNER_TEMP/catalog-proof/models-list.json"
+          pnpm --silent openclaw gateway call models.list --json --params '{"agentId":"main","sessionKey":"agent:main:main","view":"configured","includeDetails":true}' > "$RUNNER_TEMP/catalog-proof/session-models.json"
+          pnpm --silent openclaw qr --setup-code-only --url ws://127.0.0.1:19876 > "$RUNNER_TEMP/catalog-proof/setup-code.txt"
+      - name: Run simulator catalog controls
+        id: simulator
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ./scripts/ios-configure-signing.sh
+          ./scripts/ios-write-version-xcconfig.sh
+          node scripts/ios-write-swift-filelist.mjs
+          xcodegen generate --spec apps/ios/project.yml --project apps/ios
+          simulator_id="$(xcrun simctl list devices available --json | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const d=Object.values(JSON.parse(s).devices).flat().find(x=>x.isAvailable&&x.name.startsWith("iPhone"));if(!d)process.exit(1);process.stdout.write(d.udid)})')"
+          export TEST_RUNNER_OPENCLAW_IOS_CATALOG_PROOF=1
+          export TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE="$(cat "$RUNNER_TEMP/catalog-proof/setup-code.txt")"
+          export TEST_RUNNER_OPENCLAW_IOS_CATALOG_ROW="$(node -e 'const fs=require("fs");const p=process.env.RUNNER_TEMP+"/catalog-proof/";const row=JSON.parse(fs.readFileSync(p+"session-models.json")).models.find(x=>x.provider==="openai"&&x.id==="o3");const cli=JSON.parse(fs.readFileSync(p+"models-list.json")).models.find(x=>x.key==="openai/o3");if(!row||!cli||row.supportsFastMode!==false||!row.thinkingLevels?.length)throw Error("Fixture catalog is not ready");process.stdout.write(JSON.stringify(row))')"
+          xcodebuild test -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests \
+            -destination "platform=iOS Simulator,id=$simulator_id" -derivedDataPath "$RUNNER_TEMP/catalog-ios" \
+            -resultBundlePath "$RUNNER_TEMP/catalog-proof/catalog.xcresult" -parallel-testing-enabled NO -jobs 4 \
+            -only-testing:OpenClawUITests/ChatCatalogUITests CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/catalog-proof/simulator.log"
+      - name: Stop task Gateway
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/catalog-proof/gateway.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/catalog-proof/gateway.pid")" || true
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: ios-catalog-proof-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/catalog-proof/*.log
+            ${{ runner.temp }}/catalog-proof/*.json
+            ${{ runner.temp }}/catalog-proof/*-sha.txt
+            ${{ runner.temp }}/catalog-proof/catalog.xcresult
+          retention-days: 14
+      - name: Require both proofs
+        if: always()
+        env:
+          SWIFT_OUTCOME: ${{ steps.swift.outcome }}
+          SIMULATOR_OUTCOME: ${{ steps.simulator.outcome }}
+        run: test "$SWIFT_OUTCOME" = success && test "$SIMULATOR_OUTCOME" = success
