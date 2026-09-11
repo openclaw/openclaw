@@ -67,9 +67,15 @@ export function observePendingFollowupRunId(params: {
           return;
         }
         const status = result?.status;
-        // A terminal state here is unexpected during follow-up observation;
-        // surface it rather than silently dropping the turn.
+        // A terminal error here is unexpected during follow-up observation.
+        // Surface it to the caller so the turn is rejected rather than
+        // silently dropped; stop polling once the error is reported.
         if (status === "error" && result && typeof result === "object" && "error" in result) {
+          const errorMessage =
+            typeof result.error === "string"
+              ? result.error
+              : "OpenClaw follow-up observation failed";
+          params.onError(new Error(errorMessage));
           return;
         }
         if (status === "pending" && result?.followupRunId) {

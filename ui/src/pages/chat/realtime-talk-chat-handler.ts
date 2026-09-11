@@ -1,5 +1,7 @@
+import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { RealtimeTalkEvent } from "./realtime-talk-shared.js";
+
+type RealtimeTalkEvent = TalkEvent;
 
 /** Payload shape for a chat event frame from the gateway. */
 export type ChatPayload = {
@@ -89,11 +91,15 @@ export function createChatHandler(deps: ChatHandlerDeps) {
 
   const bufferEvent = (payload: ChatPayload) => {
     const bytes = estimatePayloadBytes(payload);
-    if (
-      bufferedFollowupEvents.length >= MAX_BUFFERED_TERMINAL_EVENTS ||
-      bufferedBytes + bytes > MAX_BUFFERED_BYTES
+    // Evict oldest entries until there is room under both the count and byte
+    // ceilings, or the buffer is empty. A single oversized terminal event is
+    // always retained (it is the newest known answer) so the byte ceiling may
+    // be exceeded only by a lone entry — never by accumulation.
+    while (
+      bufferedFollowupEvents.length > 0 &&
+      (bufferedFollowupEvents.length >= MAX_BUFFERED_TERMINAL_EVENTS ||
+        bufferedBytes + bytes > MAX_BUFFERED_BYTES)
     ) {
-      // Drop the oldest entry to make room, preserving newest terminal events.
       const oldest = bufferedFollowupEvents.shift();
       if (oldest) {
         bufferedBytes -= estimatePayloadBytes(oldest);

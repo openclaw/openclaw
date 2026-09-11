@@ -15,7 +15,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import {
   createChatHandler,
   type ChatEventDisposition,
-  type ChatPayload,
   type RealtimeTalkEventInput,
 } from "./realtime-talk-chat-handler.ts";
 import {
@@ -230,8 +229,6 @@ function resolveRealtimeTalkEventSessionId(
   return `${ctx.sessionKey}:${session.provider}:${session.transport}`;
 }
 
-export type { ChatPayload };
-
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 const EMPTY_FINAL_FALLBACK_TEXT = "OpenClaw finished with no text.";
 
@@ -419,6 +416,12 @@ function waitForChatResult(params: {
         });
     };
 
+    // unsubscribe is assigned asynchronously after the client event listener
+    // is registered. Until then, cleanup() (which can fire via the timeout
+    // or abort paths before that assignment completes) must not throw a TDZ
+    // ReferenceError. Default to a no-op so early cleanup is safe.
+    let unsubscribe: () => void = () => {};
+
     const timer = window.setTimeout(() => {
       settleReject(new Error("OpenClaw tool call timed out"));
     }, params.timeoutMs);
@@ -427,7 +430,7 @@ function waitForChatResult(params: {
       settleReject(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    const unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
+    unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
       const d = chatHandler.handleEvent(evt);
       if (d) {
         applyDisposition(d);

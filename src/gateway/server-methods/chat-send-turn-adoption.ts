@@ -2,6 +2,7 @@ import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.t
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import {
   completeQueuedChatTurn,
+  RETIRED_FOLLOWUP_RUNID_TTL_MS,
   registerQueuedChatTurn,
   retireFollowupRunId,
   retireQueuedChatTurnCancellation,
@@ -100,10 +101,14 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       // Preserve the follow-up runId before deleting the queue entry so that
       // waitForTurn can return it in the terminal snapshot response. This
       // handles the fast-completion race where the follow-up finishes before
-      // the client's next identity poll discovers the ID.
+      // the client's next identity poll discovers the ID. The entry carries
+      // an inline TTL so the retired map can be pruned periodically.
       const entry = params.chatQueuedTurns.get(params.runId);
       if (entry) {
-        retireFollowupRunId(params.retiredFollowupRunIds, params.runId, entry.followupRunId);
+        const followupRunId = entry.followupRunId
+          ? `${entry.followupRunId}|${Date.now() + RETIRED_FOLLOWUP_RUNID_TTL_MS}`
+          : undefined;
+        retireFollowupRunId(params.retiredFollowupRunIds, params.runId, followupRunId);
       }
       completeQueuedChatTurn(params.chatQueuedTurns, params.runId, params.controller);
       releaseWorkAdmission?.();
