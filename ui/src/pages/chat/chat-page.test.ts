@@ -106,6 +106,19 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
 
+// A layout round-tripped through settings storage loses the distinction between
+// "freshly balanced" and "saved before the custom-size flag existed", so the
+// persistence loader treats any missing flag as manual sizing (see
+// split-layout-persistence.ts). Project that onto an in-memory layout for
+// equality checks against `loadSettings().chatSplitLayout`.
+function withManualSizing(layout: ChatSplitLayout): ChatSplitLayout {
+  return {
+    ...layout,
+    customColumnWeights: true,
+    columns: layout.columns.map((column) => Object.assign({}, column, { customPaneWeights: true })),
+  };
+}
+
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
   (page as unknown as { layout: ChatSplitLayout | undefined }).layout = layout;
 }
@@ -929,7 +942,7 @@ describe("chat page split layout host", () => {
       ["main"],
     ]);
     expect(layout?.activePaneId).toBe("p2");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(loadSettings().chatSplitLayout).toEqual(withManualSizing(layout!));
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
     });
@@ -949,7 +962,7 @@ describe("chat page split layout host", () => {
       WORK_SESSION_KEY,
     ]);
     expect(layout?.activePaneId).toBe("p3");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(loadSettings().chatSplitLayout).toEqual(withManualSizing(layout!));
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
     });
@@ -966,7 +979,7 @@ describe("chat page split layout host", () => {
     const layout = getLayout(page);
     expect(layout?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
     expect(layout?.activePaneId).toBe("p1");
-    expect(loadSettings().chatSplitLayout).toEqual(layout);
+    expect(loadSettings().chatSplitLayout).toEqual(withManualSizing(layout!));
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath(WORK_SESSION_KEY),
     });

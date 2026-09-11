@@ -96,7 +96,9 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
       id: uniqueId(rawColumn.id, usedColumnIds, () => `c${++columnSequence}`),
       panes,
       paneWeights,
-      ...(rawColumn.customPaneWeights === true ? { customPaneWeights: true } : {}),
+      // A saved layout with no flag predates this PR (or was never explicitly marked
+      // automatic), so treat it as manually sized rather than silently rebalancing it.
+      ...(rawColumn.customPaneWeights === false ? {} : { customPaneWeights: true }),
     });
     sourceColumnIndexes.push(columnIndex);
   }
@@ -122,6 +124,7 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
     columns,
     columnWeights,
     activePaneId,
-    ...(value.customColumnWeights === true ? { customColumnWeights: true } : {}),
+    // Same legacy-migration rule as customPaneWeights above: missing means manual.
+    ...(value.customColumnWeights === false ? {} : { customColumnWeights: true }),
   };
 }

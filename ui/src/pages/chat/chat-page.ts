@@ -311,7 +311,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       if (!pending || this.narrow || !this.isConnected) {
         return;
       }
-      const indicator = resolveDropIndicator(this, pending.pane, pending.x, pending.y);
+      const layout = this.layout ?? this.classicLayout();
+      const indicator = resolveDropIndicator(this, layout, pending.pane, pending.x, pending.y);
       if (!indicator) {
         return;
       }
@@ -346,9 +347,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    const dropLayout = this.layout ?? this.classicLayout();
     const indicator =
       (pane && this.contains(pane)
-        ? resolveDropIndicator(this, pane, event.clientX, event.clientY)
+        ? resolveDropIndicator(this, dropLayout, pane, event.clientX, event.clientY)
         : null) ?? this.dropIndicator;
     this.clearDropIndicator();
     if (sessionKey && indicator) {

@@ -31,7 +31,16 @@ describe("settings layout persistence", () => {
 
     saveSettings({ ...settings, chatSplitLayout });
 
-    expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
+    // The saved layout carries no custom-size flag, same as anything written before
+    // the flag existed, so the loader must treat it as manually sized (40/60 kept)
+    // rather than silently rounding it back to an even split on the next resize.
+    expect(loadSettings().chatSplitLayout).toEqual({
+      ...chatSplitLayout,
+      customColumnWeights: true,
+      columns: chatSplitLayout.columns.map((column) =>
+        Object.assign({}, column, { customPaneWeights: true }),
+      ),
+    });
   });
 
   it("omits an invalid stored chat split layout", () => {
