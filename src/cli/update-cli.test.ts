@@ -51,6 +51,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 
@@ -743,6 +744,7 @@ describe("update-cli", () => {
       profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
     );
   let fixtureCount = 0;
+  let tempHome: TempHomeEnv | undefined;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
 
@@ -1930,6 +1932,9 @@ describe("update-cli", () => {
   };
 
   beforeEach(async () => {
+    // Clear the helper's state selector below so HOME and profile overrides keep their semantics.
+    const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
+    tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
     const executorTmp = tempDirs.make("update-cli-owner-");
     absentServicePort = await getFreePort();
     const gatewayEntrypoint = await import("../daemon/gateway-entrypoint.js");
@@ -2184,6 +2189,8 @@ describe("update-cli", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    await tempHome?.restore();
+    tempHome = undefined;
     if (tempDirsToCleanup.size === 0) {
       return;
     }

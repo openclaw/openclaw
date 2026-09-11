@@ -163,6 +163,22 @@ function isSelfClosingTagRaw(raw: string): boolean {
   );
 }
 
+export function skipHtmlComment(html: string, start: number): number {
+  if (html[start + 4] === ">") {
+    return start + 5;
+  }
+  if (html.startsWith("->", start + 4)) {
+    return start + 6;
+  }
+  for (let end = html.indexOf("--", start + 4); end !== -1; end = html.indexOf("--", end + 1)) {
+    const bracket = html[end + 2] === "!" ? end + 3 : end + 2;
+    if (html[bracket] === ">") {
+      return bracket + 1;
+    }
+  }
+  return html.length;
+}
+
 export function readTagToken(
   html: string,
   start: number,
@@ -170,14 +186,7 @@ export function readTagToken(
 ): ReadTagResult | null {
   const rendering = mode === "render";
   if (rendering && html.startsWith("<!--", start)) {
-    if (html[start + 4] === ">") {
-      return { token: null, next: start + 5 };
-    }
-    if (html.startsWith("->", start + 4)) {
-      return { token: null, next: start + 6 };
-    }
-    const commentEnd = html.indexOf("-->", start + 4);
-    return { token: null, next: commentEnd === -1 ? html.length : commentEnd + 3 };
+    return { token: null, next: skipHtmlComment(html, start) };
   }
 
   const tagEnd = findTagEnd(html, start, mode);
@@ -187,42 +196,33 @@ export function readTagToken(
   }
 
   const raw = html.slice(start + 1, end);
-  const body = rendering ? raw : raw.trim();
+  const body = raw;
   let pos = 0;
-  while (pos < body.length && isAsciiWhitespace(body.charAt(pos))) {
-    pos += 1;
-  }
   const closing = body[pos] === "/";
   if (closing) {
     pos += 1;
-    while (
-      pos < body.length &&
-      (rendering ? isAsciiWhitespace(body.charAt(pos)) : /\s/.test(body.charAt(pos)))
-    ) {
-      pos += 1;
-    }
   }
-  if (pos >= body.length || body[pos] === "!" || body[pos] === "?") {
+  if (!isTagNameStartChar(body[pos] ?? "")) {
     return { token: null, next: end + 1 };
   }
 
   const nameStart = pos;
-  while (pos < body.length && isTagNameChar(body.charAt(pos))) {
-    if (!rendering && body[pos] === ".") {
-      break;
-    }
+  while (
+    pos < body.length &&
+    !isAsciiWhitespace(body.charAt(pos)) &&
+    body[pos] !== "/" &&
+    body[pos] !== ">"
+  ) {
     pos += 1;
-  }
-  if (pos === nameStart || (rendering && !isTagNameStartChar(body[nameStart] ?? ""))) {
-    const rawTextStart = rendering ? findRawTextOpenTagStart(html, start + 1, end + 1) : -1;
-    return { token: null, next: rawTextStart === -1 ? end + 1 : rawTextStart };
   }
 
   const attrs = closing ? "" : body.slice(pos);
   return {
     token: {
       closing,
-      name: body.slice(nameStart, pos).toLowerCase(),
+      name: body
+        .slice(nameStart, pos)
+        .replace(/\0|[A-Z]/g, (ch) => (ch === "\0" ? "\uFFFD" : asciiLower(ch))),
       raw,
       attrs,
       selfClosing: rendering ? isSelfClosingTagRaw(raw) : !closing && attrs.trimEnd().endsWith("/"),
@@ -231,20 +231,59 @@ export function readTagToken(
   };
 }
 
-export function closeRawTextTagEnd(html: string, tagName: string, contentStart: number): number {
+export function readRawTextBounds(
+  html: string,
+  tagName: string,
+  contentStart: number,
+  mode: HtmlTagMode = "render",
+): { contentEnd: number; end: number } {
+  if (tagName === "script") {
+    // In double-escaped script data, </script> is text that returns to the escaped state.
+    let state: "data" | "escaped" | "double-escaped" = "data";
+    for (let cursor = contentStart; cursor < html.length; cursor += 1) {
+      if (state === "data" && html.startsWith("<!--", cursor)) {
+        state = "escaped";
+        // Revisit the dashes so <!--> also returns to normal script data.
+        cursor += 1;
+        continue;
+      }
+      if (state !== "data" && html.startsWith("-->", cursor)) {
+        state = "data";
+        cursor += 2;
+        continue;
+      }
+      if (html[cursor] !== "<") {
+        continue;
+      }
+      if (startsWithClosingTag(html, cursor, tagName)) {
+        if (state === "double-escaped") {
+          state = "escaped";
+          cursor += tagName.length + 1;
+          continue;
+        }
+        const closeEnd = findTagEnd(html, cursor, mode).end;
+        return { contentEnd: cursor, end: closeEnd === -1 ? html.length : closeEnd + 1 };
+      }
+      if (state === "escaped" && readRawTextOpenTagName(html, cursor) === "script") {
+        state = "double-escaped";
+        cursor += tagName.length;
+      }
+    }
+    return { contentEnd: html.length, end: html.length };
+  }
   let closeStart = html.indexOf("</", contentStart);
   while (closeStart !== -1) {
     if (startsWithClosingTag(html, closeStart, tagName)) {
-      const closeEnd = findTagEnd(html, closeStart).end;
-      return closeEnd === -1 ? html.length : closeEnd + 1;
+      const closeEnd = findTagEnd(html, closeStart, mode).end;
+      return { contentEnd: closeStart, end: closeEnd === -1 ? html.length : closeEnd + 1 };
     }
     closeStart = html.indexOf("</", closeStart + 2);
   }
-  return html.length;
+  return { contentEnd: html.length, end: html.length };
 }
 
 export function skipRawTextElement(html: string, start: number, tagName: string): number {
   const openerEnd = findTagEnd(html, start);
   const contentStart = openerEnd.end === -1 ? start + tagName.length + 1 : openerEnd.end + 1;
-  return closeRawTextTagEnd(html, tagName, contentStart);
+  return readRawTextBounds(html, tagName, contentStart).end;
 }

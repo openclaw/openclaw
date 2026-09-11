@@ -1,23 +1,37 @@
-// Keep category validation dependency-free: native Node packaging and updater
-// entrypoints consume it before any runtime source has been compiled.
-
-/** Controlled browse categories accepted by native OpenClaw plugin manifests. */
+/** Active browse taxonomy, ordered with the core configuration surfaces first. */
 export const PLUGIN_CATEGORY_SLUGS = [
   "channels",
   "models",
+  "agent-runtimes",
   "memory",
   "context",
   "voice",
-  "media",
   "web",
-  "tools",
-  "runtime",
-  "gateway",
+  "media",
   "security",
+  "integrations",
+  "developer-tools",
+  "infrastructure",
+  "documents-files",
+  "inbox-collaboration",
+  "productivity",
+  "scheduling",
+  "finance-payments",
+  "sales-marketing",
+  "data-analytics",
+  "agent-orchestration",
+  "research",
   "other",
 ] as const;
 
-export type PluginCategorySlug = (typeof PLUGIN_CATEGORY_SLUGS)[number];
+/** Published declarations remain readable while authors adopt the active taxonomy. */
+const LEGACY_PLUGIN_CATEGORY_SLUGS = ["tools", "runtime", "gateway"] as const;
+const ACCEPTED_PLUGIN_CATEGORY_SLUGS = [
+  ...PLUGIN_CATEGORY_SLUGS,
+  ...LEGACY_PLUGIN_CATEGORY_SLUGS,
+] as const;
+
+export type PluginCategorySlug = (typeof ACCEPTED_PLUGIN_CATEGORY_SLUGS)[number];
 
 export type PluginCategoriesValidationResult =
   | { ok: true; categories?: PluginCategorySlug[] }
@@ -36,7 +50,7 @@ export function validatePluginCategories(value: unknown): PluginCategoriesValida
   }
   const categories: PluginCategorySlug[] = [];
   for (const entry of value) {
-    const category = PLUGIN_CATEGORY_SLUGS.find((candidate) => candidate === entry);
+    const category = ACCEPTED_PLUGIN_CATEGORY_SLUGS.find((candidate) => candidate === entry);
     if (!category) {
       return { ok: false, error: `contains unknown category ${JSON.stringify(entry)}` };
     }

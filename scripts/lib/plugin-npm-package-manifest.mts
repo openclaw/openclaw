@@ -1097,6 +1097,14 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
     if (!result.ok || result.categories?.length !== 1) {
       throw new Error("ClawHub metadata must declare exactly one supported plugin category");
     }
+    // The published 2026.9.4 reader rejects the renamed agent-runtimes slug.
+    // Remove this pack-only encoding when recovery no longer packs 2026.9.4.
+    if (sourcePackage.version === "2026.9.4" && result.categories[0] === "agent-runtimes") {
+      if (!Array.isArray(manifest.categories) || !manifest.categories.includes("runtime")) {
+        throw new Error("ClawHub 2026.9.4 metadata requires the candidate to declare runtime");
+      }
+      result.categories = ["runtime"];
+    }
     // Tooling owns reviewed catalog metadata; the candidate owns every runtime
     // field and version. These revisions intentionally need not share a version.
     publicationManifest = { ...manifest, categories: result.categories };

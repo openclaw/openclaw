@@ -342,12 +342,14 @@ export function decodeClawHubResponseBody(buffer: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
-export async function fetchClawHubJson<T>(params: ClawHubRequestParams): Promise<T> {
+export async function fetchClawHubJson<T>(
+  params: ClawHubRequestParams & { maxResponseBytes?: number },
+): Promise<T> {
   return await withClawHubResponse(params, async ({ response, url, hasToken }) => {
     if (!response.ok) {
       throw await createClawHubError(response, url, hasToken, params.timeoutMs);
     }
-    return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+    return parseClawHubJsonBody<T>(response, url, params.timeoutMs, params.maxResponseBytes);
   });
 }
 
@@ -355,8 +357,9 @@ export async function parseClawHubJsonBody<T>(
   response: Response,
   url: URL,
   timeoutMs?: number,
+  maxResponseBytes = CLAWHUB_JSON_MAX_BYTES,
 ): Promise<T> {
-  const buffer = await readResponseWithLimit(response, CLAWHUB_JSON_MAX_BYTES, {
+  const buffer = await readResponseWithLimit(response, maxResponseBytes, {
     chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
     onOverflow: ({ size, maxBytes }) =>
       new Error(

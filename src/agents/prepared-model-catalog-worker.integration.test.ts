@@ -36,6 +36,7 @@ import {
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
   createCatalogFixture,
+  expectCatalogAuth,
   writeCodexAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
@@ -681,6 +682,7 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile("first-key-not-real");
     const added = await projectModels();
+    expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toContain("first-ke...not-real");
     expect(added).toMatchObject({
       result: {
         models: expect.arrayContaining([
@@ -700,6 +702,7 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile("second-key-not-real");
     const updated = await project();
+    expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toContain("second-k...not-real");
     expect(updated).toMatchObject({
       authStore: {
         profiles: {
@@ -712,6 +715,7 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile();
     const removed = await projectModels();
+    expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toBe("missing");
     expect(removed.result.models).toContainEqual(
       expect.objectContaining({ id: "durable-model", available: false }),
     );

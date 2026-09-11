@@ -1,4 +1,8 @@
-import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildChannelProgressDraftLine,
+  type ChannelProgressDraftLine,
+  mergeChannelProgressDraftLine,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 import {
   buildSlackProgressStreamChunks,
@@ -853,6 +857,78 @@ describe("native Slack progress stream chunks", () => {
       taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
       taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
     ]);
+  });
+
+  it("keeps one native task for a tool call across its start, command and output lines", () => {
+    // The agent keys one exec call's tool item and command item separately
+    // (tool:<call>, command:<call>). The compositor merges them into one line
+    // by call; the task id must follow that line, or Slack opens a second card.
+    const options = { commandText: "raw" as const };
+    const events = [
+      buildChannelProgressDraftLine(
+        {
+          event: "tool",
+          toolCallId: "call-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+        options,
+      ),
+      buildChannelProgressDraftLine(
+        {
+          event: "item",
+          itemId: "command:call-1",
+          itemKind: "command",
+          toolCallId: "call-1",
+          name: "exec",
+          phase: "start",
+          status: "running",
+          meta: "run tests",
+        },
+        options,
+      ),
+      buildChannelProgressDraftLine(
+        {
+          event: "command-output",
+          itemId: "command:call-1",
+          toolCallId: "call-1",
+          name: "exec",
+          phase: "end",
+          title: "command run tests",
+          exitCode: 0,
+        },
+        options,
+      ),
+    ];
+    let lines: ChannelProgressDraftLine[] = [];
+    let snapshot = EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT;
+    const emitted: unknown[][] = [];
+    for (const line of events) {
+      if (!line) {
+        throw new Error("expected exec progress line");
+      }
+      lines = mergeChannelProgressDraftLine(lines, line, { maxLines: 8 });
+      const reconciled = reconcileSlackNativeTaskChunks({
+        previous: snapshot,
+        chunks: buildSlackProgressStreamChunks({ lines }),
+      });
+      snapshot = reconciled.snapshot;
+      emitted.push(reconciled.chunks ?? []);
+    }
+
+    expect([...snapshot.tasks.keys()]).toHaveLength(1);
+    const taskId = expect.stringMatching(/^tool_call_1_[a-f0-9]{8}$/u);
+    expect(emitted[0]).toContainEqual(
+      taskUpdate(taskId, "Exec", "in_progress", { details: "run tests" }),
+    );
+    expect(emitted[1]).toEqual([]);
+    expect(emitted[2]).toContainEqual(
+      expect.objectContaining({ type: "task_update", id: taskId, status: "complete" }),
+    );
+    expect(emitted[2]).not.toContainEqual(
+      expect.objectContaining({ type: "task_update", status: "in_progress" }),
+    );
   });
 
   it("keeps id-derived native task ids stable when completion changes visible status text", () => {

@@ -592,6 +592,12 @@ export async function runAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
+      runtimeContext: {
+        provider: internalParams.provider,
+        modelId: internalParams.modelId,
+        modelContextWindow: internalParams.modelContextWindow,
+        tokenBudget: internalParams.contextTokenBudget,
+      },
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;

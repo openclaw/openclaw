@@ -1,6 +1,6 @@
 {
   "id": "migrate-hermes",
-  "categories": ["runtime"],
+  "categories": ["integrations"],
   "activation": {
     "onStartup": false
   },

@@ -76,6 +76,7 @@ type TranscriptSearchState =
 
 export type SessionsProps = {
   loading: boolean;
+  refreshing: boolean;
   result: SessionsListResult | null;
   error: string | null;
   activeMinutes: string;
@@ -1019,8 +1020,8 @@ export function renderSessions(props: SessionsProps) {
           `
         : nothing
     }
-    <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-      ${props.loading ? t("common.loading") : t("common.refresh")}
+    <button class="btn" ?disabled=${props.refreshing} @click=${props.onRefresh}>
+      ${props.refreshing ? t("common.loading") : t("common.refresh")}
     </button>
   `;
   const children = [

@@ -221,6 +221,8 @@ export type ActivateSetupInferenceParams = {
       typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
     >,
   ) => void;
+  /** Run credential promotion only after the Gateway applied the verified config. */
+  onCredentialActivation?: (activate: () => Promise<void>) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 

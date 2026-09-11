@@ -172,6 +172,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
         routeVariants: [completedEntry],
       };
       setPreparedModelFullCatalogAuth(completed, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });

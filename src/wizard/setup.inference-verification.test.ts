@@ -101,7 +101,14 @@ describe("offerLiveModelVerification", () => {
       attemptedProfiles.push(profileId);
       const store = readAuthProfileStoreForTest(agentDir);
       expect(profileId).toMatch(/^openai:setup-/);
-      expect(store.profiles[profileId]).toEqual(replacement.credential);
+      expect(store.profiles[profileId]).toMatchObject({
+        ...replacement.credential,
+        setup: {
+          replacement: true,
+          modelRef: "openai/test-model",
+          configJson: expect.any(String),
+        },
+      });
       expect(store.profiles[working.profileId]).toEqual(working.credential);
       expect(tested.browser).toEqual({ enabled: false });
       return { ok: false, status: "auth", error: "credential rejected" };
@@ -219,7 +226,8 @@ describe("offerLiveModelVerification", () => {
         persisted: true,
         config: before,
       });
-      expect(writeConfig).toHaveBeenCalledExactlyOnceWith(before);
+      expect(writeConfig).toHaveBeenCalledOnce();
+      expect(writeConfig.mock.calls[0]?.[0]).toEqual(before);
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     } else {
       await expect(verification).rejects.toThrow("No agents configured");

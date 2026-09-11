@@ -2224,7 +2224,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      "Only a configured OpenClaw owner/admin can start provider login from this channel.",
       {},
     );
   });

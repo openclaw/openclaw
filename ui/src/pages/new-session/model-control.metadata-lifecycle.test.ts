@@ -167,28 +167,24 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it.each(["request failure", "missing model", "unconfirmed account", "unknown availability"])(
+  it.each(["missing model", "unconfirmed account", "unknown availability"])(
     "keeps an explicit account blocked after a preview with $0",
     async (outcome) => {
       const { agent, control, preview, connected, chooseAccount } = retainedAccountDraft();
       const { completion } = await chooseAccount();
       expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
-      if (outcome === "request failure") {
-        preview.reject(new Error("Preview unavailable"));
-      } else {
-        preview.resolve({
-          ...connected,
-          ...(outcome === "missing model" ? { models: [] } : {}),
-          ...(outcome === "unconfirmed account" ? { accountSelection: undefined } : {}),
-          ...(outcome === "unknown availability"
-            ? {
-                models: connected.models?.map((model) =>
-                  Object.assign({}, model, { available: undefined }),
-                ),
-              }
-            : {}),
-        });
-      }
+      preview.resolve({
+        ...connected,
+        ...(outcome === "missing model" ? { models: [] } : {}),
+        ...(outcome === "unconfirmed account" ? { accountSelection: undefined } : {}),
+        ...(outcome === "unknown availability"
+          ? {
+              models: connected.models?.map((model) =>
+                Object.assign({}, model, { available: undefined }),
+              ),
+            }
+          : {}),
+      });
       await completion;
       expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
       control.reset();

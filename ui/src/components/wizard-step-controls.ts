@@ -211,6 +211,7 @@ function renderProgressStep(props: WizardStepControlsProps) {
       <span class="wizard-step__spinner" aria-hidden="true"></span>
       ${renderMessage(props)}
     </div>
+    ${renderExternalStepInfo(props.step)}
     ${
       props.leadingAction
         ? html`<div class="wizard-step__actions wizard-step__actions--split">

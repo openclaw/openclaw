@@ -203,6 +203,10 @@ class UsagePage extends OpenClawLightDomElement {
       agentId: this.usageAgentId ?? undefined,
     }),
     () => this.usageResult?.sessions ?? [],
+    () => {
+      this.usageTimeSeriesCursorStart = null;
+      this.usageTimeSeriesCursorEnd = null;
+    },
   );
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -369,16 +373,10 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageSelectedSessions = [];
   }
 
-  private clearDetails() {
-    this.details.clear();
-    this.usageTimeSeriesCursorStart = null;
-    this.usageTimeSeriesCursorEnd = null;
-  }
-
   private clearSelectionsAndDetails() {
     this.usageExportRequest.cancel();
     this.clearSelections();
-    this.clearDetails();
+    this.details.clear();
   }
 
   private clearDateDebounce() {
@@ -431,7 +429,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private selectSession(key: string, shiftKey: boolean, orderedKeys: string[]) {
-    this.clearDetails();
+    this.details.clear();
     this.usageRecentSessions = [
       key,
       ...this.usageRecentSessions.filter((entry) => entry !== key),
@@ -453,6 +451,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const timeSeries = this.details.timeSeries.data;
     const props: UsageProps = {
       data: {
         loading: this.usageLoading,
@@ -506,7 +505,7 @@ class UsagePage extends OpenClawLightDomElement {
         },
         timeSeriesMode: this.usageTimeSeriesMode,
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
-        timeSeries: this.details.timeSeries.data,
+        timeSeries,
         timeSeriesLoading: this.details.timeSeries.loading,
         timeSeriesStatus: this.details.timeSeries.status,
         timeSeriesCursorStart: this.usageTimeSeriesCursorStart,
@@ -588,7 +587,7 @@ class UsagePage extends OpenClawLightDomElement {
           onClearHours: () => (this.usageSelectedHours = []),
           onClearSessions: () => {
             this.usageSelectedSessions = [];
-            this.clearDetails();
+            this.details.clear();
           },
           onClearFilters: () => this.clearSelectionsAndDetails(),
         },
@@ -638,8 +637,10 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageTimeSeriesBreakdownMode = mode;
           },
           onTimeSeriesCursorRangeChange: (start, end) => {
-            this.usageTimeSeriesCursorStart = start;
-            this.usageTimeSeriesCursorEnd = end;
+            if (this.details.timeSeries.data === timeSeries) {
+              this.usageTimeSeriesCursorStart = start;
+              this.usageTimeSeriesCursorEnd = end;
+            }
           },
         },
       },

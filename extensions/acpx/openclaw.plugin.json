@@ -1,6 +1,6 @@
 {
   "id": "acpx",
-  "categories": ["runtime"],
+  "categories": ["agent-runtimes"],
   "backupResources": [
     {
       "disposition": "regenerable",

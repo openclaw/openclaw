@@ -307,11 +307,13 @@ async function stageProviderAuthProfilesForPersistence(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
+  beforeWrite?: () => void;
 }): Promise<ProviderAuthProtectedProfilesReceipt> {
   const env = resolvePersistenceEnv(params);
   const locks = await acquireProviderAuthLocks(params.profiles, env);
   let prepared: ReturnType<typeof materializeProviderAuthProfiles>;
   try {
+    params.beforeWrite?.();
     prepared = materializeProviderAuthProfiles({
       profiles: params.profiles,
       config: params.config,
@@ -412,6 +414,7 @@ async function stageProviderAuthProfileBatchCore(
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       ...(params.resetFailureState ? { resetFailureState: true } : {}),
       allowOAuthGenerationReplacement: true,
+      beforeWrite: params.beforeWrite,
     });
   } catch (error) {
     try {

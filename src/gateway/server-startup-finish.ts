@@ -343,9 +343,6 @@ export async function finishGatewayStartup(params: {
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
           activeWorkInspectors,
-          providerAuthPrewarm: {
-            getConfig: getRuntimeConfig,
-          },
         }),
       ),
     ),

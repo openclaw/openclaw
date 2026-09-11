@@ -2,9 +2,6 @@
 import { isRecord } from "../../normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../normalization-core/src/string-coerce.js";
 
-export { PLUGIN_CATEGORY_SLUGS, validatePluginCategories } from "./categories.js";
-export type { PluginCategorySlug, PluginCategoriesValidationResult } from "./categories.js";
-
 /** JSON object shape accepted by package contract helpers. */
 export type JsonObject = Record<string, unknown>;
 
@@ -33,6 +30,9 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.compat.pluginApi",
   "openclaw.build.openclawVersion",
 ] as const;
+
+export { PLUGIN_CATEGORY_SLUGS, validatePluginCategories } from "./categories.js";
+export type { PluginCategorySlug, PluginCategoriesValidationResult } from "./categories.js";
 
 /** Read OpenClaw package.json blocks without trusting caller input shape. */
 function readOpenClawBlock(packageJson: unknown) {

@@ -117,36 +117,39 @@ describe("buildEmbeddedRunPayloads", () => {
     ]);
   });
 
-  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
-    const payloads = buildPayloads({
-      provider: "openai",
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
-        content: [],
-      }),
-    });
+  it.each(["openai", "xai", "minimax-portal"])(
+    "turns returned %s refresh failures into provider login recovery",
+    (provider) => {
+      const payloads = buildPayloads({
+        provider,
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          errorMessage: `OAuth token refresh failed for ${provider}: refresh_token_invalidated`,
+          content: [],
+        }),
+      });
 
-    expect(payloads).toEqual([
-      {
-        text: expect.stringContaining("/login codex"),
-        isError: true,
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
-                },
-              ],
-            },
-          ],
+      expect(payloads).toEqual([
+        {
+          text: expect.stringContaining("/login"),
+          isError: true,
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Sign in",
+                    action: { type: "command", command: "/login" },
+                  },
+                ],
+              },
+            ],
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
     const payloads = buildPayloads({

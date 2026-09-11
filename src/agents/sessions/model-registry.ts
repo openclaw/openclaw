@@ -556,7 +556,7 @@ export class ModelRegistry {
       const current: RegistryProviderSources[string] = {
         api: configured.api,
         baseUrl: configured.baseUrl,
-        models: configured.models.map((model) => ({
+        models: configured.models?.map((model) => ({
           ...model,
           api: model.api ?? accepted.get(model.id)?.api ?? configured.api,
           baseUrl: model.baseUrl ?? accepted.get(model.id)?.baseUrl ?? configured.baseUrl,

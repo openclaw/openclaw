@@ -846,10 +846,15 @@ describe("node-host worker supervisor commands", () => {
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const workspace = {
       exec: vi.fn(async () => {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        throw Object.assign(
+          new NodeWorkerWorkspaceTransferError(
+            "workspace-transfer-failed: transfer did not complete",
+            { cause },
+          ),
+          { operation: "upload", stage: "reconcile" },
         );
       }),
     } as unknown as NodeWorkerWorkspaceRuntime;
@@ -870,8 +875,43 @@ describe("node-host worker supervisor commands", () => {
       ok: false,
       error: {
         code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        message:
+          "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
       },
     });
+  });
+
+  it("bounds and redacts serialized workspace transfer diagnostics", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = Object.assign(
+      new Error(`socket hang up ${"detail ".repeat(300)} Authorization: Bearer ${secret}`),
+      { code: "ECONNRESET" },
+    );
+    const workspace = {
+      exec: vi.fn(async () => {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: transfer did not complete",
+          { cause, operation: "upload", stage: "reconcile" },
+        );
+      }),
+    } as unknown as NodeWorkerWorkspaceRuntime;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["openclaw-internal-workspace-transfer"],
+      }),
+      workspace,
+    });
+
+    const message = result?.error?.message ?? "";
+    expect(message).toContain("operation=upload stage=reconcile");
+    expect(message).toContain("ECONNRESET");
+    expect(message).not.toContain(secret);
+    expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });

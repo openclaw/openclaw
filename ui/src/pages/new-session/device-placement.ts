@@ -14,7 +14,7 @@ export type DevicePlacementOption = Readonly<
     facts: readonly string[];
     selectable: boolean;
     disabledReason?: string;
-  } & Pick<DraftEnvironment, "workerSlots" | "capabilities" | "invocableCommands">
+  } & Pick<DraftEnvironment, "platform" | "workerSlots" | "capabilities" | "invocableCommands">
 >;
 
 export type DevicePlacementRequirement = Readonly<{
@@ -100,6 +100,7 @@ export function projectDevicePlacements(
         {
           deviceId,
           label: environment.label ?? deviceId,
+          platform: environment.platform,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
           workerSlots: environment.workerSlots,
           capabilities: environment.capabilities,

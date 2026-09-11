@@ -246,81 +246,151 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
     saved.push(restore(value));
     return key;
   };
-  const jsxComments = new Set();
+  const jsxComments = new Map();
+  const literalContinuationLines = new Set();
+  const literals =
+    /(`+)(?:(?!\n(?:[ \t]*\r?\n|[ \t]*<(?:pre|script|style|textarea)\b))[^])*?\1|<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\2\s*>/g;
+  let literalEnd = 0;
+  let nextLiteral;
+  let inlineCode = false;
+  let jsxComment = false;
+  let literalLine = 0;
+  let depth = 0;
+  let fenceEndLine = 0;
+  const projectionLines = [];
+  const recordLine = (line, projection = line) => {
+    projectionLines.push(projection);
+    return line;
+  };
+  // Keep split("\n") semantics: CRLF must not create extra code-line entries.
   let text = new DocsSource(input, firstLine).replace(
-    /(`+)(?:(?!\n(?:[ \t]*\r?\n|[ \t]*<(?:pre|script|style|textarea)\b))[^])*?\1|<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\2\s*>/g,
-    (value) => {
-      // Code spans cannot cross a blank line or a raw HTML block boundary.
-      // Skip them before raw HTML matching can consume later examples.
-      if (value.startsWith("`")) {
-        return value;
+    /(?<=^|\n)[^\n]*/g,
+    (line, offset, source) => {
+      const insideLiteral = offset < literalEnd;
+      let normalized =
+        depth && (!insideLiteral || inlineCode)
+          ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "")
+          : line;
+      const lineIndex = projectionLines.length;
+      if (insideLiteral && !inlineCode) {
+        literalContinuationLines.add(lineIndex);
       }
-      if (value.startsWith("{/*")) {
-        jsxComments.add(saved.length);
+      if (lineIndex < fenceEndLine) {
+        return recordLine(normalized);
       }
-      return hold(value);
+      if (!insideLiteral && /`{3,}|~{3,}/.test(normalized)) {
+        const suffix = source.slice(offset + line.length);
+        // Keep the processed prefix for list/quote context. Component depth is
+        // fixed inside this fence; CommonMark owns its closing/container boundary.
+        const projection = [
+          ...projectionLines,
+          normalized +
+            (depth ? suffix.replace(new RegExp(`^ {1,${depth * 2}}`, "gm"), "") : suffix),
+        ].join("\n");
+        const token = codeParser
+          .parse(projection, {})
+          .find((entry) => entry.type === "fence" && entry.map[0] === lineIndex);
+        if (token) {
+          fenceEndLine = token.map[1];
+          return recordLine(normalized);
+        }
+      }
+      // The first opener owns its span: fenced examples cannot open raw HTML,
+      // and raw HTML cannot open fences. Keep each held piece on its source line.
+      let cursor = offset + line.length - normalized.length;
+      const end = offset + line.length;
+      const pieces = [];
+      const projectedPieces = [];
+      while (cursor < end) {
+        if (cursor < literalEnd) {
+          const value = source.slice(cursor, Math.min(literalEnd, end));
+          if (jsxComment) {
+            jsxComments.set(saved.length, { openerLine: literalLine, line: lineIndex });
+          }
+          const held = inlineCode ? value : hold(value);
+          pieces.push(held);
+          const structuralPrefix = inlineCode ? "" : value.match(/^[ \t]*(?:>[ \t]*)*/)[0];
+          projectedPieces.push(
+            (depth
+              ? structuralPrefix.replace(new RegExp(`^ {1,${depth * 2}}`), "")
+              : structuralPrefix) + (structuralPrefix.length < value.length ? held : ""),
+          );
+          cursor += value.length;
+          continue;
+        }
+        if (nextLiteral === undefined || (nextLiteral && nextLiteral.index < cursor)) {
+          literals.lastIndex = cursor;
+          nextLiteral = literals.exec(source);
+        }
+        const literal = nextLiteral;
+        if (!literal || literal.index >= end) {
+          pieces.push(source.slice(cursor, end));
+          projectedPieces.push(source.slice(cursor, end));
+          break;
+        }
+        pieces.push(source.slice(cursor, literal.index));
+        projectedPieces.push(source.slice(cursor, literal.index));
+        cursor = literal.index;
+        literalEnd = cursor + literal[0].length;
+        inlineCode = literal[0].startsWith("`");
+        jsxComment = literal[0].startsWith("{/*");
+        literalLine = lineIndex;
+      }
+      normalized = pieces.join("");
+      for (const [, closing, name, attrs] of normalized
+        .replace(/(`+)[^\n]*?\1/g, "")
+        .matchAll(componentTag)) {
+        if (
+          inlineComponents.has(name) ||
+          !(
+            components.has(name) ||
+            knownBlocks.has(name) ||
+            callouts.has(name) ||
+            gridComponents.has(name)
+          )
+        ) {
+          continue;
+        }
+        if (closing) {
+          depth = Math.max(0, depth - 1);
+        } else if (!attrs.endsWith("/")) {
+          depth++;
+        }
+      }
+      return recordLine(normalized, projectedPieces.join(""));
     },
   );
-  let depth = 0;
-  let fence;
-  // Keep split("\n") semantics: CRLF must not create extra code-line entries.
-  text = text.replace(/(?<=^|\n)[^\n]*/g, (line) => {
-    const normalized = depth ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "") : line;
-    const match = normalized.match(/^\s*(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})(.*)$/);
-    if (fence) {
-      if (
-        match &&
-        match[1][0] === fence[0] &&
-        match[1].length >= fence.length &&
-        !match[2].trim()
-      ) {
-        fence = undefined;
-      }
-      return normalized;
-    }
-    if (match) {
-      fence = match[1];
-      return normalized;
-    }
-    for (const [, closing, name, attrs] of normalized
-      .replace(/(`+)[^\n]*?\1/g, "")
-      .matchAll(componentTag)) {
-      if (
-        inlineComponents.has(name) ||
-        !(
-          components.has(name) ||
-          knownBlocks.has(name) ||
-          callouts.has(name) ||
-          gridComponents.has(name)
-        )
-      ) {
-        continue;
-      }
-      if (closing) {
-        depth = Math.max(0, depth - 1);
-      } else if (!attrs.endsWith("/")) {
-        depth++;
-      }
-    }
-    return normalized;
-  });
   const codeLines = new Set();
-  for (const token of codeParser.parse(text.text, {})) {
+  const quoteRanges = [];
+  for (const token of codeParser.parse(projectionLines.join("\n"), {})) {
+    // Quote markers inside raw literals cannot establish a later comment's container.
+    if (token.type === "blockquote_open" && !literalContinuationLines.has(token.map[0])) {
+      quoteRanges.push(token.map);
+    }
     if ((token.type === "fence" || token.type === "code_block") && token.map) {
       for (let i = token.map[0]; i < token.map[1]; i++) {
         codeLines.add(i);
       }
     }
   }
+  // A comment's opener owns whether its bytes are code. Remove ordinary JSX
+  // comments before code holding can preserve their indented continuation lines.
+  text = text.replace(placeholder, (key, index) => {
+    const comment = jsxComments.get(Number(index));
+    if (!comment || codeLines.has(comment.openerLine)) {
+      return key;
+    }
+    const value = saved[Number(index)];
+    const quoteDepth = quoteRanges.filter(
+      ([start, end]) => start <= comment.openerLine && comment.line < end,
+    ).length;
+    const quotePrefix = value.match(new RegExp(`^(?:[ \\t]*>){0,${quoteDepth}}`))[0];
+    return quotePrefix + value.slice(quotePrefix.length).replace(/[^\n]/g, " ");
+  });
   let sourceLine = 0;
   text = text
     .replace(/(?<=^|\n)[^\n]*/g, (line) => (codeLines.has(sourceLine++) ? hold(line) : line))
     .replace(/(`+)([^]*?)\1/g, hold);
-  // Code captures have already restored their inner comment bytes. Remove only
-  // standalone JSX comments, never comment syntax inside a protected literal.
-  text = text.replace(placeholder, (key, index) =>
-    jsxComments.has(Number(index)) ? saved[Number(index)].replace(/[^\n]/g, " ") : key,
-  );
   if (sourceFile) {
     text = text.replace(
       new RegExp(String.raw`<Snippet\b(${componentAttrsPattern})\/>`, "g"),

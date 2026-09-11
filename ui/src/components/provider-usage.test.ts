@@ -17,9 +17,6 @@ describe("renderProviderUsageDetails", () => {
 
       render(
         renderProviderUsageDetails({
-          provider: "openai",
-          displayName: "OpenAI",
-          plan: "Admin API",
           windows: [],
           costHistory: {
             unit,

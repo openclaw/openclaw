@@ -27,7 +27,6 @@ import {
   resolveRequesterScopedMcpConnections,
 } from "./mcp-connection-resolver.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
-import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 type AuthenticatedMcpProofEndpoint = {
@@ -415,7 +414,6 @@ describe("mcp connection resolver helpers", () => {
       expect(proof.pinnedDrive.requests).toBe(0);
     } finally {
       await disposeAllSessionMcpRuntimes();
-      clearCurrentProviderAuthState();
       await resetPreparedModelRuntimeSnapshotsForTest();
       setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();

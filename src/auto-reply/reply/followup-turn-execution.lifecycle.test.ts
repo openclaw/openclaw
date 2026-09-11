@@ -14,6 +14,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 const createTypingController = createFollowupTurnTestTypingController;
@@ -86,7 +87,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const updateSessionId = vi.fn();
     const turn = createTurn({
       operation: {
-        abortSignal: new AbortController().signal,
+        ...createMockReplyOperation().replyOperation,
         updateSessionId,
       } as unknown as AdmittedFollowupTurn["operation"],
     });
@@ -146,7 +147,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const onItemEvent = vi.fn(async () => {});
     const fail = vi.fn();
     const operation = {
-      abortSignal: new AbortController().signal,
+      ...createMockReplyOperation().replyOperation,
       fail,
     } as unknown as AdmittedFollowupTurn["operation"];
     const turn = createTurn({ operation });

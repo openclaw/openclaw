@@ -695,6 +695,7 @@ describe("plugin management service", () => {
       metadataSnapshot({
         enabled: false,
         iconPath,
+        channels: ["workboard-chat"],
       }),
     );
 
@@ -708,7 +709,11 @@ describe("plugin management service", () => {
       pluginId: "workboard",
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
+    expect(catalog.plugins[0]).toMatchObject({
+      id: "workboard",
+      hasIcon: true,
+      channelIds: ["workboard-chat"],
+    });
     expect(resolved).toEqual({ kind: "file", path: iconPath, rootPath: "/tmp/workboard" });
   });
 

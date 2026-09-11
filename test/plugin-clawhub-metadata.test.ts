@@ -13,19 +13,23 @@ import { writeJsonFile } from "./helpers/temp-repo.js";
 const tempDirs: string[] = [];
 afterEach(() => cleanupTempDirs(tempDirs));
 
-function fixture() {
+function fixture({
+  version = "2026.9.4",
+  categories = ["tools", "web"],
+  metadataCategories = ["web"],
+} = {}) {
   const repoRoot = makeTempDir(tempDirs, "openclaw-clawhub-metadata-");
   const packageDir = join(repoRoot, "extensions", "demo");
   const clawhubMetadataDir = join(repoRoot, "tooling", "extensions", "demo");
   const manifest = {
     id: "demo",
-    categories: ["tools", "web"],
+    categories,
     description: "Frozen candidate description",
     configSchema: { type: "object", properties: {} },
   };
   const packageJson = {
     name: "@openclaw/demo",
-    version: "2026.9.4",
+    version,
     files: ["index.js", "openclaw.plugin.json"],
   };
   writeJsonFile(join(packageDir, "openclaw.plugin.json"), manifest);
@@ -37,7 +41,7 @@ function fixture() {
   });
   writeJsonFile(join(clawhubMetadataDir, "openclaw.plugin.json"), {
     ...manifest,
-    categories: ["web"],
+    categories: metadataCategories,
     description: "Tooling description must not ship",
   });
   return { repoRoot, packageDir, clawhubMetadataDir, manifest };
@@ -67,8 +71,27 @@ function pack(packageDir: string, destination: string) {
 }
 
 describe("ClawHub package category projection", () => {
-  it("packs only the reviewed category over frozen candidate bytes and leaves npm unchanged", () => {
-    const input = fixture();
+  it.each([
+    {
+      version: "2026.9.4",
+      categories: ["tools", "web"],
+      metadataCategories: ["web"],
+      expectedCategory: "web",
+    },
+    {
+      version: "2026.9.4",
+      categories: ["runtime", "tools", "web"],
+      metadataCategories: ["agent-runtimes"],
+      expectedCategory: "runtime",
+    },
+    ...["2026.9.3", "2026.9.5"].map((version) => ({
+      version,
+      categories: ["agent-runtimes"],
+      metadataCategories: ["agent-runtimes"],
+      expectedCategory: "agent-runtimes",
+    })),
+  ])("packs $expectedCategory for $version without changing npm bytes", (scenario) => {
+    const input = fixture(scenario);
     const original = readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8");
     const npm = withAugmentedPluginNpmManifestForPackage(
       { repoRoot: input.repoRoot, packageDir: input.packageDir },
@@ -80,7 +103,10 @@ describe("ClawHub package category projection", () => {
       expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
       return pack(packageDir, input.repoRoot);
     });
-    expect(clawhub.pluginManifest).toEqual({ ...input.manifest, categories: ["web"] });
+    expect(clawhub.pluginManifest).toEqual({
+      ...input.manifest,
+      categories: [scenario.expectedCategory],
+    });
     expect(npm.pluginManifest).toEqual(input.manifest);
     expect(clawhub.packageManifest).toEqual(npm.packageManifest);
     const nonManifest = (entry: { path: string }) => entry.path !== "package/openclaw.plugin.json";
@@ -117,9 +143,15 @@ describe("ClawHub package category projection", () => {
     },
     {
       label: "unsupported category",
-      manifest: { id: "demo", categories: ["agent-runtimes"] },
+      manifest: { id: "demo", categories: ["unknown-category"] },
       packageName: "@openclaw/demo",
       error: "exactly one supported",
+    },
+    {
+      label: "2026.9.4 runtime without its source declaration",
+      manifest: { id: "demo", categories: ["agent-runtimes"] },
+      packageName: "@openclaw/demo",
+      error: "requires the candidate to declare runtime",
     },
   ])("rejects $label before invoking the packer", ({ manifest, packageName, error }) => {
     const input = fixture();

@@ -278,7 +278,7 @@ describe("embedded model resolution consistency", () => {
         provider: "custom-provider",
         model: "modern-model",
         routeOrigin: "requested",
-        routeResolution: "raw",
+        routeResolution: "resolved",
       },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({

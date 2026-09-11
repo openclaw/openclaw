@@ -199,6 +199,11 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
     }
+    // A checkout that pulled but never rebuilt keeps executing the previous dist,
+    // so report the built commit rather than letting HEAD imply what is running.
+    if (update.git.builtSha && update.git.sha && update.git.builtSha !== update.git.sha) {
+      parts.push(`stale build (running ${update.git.builtSha.slice(0, 8)}, run pnpm build)`);
+    }
     appendRegistryUpdateSummary();
   } else {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");

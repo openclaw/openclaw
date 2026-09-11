@@ -1,4 +1,3 @@
-import { clearCurrentProviderAuthState } from "../agents/model-provider-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { requestActiveCronJobCancellationByDeclarationKeyPrefix } from "../cron/active-jobs.js";
@@ -38,10 +37,6 @@ export function restoreCanonicalSecretRefs(
   sourceConfig: OpenClawConfig,
 ): OpenClawConfig {
   return projectCanonicalSecretRefsOntoRuntime(sourceConfig, runtimeConfig) as OpenClawConfig;
-}
-
-export function resetPreparedModelRuntimeStateForHotReload(): void {
-  clearCurrentProviderAuthState();
 }
 
 export function revokeActiveSkillReviewsBeforeConfigPublication(config: OpenClawConfig): void {

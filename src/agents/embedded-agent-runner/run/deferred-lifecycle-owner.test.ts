@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveReplyOperationAbortReason } from "../../../auto-reply/reply/reply-operation-abort.js";
 import {
+  createDiagnosticEmbeddedRunOwner,
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  closeDiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
   resolveAgentRunErrorLifecycleFields,
@@ -109,7 +115,11 @@ describe("deferred logical-turn lifecycle", () => {
       sessionId,
       sessionKey,
     });
-    manager.adopt({ complete: async () => clearEmbedded(), discard: clearEmbedded });
+    manager.adopt({
+      beginRetryWait: () => undefined,
+      complete: async () => clearEmbedded(),
+      discard: clearEmbedded,
+    });
 
     manager.handoffToCli();
 
@@ -129,6 +139,9 @@ describe("deferred logical-turn lifecycle", () => {
     const discarded = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: "logical-run",
       sessionId,
+      diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: "logical-run", sessionId }),
+      isCurrent: () => true,
+      onRetryWaitCompleted: () => {},
       trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
       clearActiveRun,
     });
@@ -139,6 +152,9 @@ describe("deferred logical-turn lifecycle", () => {
     const accepted = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: "logical-run",
       sessionId,
+      diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: "logical-run", sessionId }),
+      isCurrent: () => true,
+      onRetryWaitCompleted: () => {},
       trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
       clearActiveRun,
     });
@@ -149,5 +165,89 @@ describe("deferred logical-turn lifecycle", () => {
     expect(recordEvent).toHaveBeenCalledWith("session.ended", { status: "success" });
     expect(flush).toHaveBeenCalledOnce();
     expect(clearActiveRun).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["abort", "timeout", "complete", "replace", "close", "authority"] as const)(
+    "releases a retry wait when its owner loses authority through %s",
+    async (reason) => {
+      const ref = { runId: "waiting-run", sessionId, sessionKey };
+      const diagnosticOwner = createDiagnosticEmbeddedRunOwner(ref);
+      markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
+      let current = true;
+      const onRetryWaitCompleted = vi.fn();
+      const manager = createDeferredEmbeddedRunLifecycleManager(ref);
+      manager.adopt(
+        createEmbeddedAttemptDeferredLifecycleOwner({
+          ...ref,
+          diagnosticOwner,
+          isCurrent: () => current,
+          onRetryWaitCompleted,
+          trajectoryRecorder: null,
+          clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
+        }),
+      );
+      const timeout = new AbortController();
+      const deadlineAtMs = Date.now() + 660_000;
+      const release = manager.beginRetryWait(deadlineAtMs, timeout.signal);
+      try {
+        expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBe(
+          deadlineAtMs,
+        );
+        if (reason === "abort") {
+          manager.abort();
+        } else if (reason === "timeout") {
+          timeout.abort(new DOMException("Execution deadline reached", "TimeoutError"));
+        } else if (reason === "complete") {
+          await manager.complete();
+        } else if (reason === "replace") {
+          manager.adopt({
+            beginRetryWait: () => undefined,
+            complete: async () => {},
+            discard: () => {},
+          });
+        } else if (reason === "close") {
+          closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+        } else {
+          current = false;
+        }
+        expect(
+          getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs,
+        ).toBeUndefined();
+      } finally {
+        expect(onRetryWaitCompleted).not.toHaveBeenCalled();
+        release?.();
+        await manager.complete();
+      }
+    },
+  );
+
+  it("does not let a completed wait release its owner's next wait", async () => {
+    const ref = { runId: "reused-wait-owner", sessionId, sessionKey };
+    const diagnosticOwner = createDiagnosticEmbeddedRunOwner(ref);
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
+    const manager = createDeferredEmbeddedRunLifecycleManager(ref);
+    manager.adopt(
+      createEmbeddedAttemptDeferredLifecycleOwner({
+        ...ref,
+        diagnosticOwner,
+        isCurrent: () => true,
+        onRetryWaitCompleted: () => {},
+        trajectoryRecorder: null,
+        clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
+      }),
+    );
+    try {
+      const releaseFirst = manager.beginRetryWait(Date.now() + 660_000);
+      const nextDeadline = Date.now() + 900_000;
+      const releaseNext = manager.beginRetryWait(nextDeadline);
+      releaseFirst?.();
+      expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBe(
+        nextDeadline,
+      );
+      releaseNext?.();
+      expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBeUndefined();
+    } finally {
+      await manager.complete();
+    }
   });
 });

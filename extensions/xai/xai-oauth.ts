@@ -21,7 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyXaiOAuthConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildLiveXaiOAuthProvider } from "./provider-catalog.js";
+import { buildLiveXaiOAuthProvider, buildXaiProvider } from "./provider-catalog.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -581,7 +581,7 @@ async function noteXaiDeviceCode(
       title: "xAI OAuth",
       code: deviceCode.userCode,
       expiresInMinutes,
-      message: "Enter this one-time code on the xAI sign-in page.",
+      message: `Open ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri} and enter this one-time code.`,
     });
     return;
   }
@@ -633,11 +633,14 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ...requestOptions,
     });
     const identity = resolveXaiOAuthIdentity(tokens);
-    const provider = await buildLiveXaiOAuthProvider({
-      discoveryApiKey: tokens.accessToken,
-      signal: ctx.signal,
-      fetchGuard: (params) => fetchWithSsrFGuard({ ...params, beforeRequest: ctx.assertCurrent }),
-    });
+    const provider = ctx.credentialOnly
+      ? buildXaiProvider("openai-responses", "oauth")
+      : await buildLiveXaiOAuthProvider({
+          discoveryApiKey: tokens.accessToken,
+          signal: ctx.signal,
+          fetchGuard: (params) =>
+            fetchWithSsrFGuard({ ...params, beforeRequest: ctx.assertCurrent }),
+        });
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
@@ -648,7 +651,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiOAuthConfig(ctx.config, provider),
+      configPatch: applyXaiOAuthConfig(ctx.credentialOnly ? {} : ctx.config, provider),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,

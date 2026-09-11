@@ -299,17 +299,6 @@ export async function publishMemoryDatabaseTables(params: {
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
       `);
 
-      if (tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_embedding_cache")) {
-        params.targetDb.exec(`
-          DELETE FROM main.memory_embedding_cache;
-          INSERT INTO main.memory_embedding_cache (
-            provider, model, provider_key, hash, embedding, dims, updated_at
-          )
-          SELECT provider, model, provider_key, hash, embedding, dims, updated_at
-          FROM ${MEMORY_REINDEX_SCHEMA}.memory_embedding_cache;
-        `);
-      }
-
       replaceVirtualTable({
         db: params.targetDb,
         tableName: "memory_index_chunks_fts",

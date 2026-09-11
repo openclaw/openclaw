@@ -111,6 +111,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         params.onDeferredLifecycleOwner?.({
+          beginRetryWait: () => undefined,
           complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
           discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
         });
