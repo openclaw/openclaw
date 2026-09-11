@@ -653,8 +653,12 @@ async function withMediaFetchRetry<T>(
     // Honor a rate-limited origin's Retry-After before the generic backoff so a
     // 429 is not re-requested before the server's requested wait. The scheduler
     // caps the honored delay at the caller's own maxDelayMs (e.g. the attachment
-    // cache's 3s budget), so a hostile header cannot stall a download.
-    retryAfterMs: (err) => (err instanceof MediaFetchError ? err.retryAfterMs : undefined),
+    // cache's 3s budget), so a hostile header cannot stall a download. Only fall
+    // back to the built-in parser when the caller did not supply its own
+    // retryAfterMs callback, so an explicit caller pacing choice is preserved.
+    retryAfterMs:
+      retry.retryAfterMs ??
+      ((err) => (err instanceof MediaFetchError ? err.retryAfterMs : undefined)),
     sleep:
       retry.sleep ??
       ((delay) =>

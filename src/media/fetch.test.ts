@@ -690,8 +690,43 @@ describe("readRemoteMediaBuffer", () => {
         retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
       });
 
+      // The 429 must not be retried until the origin's Retry-After delay elapses.
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
 
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a caller-provided retryAfterMs callback for unheaded retries", async () => {
+    vi.useFakeTimers();
+    try {
+      // No Retry-After header on the 503, so the built-in parser returns nothing.
+      // The caller's explicit 10s pacing must still be honored instead of being
+      // replaced by the generic (zero in this config) backoff.
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+      const retryAfterMs = vi.fn(() => 10_000);
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0, retryAfterMs },
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(retryAfterMs).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
       await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
