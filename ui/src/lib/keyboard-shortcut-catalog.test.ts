@@ -185,6 +185,7 @@ describe("keyboard shortcut catalog presentation", () => {
       discussionPanel: "⌘⌥⇧J",
       dashboardPanel: "⌘⌥⇧G",
       reviewPanel: "⌘⌥⇧E",
+      balancePanes: "⌘⌥⇧B",
     };
     expect(
       Object.fromEntries(

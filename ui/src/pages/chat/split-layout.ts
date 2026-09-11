@@ -56,10 +56,10 @@ function evenWeights(length: number): number[] {
 export function balanceLayout(layout: ChatSplitLayout): ChatSplitLayout {
   const next = cloneLayout(layout);
   next.columnWeights = evenWeights(next.columns.length);
-  next.customColumnWeights = false;
+  delete next.customColumnWeights;
   for (const column of next.columns) {
     column.paneWeights = evenWeights(column.panes.length);
-    column.customPaneWeights = false;
+    delete column.customPaneWeights;
   }
   return next;
 }

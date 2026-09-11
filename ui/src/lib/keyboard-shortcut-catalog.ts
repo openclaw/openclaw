@@ -46,7 +46,6 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("stopResponse", KEYBOARD_SHORTCUT_COMBOS.escape),
     keyboardShortcutEntry("cancelDictation", KEYBOARD_SHORTCUT_COMBOS.escape),
     keyboardShortcutEntry("saveQueuedMessage", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
-    keyboardShortcutEntry("balancePanes", KEYBOARD_SHORTCUT_COMBOS.balancePanes),
   ]),
   keyboardShortcutSection("panels", [
     keyboardShortcutEntry("terminalPanel", KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
@@ -59,6 +58,7 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("discussionPanel", KEYBOARD_SHORTCUT_COMBOS.discussionPanel),
     keyboardShortcutEntry("dashboardPanel", KEYBOARD_SHORTCUT_COMBOS.dashboardPanel),
     keyboardShortcutEntry("reviewPanel", KEYBOARD_SHORTCUT_COMBOS.reviewPanel),
+    keyboardShortcutEntry("balancePanes", KEYBOARD_SHORTCUT_COMBOS.balancePanes),
   ]),
   keyboardShortcutSection("sidebar", [
     keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect),

@@ -85,7 +85,7 @@ describe("chat split layout", () => {
     expect(insertPane(custom, "p1", "right", "right").columnWeights).toEqual([0.25, 0.25, 0.5]);
   });
 
-  it("inserts panes immediately up or down and halves only the target weight", () => {
+  it("inserts panes immediately up or down and shares the column evenly until resized", () => {
     const down = insertPane(createSplitLayout("main"), "p1", "down", "down");
     expect(down.columns.at(0)?.panes).toEqual([
       { id: "p1", sessionKey: "main" },
@@ -262,8 +262,8 @@ describe("chat split layout", () => {
     const balanced = balanceLayout(uneven);
     expect(balanced.columnWeights).toEqual([0.5, 0.5]);
     expect(balanced.columns.map((column) => column.paneWeights)).toEqual([[1], [0.5, 0.5]]);
-    expect(balanced.customColumnWeights).toBe(false);
-    expect(balanced.columns.every((column) => column.customPaneWeights === false)).toBe(true);
+    expect(balanced.customColumnWeights).toBeUndefined();
+    expect(balanced.columns.every((column) => column.customPaneWeights === undefined)).toBe(true);
     expect(balanced.activePaneId).toBe(uneven.activePaneId);
     // Balancing forgets manual sizing, so the next split is even again.
     expect(insertPane(balanced, "p1", "fourth", "right").columnWeights).toEqual([
