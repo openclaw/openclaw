@@ -39,6 +39,7 @@ struct ChatModelSignInTests {
         try await model.start(#require(model.authStatus?.loginOptions.first))
         #expect(model.sessionID != nil)
         await model.answer()
+        #expect(model.message == "The connection changed. Close sign-in and open it again.")
         await model.close()
 
         #expect(model.sessionID == nil)
@@ -108,7 +109,7 @@ struct ChatModelSignInTests {
         #expect(newSessionCatalogRefreshes == 0)
     }
 
-    @Test(arguments: ["done", "error"])
+    @Test(arguments: ["done", "error", "cancelled"])
     func `device code is not login completion and terminal errors still refresh published state`(
         terminalStatus: String) async throws
     {
@@ -132,6 +133,9 @@ struct ChatModelSignInTests {
                     #expect(params["authChoice"]?.stringValue == "fixture/device")
                     return try JSONEncoder().encode(WizardStartResult(
                         sessionid: #require(params["sessionId"]?.stringValue), done: false))
+                case "wizard.cancel":
+                    #expect(terminalStatus == "cancelled")
+                    return try JSONEncoder().encode(WizardStatusResult(status: AnyCodable("cancelled")))
                 case "wizard.next":
                     if params["answer"] != nil {
                         loginFinished = true
@@ -160,12 +164,20 @@ struct ChatModelSignInTests {
         #expect(model.sessionID != nil)
         #expect(statusReads == 1)
         #expect(catalogRefreshes == 0)
+        #expect(model.message == nil)
 
-        await model.answer()
+        if terminalStatus == "cancelled" {
+            await model.cancel()
+        } else {
+            await model.answer()
+        }
 
         #expect(model.sessionID == nil)
         #expect(model.step == nil)
-        #expect(model.authStatus?.providers.first?.status == "ok")
+        #expect(model.authStatus?.providers.first?.status == (terminalStatus == "cancelled" ? "missing" : "ok"))
+        #expect(model.message == (terminalStatus == "done"
+            ? "Sign-in finished."
+            : "Sign-in ended. Review the account status before trying again."))
         #expect(statusReads == 2)
         #expect(catalogRefreshes == 1)
     }
