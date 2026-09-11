@@ -28,10 +28,10 @@ export type LeaseTable = LeaseRow & { install_root: string };
 export const leaseQueries = (db: HandoffDatabase) =>
   getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
 
-const fsSafeDurabilityUrl = import.meta.resolve("@openclaw/fs-safe/durability");
-const renameNoReplaceScript = `
+// Sealed lease consumers must not resolve installed publication dependencies.
+const renameNoReplaceScript = () => `
   import fs from "node:fs";
-  import { publishFileExclusive } from ${JSON.stringify(fsSafeDurabilityUrl)};
+  import { publishFileExclusive } from ${JSON.stringify(import.meta.resolve("@openclaw/fs-safe/durability"))};
   try {
     const input = JSON.parse(process.argv[1]);
     const source = fs.lstatSync(input.sourcePath);
@@ -124,7 +124,7 @@ function renameNoReplaceSync(params: {
   });
   const child = childProcess.spawnSync(
     process.execPath,
-    ["--no-warnings", "--input-type=module", "--eval", renameNoReplaceScript, input],
+    ["--no-warnings", "--input-type=module", "--eval", renameNoReplaceScript(), input],
     {
       encoding: "utf8",
       env: {},

@@ -270,6 +270,11 @@ opens the published winner without replacing it. Reads of an absent database
 create no state. Existing lease rows, transactions, recovery behavior, and the
 rule that one updater owns an installation are unchanged.
 
+The normal handoff parent prepares this database before launching its sealed
+helper. The helper receives the captured database identity and operates only on
+that existing database, without resolving installation packages or recreating
+missing state.
+
 Publication uses the filesystem owner's atomic no-replace rename and follows
 the existing platform policy for directory durability. The published database
 always has one filesystem link.
