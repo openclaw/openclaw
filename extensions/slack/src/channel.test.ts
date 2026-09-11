@@ -1113,6 +1113,33 @@ describe("slackPlugin outbound", () => {
     },
   };
 
+  it.each(["U12345", "team:TWORK:user:U12345"])(
+    "privately delivers to requester %s using the originating account",
+    async (senderId) => {
+      const assertActive = vi.fn();
+      await slackPlugin.outbound!.sendPrivateText!({
+        cfg,
+        accountId: "work-bot",
+        senderId,
+        text: "https://example.test/connect?state=private-fixture",
+        assertActive,
+      });
+
+      expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+      expect(sendMessageSlackMock).toHaveBeenCalledWith(
+        senderId.startsWith("team:") ? senderId : `user:${senderId}`,
+        "https://example.test/connect?state=private-fixture",
+        {
+          cfg,
+          accountId: "work-bot",
+          textIsSlackPlainText: true,
+          suppressLinkPreviews: true,
+          assertPlatformSendAuthorized: assertActive,
+        },
+      );
+    },
+  );
+
   it("treats ACP block text as visible delivered output", () => {
     expect(
       slackPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({

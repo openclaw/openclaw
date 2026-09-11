@@ -27,6 +27,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   setupWizard: slackSetupWizard,
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
+    requesterPrivateMessages: true,
     reactions: true,
     threads: true,
     media: true,

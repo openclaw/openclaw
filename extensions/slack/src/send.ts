@@ -39,7 +39,12 @@ import {
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
-import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
+import {
+  createSlackReadClient,
+  createSlackWriteClient,
+  createSlackTokenCacheKey,
+  getSlackWriteClient,
+} from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
@@ -143,6 +148,10 @@ type SlackSendOpts = {
   deliveryQueueId?: string;
   /** Refresh durable timing after the per-target queue and before Slack API work. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate caller-owned authority before each HTTP request, including retries. */
+  assertPlatformSendAuthorized?: () => void;
+  /** Sensitive messages must not expose their URLs through link previews. */
+  suppressLinkPreviews?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
@@ -411,6 +420,9 @@ function resolveSlackDelivery(params: {
   opts: Readonly<SlackSendOpts>;
   recipient: SlackRecipient;
 }): SlackResolvedDelivery {
+  if (params.opts.assertPlatformSendAuthorized && (params.opts.client || params.eventScope)) {
+    throw new Error("Authorized Slack delivery requires its own write client");
+  }
   if (params.eventScope) {
     if (!params.eventScope.writeClient) {
       throw new Error("missing_enterprise_slack_write_client");
@@ -439,9 +451,15 @@ function resolveSlackDelivery(params: {
         : params.account.botTokenSource,
   });
   return Object.freeze({
-    client: params.recipient.teamId
-      ? getSlackWriteClient(credential, { teamId: params.recipient.teamId })
-      : (params.opts.client ?? getSlackWriteClient(credential)),
+    // A cached client must not retain one run's authority or apply it to another.
+    client: params.opts.assertPlatformSendAuthorized
+      ? createSlackWriteClient(credential, {
+          teamId: params.recipient.teamId,
+          assertPlatformSendAuthorized: params.opts.assertPlatformSendAuthorized,
+        })
+      : params.recipient.teamId
+        ? getSlackWriteClient(credential, { teamId: params.recipient.teamId })
+        : (params.opts.client ?? getSlackWriteClient(credential)),
     credential,
     identity: resolveSlackSendIdentity({
       accountId: params.account.accountId,
@@ -1124,7 +1142,10 @@ async function sendMessageSlackQueuedInner(params: {
   delivery: SlackResolvedDelivery;
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, blocks, trimmedMessage, delivery } = params;
-  const { client, identity, recipient, unfurl } = delivery;
+  const { client, identity, recipient } = delivery;
+  const unfurl = opts.suppressLinkPreviews
+    ? { unfurlLinks: false, unfurlMedia: false }
+    : delivery.unfurl;
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
@@ -1252,6 +1273,7 @@ async function sendMessageSlackQueuedInner(params: {
       await dispatchOnce();
       try {
         const { response } = await postSlackMessageBestEffort({
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
           client,
           channelId,
           text: accessibilityText,
@@ -1304,6 +1326,7 @@ async function sendMessageSlackQueuedInner(params: {
           await dispatchOnce();
         }
         const posted = await postSlackMessageBestEffort({
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
           client,
           channelId,
           text: fallback.text,
@@ -1428,6 +1451,7 @@ async function sendMessageSlackQueuedInner(params: {
       await dispatchOnce();
     }
     const posted = await postSlackMessageBestEffort({
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       client,
       channelId,
       text: chunk,

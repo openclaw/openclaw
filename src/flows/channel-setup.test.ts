@@ -448,6 +448,40 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(collectChannelStatus).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, false, true])(
+    "uses setup metadata to warn about shared sign-in links (private delivery: %s)",
+    async (requesterPrivateMessages) => {
+      const configure = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }));
+      const plugin = makeExternalChatSetupPlugin({ configure });
+      plugin.capabilities.requesterPrivateMessages = requesterPrivateMessages;
+      listActiveChannelSetupPlugins.mockReturnValue([plugin]);
+      resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+      const note = vi.fn(async (_message: string, _title?: string) => undefined);
+
+      await runChannelSetup({}, { note }, TARGETED_CHANNEL_SETUP_OPTIONS);
+
+      expect(configure).toHaveBeenCalledOnce();
+      expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+      const warnings = note.mock.calls
+        .filter(([, title]) => title === "Personal MCP connections")
+        .map(([message]) => message);
+      expect(warnings).toEqual(
+        requesterPrivateMessages
+          ? []
+          : [
+              expect.stringContaining(
+                "The External Chat plugin does not support private sign-in delivery.",
+              ),
+            ],
+      );
+      if (requesterPrivateMessages !== true) {
+        expect(warnings[0]).toContain(
+          "someone else can complete the link and connect the wrong account",
+        );
+      }
+    },
+  );
+
   it("enables an active deferred setup plugin when explicitly selected", async () => {
     const setupWizard = {
       channel: "custom-chat",
@@ -1534,16 +1568,18 @@ describe("setupChannels workspace shadow exclusion", () => {
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
     const select = vi.fn().mockResolvedValue("external-chat");
     const onSelection = vi.fn();
+    const note = vi.fn(async () => undefined);
 
     const next = await runChannelSetup(
       {},
-      { select },
+      { select, note },
       { ...DEFERRED_CHANNEL_SETUP_OPTIONS, onSelection },
     );
 
     expect(select).toHaveBeenCalledOnce();
     expect(onSelection).toHaveBeenCalledWith([]);
     expect(next).toBe(pausedConfig);
+    expect(note).not.toHaveBeenCalledWith(expect.any(String), "Personal MCP connections");
   });
 
   it("honors global plugin disablement before lazy channel setup loads plugins", async () => {

@@ -21,6 +21,7 @@ import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
   McpToolCatalog,
+  RequesterMcpConnectDelivery,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -427,12 +428,24 @@ export async function materializeBundleMcpToolsForRun(params: {
   /** Transfer the lease admitted by the manager before returning this runtime. */
   releaseLease?: () => void;
   disposeRuntime?: () => Promise<void>;
+  requesterConnectDelivery?: RequesterMcpConnectDelivery;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = params.runtime;
   let disposal: Promise<void> | undefined;
+  let disposed = false;
+  const requesterConnectDelivery = params.requesterConnectDelivery && {
+    ...params.requesterConnectDelivery,
+    assertActive: () => {
+      if (disposed) {
+        throw new Error("MCP tool view is disposed");
+      }
+      params.requesterConnectDelivery!.assertActive();
+    },
+  };
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   let releaseLease: (() => void) | undefined;
   const dispose = async () => {
+    disposed = true;
     disposal ??= (async () => {
       // Failure to release the lease cannot strand this view's private runtime.
       try {
@@ -474,9 +487,14 @@ export async function materializeBundleMcpToolsForRun(params: {
       createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
         runWithSessionMcpRequestSignal(signal, async () => {
           if (!Object.hasOwn(catalog.servers, tool.serverName)) {
-            const connect = runtime.requesterConnect?.createExecute(tool.serverName);
+            const connect = runtime.requesterConnect?.createExecute(
+              tool.serverName,
+              requesterConnectDelivery,
+            );
             if (connect) {
-              return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
+              return setMcpCodeModeGuestResultFromAgentResult(
+                await connect(toolCallId, input, signal),
+              );
             }
           }
           runtime.markUsed();

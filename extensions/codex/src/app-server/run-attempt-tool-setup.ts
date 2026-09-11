@@ -456,6 +456,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
+          assertActive: params.hostCapabilities?.assertActive,
+          abortSignal: runAbortController.signal,
           reservedToolNames: [
             ...reservedToolNames,
             ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),

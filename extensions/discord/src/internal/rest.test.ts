@@ -101,6 +101,42 @@ describe("RequestClient", () => {
     expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
   });
 
+  it("rechecks each queued request's authority without affecting other requests", async () => {
+    const firstResponse = createDeferred<Response>();
+    const sentContents: unknown[] = [];
+    const client = new RequestClient("test-token", {
+      fetch: async (_input, init) => {
+        sentContents.push(JSON.parse(String(init?.body)).content);
+        return sentContents.length === 1
+          ? await firstResponse.promise
+          : createJsonResponse({ id: "third" });
+      },
+    });
+    const authorityRevoked = new Error("delivery authority revoked");
+    let secondActive = true;
+    const first = client.post("/channels/c1/messages", { body: { content: "first" } });
+    const second = client.post("/channels/c1/messages", {
+      body: { content: "second" },
+      assertRequestAuthorized: () => {
+        if (!secondActive) {
+          throw authorityRevoked;
+        }
+      },
+    });
+    const secondRejected = expect(second).rejects.toBe(authorityRevoked);
+    const third = client.post("/channels/c1/messages", { body: { content: "third" } });
+    expect(sentContents).toEqual(["first"]);
+
+    secondActive = false;
+    firstResponse.resolve(createJsonResponse({ id: "first" }));
+
+    await expect(first).resolves.toEqual({ id: "first" });
+    await secondRejected;
+    await expect(third).resolves.toEqual({ id: "third" });
+    expect(sentContents).toEqual(["first", "third"]);
+    expect(client.queueSize).toBe(0);
+  });
+
   it("caps oversized REST client request timeouts before scheduling aborts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fetchSpy = vi.fn(async () => createJsonResponse({ ok: true }));

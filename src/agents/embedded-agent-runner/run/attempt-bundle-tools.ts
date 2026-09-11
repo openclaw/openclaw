@@ -1,6 +1,8 @@
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { createRequesterMcpConnectDelivery } from "../../agent-bundle-mcp-private-delivery.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   acquireSessionMcpRuntime,
@@ -134,10 +136,31 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
     : undefined;
+  const assertMcpRunActive = bundleMcpAcquisition
+    ? resolveAdmittedRunActiveAssertion(params.attempt.admittedRunContext)
+    : undefined;
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
         agentId: params.setup.sessionAgentId,
+        requesterConnectDelivery: createRequesterMcpConnectDelivery({
+          cfg: params.attempt.config,
+          requesterScope: params.attempt.senderId
+            ? {
+                requesterSenderId: params.attempt.senderId,
+                agentAccountId: params.attempt.agentAccountId,
+                messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+              }
+            : undefined,
+          assertActive: assertMcpRunActive
+            ? () => {
+                // Permission changes replace this signal while reusing the MCP view.
+                // The call's own signal separately fences work from an older generation.
+                params.preparedToolBase.toolAbortSignal.throwIfAborted();
+                assertMcpRunActive();
+              }
+            : undefined,
+        }),
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),

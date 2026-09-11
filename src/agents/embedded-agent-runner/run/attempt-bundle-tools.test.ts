@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import type { RequesterMcpConnectDelivery } from "../../agent-bundle-mcp-types.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -14,6 +15,11 @@ const mocks = vi.hoisted(() => ({
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
+  resolveAdmittedRunActiveAssertion: vi.fn(),
+}));
+
+vi.mock("../../admitted-run-context.js", () => ({
+  resolveAdmittedRunActiveAssertion: mocks.resolveAdmittedRunActiveAssertion,
 }));
 
 vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
@@ -50,6 +56,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
     mocks.acquireSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
+    mocks.resolveAdmittedRunActiveAssertion.mockReset().mockReturnValue(() => {});
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
@@ -418,6 +425,49 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       { name: "core_first" },
       { name: "server__read", pluginId: "bundle-mcp" },
     ]);
+  });
+
+  it("keeps requester connect available after permission refresh while rejecting old tools", async () => {
+    const input = createInput([], []);
+    input.attempt.senderId = "alice";
+    input.attempt.agentAccountId = "bot";
+    input.attempt.messageChannel = "discord";
+    const firstController = new AbortController();
+    let toolAbortSignal = firstController.signal;
+    Object.defineProperty(input.preparedToolBase, "toolAbortSignal", {
+      get: () => toolAbortSignal,
+    });
+    const connected = { content: [{ type: "text" as const, text: "connected" }], details: {} };
+    const connect = vi.fn().mockResolvedValue(connected);
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockImplementation(
+      async ({
+        requesterConnectDelivery,
+      }: {
+        requesterConnectDelivery: RequesterMcpConnectDelivery;
+      }) => {
+        const tool = createStubTool("calendar__connect");
+        tool.execute = async () => {
+          requesterConnectDelivery.assertActive();
+          return await connect();
+        };
+        return { tools: [tool] };
+      },
+    );
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+    const oldTool = result.uncompactedEffectiveTools[0]!;
+    await expect(oldTool.execute("first", {})).resolves.toEqual(connected);
+
+    firstController.abort();
+    toolAbortSignal = new AbortController().signal;
+    result.refreshTools();
+
+    await expect(oldTool.execute("old-generation", {})).rejects.toThrow("Aborted");
+    await expect(
+      result.uncompactedEffectiveTools[0]!.execute("current-generation", {}),
+    ).resolves.toEqual(connected);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(mocks.materializeBundleMcpToolsForRun).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, "MCP", "LSP"])(

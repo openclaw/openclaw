@@ -200,10 +200,16 @@ export async function sendMessageDiscord(
     tableMode: opts.tableMode,
   });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
+  const { channelId, dm } = await resolveChannelId(
+    rest,
+    recipient,
+    request,
+    opts.assertPlatformSendAuthorized,
+  );
 
-  // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  const channel = await resolveDiscordChannel(rest, channelId);
+  // Created DMs cannot be forum/media channels; keep their send path free of
+  // unnecessary channel lookups that are outside the request's guarded writes.
+  const channel = dm ? undefined : await resolveDiscordChannel(rest, channelId);
   const deliveredResults: DiscordSendResult[] = [];
   let deliveryThreadId: string | undefined;
   const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
@@ -429,6 +435,7 @@ export async function sendMessageDiscord(
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),
+      dm,
     });
   }
 

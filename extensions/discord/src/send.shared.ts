@@ -188,6 +188,7 @@ async function buildDiscordSendError(
     rest: RequestClient;
     token: string;
     hasMedia: boolean;
+    dm?: boolean;
   },
 ) {
   if (err instanceof DiscordSendError) {
@@ -200,7 +201,9 @@ async function buildDiscordSendError(
       { kind: "dm-blocked", discordCode: code, status: getDiscordErrorStatus(err) },
     );
   }
-  if (code !== DISCORD_MISSING_PERMISSIONS) {
+  // A resolved DM has no guild permissions to probe. Avoid unrelated REST I/O
+  // after a private send fails, including after its authority has been revoked.
+  if (code !== DISCORD_MISSING_PERMISSIONS || ctx.dm) {
     return err;
   }
 
@@ -251,12 +254,13 @@ async function resolveChannelId(
   rest: RequestClient,
   recipient: DiscordRecipient,
   request: DiscordRequest,
+  assertRequestAuthorized?: () => void,
 ): Promise<{ channelId: string; dm?: boolean }> {
   if (recipient.kind === "channel") {
     return { channelId: recipient.id };
   }
   const dmChannel = (await request(
-    () => createUserDmChannel(rest, recipient.id),
+    () => createUserDmChannel(rest, recipient.id, assertRequestAuthorized),
     "dm-channel",
   )) as { id: string };
   if (!dmChannel?.id) {
@@ -385,7 +389,7 @@ async function sendDiscordChunks(
           return createChannelMessage<{ id: string; channel_id: string }>(
             params.rest,
             params.channelId,
-            { body },
+            { body, assertRequestAuthorized: params.assertPlatformSendAuthorized },
           );
         },
         files ? "media" : "text",

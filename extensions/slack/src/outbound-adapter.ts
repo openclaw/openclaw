@@ -256,6 +256,26 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  sendPrivateText: async ({ cfg, accountId, senderId, text, assertActive }) => {
+    const recipient = parseSlackTarget(senderId, { defaultKind: "user" });
+    if (recipient?.kind !== "user" || !/^[UW][A-Z0-9]+$/i.test(recipient.id)) {
+      throw new Error("Slack private delivery requires a user ID");
+    }
+    const target = recipient.teamId ? recipient.raw : `user:${recipient.id}`;
+    const account = resolveSlackAccount({ cfg, accountId });
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
+    const { sendMessageSlack } = await loadSlackSendRuntime();
+    assertActive();
+    return toSlackOutboundResult(
+      await sendMessageSlack(target, text, {
+        cfg,
+        accountId,
+        textIsSlackPlainText: true,
+        suppressLinkPreviews: true,
+        assertPlatformSendAuthorized: assertActive,
+      }),
+    );
+  },
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;

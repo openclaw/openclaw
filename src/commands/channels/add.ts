@@ -3,14 +3,17 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   applyPreparedChannelAccountConfiguration,
-  type ChannelAccountMutationPlugin,
   prepareChannelAccountConfiguration,
 } from "../../channels/plugins/account-config-mutation.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelId,
+  ChannelPlugin,
+  ChannelSetupInput,
+} from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -26,6 +29,7 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
+import { getChannelPrivateSignInWarning } from "../channel-setup/private-sign-in-warning.js";
 import { parseAccountSelector } from "./account-selector.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
@@ -188,7 +192,7 @@ async function channelsAddCommandImpl(
   const loadScopedPlugin = async (
     channelId: ChannelId,
     pluginId?: string,
-  ): Promise<ChannelAccountMutationPlugin | undefined> => {
+  ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
     if (existing?.setupContract?.applyAccountConfig || existing?.setup?.applyAccountConfig) {
       return existing;
@@ -321,6 +325,10 @@ async function channelsAddCommandImpl(
   runtime.log(
     `Added ${plugin.meta.label ?? channelLabel(channel)} account "${applied.accountId}".`,
   );
+  const privateSignInWarning = getChannelPrivateSignInWarning(plugin);
+  if (privateSignInWarning) {
+    runtime.log(`Warning: ${privateSignInWarning}`);
+  }
   const afterAccountConfigWritten = applied.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();

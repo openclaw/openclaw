@@ -534,6 +534,9 @@ export const en = {
       pluginMissingRecoverable:
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
+      privateSignInTitle: "Personal MCP connections",
+      privateSignInWarning:
+        "The {label} plugin does not support private sign-in delivery. Personal MCP sign-in links appear in the conversation where they are requested. In a shared conversation, someone else can complete the link and connect the wrong account to the requester's pending connection. Request personal connections only in trusted or private conversations, and do not share sign-in links.",
       removeTitle: "Remove channel",
       resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
       resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
