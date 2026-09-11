@@ -796,10 +796,11 @@ async function handleSlashCommandAsync(params: {
     });
     const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
     if (data.providers.length === 0) {
-      await sendMessageMattermost(`channel:${channelId}`, "No models available.", {
-        cfg,
-        accountId: account.accountId,
-      });
+      await sendMessageMattermost(
+        `channel:${channelId}`,
+        [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
+        { cfg, accountId: account.accountId },
+      );
       return;
     }
 
@@ -828,11 +829,11 @@ async function handleSlashCommandAsync(params: {
               currentModel,
             });
 
-    await sendMessageMattermost(`channel:${channelId}`, view.text, {
-      cfg,
-      accountId: account.accountId,
-      buttons: view.buttons,
-    });
+    await sendMessageMattermost(
+      `channel:${channelId}`,
+      [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
+      { cfg, accountId: account.accountId, buttons: view.buttons },
+    );
     runtime.log?.(`delivered model picker to ${to}`);
     return;
   }

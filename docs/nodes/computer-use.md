@@ -77,6 +77,10 @@ Loopback is also reachability, not identity: any process on the machine can conn
 
 The CUA descriptor advertises window, element, and browser targets; background and foreground delivery; image, accessibility, and browser observations; and recording. Peekaboo remains the default provider and does not advertise recording.
 
+CUA desktop input uses the foreground desktop route. `deliveryMode` selects a route only for window-targeted input; switching it on a desktop action does not change how that action is delivered. Desktop results preserve native effect and escalation evidence, identify their desktop scope, and indicate when a requested delivery mode is not applicable. An acknowledged input is not proof that the application responded: verify the intended visible change before repeating it.
+
+The pinned CUA driver supports key taps, not sustained keyboard holds. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
+
 #### Browser profiles
 
 `browser_prepare` can launch a separate driver-owned Chromium process with a new ephemeral profile or a named isolated profile. It never modifies, copies, terminates, or attaches to the selected browser's existing profile. Existing-profile/CDP attachment is not exposed by this adapter; browser preparation is limited to isolated profiles.

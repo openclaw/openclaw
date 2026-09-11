@@ -273,20 +273,37 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const disabled = areBundledPluginsDisabled(env);
   const override = disabled ? undefined : env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
-  const key = JSON.stringify([
-    import.meta.url,
-    disabled,
-    override ? resolveUserPath(override, env) : undefined,
-    shouldTrustTestBundledPluginsDirOverride(env),
-    process.argv[1],
-    process.execPath,
-    tryProcessCwd(),
-  ]);
+  const resolvedOverride = override ? resolveUserPath(override, env) : undefined;
+  const trustOverride = shouldTrustTestBundledPluginsDirOverride(env);
+  const argv1 = process.argv[1];
+  const execPath = process.execPath;
+  const cwd = tryProcessCwd();
   const metadata = getPluginCache().metadata;
+  const cached = metadata.bundledPluginsDir;
   // Reuse the selected root, not just its filesystem facts. Management scopes and
   // Gateway restart acquire a new owner; config activation retains this inventory.
-  if (metadata.bundledPluginsDir?.key !== key) {
-    metadata.bundledPluginsDir = { key, value: resolveBundledPluginsDirUncached(env) };
+  if (
+    cached &&
+    cached.moduleUrl === import.meta.url &&
+    cached.disabled === disabled &&
+    cached.resolvedOverride === resolvedOverride &&
+    cached.trustOverride === trustOverride &&
+    cached.argv1 === argv1 &&
+    cached.execPath === execPath &&
+    cached.cwd === cwd
+  ) {
+    return cached.value;
   }
-  return metadata.bundledPluginsDir.value;
+  const value = resolveBundledPluginsDirUncached(env);
+  metadata.bundledPluginsDir = {
+    moduleUrl: import.meta.url,
+    disabled,
+    resolvedOverride,
+    trustOverride,
+    argv1,
+    execPath,
+    cwd,
+    value,
+  };
+  return value;
 }

@@ -32,6 +32,7 @@ import {
   videoGenerationTaskLifecycle,
   type VideoGenerationTaskHandle,
 } from "./media-generate-background.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import { acquireVideoGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   applyAgentDefaultModelConfig,
@@ -695,22 +696,11 @@ export function createVideoGenerateTool(options?: {
           acquired?.assertOpen();
         }
       } catch (error) {
-        let cleanupFailure: { error: unknown } | undefined;
-        try {
-          await acquired?.release();
-        } catch (cleanupError) {
-          cleanupFailure = { error: cleanupError };
-        }
-        if (cleanupFailure) {
-          throw new AggregateError(
-            [error, cleanupFailure.error],
-            "Video preflight and cleanup failed",
-            {
-              cause: error,
-            },
-          );
-        }
-        throw error;
+        return rethrowAfterMediaCleanup(
+          error,
+          () => acquired?.release(),
+          "Video preflight and cleanup failed",
+        );
       }
       if (prepared.kind === "result") {
         await acquired?.release();

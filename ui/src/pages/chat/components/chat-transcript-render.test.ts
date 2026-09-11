@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
@@ -343,7 +344,7 @@ describe("chat transcript rendering", () => {
       ];
       const props = {
         ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
-        browserTabPreviewsActive: active,
+        latestBrowserTabs: active ? latestBrowserTabCards(messages, []) : undefined,
         showToolCalls: true,
       };
       const transcript = createTestTranscript();

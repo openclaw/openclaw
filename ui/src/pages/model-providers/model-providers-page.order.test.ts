@@ -307,7 +307,7 @@ describe("ModelProvidersPage profile actions", () => {
       return originalRequest(method);
     });
 
-    const refreshing = page.refresh({ force: true });
+    const refreshing = page.refresh("forced");
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
     page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));

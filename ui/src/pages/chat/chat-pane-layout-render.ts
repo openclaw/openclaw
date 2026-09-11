@@ -123,6 +123,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         state.requestUpdate?.();
       }}
     ></openclaw-chat-outbox-recovery>`;
+    const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const chat = renderChat({
       ...chatProps,
       pluginToolIcons: this.toolIcons.icons,
@@ -131,7 +132,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         this.presented &&
         this.visuallyPresented &&
         isSidebarSlotVisible(sidebarLayout, "conversation"),
-      browserTabPreviewsActive: this.active && this.presented,
+      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
       header: nothing,
     });
@@ -172,9 +173,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       agentId: currentAgentId,
       browserPresented,
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
-      preferredBrowserTab: [
-        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
-      ].at(-1),
+      preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
