@@ -387,6 +387,60 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
 
+  it("still cleans up tailscale and the webhook server when tunnel stop fails", async () => {
+    const tunnelError = new Error("tunnel cleanup failed");
+    const tunnelStop = vi.fn().mockRejectedValue(tunnelError);
+    mocks.startTunnel.mockResolvedValue({
+      publicUrl: "https://public.example/voice/webhook",
+      provider: "ngrok",
+      stop: tunnelStop,
+    });
+
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    await expect(runtime.stop()).rejects.toBe(tunnelError);
+    expect(tunnelStop).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
+    expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("aggregates every cleanup failure in disposer order", async () => {
+    const tunnelError = new Error("tunnel cleanup failed");
+    const tailscaleError = new Error("tailscale cleanup failed");
+    const webhookError = new Error("webhook stop failed");
+    const tunnelStop = vi.fn().mockRejectedValue(tunnelError);
+    mocks.startTunnel.mockResolvedValue({
+      publicUrl: "https://public.example/voice/webhook",
+      provider: "ngrok",
+      stop: tunnelStop,
+    });
+    mocks.cleanupTailscaleExposure.mockRejectedValue(tailscaleError);
+    mocks.webhookStop.mockRejectedValue(webhookError);
+
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    const firstStop = runtime.stop();
+    expect(runtime.stop()).toBe(firstStop);
+    const error = await firstStop.then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([tunnelError, tailscaleError, webhookError]);
+    expect(tunnelStop).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
+    expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
     const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
     const fullConfig = {
