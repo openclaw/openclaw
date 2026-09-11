@@ -31,14 +31,7 @@ const hasConfiguredSecretInputMock = vi.hoisted(() =>
     return resolveSecretInputRefMock(value)?.ref != null;
   }),
 );
-const resolveGatewayAuthMock = vi.hoisted(() =>
-  vi.fn<() => ResolvedGatewayAuth>(() => ({
-    mode: "token",
-    token: undefined,
-    password: undefined,
-    allowTailscale: false,
-  })),
-);
+const resolveGatewayAuthMock = vi.hoisted(() => vi.fn<() => ResolvedGatewayAuth>());
 const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
