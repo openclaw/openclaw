@@ -142,7 +142,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
-      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
       const missingScope =
         scope && !selectableAgents.some((agent) => agent.id === scope) ? scope : null;
       if (observedScope !== scope) {
