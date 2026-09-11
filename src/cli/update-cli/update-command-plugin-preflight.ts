@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredNpmPluginTargets } from "../../commands/doctor/shared/missing-configured-plugin-install.targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
@@ -65,7 +66,7 @@ export async function preflightConfiguredNpmPluginTargets(params: {
       if (!requirement || typeof manifest?.version !== "string") {
         continue;
       }
-      let requiredSpec: string;
+      let requiredSpec = target.spec;
       let failure: string;
       try {
         const selected = await resolveNpmInstallSpecsForUpdateChannel({
@@ -77,10 +78,10 @@ export async function preflightConfiguredNpmPluginTargets(params: {
           ? { ok: true as const, metadata: selected.npmResolution }
           : await resolveNpmSpecMetadata({ spec: requiredSpec, timeoutMs: params.timeoutMs });
         if (!resolution.ok) {
-          if (resolution.category === "metadata-env") {
-            continue;
-          }
-          failure = resolution.error;
+          failure =
+            resolution.category === "metadata-env"
+              ? `registry could not be reached: ${resolution.error}`
+              : resolution.error;
         } else {
           const candidateRequirement = incompatibleRequirement(
             resolution.metadata.packageOpenClaw,
@@ -91,13 +92,12 @@ export async function preflightConfiguredNpmPluginTargets(params: {
           }
           failure = `resolved plugin requires ${candidateRequirement}`;
         }
-      } catch {
-        // A registry outage is not evidence that a compatible release does not exist.
-        continue;
+      } catch (error) {
+        failure = `registry could not be reached: ${formatErrorMessage(error)}`;
       }
       throw new UpdatePreMutationError(
         "plugin-incompatible",
-        `Update refused: Plugin "${target.pluginId}" (installed ${manifest.version}) requires ${requirement} and would not load on core ${targetVersion}. Cannot resolve a compatible ${requiredSpec}: ${failure}. Install a compatible plugin version with \`openclaw plugins update <package>@<compatible-version>\`, disable it with \`openclaw plugins disable ${target.pluginId}\`, or wait for a compatible release.`,
+        `Update refused: Plugin "${target.pluginId}" (installed ${manifest.version}) requires ${requirement} and would not load on core ${targetVersion}. Cannot resolve a compatible ${requiredSpec}: ${failure}. Retry when the registry is reachable, pin a compatible plugin version with \`openclaw plugins update <package>@<compatible-version>\`, disable it with \`openclaw plugins disable ${target.pluginId}\`, or wait for a compatible release.`,
       );
     }
   });

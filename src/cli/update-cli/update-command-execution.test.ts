@@ -329,34 +329,46 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { category: undefined, range: ">=1.0.0", refused: false },
-    { category: "metadata-env", range: ">=1.0.0", refused: false },
-    { category: undefined, range: ">=1.0.0 <1.0.1", refused: true },
-    { category: "metadata-env", range: ">=1.0.0 <1.0.1", refused: false },
+    { failure: "missing", contract: "api", range: ">=1.0.0", refused: false },
+    { failure: "metadata", contract: "api", range: ">=1.0.0", refused: false },
+    { failure: "throw", contract: "api", range: ">=1.0.0", refused: false },
+    { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
+    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
+    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
+    { failure: "metadata", contract: "host", range: ">=1.0.2", refused: true },
+    { failure: "throw", contract: "host", range: ">=1.0.2", refused: true },
   ])(
-    "admits only known plugin compatibility risks ($category, $range)",
-    async ({ category, range, refused }) => {
+    "refuses unresolved incompatible plugins before mutation ($failure, $contract, $range)",
+    async ({ failure, contract, range, refused }) => {
       await withTestDir({ prefix: "openclaw-plugin-admission-" }, async (installPath) => {
         await fs.writeFile(
           path.join(installPath, "package.json"),
           JSON.stringify({
             name: "@example/demo",
             version: "1.0.0",
-            openclaw: { compat: { pluginApi: range } },
+            openclaw:
+              contract === "api"
+                ? { compat: { pluginApi: range } }
+                : { install: { minHostVersion: range } },
           }),
         );
         mocks.pluginRecords.mockResolvedValue({
           demo: { source: "npm", spec: "@example/demo@1.0.1", version: "1.0.0", installPath },
         });
         mocks.pluginTargets.mockResolvedValue([{ pluginId: "demo", spec: "@example/demo@1.0.1" }]);
-        mocks.npmMetadata.mockResolvedValue({
-          ok: false,
-          category,
-          error:
-            category === "metadata-env"
-              ? "registry unreachable: ECONNRESET"
-              : "No matching version found",
-        });
+        const error =
+          failure === "missing"
+            ? "No matching version found"
+            : "registry connection failed: ECONNRESET";
+        if (failure === "throw") {
+          mocks.npmMetadata.mockRejectedValue(new Error(error));
+        } else {
+          mocks.npmMetadata.mockResolvedValue({
+            ok: false,
+            category: failure === "metadata" ? "metadata-env" : undefined,
+            error,
+          });
+        }
         const actual = await vi.importActual<typeof import("./update-command-plugin-preflight.js")>(
           "./update-command-plugin-preflight.js",
         );
@@ -369,7 +381,13 @@ describe("mutable update execution", () => {
           expect(execution?.result.reason).toBe("plugin-incompatible");
           expect(execution?.failure?.detail).toContain('Plugin "demo" (installed 1.0.0)');
           expect(execution?.failure?.detail).toContain(range);
+          expect(execution?.failure?.detail).toContain("core 1.0.1");
           expect(execution?.failure?.detail).toContain("@example/demo@1.0.1");
+          expect(execution?.failure?.detail).toContain(error);
+          if (failure !== "missing") {
+            expect(execution?.failure?.detail).toContain("registry could not be reached");
+            expect(execution?.failure?.detail).toContain("Retry when the registry is reachable");
+          }
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
           expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
           expect(mocks.serviceStopped).toBe(false);

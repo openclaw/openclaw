@@ -439,9 +439,11 @@ Before mutation, an installed plugin whose declared `openclaw.compat.pluginApi`
 range or `openclaw.install.minHostVersion` excludes the target core can block the
 update if the requested replacement is unavailable or also incompatible. The
 `plugin-incompatible` refusal names the installed version and requirement.
-Install a compatible plugin version, explicitly disable the plugin, or wait for
-a compatible release. A registry outage alone never establishes this refusal;
-candidate validation and post-core convergence still check activation safety.
+When the installed plugin is known to be incompatible, a registry outage also
+blocks the update because a compatible replacement cannot be resolved. Retry
+when the registry is reachable, pin a compatible plugin version, explicitly
+disable the plugin, or wait for a compatible release. Compatible installed
+plugins still follow the advisory path described above.
 
 Older updaters may still refuse with `plugin-target-unavailable` before candidate
 code runs. Use your installation's [manual update method](/install/updating/update-methods),
