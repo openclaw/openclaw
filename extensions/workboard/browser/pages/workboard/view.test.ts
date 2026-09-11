@@ -2103,6 +2103,31 @@ describe("renderWorkboard", () => {
     },
   );
 
+  it.each(["writer", "main"])(
+    "creates a card in its column while preserving %s agent scope",
+    (scopeAgentId) => {
+      const { state, container, renderView } = createWorkboardView({
+        agentsList: {
+          defaultId: "main",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "writer", name: "Writer" },
+          ],
+        },
+        scopeAgentId,
+      });
+      state.statusFilter = new Set(["ready"]);
+      renderView();
+      const add = container.querySelector<HTMLButtonElement>(".workboard-column__add");
+      expect(add).not.toBeNull();
+      add?.click();
+      renderView();
+      expect(state.draftOpen).toBe(true);
+      expect(state.draftStatus).toBe("ready");
+      expect(state.draftAgentId).toBe(scopeAgentId === "main" ? "" : scopeAgentId);
+    },
+  );
+
   it.each(["main", "research"])(
     "keeps a new default-agent card visible in %s scope before metadata loads",
     async (defaultAgentId) => {

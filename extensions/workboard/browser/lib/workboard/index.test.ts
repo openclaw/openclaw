@@ -3579,6 +3579,58 @@ describe("workboard controller", () => {
     },
   );
 
+  it.each([false, true])(
+    "reconciles a partially acknowledged drop with reload failure=%s",
+    async (reloadFails) => {
+      const a = makeCard({ id: "a", status: "todo", position: 0 });
+      const b = makeCard({ id: "b", status: "todo", position: 1 });
+      const c = makeCard({ id: "c", status: "todo", position: 2 });
+      const dragged = makeCard({ id: "dragged", status: "ready", position: 3000 });
+      state.cards = [a, b, c, dragged];
+      const movedC = { ...c, position: 3000 };
+      // The second move reached the server, but its acknowledgment was lost.
+      const canonicalCards = [a, { ...b, position: 2000 }, movedC, dragged];
+      const reload = createDeferred<{ cards: WorkboardCard[] }>();
+      const client = createSequencedClient({
+        "workboard.cards.move": [{ card: movedC }, new Error("move acknowledgment lost")],
+        "workboard.cards.list": [reload.promise],
+      });
+      const pending = moveWorkboardCard({
+        host,
+        client,
+        cardId: dragged.id,
+        status: "todo",
+        beforeCardId: b.id,
+        boardFilter: "__all__",
+      });
+      await waitForFast(() => expect(requestCalls(client, "workboard.cards.list")).toHaveLength(1));
+      expect(requestCalls(client, "workboard.cards.move").map(([, params]) => params)).toEqual([
+        { id: c.id, status: "todo", position: 3000 },
+        { id: b.id, status: "todo", position: 2000 },
+      ]);
+      expect(state.mutationReadiness).toBe("canonical_reload_required");
+      expect(state.busyCardIds.size).toBe(0);
+      await moveWorkboardCard({ host, client, cardId: a.id, status: "done", position: 0 });
+      expect(requestCalls(client, "workboard.cards.move")).toHaveLength(2);
+      if (reloadFails) {
+        reload.reject(new Error("canonical refresh unavailable"));
+      } else {
+        reload.resolve({ cards: canonicalCards });
+      }
+      await pending;
+      expect(state.error).toBe("move acknowledgment lost");
+      if (reloadFails) {
+        expect(state.mutationReadiness).toBe("canonical_reload_required");
+        expect(state.lastRefreshError).toBe("canonical refresh unavailable");
+        expect(state.cards.find((card) => card.id === c.id)).toEqual(movedC);
+      } else {
+        expect(state.mutationReadiness).toBe("ready");
+        expect(state.cards).toEqual(expect.arrayContaining(canonicalCards));
+        expect(state.cards.find((card) => card.id === dragged.id)?.status).toBe("ready");
+      }
+    },
+  );
+
   it("moves cards through the plugin gateway method", async () => {
     const moved = makeCard({ status: "blocked", position: 2000 });
     const client = createClient({ "workboard.cards.move": { card: moved } });

@@ -634,23 +634,19 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                 </div>
               `
             : html`
-              <div
-                class="workboard-board-viewport"
-                  ? "workboard-board-viewport--list"
-                  : ""}"
-              >
-                <div
-                  ${ref(boardScrollEdgesRef())}
-                  class="workboard-board workboard-board--page workboard-board--${state.layout} ${visibleStatuses.length === 1 ? "workboard-board--single-column" : ""}"
-                >
-                  ${visibleStatuses.map((status) =>
-                    renderColumn(props, status, byStatus.get(status) ?? [], {
-                      surface: "page",
-                    }),
-                  )}
+                <div class="workboard-board-viewport">
+                  <div
+                    ${ref(boardScrollEdgesRef())}
+                    class="workboard-board workboard-board--page workboard-board--${state.layout} ${visibleStatuses.length === 1 ? "workboard-board--single-column" : ""}"
+                  >
+                    ${visibleStatuses.map((status) =>
+                      renderColumn(props, status, byStatus.get(status) ?? [], {
+                        surface: "page",
+                      }),
+                    )}
+                  </div>
                 </div>
-              </div>
-            `
+              `
         }
       </div>
       ${renderWorkboardToast({

@@ -11,6 +11,7 @@ import {
   selectedWorkboardBoardParams,
   setWorkboardCards,
 } from "./card-state.ts";
+import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -204,6 +205,7 @@ export async function moveWorkboardCard(
   }
   state.error = null;
   params.requestUpdate?.();
+  let reloadAfterFailure = false;
   try {
     for (const move of moves) {
       const payload = await params.client.request("workboard.cards.move", move);
@@ -211,6 +213,13 @@ export async function moveWorkboardCard(
     }
   } catch (error) {
     state.error = formatError(error);
+    if (moves.length > 1) {
+      // Peer moves commit separately; a lost acknowledgment can leave local order stale.
+      state.mutationReadiness = "canonical_reload_required";
+      state.loaded = false;
+      state.loadAttempted = false;
+      reloadAfterFailure = true;
+    }
   } finally {
     for (const move of moves) {
       state.busyCardIds.delete(move.id);
@@ -219,6 +228,16 @@ export async function moveWorkboardCard(
       state.draggedCardId = null;
     }
     params.requestUpdate?.();
+  }
+  if (reloadAfterFailure) {
+    await loadWorkboard({
+      host: params.host,
+      client: params.client,
+      requestUpdate: params.requestUpdate,
+      force: true,
+      preserveError: true,
+      taskRefresh: "linked",
+    });
   }
 }
 
