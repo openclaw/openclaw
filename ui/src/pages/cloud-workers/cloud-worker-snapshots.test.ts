@@ -942,6 +942,11 @@ describe("Snapshot builds", () => {
             (entry) => entry.textContent?.trim() === "Cancel",
           ),
         ).toBe(false);
+        expect(
+          [...snapshots.querySelectorAll("button")].some(
+            (entry) => entry.textContent?.trim() === "Dismiss",
+          ),
+        ).toBe(state === "failed");
         const calls = fixture.request.mock.calls.length;
         await vi.advanceTimersByTimeAsync(30_000);
         expect(fixture.request).toHaveBeenCalledTimes(calls);
@@ -977,6 +982,72 @@ describe("Snapshot builds", () => {
         environmentId: "build-app",
       });
       expect(snapshots.textContent).not.toContain("build-app");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("dismisses a failed build the Gateway still records and keeps it hidden on refresh", async () => {
+    const environments = [buildFixture("failed", "Gateway is only bound to loopback")];
+    const fixture = mountPage(buildMethods, {
+      result: { ...snapshotListFixture(), images: [] },
+      response: (method) => (method === "environments.list" ? { environments } : undefined),
+    });
+    try {
+      const snapshots = await openSnapshots(fixture);
+      expect(snapshots.querySelector('[role="alert"]')?.textContent).toContain(
+        "Gateway is only bound to loopback",
+      );
+      expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("1");
+      button(snapshots, "Dismiss").click();
+      await waitForFast(() => expect(snapshots.textContent).toContain("Failed build dismissed"));
+      expect(vi.mocked(showConfirmDialog)).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Dismiss failed build", details: "build-app" }),
+      );
+      expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
+        environmentId: "build-app",
+      });
+      expect(snapshots.textContent).not.toContain("build-app");
+      expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("0");
+      // The Gateway keeps terminal build records until retention; the row must stay cleared.
+      const listed = fixture.request.mock.calls.filter(
+        ([method]) => method === "environments.list",
+      ).length;
+      button(snapshots, "Refresh").click();
+      await waitForFast(() =>
+        expect(
+          fixture.request.mock.calls.filter(([method]) => method === "environments.list"),
+        ).toHaveLength(listed + 1),
+      );
+      expect(snapshots.textContent).not.toContain("build-app");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("keeps a failed build listed when dismissal is refused or its destruction fails", async () => {
+    const fixture = mountPage(buildMethods, {
+      response: (method) => {
+        if (method === "environments.list") {
+          return { environments: [buildFixture("failed", "Setup recipe failed")] };
+        }
+        if (method === "environments.destroy") {
+          throw new Error("Provider is unavailable");
+        }
+        return undefined;
+      },
+    });
+    try {
+      const snapshots = await openSnapshots(fixture);
+      vi.mocked(showConfirmDialog).mockResolvedValueOnce(false);
+      button(snapshots, "Dismiss").click();
+      await waitForFast(() => expect(vi.mocked(showConfirmDialog)).toHaveBeenCalledTimes(1));
+      expect(fixture.request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
+      expect(snapshots.textContent).toContain("build-app");
+      button(snapshots, "Dismiss").click();
+      await waitForFast(() => expect(snapshots.textContent).toContain("Provider is unavailable"));
+      expect(snapshots.textContent).toContain("build-app");
+      expect(button(snapshots, "Dismiss").disabled).toBe(false);
     } finally {
       fixture.dispose();
     }

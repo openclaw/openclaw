@@ -216,6 +216,10 @@ as active builds. The **Building** total also includes active image captures,
 counting a build and its capture once when they share a lease ID.
 Failed and orphaned builds remain visible with their reported error and count
 toward **Needs attention**. They do not keep polling active or offer cancellation.
+A failed build offers **Dismiss**, which confirms, calls `environments.destroy`,
+and hides the row; the Gateway keeps the terminal record until retention expires,
+so a reload can list it again. Orphaned builds keep no dismissal because their
+provider artifacts still await cleanup.
 
 **Recover** is available only for uncertain captures. Its required checkbox
 acknowledges that the owning capture and worker have stopped and provider

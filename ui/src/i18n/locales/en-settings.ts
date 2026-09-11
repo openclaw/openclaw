@@ -130,6 +130,11 @@ const enSettings = {
       cancelBuildMessage:
         "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
       buildCancelled: "Build canceled",
+      dismiss: "Dismiss",
+      dismissBuild: "Dismiss failed build",
+      dismissBuildMessage:
+        "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
+      buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
       buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {

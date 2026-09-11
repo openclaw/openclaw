@@ -9,7 +9,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-function buildEnvironmentFixture() {
+function buildEnvironmentFixture(state = "provisioning", error?: string) {
   return {
     id: "build-app",
     type: "worker",
@@ -19,10 +19,11 @@ function buildEnvironmentFixture() {
       profileId: "linux-build",
       providerId: "crabbox",
       leaseId: "lease-app",
-      state: "provisioning",
+      state,
       ageMs: 60_000,
       attachedSessionIds: [],
       tunnelStatus: "stopped",
+      ...(error ? { error } : {}),
     },
   };
 }
@@ -122,6 +123,53 @@ suite.define(() => {
       });
       await expect.poll(() => cancel.count()).toBe(0);
       await page.getByText("github.com/acme/app", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("dismisses a failed build after confirmation and keeps the recorded row hidden", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const failed = buildEnvironmentFixture("failed", "Gateway is only bound to loopback");
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["crabbox.images.list", "environments.list", "environments.destroy"],
+      methodResponses: {
+        "crabbox.images.list": snapshotListFixture(),
+        // The Gateway keeps the terminal record; dismissal must not depend on it disappearing.
+        "environments.list": { environments: [failed], profiles: [] },
+        "environments.destroy": { ok: true },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
+      await page.getByText("Gateway is only bound to loopback", { exact: true }).waitFor();
+      const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
+      await dismiss.click();
+      const dialog = await waitForConfirmModal(page);
+      expect(await dialog.getAttribute("label")).toBe("Dismiss failed build");
+      await dialog.getByText("build-app", { exact: true }).waitFor();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
+      await dismiss.click();
+      const confirmation = await waitForConfirmModal(page);
+      await confirmation.getByRole("button", { name: "Dismiss", exact: true }).click();
+      expect((await gateway.waitForRequest("environments.destroy")).params).toEqual({
+        environmentId: "build-app",
+      });
+      await page.getByText("Failed build dismissed", { exact: true }).waitFor();
+      await expect.poll(() => dismiss.count()).toBe(0);
+      await expect
+        .poll(() => page.getByText("Gateway is only bound to loopback", { exact: true }).count())
+        .toBe(0);
+      const listed = (await gateway.getRequests("environments.list")).length;
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(listed);
+      expect(await dismiss.count()).toBe(0);
     } finally {
       await context.close();
     }
