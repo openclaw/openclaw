@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
 } from "./pw-tools-core.test-harness.js";
@@ -95,6 +96,63 @@ describe("download current document", () => {
       "download redirects cannot be inspected",
     );
     expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "omitted policy", policy: undefined },
+    { name: "empty policy", policy: {} },
+    { name: "legacy private denial", policy: { allowPrivateNetwork: false } },
+    { name: "per-host private exception", policy: { allowedHostnames: ["127.0.0.1"] } },
+    { name: "per-origin private exception", policy: { allowedOrigins: ["http://127.0.0.1"] } },
+    {
+      name: "allowlist despite private access",
+      policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: ["127.0.0.1"] },
+    },
+    {
+      name: "blocklist despite private access",
+      policy: {
+        dangerouslyAllowPrivateNetwork: true,
+        blockedHostnames: [" *.Forbidden.Example. "],
+      },
+    },
+  ])("refuses $name before resolving the browser or triggering traffic", async ({ policy }) => {
+    await expect(start({ ssrfPolicy: policy })).rejects.toThrow(
+      "download redirects cannot be inspected",
+    );
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(await fs.readdir(rootDir)).toEqual([]);
+  });
+
+  it.each([
+    { name: "legacy explicit private permission", policy: { allowPrivateNetwork: true } },
+    {
+      name: "effective private permission",
+      policy: { allowPrivateNetwork: true, dangerouslyAllowPrivateNetwork: false },
+    },
+    {
+      name: "normalized unconstrained hostname entries",
+      policy: {
+        dangerouslyAllowPrivateNetwork: true,
+        hostnameAllowlist: ["", " . ", " * "],
+        blockedHostnames: [" ", " *. "],
+      },
+    },
+    {
+      name: "trust exceptions with global permission",
+      policy: {
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["example.com"],
+        allowedOrigins: ["https://example.com"],
+      },
+    },
+  ])("retains download support for $name", async ({ policy }) => {
+    evaluate.mockImplementationOnce(async () => {
+      events.emit("download", makeDownload());
+    });
+    await expect(start({ ssrfPolicy: policy })).resolves.toMatchObject({
+      suggestedFilename: "inline.png",
+    });
   });
 
   it("validates the final download URL before saving", async () => {

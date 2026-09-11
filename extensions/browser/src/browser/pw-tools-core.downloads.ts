@@ -5,14 +5,15 @@
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Frame, Page } from "playwright-core";
+import { isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { normalizeHostname } from "../sdk-security-runtime.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import {
   assertBrowserNavigationAllowed,
   InvalidBrowserNavigationUrlError,
   parseBrowserNavigationUrl,
-  requiresInspectableBrowserNavigationRedirectsForUrl,
 } from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
@@ -351,11 +352,19 @@ export async function downloadCurrentDocumentViaPlaywright(
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new InvalidBrowserNavigationUrlError("Only HTTP(S) documents can be downloaded");
   }
-  // Chromium's native downloads do not expose their redirect requests to page.route.
-  // Do not start traffic when the profile requires inspectable redirect chains.
-  if (requiresInspectableBrowserNavigationRedirectsForUrl(expectedUrl, opts.ssrfPolicy)) {
+  // Chromium hides native download redirect requests from page.route. A starting
+  // host's trust does not authorize the next host, and save-time checks are too late.
+  // Shared policy normalization treats blank/lone-wildcard entries as unconstrained.
+  const hasHostnameRestrictions = [
+    ...(opts.ssrfPolicy?.hostnameAllowlist ?? []),
+    ...(opts.ssrfPolicy?.blockedHostnames ?? []),
+  ].some((pattern) => {
+    const normalized = normalizeHostname(pattern);
+    return normalized.length > 0 && normalized !== "*";
+  });
+  if (!isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) || hasHostnameRestrictions) {
     throw new InvalidBrowserNavigationUrlError(
-      "Current-document downloads are unavailable under strict browser navigation policy because download redirects cannot be inspected",
+      "Current-document downloads are unavailable under this browser network policy because download redirects cannot be inspected",
     );
   }
   const operation = new AbortController();
