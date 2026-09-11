@@ -18,11 +18,16 @@ struct GatewayInstallerViewTests {
         var rechecks = 0
         let view = self.view(kind: kind, onInstall: { installs += 1 }, onRecheck: { rechecks += 1 })
         try await self.withButtons(view) { buttons in
-            let recovery = try #require(buttons.first { $0.accessibilityTitle?() == title })
+            // SwiftUI virtual AX buttons can expose their name through label instead of title.
+            let recovery = try #require(buttons.first {
+                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(title)
+            })
             #expect(recovery.accessibilityPerformPress?() == true)
             #expect(installs == 1)
             #expect(rechecks == 0)
-            let recheck = try #require(buttons.first { $0.accessibilityTitle?() == "Recheck" })
+            let recheck = try #require(buttons.first {
+                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Recheck")
+            })
             #expect(recheck.accessibilityPerformPress?() == true)
             #expect(rechecks == 1)
         }
@@ -32,7 +37,9 @@ struct GatewayInstallerViewTests {
     func `ready or checking gateways do not offer replacement`(kind: GatewayEnvironmentKind) async throws {
         try await self.withButtons(self.view(kind: kind)) { buttons in
             #expect(buttons.count == 1)
-            #expect(buttons.first?.accessibilityTitle?() == "Recheck")
+            #expect(buttons.contains {
+                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Recheck")
+            })
         }
     }
 
@@ -63,8 +70,11 @@ struct GatewayInstallerViewTests {
     {
         GatewayInstallerView(
             status: .init(
-                kind: kind, nodeVersion: "26.8.1", gatewayVersion: "2026.7.1-2",
-                requiredGateway: "2026.9.3", message: "Gateway setup fixture"),
+                kind: kind,
+                nodeVersion: "26.8.1",
+                gatewayVersion: "2026.7.1-2",
+                requiredGateway: "2026.9.3",
+                message: "Gateway setup fixture"),
             failure: nil,
             existingGatewayDetails: nil,
             isInstalling: isInstalling,
