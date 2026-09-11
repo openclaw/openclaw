@@ -1,4 +1,5 @@
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
+import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import type { OpenClawExternalStateOwnership } from "./openclaw-state-ownership.js";
 
 export type IncompatibleOpenClawDatabase = {
@@ -29,6 +30,7 @@ export type DeferredStateSchemaPublication = {
 export type OpenClawDatabaseSchemaPreflight = {
   incompatible: IncompatibleOpenClawDatabase[];
   indeterminate: IndeterminateOpenClawDatabase[];
+  agentRefusals?: AgentDatabaseAdmissionRefusal[];
   pendingMigrations?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">[];
   deferredSchemaPublications?: DeferredStateSchemaPublication[];
 };

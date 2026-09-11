@@ -174,7 +174,7 @@ export type GatewayReloadHandlerParams = {
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;
   /** Revalidate successor-owned startup state before the current listener is closed. */
-  assertRestartReady?: () => Promise<void> | void;
+  assertRestartReady?: (config: OpenClawConfig) => Promise<void> | void;
 };
 
 export type ManagedGatewayConfigReloaderParams = Omit<

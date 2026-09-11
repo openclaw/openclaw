@@ -46,6 +46,7 @@ import {
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -354,6 +355,10 @@ export async function getReplyFromConfig(
   });
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
+  const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+  if (refusal) {
+    return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };
+  }
   if (
     preparedReplyDispatchRuntime &&
     !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)
