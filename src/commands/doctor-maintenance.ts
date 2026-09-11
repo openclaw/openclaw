@@ -2,6 +2,7 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "../cli/update-cli/update-command-service-plan.js";
 import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
@@ -221,6 +222,12 @@ export async function beginDoctorMaintenance(params: {
       const state = await readGatewayServiceState(service, {
         env: stopped.serviceEnv,
         requireEffective: true,
+        // Match the maintenance flow's strict admission read: the Linux
+        // revalidation compares the service-manager UID that only the loaded
+        // runtime inspection records. A non-loaded read leaves that UID
+        // undefined and fails revalidation after every stop.
+        requireLoadedCommand: true,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       });
       assertDoctorServiceSelection(env, state.env);
       await revalidateManagedGatewayServiceAfterUpdate({
