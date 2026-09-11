@@ -168,3 +168,21 @@ export function normalizeActiveAgentFilter(
 ): WorkboardUiState["agentFilter"] {
   return options.some((option) => option.id === filter) ? filter : "all";
 }
+
+export function buildAssignableAgentPickerOptions(
+  agentsList: WorkboardAgentsList | null,
+  currentAgentId: string,
+  defaultAgentId = agentsList?.defaultId ?? "",
+) {
+  return buildAssignableAgentOptions(agentsList, currentAgentId).map((option) => {
+    const effectiveId = option.id || defaultAgentId;
+    const agent = agentsList?.agents.find((entry) => entry.id === effectiveId);
+    return {
+      value: option.id,
+      label: agentDisplayName(agent, option.id ? option.label : defaultAgentId || option.label),
+      badge: !option.id && defaultAgentId ? t("workboard.defaultAgentBadge") : undefined,
+      agent: effectiveId ? (agent ?? { id: effectiveId }) : undefined,
+      icon: effectiveId ? undefined : ("bot" as const),
+    };
+  });
+}
