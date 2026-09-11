@@ -117,9 +117,10 @@ it("does not expose continuation for search results", async () => {
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {
-  const matches = Array.from({ length: 101 }, (_, index) => entry(index));
-  matches[100].catalog.official = true;
-  matches[100].catalog.downloads = 10_000;
+  const promotedMatch = entry(100);
+  promotedMatch.catalog.official = true;
+  promotedMatch.catalog.downloads = 10_000;
+  const matches = [...Array.from({ length: 100 }, (_, index) => entry(index)), promotedMatch];
   const { controller, request } = setup([
     { items: matches.slice(0, 100), nextCursor: "catalog-page-2" },
     { items: matches.slice(100) },
@@ -138,13 +139,32 @@ it("loads one bounded page initially and continues only after explicit expansion
   await controller.loadMore();
 
   expect(controller.result?.items).toHaveLength(101);
-  expect(controller.result?.items[0]?.id).toBe(matches[100].id);
+  expect(controller.result?.items[0]?.id).toBe(promotedMatch.id);
   expect(request).toHaveBeenCalledTimes(2);
   expect(request).toHaveBeenLastCalledWith(
     "plugins.catalog.browse",
     { intent: "all", category: "tools", cursor: "catalog-page-2", pageSize: 100 },
     expect.anything(),
   );
+});
+
+it("replaces a first-page local placeholder with later published metadata", async () => {
+  const placeholder = entry(1);
+  delete placeholder.catalog.family;
+  const published = entry(1);
+  published.catalog.author = "openclaw";
+  published.catalog.official = true;
+  published.catalog.downloads = 10_000;
+  const { controller } = setup([
+    { items: [placeholder], nextCursor: "catalog-page-2" },
+    { items: [published] },
+  ]);
+  controller.category = "tools";
+
+  await controller.refresh();
+  await controller.loadMore();
+
+  expect(controller.result?.items).toEqual([published]);
 });
 
 it("preserves independent Trending rank from the deduplicated overview", async () => {

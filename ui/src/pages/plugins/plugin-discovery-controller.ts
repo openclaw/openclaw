@@ -55,9 +55,9 @@ function appendUniqueEntries(
 ): PluginDiscoveryEntry[] {
   const entries = new Map(existing.map((item) => [item.id, item]));
   for (const item of incoming) {
-    if (!entries.has(item.id)) {
-      entries.set(item.id, item);
-    }
+    // Cursor pages contain remote catalog projections, so they replace any first-page local
+    // placeholder while carrying forward the Gateway's latest authoritative local state.
+    entries.set(item.id, item);
   }
   return [...entries.values()];
 }
