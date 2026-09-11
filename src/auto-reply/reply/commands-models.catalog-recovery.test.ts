@@ -15,6 +15,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../../agents/pre
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const catalogMocks = vi.hoisted(() => ({
   readSnapshot: vi.fn<(params: unknown) => ModelCatalogSnapshot | undefined>(),
@@ -24,7 +25,7 @@ const catalogMocks = vi.hoisted(() => ({
   isCurrent: (): boolean => true,
 }));
 
-const { buildPreparedModelsProviderData, resolveModelsCommandReply } =
+const { buildPreparedModelsProviderData, handleModelsCommand, resolveModelsCommandReply } =
   await import("./commands-models.js");
 
 const staleCfg = {
@@ -102,16 +103,18 @@ describe("/models browse catalog recovery", () => {
         refreshFailed: true,
       };
       catalogMocks.readSnapshot.mockReturnValue(snapshot);
-      const params = { cfg: staleCfg, commandBodyNormalized };
+      const params = buildCommandTestParams(commandBodyNormalized, staleCfg);
 
-      const failedRefresh = await resolveModelsCommandReply(params);
+      const failedRefresh = await handleModelsCommand(params, true);
 
-      expect(failedRefresh?.text).toContain("Some models could not be refreshed.");
-      expect(failedRefresh?.text).toContain(choice);
+      expect(failedRefresh?.shouldContinue).toBe(false);
+      expect(failedRefresh?.reply?.text).toContain("Some models could not be refreshed.");
+      expect(failedRefresh?.reply?.text).toContain(choice);
       snapshot.refreshFailed = false;
-      const recovered = await resolveModelsCommandReply(params);
-      expect(recovered?.text).not.toContain("Some models could not be refreshed.");
-      expect(recovered?.text).toContain(choice);
+      const recovered = await handleModelsCommand(params, true);
+      expect(recovered?.shouldContinue).toBe(false);
+      expect(recovered?.reply?.text).not.toContain("Some models could not be refreshed.");
+      expect(recovered?.reply?.text).toContain(choice);
     },
   );
 
