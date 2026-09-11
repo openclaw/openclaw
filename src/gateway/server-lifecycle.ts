@@ -648,18 +648,27 @@ export async function prepareGatewayLifecycle(params: {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,
       sampleLiveness: () => {
-        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-        if (!sample || sample.degradedSinceMs == null) {
+        const s = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!s || s.degradedSinceMs == null) {
           return null;
         }
+        const {
+          reasons,
+          intervalMs,
+          degradedSinceMs,
+          delayP99Ms,
+          delayMaxMs,
+          utilization,
+          cpuCoreRatio,
+        } = s;
         return {
-          reasons: sample.reasons,
-          intervalMs: sample.intervalMs,
-          degradedSinceMs: sample.degradedSinceMs,
-          eventLoopDelayP99Ms: sample.delayP99Ms,
-          eventLoopDelayMaxMs: sample.delayMaxMs,
-          eventLoopUtilization: sample.utilization,
-          cpuCoreRatio: sample.cpuCoreRatio,
+          reasons,
+          intervalMs,
+          degradedSinceMs,
+          eventLoopDelayP99Ms: delayP99Ms,
+          eventLoopDelayMaxMs: delayMaxMs,
+          eventLoopUtilization: utilization,
+          cpuCoreRatio,
         };
       },
     });
