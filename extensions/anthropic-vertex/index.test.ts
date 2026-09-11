@@ -127,6 +127,7 @@ describe("anthropic-vertex provider plugin", () => {
       region: "us-east5",
       modelId: "claude-sonnet-5",
       modelAlias: "production-sonnet",
+      endpoint: "https://us-east5-aiplatform.googleapis.com",
       expected: "https://us-east5-aiplatform.googleapis.com",
     },
   ])(
@@ -168,23 +169,22 @@ describe("anthropic-vertex provider plugin", () => {
           cacheWrite: row.cost.cacheWrite,
         },
       };
-      const config: OpenClawConfig =
-        endpoint || modelAlias
-          ? {
-              models: {
-                providers: {
-                  "anthropic-vertex": {
-                    baseUrl: endpoint,
-                    models: modelAlias
-                      ? [{ ...row, id: modelAlias, params: { canonicalModelId: modelId } }]
-                      : modelEndpoint
-                        ? [{ ...row, baseUrl: modelEndpoint }]
-                        : [],
-                  },
+      const config: OpenClawConfig = endpoint
+        ? {
+            models: {
+              providers: {
+                "anthropic-vertex": {
+                  baseUrl: endpoint,
+                  models: modelAlias
+                    ? [{ ...row, id: modelAlias, params: { canonicalModelId: modelId } }]
+                    : modelEndpoint
+                      ? [{ ...row, baseUrl: modelEndpoint }]
+                      : [],
                 },
               },
-            }
-          : {};
+            },
+          }
+        : {};
       const normalize = () =>
         provider.normalizeResolvedModel?.({
           config,
