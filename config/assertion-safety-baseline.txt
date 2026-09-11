@@ -2359,7 +2359,7 @@ src/commands/doctor-auth-flat-profiles.ts	3
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
 src/commands/doctor-config-analysis.ts	3
-src/commands/doctor-config-flow.ts	3
+src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-db-bloat.ts	1
 src/commands/doctor-gateway-services.ts	1
