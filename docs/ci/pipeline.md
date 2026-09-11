@@ -161,6 +161,17 @@ Run the timing helper locally; there is no in-workflow timing-summary job (a per
 
 The `Run Node test shard` step prints Bash `time -p` totals: elapsed (`real`), user CPU (`user`), and system CPU (`sys`) seconds, including waited-for child processes. Compare CPU totals with elapsed time across equivalent runs to distinguish extra CPU work from slower execution with similar CPU work. These totals alone do not establish runner contention.
 
+Android test rows retain their existing Gradle JUnit XML for 14 days in
+`android-test-reports-<task>-<checkout-revision>-<run-attempt>` artifacts, including
+failed runs unless canceled. Reports identify test cases and durations; compilation,
+lint, setup, and queue time remain separate in the job log. Read the XML alongside
+that attempt's Gradle task outcomes: reports restored by `FROM-CACHE` or reused by
+`UP-TO-DATE` describe an earlier execution, so their times are historical. They do
+not show fresh test execution or a speedup in the current run. A failure before
+Gradle writes XML can leave no artifact; the upload warns without replacing the
+original failure. The artifact contains only phone and Wear unit-test XML, not
+dependency caches or application build outputs.
+
 Node test shards that need a built CLI run `pnpm build qaRuntime` before starting
 Vitest. This profile builds runtime JavaScript, plugin assets, and freshness and
 provenance metadata. Private QA shards select their private runtime entries. The
