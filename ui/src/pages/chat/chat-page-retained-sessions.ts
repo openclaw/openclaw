@@ -15,13 +15,13 @@ const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
-  face: () => SessionNavigationIntent["face"];
+  presented: () => boolean;
   layout: () => ChatSplitLayout;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
 };
 
 export class ChatPageRetainedSessions {
-  private readonly sessionsByPane = new Map<string, string[]>();
+  private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
@@ -45,6 +45,10 @@ export class ChatPageRetainedSessions {
     this.cancelPreview();
   }
 
+  suspend(): void {
+    this.cancelPreview();
+  }
+
   settleRoute(sessionKey: string): void {
     if (!this.preview) {
       return;
@@ -57,7 +61,7 @@ export class ChatPageRetainedSessions {
     }
   }
 
-  retain(panes: readonly ChatSplitPane[]): ReadonlyMap<string, readonly string[]> {
+  retain(panes: readonly ChatSplitPane[]): ReadonlyMap<string, readonly (string | undefined)[]> {
     const paneIds = new Set(panes.map((pane) => pane.id));
     for (const paneId of this.sessionsByPane.keys()) {
       if (!paneIds.has(paneId)) {
@@ -67,22 +71,39 @@ export class ChatPageRetainedSessions {
     return new Map(panes.map((pane) => [pane.id, this.retainPane(pane)]));
   }
 
-  private retainPane(pane: ChatSplitPane): string[] {
+  private retainPane(pane: ChatSplitPane): (string | undefined)[] {
     let retained = this.sessionsByPane.get(pane.id);
     if (!retained) {
-      retained = [];
+      retained = new Map();
       this.sessionsByPane.set(pane.id, retained);
     }
-    const equivalentIndex = retained.findIndex(
-      (key) => key === pane.sessionKey || areUiSessionKeysEquivalent(key, pane.sessionKey),
+    // Map order owns eviction recency; fixed slots keep surviving panes from
+    // disconnecting when Lit removes or moves a sibling.
+    const slots: (string | undefined)[] = Array.from(
+      { length: RETAINED_SESSIONS_PER_PANE },
+      () => undefined,
     );
-    const retainedKey =
-      equivalentIndex < 0 ? pane.sessionKey : retained.splice(equivalentIndex, 1)[0]!;
-    retained.push(retainedKey);
-    if (retained.length > RETAINED_SESSIONS_PER_PANE) {
-      this.findPane(pane.id, retained.shift()!)?.prepareForEviction?.();
+    for (const [key, slot] of retained) {
+      slots[slot] = key;
     }
-    return retained.toSorted((left, right) => left.localeCompare(right));
+    const retainedKey =
+      [...retained.keys()].find(
+        (key) => key === pane.sessionKey || areUiSessionKeysEquivalent(key, pane.sessionKey),
+      ) ?? pane.sessionKey;
+    let slot = retained.get(retainedKey);
+    if (slot === undefined) {
+      slot = slots.indexOf(undefined);
+      if (slot < 0) {
+        const [evictedKey, evictedSlot] = retained.entries().next().value!;
+        this.findPane(pane.id, evictedKey)?.prepareForEviction?.();
+        retained.delete(evictedKey);
+        slot = evictedSlot;
+      }
+      slots[slot] = retainedKey;
+    }
+    retained.delete(retainedKey);
+    retained.set(retainedKey, slot);
+    return slots;
   }
 
   discardPane(paneId: string): void {
@@ -105,9 +126,10 @@ export class ChatPageRetainedSessions {
       deletedPane?.discardStagedAttachments?.();
     }
     const retained = this.sessionsByPane.get(paneId);
-    const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
-    if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
-      retained.splice(retainedIndex, 1);
+    const retainedKey =
+      retained && [...retained.keys()].find((key) => areUiSessionKeysEquivalent(key, sessionKey));
+    if (retainedKey !== undefined) {
+      retained?.delete(retainedKey);
     }
     const context = this.bindings.context();
     if (context && !preserveDraft) {
@@ -135,22 +157,20 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (!(event instanceof CustomEvent)) {
+    if (!this.bindings.presented() || !(event instanceof CustomEvent)) {
       return;
     }
     this.cancelPreview();
     const intent = event.detail as SessionNavigationIntent;
-    if (intent.face !== this.bindings.face()) {
-      return;
-    }
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
-    const retainedKey = this.sessionsByPane
-      .get(activePane?.id ?? "")
-      ?.find((key) => areUiSessionKeysEquivalent(key, intent.sessionKey));
+    const retainedKey = [...(this.sessionsByPane.get(activePane?.id ?? "")?.keys() ?? [])].find(
+      (key) => areUiSessionKeysEquivalent(key, intent.sessionKey),
+    );
     if (
       !activePane ||
       !retainedKey ||
+      this.findPane(activePane.id, retainedKey)?.routeFace !== intent.face ||
       areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
     ) {
       return;
@@ -191,8 +211,9 @@ export class ChatPageRetainedSessions {
       if (pane.paneId !== paneId) {
         continue;
       }
-      const presented = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
-      pane.classList.toggle("chat-pane-cache__pane--visible", presented);
+      const selected = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
+      const presented = this.bindings.presented() && selected;
+      pane.classList.toggle("chat-pane-cache__pane--visible", selected);
       pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);

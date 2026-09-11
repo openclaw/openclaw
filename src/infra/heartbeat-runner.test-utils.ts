@@ -215,7 +215,7 @@ export function setupTelegramHeartbeatPluginRuntimeForTests() {
 
 export type HeartbeatReplyContext = Pick<
   MsgContext,
-  "InternalTurnSource" | "SessionKey" | "MessageThreadId" | "Body"
+  "InternalTurnSource" | "InputProvenance" | "SessionKey" | "MessageThreadId" | "Body"
 >;
 
 export const mockCallAt = (

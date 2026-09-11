@@ -3,6 +3,7 @@ import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { StatusScanResult } from "./status.scan-result.js";
 
@@ -948,27 +949,7 @@ describe("statusCommand", () => {
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
     mocks.getInspectableTaskRegistrySummary.mockReset();
-    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    });
+    mocks.getInspectableTaskRegistrySummary.mockReturnValue(createEmptyTaskRegistrySummary());
     mocks.getInspectableTaskAuditSummary.mockReset();
     mocks.getInspectableTaskAuditSummary.mockReturnValue({
       total: 0,
@@ -1184,10 +1165,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ deep: true, timeoutMs: 5000 }, runtime as never);
 
-    expect(scanStatus).toHaveBeenCalledWith(
-      { json: false, timeoutMs: 5000, all: undefined, deep: true },
-      runtime,
-    );
+    expect(scanStatus).toHaveBeenCalledWith({ timeoutMs: 5000, deep: true });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {

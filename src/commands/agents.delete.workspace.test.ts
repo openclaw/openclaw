@@ -42,6 +42,10 @@ const wizardMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => ({
+    snapshot: await configMocks.readConfigFileSnapshot(),
+    writeOptions: {},
+  }),
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
@@ -164,9 +168,12 @@ describe("agents delete workspace lifecycle", () => {
       });
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({
-        workspaceDir: opsWorkspace,
-      });
+      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith(
+        {
+          workspaceDir: opsWorkspace,
+        },
+        { assertCurrent: expect.any(Function) },
+      );
       const workspaceTrashOrder = fsSafeMocks.movePathToTrash.mock.invocationCallOrder[0];
       const stateDeleteOrder = workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0];
       expect(workspaceTrashOrder).toBeLessThan(stateDeleteOrder ?? 0);
@@ -416,9 +423,12 @@ describe("agents delete workspace lifecycle", () => {
       expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(expectedOpsWorkspace, {
         allowedRoots: [path.dirname(expectedOpsWorkspace)],
       });
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({
-        workspaceDir: opsWorkspace,
-      });
+      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith(
+        {
+          workspaceDir: opsWorkspace,
+        },
+        { assertCurrent: expect.any(Function) },
+      );
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     });
   });

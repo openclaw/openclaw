@@ -31,6 +31,19 @@ type TranscriptArchiveMigrationDatabase = Pick<
 
 type ArchiveCursor = { generation: string; sessionId: string };
 
+type ArchiveContentTransform = (
+  content: string,
+  owner: string,
+) => { changed: boolean; content: string };
+
+type ArchiveMigrationOptions = {
+  agentId: string;
+  database: DatabaseSync;
+  pathname: string;
+  start: ArchiveCursor;
+  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+};
+
 type ArchiveRowPlan = {
   archiveName: string;
   archiveSha256: string;
@@ -102,7 +115,11 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
-function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): ArchiveRowPlan[] {
+function listArchiveBatch(
+  database: DatabaseSync,
+  cursor: ArchiveCursor,
+  transformContent: ArchiveContentTransform = transformArchiveContent,
+): ArchiveRowPlan[] {
   // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
   const hasArchiveTable = database
     .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -141,7 +158,7 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
       throw new Error(`Canonical SQLite transcript archive is corrupt for ${row.session_id}`);
     }
     const content = decodeSessionArchiveBytes(bytes, encoding === "zstd");
-    const transformed = transformArchiveContent(content, owner);
+    const transformed = transformContent(content, owner);
     const nextBytes = transformed.changed
       ? encodeArchiveContent(transformed.content, encoding, owner)
       : bytes;
@@ -324,13 +341,13 @@ function finalizeArchiveCursor(params: {
   });
 }
 
-export async function migrateTranscriptDirectiveArchives(params: {
-  agentId: string;
-  database: DatabaseSync;
-  pathname: string;
-  start: ArchiveCursor;
-  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
-}): Promise<number> {
+/** Repairs canonical blobs before their reconstructible files under maintenance authority. */
+export async function migrateCanonicalTranscriptArchives(
+  params: ArchiveMigrationOptions & {
+    onArchive?: (archivePath: string) => void;
+    transformContent: ArchiveContentTransform;
+  },
+): Promise<number> {
   let rewrittenArchives = 0;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
@@ -338,7 +355,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
     path: params.pathname,
   });
   while (true) {
-    const batch = listArchiveBatch(params.database, cursor);
+    const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
       runSqliteImmediateTransactionSync(params.database, () => {
         assertAgentDatabaseMaintenanceAuthority();
@@ -348,6 +365,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
       return rewrittenArchives;
     }
     for (const planned of batch) {
+      params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
       const rowPresent = runSqliteImmediateTransactionSync(
         params.database,
         () => {
@@ -392,4 +410,13 @@ export async function migrateTranscriptDirectiveArchives(params: {
       setImmediate(resolve);
     });
   }
+}
+
+export function migrateTranscriptDirectiveArchives(
+  params: ArchiveMigrationOptions,
+): Promise<number> {
+  return migrateCanonicalTranscriptArchives({
+    ...params,
+    transformContent: transformArchiveContent,
+  });
 }

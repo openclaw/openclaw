@@ -607,7 +607,11 @@ class GatewayExecApprovalRuntimeTest {
   fun legacyUnknownWriteUnlocksAfterReconnectProvesApprovalStillPending() =
     runBlocking {
       val runtime = approvalRuntime(legacyMethods)
+      val initialReadAttempted = CompletableDeferred<Unit>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        if (method == "exec.approval.get") {
+          initialReadAttempted.complete(Unit)
+        }
         when (method) {
           "exec.approval.resolve", "exec.approval.get" -> throw GatewayRequestOutcomeUnknown("disconnected")
           else -> error("unexpected method $method")
@@ -615,11 +619,14 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
+      // The unknown-outcome state is published before its reconciliation read starts.
+      // Keep the original failing handler installed until that read has entered it.
       waitUntil {
-        runtime.execApprovalInbox.value.approvals
-          .singleOrNull()
-          ?.errorText
-          ?.startsWith("Resolution outcome unknown") == true
+        initialReadAttempted.isCompleted &&
+          runtime.execApprovalInbox.value.approvals
+            .singleOrNull()
+            ?.errorText
+            ?.startsWith("Resolution outcome unknown") == true
       }
       assertEquals(
         "deny",

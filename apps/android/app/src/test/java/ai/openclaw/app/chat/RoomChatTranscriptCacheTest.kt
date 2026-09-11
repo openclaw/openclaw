@@ -133,11 +133,14 @@ class RoomChatTranscriptCacheTest {
       controller.load("main")
       advanceUntilIdle()
       assertEquals(2, controller.messages.value.size)
-      assertTrue(
+      assertEquals(
+        "read",
         controller.messages.value
           .last()
           .content
-          .isEmpty(),
+          .single()
+          .toolActivity
+          ?.name,
       )
       assertEquals(
         "entry-2",
@@ -153,6 +156,15 @@ class RoomChatTranscriptCacheTest {
       assertTrue(offline.messagesFromCache.value)
       assertEquals(null, latestChatMessageUsage(offline.messages.value))
       assertEquals(2, offline.messages.value.size)
+      assertEquals(
+        "read",
+        offline.messages.value
+          .last()
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
     }
 
   @Test
@@ -453,6 +465,8 @@ class RoomChatTranscriptCacheTest {
               model = "gpt-5.2",
               usage = usage,
               cost = cost,
+              runId = "run-1",
+              steerTargetRunId = "run-parent",
             ),
             message("Delivery copy").copy(
               role = "assistant",
@@ -477,6 +491,8 @@ class RoomChatTranscriptCacheTest {
       assertEquals("gpt-5.2", loaded[0].model)
       assertEquals(usage, loaded[0].usage)
       assertEquals(cost, loaded[0].cost)
+      assertEquals("run-1", loaded[0].runId)
+      assertEquals("run-parent", loaded[0].steerTargetRunId)
       assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
       assertTrue(loaded[2].content.isEmpty())
       assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
@@ -547,13 +563,25 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun transcriptRoundTripDropsInternalRoleRows() =
+  fun transcriptRoundTripKeepsBoundedToolRowsAndDropsInternalRoles() =
     runTest {
       saveTranscript(
         messages =
           listOf(
             message("hello", role = "user"),
-            message("private tool output", role = "toolResult"),
+            ChatMessage(
+              id = "tool-result",
+              role = "toolresult",
+              content =
+                listOf(
+                  ChatMessageContent(
+                    type = "toolResult",
+                    toolActivity = ChatToolActivity("call-1", "read", null, "bounded output", false),
+                  ),
+                ),
+              timestampMs = 2,
+            ),
+            message("private reasoning", role = "internal"),
             message("visible plugin notice", role = "custom"),
             message("reply", role = "assistant"),
           ),
@@ -561,8 +589,15 @@ class RoomChatTranscriptCacheTest {
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
-      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(listOf("user", "toolresult", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(
+        "bounded output",
+        loaded[1]
+          .content
+          .single()
+          .toolActivity
+          ?.result,
+      )
     }
 
   @Test

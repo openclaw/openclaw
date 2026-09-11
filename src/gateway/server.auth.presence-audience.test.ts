@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { afterEach, describe, expect, test } from "vitest";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { writeConfigFile } from "../config/config.js";
 import {
   persistSessionTranscriptTurn,
@@ -133,11 +134,7 @@ describe("gateway presence audience", () => {
           updateMode: "none",
           messages: [
             {
-              message: {
-                role: "user",
-                content: "foreign draft transcript",
-                timestamp: 1,
-              },
+              message: makeUserMessage("foreign draft transcript", 1),
               now: Date.parse("2026-09-04T08:00:00.000Z"),
             },
           ],

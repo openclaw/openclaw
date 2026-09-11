@@ -19,6 +19,7 @@ import {
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/runtime-internal.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
 import { formatTaskBlockedFollowupMessage } from "../../../tasks/task-executor-policy.js";
+import { syncFlowFromTaskAfterTaskMutation } from "../../../tasks/task-registry-mutation.js";
 import {
   bindTaskRecord,
   readTaskRecord,
@@ -66,7 +67,12 @@ export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskR
   } else {
     subagentRuns.set(subagent.runId, subagent);
   }
-  publishTaskRecordAfterAtomicStore(task);
+  const deferredObserverEvents: Array<() => void> = [];
+  const published = publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents });
+  syncFlowFromTaskAfterTaskMutation(published, "atomic completion admission");
+  for (const emitObserverEvent of deferredObserverEvents) {
+    emitObserverEvent();
+  }
 }
 
 function assertCorrelatedEntry(params: {

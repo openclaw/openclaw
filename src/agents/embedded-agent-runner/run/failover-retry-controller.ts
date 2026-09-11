@@ -12,6 +12,7 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -210,6 +211,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeRetryTransient: async (retry: {
       reason: FailoverReason;
+      message?: string;
       retryAfterMs?: number;
       onRetry?: (status: {
         attempt: number;
@@ -227,6 +229,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return false;
       }
       const rateLimit = retry.reason === "rate_limit";
+      if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        return false;
+      }
       rateLimitSeen ||= rateLimit;
       const retryCount = transientRetryCount;
       const retryBudget = Math.min(
@@ -261,12 +266,19 @@ export function createEmbeddedRunFailoverRetryController(input: {
         delayMs,
         reason: retry.reason,
       });
-      // Provider floors can exceed one native timer; the shared helper owns abort errors.
-      let remainingMs = delayMs;
-      while (remainingMs > 0) {
-        const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
-        await sleepWithAbort(chunkMs, params.abortSignal);
-        remainingMs -= chunkMs;
+      const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
+      let completed = false;
+      try {
+        // Provider floors can exceed one native timer; protect the whole wait.
+        let remainingMs = delayMs;
+        while (remainingMs > 0) {
+          const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
+          await sleepWithAbort(chunkMs, params.abortSignal);
+          remainingMs -= chunkMs;
+        }
+        completed = true;
+      } finally {
+        closeRetryWait?.(completed);
       }
       transientRetryCount += 1;
       return true;

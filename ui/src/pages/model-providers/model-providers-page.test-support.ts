@@ -1,10 +1,19 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusProvider,
+  ModelAuthStatusResult,
+  ModelsProbeResult,
+} from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
+import type {
+  RuntimeConfigExternalMutationOptions,
+  RuntimeConfigExternalMutationResult,
+} from "../../lib/config/config-gateway-operations.ts";
+import type { ModelBehaviorConfig } from "./config-mutation.ts";
+import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelBehaviorConfig } from "./model-behavior.ts";
+import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -20,16 +29,15 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
+  profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
-  saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
 };
 
@@ -37,12 +45,58 @@ export type AgentSelectElement = HTMLElement & {
   onSelect: (value: string) => void;
 };
 
+export function createAuthStatus(
+  providers: Partial<ModelAuthStatusProvider>[] = [{}],
+  ts = 1,
+): ModelAuthStatusResult {
+  return {
+    ts,
+    providers: providers.map((overrides): ModelAuthStatusProvider => ({
+      provider: "openai",
+      displayName: "OpenAI",
+      status: "ok",
+      profiles: [
+        { profileId: "openai:one", type: "oauth", status: "ok" },
+        { profileId: "openai:two", type: "oauth", status: "ok" },
+      ],
+      ...overrides,
+    })),
+  };
+}
+
+export function createApiKeyProviderData(): ModelProvidersData {
+  return {
+    ...EMPTY_MODEL_PROVIDERS_DATA,
+    config: {},
+    authStatus: {
+      ...createAuthStatus([
+        {
+          profiles: [
+            { profileId: "openai:key", type: "api_key", status: "static", logoutSupported: true },
+          ],
+        },
+      ]),
+      providerCapabilities: [{ provider: "openai", apiKeySupported: true, quickApiKeySetup: true }],
+    },
+  };
+}
+
+export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
+  page.data = createApiKeyProviderData();
+  page.keyEditorProvider = "openai";
+  page.keyDraft = value;
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 export function createHarness(initialScopeId: string) {
@@ -114,6 +168,7 @@ export function createHarness(initialScopeId: string) {
       };
     },
   };
+  let runtimeConfigListener: (() => void) | undefined;
   const subscribe = () => () => undefined;
   const runtimeConfig = {
     canPatch: true,
@@ -134,13 +189,40 @@ export function createHarness(initialScopeId: string) {
     },
     ensureLoaded: vi.fn(async (): Promise<void> => undefined),
     patch: vi.fn(async () => true),
+    beforeExternalDispatch: vi.fn(async (): Promise<void> => undefined),
+    runExternalMutation: vi.fn(
+      async <T>(
+        task: (client: GatewayBrowserClient) => Promise<T>,
+        options: RuntimeConfigExternalMutationOptions<T> = {},
+      ): Promise<RuntimeConfigExternalMutationResult<T>> => {
+        await runtimeConfig.beforeExternalDispatch();
+        const client = snapshot.client;
+        if (!client || (options.canDispatch && !options.canDispatch())) {
+          return { ok: false, reason: "unavailable", error: "Scope changed before dispatch" };
+        }
+        const value = await task(client);
+        await runtimeConfig.refresh();
+        return {
+          ok: true,
+          value,
+          refresh: runtimeConfig.state.lastError
+            ? { ok: false, error: runtimeConfig.state.lastError }
+            : { ok: true },
+        };
+      },
+    ),
     patchForm: vi.fn(),
     removeFormValue: vi.fn(),
     refresh: vi.fn(async () => undefined),
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
     discardDraft: vi.fn(async () => undefined),
-    subscribe,
+    subscribe(listener: () => void) {
+      runtimeConfigListener = listener;
+      return () => {
+        runtimeConfigListener = undefined;
+      };
+    },
   };
   const context = {
     gateway: gatewaySource.gateway,
@@ -175,6 +257,7 @@ export function createHarness(initialScopeId: string) {
     context,
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
+    notifyRuntimeConfig: () => runtimeConfigListener?.(),
     request,
     runtimeConfig,
     snapshot,

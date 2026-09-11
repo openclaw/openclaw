@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, readStringValue } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
@@ -24,6 +24,7 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { boundCodeModeError } from "./code-mode-json.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -271,7 +272,18 @@ test.each(["transformed", "blocked", "error"] as const)(
       });
     };
     try {
-      expect(await pollThroughBridge("nested-first")).toMatchObject({ status: "completed" });
+      const firstPoll = await pollThroughBridge("nested-first");
+      expect(
+        firstPoll,
+        boundCodeModeError(
+          JSON.stringify({
+            code: readStringValue(firstPoll.code),
+            failurePhase: readStringValue(firstPoll.failurePhase),
+            error: readStringValue(firstPoll.error),
+          }),
+          1_024,
+        ),
+      ).toMatchObject({ status: "completed" });
       expect(harness.nestedToolActivities).toHaveLength(1);
       expect(harness.nestedToolActivities[0]?.details.result.content).toContainEqual(
         expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),

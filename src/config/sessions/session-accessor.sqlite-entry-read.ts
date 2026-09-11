@@ -69,14 +69,25 @@ export function readSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
-  assertCanonicalSqliteSessionKeysCurrent(database);
-  return readSessionEntryRowUnchecked(database, sessionKey);
+  return readSessionEntryRowScan(database, sessionKey)?.selected;
 }
 
-function readSessionEntryRowUnchecked(
+/**
+ * Reads the selected row plus every raw row the lookup scanned. A write transaction that must
+ * prove this logical row is unchanged can re-read and compare the raw rows instead of decoding
+ * the entry JSON again.
+ */
+export function readSessionEntryRowScan(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
-): ResolvedSessionEntryRow | undefined {
+):
+  | {
+      lookupKeys: string[];
+      rows: SessionEntryRow[];
+      selected: ResolvedSessionEntryRow | undefined;
+    }
+  | undefined {
+  assertCanonicalSqliteSessionKeysCurrent(database);
   const db = getSessionKysely(database.db);
   const lookupKeys = collectSessionEntryLookupKeys(database, sessionKey);
   if (lookupKeys.length === 0) {
@@ -98,7 +109,7 @@ function readSessionEntryRowUnchecked(
     }
     selected = { entry, row };
   }
-  return selected;
+  return { lookupKeys, rows, selected };
 }
 
 export function readExactSessionEntryRow(

@@ -18,6 +18,7 @@ import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -153,19 +154,15 @@ export async function validateUpdateCandidateCanary(params: {
       windowsHide: true,
     });
     let stdout = "";
+    let stdoutBytes = 0;
     let outputExceeded = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length + chunk.length <= 1024 * 1024) {
-        stdout += chunk.toString("utf8");
-      } else {
-        outputExceeded = true;
-      }
-    });
     const flushers = [child.stdout, child.stderr].map((stream) => {
+      // Node entrypoints emit UTF-8; pipe chunks need not end at code-point boundaries.
+      stream.setEncoding("utf8");
       let pending = "";
       let droppingLine = false;
-      stream.on("data", (chunk: Buffer) => {
-        let text = chunk.toString("utf8");
+      stream.on("data", (chunk: string) => {
+        let text = chunk;
         if (droppingLine) {
           const newline = text.indexOf("\n");
           if (newline < 0) {
@@ -193,6 +190,14 @@ export async function validateUpdateCandidateCanary(params: {
           pending = "";
         }
       };
+    });
+    child.stdout.on("data", (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(chunk);
+      if (stdoutBytes <= 1024 * 1024) {
+        stdout += chunk;
+      } else {
+        outputExceeded = true;
+      }
     });
     let exited = false;
     const closed = new Promise<number | null>((resolve) => {
@@ -259,6 +264,7 @@ export async function validateUpdateCandidateCanary(params: {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
     rehearsal ??= await prepareUpdateCandidateRehearsal({
+      candidateRoot: params.root,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,
@@ -340,9 +346,10 @@ export async function validateUpdateCandidateCanary(params: {
         }
       }
       if (code === 0 && phase === "runtime") {
-        candidateSchemaVersions = running.outputExceeded()
+        const contract: unknown = running.outputExceeded()
           ? undefined
-          : parseOpenClawSchemaVersions(JSON.parse(running.stdout()));
+          : JSON.parse(running.stdout());
+        candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
         if (!candidateSchemaVersions) {
           code = 1;
           capture("Candidate migration continuation did not report its schema contract");
@@ -460,8 +467,16 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } finally {
-    if (!params.rehearsal) {
-      await rehearsal?.cleanup();
+    if (!params.rehearsal && rehearsal) {
+      await cleanupUpdateTemporaryDirectory({
+        directory: rehearsal.stateDir,
+        root: params.root,
+        name: "candidate rehearsal cleanup",
+        onWarning: (step) => {
+          steps.push(step);
+          params.onStep?.(step);
+        },
+      });
     }
   }
 }

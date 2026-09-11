@@ -573,6 +573,7 @@ const toolsTestState = vi.hoisted(() => {
   const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
 
   return {
+    releaseRuntimeModel: vi.fn(),
     resolveToolsImpl: defaultResolveTools,
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
@@ -586,8 +587,13 @@ const toolsTestState = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
-  resolveEffectiveToolInventoryRuntimeModelContextAsync: (params: unknown) =>
-    toolsTestState.resolveRuntimeModelContextMock(params),
+  acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
+    const context = await toolsTestState.resolveRuntimeModelContextMock(params);
+    return {
+      run: <T>(project: (value: typeof context) => T): T => project(context),
+      release: toolsTestState.releaseRuntimeModel,
+    };
+  },
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -637,6 +643,7 @@ describe("handleToolsCommand", () => {
   });
 
   beforeEach(() => {
+    toolsTestState.releaseRuntimeModel.mockClear();
     toolsTestState.resolveToolsMock.mockReset();
     toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
     toolsTestState.resolveRuntimeModelContextMock.mockReset();
@@ -827,6 +834,22 @@ describe("handleToolsCommand", () => {
       modelApi: "openai-responses",
       runtimeModel,
     });
+    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
+  });
+
+  it("releases the model context when tools projection fails", async () => {
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness({
+      resolveTools: () => {
+        expect(toolsTestState.releaseRuntimeModel).not.toHaveBeenCalled();
+        throw new Error("inventory projection failed");
+      },
+    });
+    const result = await handleToolsCommandLocal(
+      buildCommandTestParamsLocal("/tools", buildConfig(), undefined, { workspaceDir: "/tmp" }),
+      true,
+    );
+    expect(result?.reply?.text).toContain("Couldn't load available tools");
+    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
   });
 
   it("ignores unauthorized senders", async () => {

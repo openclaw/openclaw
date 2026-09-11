@@ -45,6 +45,7 @@ async function resolveRuntimeModelContext(params: {
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: "selected",
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
       skipAgentDiscovery: true,

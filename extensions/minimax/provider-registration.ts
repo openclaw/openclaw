@@ -224,6 +224,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,
         note: (message, title) => ctx.prompter.note(message, title),
+        deviceCode: ctx.prompter.deviceCode,
         progress,
         region,
         ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -243,6 +244,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
+        credentialExtra: { authFlow: "device-code" },
         configPatch: {
           models: {
             providers: {

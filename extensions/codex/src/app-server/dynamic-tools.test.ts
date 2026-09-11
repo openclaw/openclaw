@@ -65,6 +65,17 @@ const COMPUTER_FRAME_IMAGE =
 const REPLACEMENT_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
+// Synthetic, non-usable credential fixtures for model-visible redaction coverage.
+const SYNTHETIC_BEARER_CREDENTIAL = "bearer-model-visible-credential-1234567890";
+const SYNTHETIC_ACCESS_TOKEN =
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljLXNpZ25hdHVyZQ";
+const SYNTHETIC_CREDENTIAL_REPORT = [
+  "Deployment finished in 42s.",
+  `Authorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`,
+  `https://example.test/callback?access_token=${SYNTHETIC_ACCESS_TOKEN}`,
+  "API_TOKEN = computeToken()",
+].join("\n");
+
 function frameImageIdentity(data: string, mimeType = "image/png") {
   return createHash("sha256")
     .update(JSON.stringify([mimeType, data]))
@@ -1879,6 +1890,146 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).not.toContain("b".repeat(10_000));
   });
 
+  it.each([
+    { label: "successful", middleware: false, details: {} },
+    { label: "successful with result middleware", middleware: true, details: {} },
+    { label: "failed", middleware: false, details: { ok: false } },
+    { label: "failed with result middleware", middleware: true, details: { ok: false } },
+  ])(
+    "redacts credentials from $label dynamic tool content items",
+    async ({ middleware, details }) => {
+      if (middleware) {
+        const registry = createEmptyPluginRegistry();
+        const passthrough = async (event: { result: AgentToolResult<unknown> }) => ({
+          result: event.result,
+        });
+        registry.agentToolResultMiddlewares.push({
+          pluginId: "passthrough-result",
+          pluginName: "Passthrough result",
+          rawHandler: passthrough,
+          handler: passthrough,
+          runtimes: ["codex"],
+          source: "test",
+        });
+        setActivePluginRegistry(registry);
+      }
+      const bridge = createBridgeWithToolResult(
+        "credential_lookup",
+        textToolResult(SYNTHETIC_CREDENTIAL_REPORT, details),
+      );
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-credential",
+        namespace: null,
+        tool: "credential_lookup",
+        arguments: {},
+      });
+
+      const firstItem = result.contentItems[0];
+      if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+        throw new Error("expected inputText tool result");
+      }
+      expect(firstItem.text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+      expect(firstItem.text).not.toContain(SYNTHETIC_ACCESS_TOKEN);
+      expect(firstItem.text).toContain("Deployment finished in 42s.");
+      expect(firstItem.text).toContain("API_TOKEN = computeToken()");
+    },
+  );
+
+  it("redacts credentials split across adjacent dynamic tool text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Deployment finished.\nAuthorization: Bearer " },
+        { type: "text", text: SYNTHETIC_BEARER_CREDENTIAL },
+        { type: "text", text: "\nArtifacts remain available." },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-credential",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).toContain("Authorization: Bearer");
+    expect(text).toContain("Deployment finished.");
+    expect(text).toContain("Artifacts remain available.");
+  });
+
+  it("preserves Unicode characters when redaction repartitions adjacent text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Authorization: Bearer abcdefg\n" },
+        { type: "text", text: "123😀tail" },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-unicode",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const textItems = result.contentItems.flatMap((item) =>
+      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
+    );
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(textItems).toHaveLength(2);
+    expect(textItems.every((text) => !unpairedSurrogate.test(text))).toBe(true);
+    expect(textItems.join("")).toBe("Authorization: Bearer ***\n123😀tail");
+  });
+
+  it("redacts a credential that crosses the dynamic tool result budget", async () => {
+    const maxChars = 16_000;
+    const totalChars = 20_000;
+    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
+    const textBudget = maxChars - noticeText.length - 1;
+    // Newlines bound the credential token so the filler stays outside its mask.
+    const marker = `\nAuthorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}\n`;
+    // Place the credential so an unsanitized slice would cut through it and strand a fragment.
+    const prefix = "a".repeat(textBudget - 45);
+    const suffix = "z".repeat(totalChars - prefix.length - marker.length);
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: `${prefix}${marker}${suffix}` },
+        { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-credential-budget",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).not.toContain("bearer-model-visible");
+    expect(text).toContain("OpenClaw truncated dynamic tool result");
+    expect(result.contentItems).toContainEqual(expect.objectContaining({ type: "inputImage" }));
+  });
+
   it("shares weighted budget across mixed text blocks while preserving images", async () => {
     const bridge = createBridgeWithToolResult(
       "mixed_lookup",
@@ -2082,7 +2233,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
   });
 
-  it("does not grant auto-delivery to a plugin tool named tts", async () => {
+  it("does not grant local media or auto-delivery to a plugin tool named tts", async () => {
     const tool = createOwnerBackedContractTool({
       pluginId: "tts-collision",
       name: "tts",
@@ -2111,9 +2262,39 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/plugin.opus"]);
+    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
     expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
   });
+
+  it.each([
+    { name: "dir_fetch", trustedLocalMedia: true, expected: ["/tmp/plugin-file.txt"] },
+    { name: "browser", trustedLocalMedia: false, expected: [] },
+  ])(
+    "applies concrete plugin metadata to local media from $name",
+    async ({ name, trustedLocalMedia, expected }) => {
+      const tool = createOwnerBackedContractTool({
+        pluginId: "file-transfer",
+        name,
+        result: mediaResult("/tmp/plugin-file.txt"),
+        trustedLocalMedia,
+      });
+      const bridge = createCodexDynamicToolBridge({
+        tools: [tool],
+        signal: new AbortController().signal,
+      });
+
+      await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: name,
+        arguments: {},
+      });
+
+      expect(bridge.telemetry.toolMediaUrls).toEqual(expected);
+    },
+  );
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
     const toolResult = {

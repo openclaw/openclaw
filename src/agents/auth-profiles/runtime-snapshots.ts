@@ -214,7 +214,7 @@ export function getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(
 export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
   inheritedAuthDir?: string,
-): AuthProfileStore | undefined {
+): RuntimeAuthProfileStore | undefined {
   const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir);
   const requestedKey = resolveRuntimeStoreKey(agentDir);
   const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
@@ -227,6 +227,10 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
     return mergeAuthProfileStores(inherited, requested, {
       preserveBaseRuntimeExternalProfiles: true,
     });
+  }
+  if (agentDir && !requested && inherited) {
+    // The shared snapshot owns its order; this agent has no local override to reset.
+    return { ...inherited, runtimeLocalOrderProviderIds: [] };
   }
   return requested ?? inherited;
 }
@@ -553,20 +557,19 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   }
   recordRuntimeAuthProfileStorePersistedMutation(ownerKey, mutation);
   const mainKey = owner?.sharedDatabasePath ?? resolveRuntimeStoreKey(undefined);
-  if (ownerKey !== mainKey || (!mutation.credentialsChanged && !mutation.profileSetChanged)) {
-    return;
-  }
-  let deletedDerivedSnapshot = false;
-  const sharedOwner = owner ?? captureRuntimeAuthSharedOwner();
-  for (const [key, entry] of runtimeAuthStoreSnapshots) {
-    if (key !== mainKey && runtimeAuthProfileSnapshotSharesOwner(entry.owner, sharedOwner)) {
-      runtimeAuthStoreSnapshots.delete(key);
-      runtimeAuthStoreSnapshotRevisions.delete(key);
-      deletedDerivedSnapshot = true;
+  if (ownerKey === mainKey && (mutation.credentialsChanged || mutation.profileSetChanged)) {
+    let deletedDerivedSnapshot = false;
+    const sharedOwner = owner ?? captureRuntimeAuthSharedOwner();
+    for (const [key, entry] of runtimeAuthStoreSnapshots) {
+      if (key !== mainKey && runtimeAuthProfileSnapshotSharesOwner(entry.owner, sharedOwner)) {
+        runtimeAuthStoreSnapshots.delete(key);
+        runtimeAuthStoreSnapshotRevisions.delete(key);
+        deletedDerivedSnapshot = true;
+      }
     }
-  }
-  if (deletedDerivedSnapshot) {
-    advanceRuntimeAuthStoreSnapshotsRevision();
+    if (deletedDerivedSnapshot) {
+      advanceRuntimeAuthStoreSnapshotsRevision();
+    }
   }
   if (mutation.credentialsChanged || mutation.profileSetChanged) {
     notifyRuntimeAuthStoreMutation(agentDir, mutation.profileSetChanged === true);

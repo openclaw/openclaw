@@ -55,6 +55,7 @@ import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
@@ -112,6 +113,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
+  @state() private refreshing = false;
   @state() private error: string | null = null;
   @state() private activeMinutes = "";
   @state() private limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
@@ -290,6 +292,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     this.resetCheckpointTask();
     this.loading = false;
+    this.refreshing = false;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
     this.closeSessionMenu();
@@ -299,6 +302,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.result = null;
     this.error = null;
     this.loading = false;
+    this.refreshing = false;
     this.resetTranscriptSearchState("");
     this.selectedKeys = new Set();
     this.expandedSessionKey = null;
@@ -566,9 +570,11 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
       this.listRequest = undefined;
+      this.refreshing = false;
       this.bindSessionList();
     });
     this.listRequest = pending;
+    this.refreshing = true;
     start(binding.sessions.refreshList({ ...binding.query, ...options }));
     return pending;
   }
@@ -1460,12 +1466,14 @@ class SessionsPage extends OpenClawLightDomElement {
       (cloudWorkerStopAction.method !== "sessions.reclaim" || row.hasActiveRun !== true) &&
       isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
     );
+    const pinnable = isPinnableUiSessionRow(row);
     return html`
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
           sessionId: normalizeOptionalString(row.sessionId) ?? null,
           pinned: row.pinned === true,
+          pinnable,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
@@ -1481,7 +1489,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
-          session: row,
+          session: { ...row, pinnable },
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
@@ -1592,6 +1600,7 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderSessions({
           loading: this.loading,
+          refreshing: this.refreshing,
           result: this.result,
           error: this.error,
           activeMinutes: this.activeMinutes,

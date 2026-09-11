@@ -705,49 +705,62 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
-  it("recovers provider-only degradation from a full reload through auth refresh", async () => {
-    const config = gatewayTokenConfig(
-      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
-    );
-    const initial = preparedSnapshot(config);
-    const providerDegraded = {
-      ...preparedSnapshot(config),
-      degradedOwners: [
-        {
-          ownerKind: "provider" as const,
-          ownerId: "openai",
-          state: "unavailable" as const,
-          paths: ["models.providers.openai.apiKey"],
-          refKeys: ["env:default:OPENAI_API_KEY"],
-          reason: "secret provider failed" as const,
-          degradationState: "stale" as const,
+  it.each(["cold", "stale"] as const)(
+    "reports %s provider recovery without claiming prior availability",
+    async (degradationState) => {
+      const config = gatewayTokenConfig(
+        asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+      );
+      const initial = preparedSnapshot(config);
+      const providerDegraded = {
+        ...preparedSnapshot(config),
+        degradedOwners: [
+          {
+            ownerKind: "provider" as const,
+            ownerId: "openai",
+            state: "unavailable" as const,
+            paths: ["models.providers.openai.apiKey"],
+            refKeys: ["env:default:OPENAI_API_KEY"],
+            reason: "secret provider failed" as const,
+            degradationState,
+          },
+        ],
+      };
+      const emitStateEvent = vi.fn();
+      const logSecrets = mockLogSecretsForTest();
+      const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+        emitStateEvent,
+        logSecrets,
+        prepareRuntimeSecretsSnapshot: vi.fn(async () => providerDegraded),
+        activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+      });
+      activateSecretsRuntimeSnapshotForTest(initial);
+
+      await activateRuntimeSecrets(config, { reason: "reload", activate: true });
+      const recovered = preparedSnapshot(config);
+      await activateProviderAuthRuntimeSnapshot({
+        snapshot: recovered,
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+        activateSnapshotIfCurrent: () => {
+          activateSecretsRuntimeSnapshotForTest(recovered);
+          return true;
         },
-      ],
-    };
-    const emitStateEvent = vi.fn();
-    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
-      emitStateEvent,
-      prepareRuntimeSecretsSnapshot: vi.fn(async () => providerDegraded),
-      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
-    });
-    activateSecretsRuntimeSnapshotForTest(initial);
+      });
 
-    await activateRuntimeSecrets(config, { reason: "reload", activate: true });
-    const recovered = preparedSnapshot(config);
-    await activateProviderAuthRuntimeSnapshot({
-      snapshot: recovered,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
-      activateSnapshotIfCurrent: () => {
-        activateSecretsRuntimeSnapshotForTest(recovered);
-        return true;
-      },
-    });
-
-    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
-      "SECRETS_RELOADER_DEGRADED",
-      "SECRETS_RELOADER_RECOVERED",
-    ]);
-  });
+      expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+        "SECRETS_RELOADER_DEGRADED",
+        "SECRETS_RELOADER_RECOVERED",
+      ]);
+      expect(emitStateEvent).toHaveBeenLastCalledWith(
+        "SECRETS_RELOADER_RECOVERED",
+        "Secret resolution recovered.",
+        config,
+      );
+      expect(logSecrets.info).toHaveBeenCalledWith(
+        "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered.",
+      );
+    },
+  );
 
   it("narrows full degradation when a committed reload leaves only provider owners", async () => {
     const config = gatewayTokenConfig(
@@ -2137,7 +2150,7 @@ describe("gateway startup config secret preflight", () => {
     );
     expect(JSON.stringify(logSecrets.warn.mock.calls)).not.toContain("OPENAI_API_KEY");
     expect(logSecrets.info).toHaveBeenCalledWith(
-      "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered; runtime remained on last-known-good during the outage.",
+      "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered.",
     );
 
     shouldResolve = false;

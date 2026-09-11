@@ -20,7 +20,9 @@ const providerAuthChoiceMocks = vi.hoisted(() => ({
 }));
 const setupSharedMocks = vi.hoisted(() => ({
   readSetupConfigFileSnapshot: vi.fn(),
-  writeWizardConfigFile: vi.fn(),
+}));
+const authConfigMocks = vi.hoisted(() => ({
+  writeProviderAuthConfig: vi.fn(),
 }));
 
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
@@ -29,7 +31,10 @@ vi.mock("../../plugins/provider-auth-choice.js", () => ({
 }));
 vi.mock("../../wizard/setup.shared.js", () => ({
   readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
-  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
+}));
+vi.mock("../../plugins/provider-auth-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-auth-config.js")>()),
+  writeProviderAuthConfig: authConfigMocks.writeProviderAuthConfig,
 }));
 
 const config: OpenClawConfig = {
@@ -96,8 +101,8 @@ describe("openclaw.setup provider preparation", () => {
       config,
       issues: [],
     });
-    setupSharedMocks.writeWizardConfigFile.mockImplementation(
-      async (writtenConfig) => writtenConfig,
+    authConfigMocks.writeProviderAuthConfig.mockImplementation(
+      async ({ config: writtenConfig }) => writtenConfig,
     );
   });
 
@@ -180,7 +185,7 @@ describe("openclaw.setup provider preparation", () => {
           } as never);
           expect(calls[0]?.payload).toMatchObject({ status: "running" });
           expect(session.signal.aborted).toBe(false);
-          expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+          expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
           finishCredentialWrite.resolve();
         }
         const done = await terminal;
@@ -191,13 +196,10 @@ describe("openclaw.setup provider preparation", () => {
           status: beforeCredentials ? "cancelled" : "done",
         });
         if (beforeCredentials) {
-          expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+          expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
           expect(done).not.toHaveProperty("preparedModelRef");
         } else {
-          expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(
-            preparedConfig,
-            expect.objectContaining({ baseHash: "setup-resolution-config" }),
-          );
+          expect(authConfigMocks.writeProviderAuthConfig).toHaveBeenCalledOnce();
           expect(done.preparedModelRef).toBe("fixture/demo-model");
         }
         expect(wizardSessions.has(sessionId)).toBe(false);
@@ -283,11 +285,7 @@ describe("openclaw.setup provider preparation", () => {
         preparedModelRef: "ollama/qwen3:0.6b",
       });
       expect(persistAuthProfiles).toHaveBeenCalledOnce();
-      expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
-        allowConfigSizeDrop: false,
-        baseSnapshot: expect.objectContaining({ hash: "setup-resolution-config" }),
-        baseHash: "setup-resolution-config",
-      });
+      expect(authConfigMocks.writeProviderAuthConfig).toHaveBeenCalledOnce();
     },
   );
 });

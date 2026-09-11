@@ -22,7 +22,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function runUpdateCommandRepair(params: {
   root: string;
@@ -81,6 +81,7 @@ export async function runUpdateCommandRepair(params: {
           observe: false,
         });
         rehearsal = await prepareUpdateCandidateRehearsal({
+          candidateRoot: params.candidateRoot ?? params.root,
           config: snapshot.config,
           sourceConfigHash: snapshot.hash,
           stateDir: target.stateDir,

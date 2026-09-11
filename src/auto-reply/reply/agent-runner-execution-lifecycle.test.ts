@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -59,6 +60,20 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: RunEmbeddedAgentInternalParams) => {
+        params.onDeferredLifecycleAbort?.();
+        params.abortSignal?.throwIfAborted();
+        throw new Error("The deferred abort must stop the current attempt");
+      },
+    );
+
+    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+  });
+
   it.each([
     {
       kind: "restart",
@@ -96,6 +111,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         params.onDeferredLifecycleOwner?.({
+          beginRetryWait: () => undefined,
           complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
           discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
         });
@@ -742,65 +758,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("injects pending MCP App context exactly once without changing transcript text", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "selected item 42" }],
-      },
-    );
-    state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "show details",
-      transcriptCommandBody: "show details",
-    });
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      commandBody: "next question",
-      transcriptCommandBody: "next question",
-    });
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("selected item 42");
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("show details");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.prompt).toBe("next question");
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.transcriptPrompt).toBe("next question");
-  });
-
-  it("does not consume pending MCP App context when pre-start validation fails", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "still pending" }],
-      },
-    );
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
-      "invalid image",
-    );
-    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toContain("still pending");
-  });
-
   it("forwards CLI harness execution phases into typing signals", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -841,43 +798,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clientCaps: ["tool-events", "inline-widgets"],
       media: followupRun.media,
     });
-  });
-
-  it("consumes pending MCP App context when a CLI process receives the turn", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(runtime);
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "CLI selection" }],
-      },
-    );
-    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({ phase: "process_spawned" });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-      }),
-    );
-
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.prompt).toContain("CLI selection");
-    expect(state.runCliAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("fix it");
-    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
   it("requires explicit message targets on heartbeat CLI runs", async () => {

@@ -210,13 +210,18 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     "retains $reason in capture diagnostics (incognito=$incognito)",
     async ({ incognito, reason, count, text }) => {
       const { marker, sessionTarget } = await writeSqliteSession({ incognito });
-      for (let index = 0; index < count; index += 1) {
-        await appendSessionTranscriptMessageByIdentity({
-          ...sessionTarget,
-          message: { role: "user", content: text, timestamp: index + 3 },
-        });
-      }
       const { settledMessages } = settledFixture();
+      const extra = Array.from({ length: count }, (_, index) =>
+        attachCodexMirrorIdentity(
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            timestamp: index + 3,
+          } as AgentMessage,
+          `settled:extra:${index}`,
+        ),
+      );
+      settledMessages.splice(1, 0, ...extra);
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
@@ -272,47 +277,37 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
-      const originalParse = JSON.parse;
-      let laterPayloadReads = 0;
-      const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(unreadMarker)) {
-          laterPayloadReads += 1;
-        }
-        return originalParse(text, reviver);
+      const captured = await captureCodexSettledTurnFinalizationContext({
+        ...sessionTarget,
+        sessionTarget,
+        sessionFile: marker,
+        model: "gpt-5.6-luna",
+        settledMessages,
+        mirroredMessages: settledMessages,
+        turnId: "settled",
       });
-      try {
-        const captured = await captureCodexSettledTurnFinalizationContext({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: marker,
-          model: "gpt-5.6-luna",
-          settledMessages,
-          mirroredMessages: settledMessages,
-          turnId: "settled",
+      {
+        expect(captured).toBeInstanceOf(CodexSettledTurnContext);
+        expect(captured?.data).toContainEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: upstreamPrompt }],
         });
-        if (oversized) {
-          expect(captured).toBeUndefined();
-        } else {
-          expect(captured).toBeInstanceOf(CodexSettledTurnContext);
-          expect(captured?.data).toContainEqual({
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: upstreamPrompt }],
-          });
-          expect(Object.isFrozen(captured?.data)).toBe(true);
-          expect(captured?.data.at(-1)).toMatchObject({
-            type: "function_call_output",
-            call_id: "sent",
-            output: "Synthetic update sent.",
-          });
-        }
-        // Incognito executes the same worker operation in this process, so this spy observes payload reads.
-        if (incognito) {
-          expect(laterPayloadReads).toBe(0);
-          await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
-        }
-      } finally {
-        parse.mockRestore();
+        expect(Object.isFrozen(captured?.data)).toBe(true);
+        expect(captured?.data.at(-1)).toMatchObject({
+          type: "function_call_output",
+          call_id: "sent",
+          output: "Synthetic update sent.",
+        });
+      }
+      if (oversized) {
+        expect(captured?.data[0]).toMatchObject({
+          content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+        });
+        expect(JSON.stringify(captured?.data)).not.toContain(unreadMarker);
+      }
+      if (incognito) {
+        await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
       }
     },
   );
@@ -328,13 +323,21 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     "revalidates before reporting projection rejection ($mutation, oversized=$oversized)",
     async ({ mutation, oversized, reason }) => {
       const { marker, sessionTarget } = await writeSqliteSession();
-      if (oversized) {
-        await appendSessionTranscriptMessageByIdentity({
-          ...sessionTarget,
-          message: { role: "user", content: "x".repeat(65537), timestamp: 3 },
-        });
-      }
       const { settledMessages } = settledFixture();
+      if (oversized) {
+        settledMessages.splice(
+          1,
+          0,
+          attachCodexMirrorIdentity(
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "x".repeat(65537) }],
+              timestamp: 3,
+            } as AgentMessage,
+            "settled:oversized",
+          ),
+        );
+      }
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }

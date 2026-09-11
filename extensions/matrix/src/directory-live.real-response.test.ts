@@ -1,6 +1,4 @@
-// Matrix tests cover directory live behavior through the real MatrixAuthedHttpClient
-// JSON-parsing path (only the lowest-level HTTP transport is mocked), so a malformed
-// homeserver response is caught end to end rather than only at the directory helper.
+// Directory parser coverage uses mocked authentication and HTTP transport.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({

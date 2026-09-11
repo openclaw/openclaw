@@ -199,5 +199,13 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     },
   },
   security: lineSecurityAdapter,
+  threading: {
+    scopedAccountReplyToMode: {
+      resolveAccount: (cfg, accountId) =>
+        resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+      resolveReplyToMode: (account) => account.config.replyToMode,
+      fallback: "off",
+    },
+  },
   outbound: lineOutboundAdapter,
 });

@@ -30,7 +30,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
+import { createInferenceReadyClientHarness, waitForHarnessRequest } from "./test-support.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -141,7 +141,7 @@ describe("Codex app-server terminal settlement", () => {
   );
 
   it("preserves a completed reply through degraded settlement without stopping a shared sibling", async () => {
-    const physical = createClientHarness();
+    const physical = createInferenceReadyClientHarness();
     const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
     const projection = createDeferred<void>();
     const onReasoningStream = vi.fn(() => projection.promise);
@@ -183,8 +183,6 @@ describe("Codex app-server terminal settlement", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
-      const firstConfig = await waitForHarnessRequest(physical, "config/read");
-      physical.send({ id: firstConfig.id, result: { config: {}, origins: {}, layers: [] } });
       const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
       physical.send({ id: firstRequirements.id, result: { requirements: null } });
       const firstThread = await waitForHarnessRequest(physical, "thread/start");
@@ -194,8 +192,6 @@ describe("Codex app-server terminal settlement", () => {
 
       const siblingStart = physical.writes.length;
       siblingRun = runCodexAppServerAttempt(siblingParams);
-      const siblingConfig = await waitForHarnessRequest(physical, "config/read", siblingStart);
-      physical.send({ id: siblingConfig.id, result: { config: {}, origins: {}, layers: [] } });
       const siblingRequirements = await waitForHarnessRequest(
         physical,
         "configRequirements/read",

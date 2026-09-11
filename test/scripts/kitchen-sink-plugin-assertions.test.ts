@@ -26,6 +26,8 @@ const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
   "session scheduler job registration requires unique id, sessionKey, and kind",
 ];
+const FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC =
+  "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider";
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -309,7 +311,10 @@ describe("kitchen-sink plugin assertions", () => {
 
   it("accepts published full-surface installs with stable diagnostic canaries", () => {
     const result = runAssertInstalled({
-      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      diagnostics: diagnosticErrors([
+        ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+        "memory prompt preparation registration missing prepare function",
+      ]),
     });
 
     expect(result.status).toBe(0);
@@ -325,6 +330,26 @@ describe("kitchen-sink plugin assertions", () => {
     expect(result.stderr).toContain(
       "unexpected kitchen-sink diagnostic errors: plugin must declare contracts.tools for: kitchen-sink-tool",
     );
+  });
+
+  it("accepts only the candidate memory diagnostic for an authorized frozen target", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors([FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC]),
+      env: { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
+      surfaceMode: "conformance",
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects the candidate memory diagnostic for an ordinary target", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors([FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC]),
+      surfaceMode: "conformance",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC);
   });
 
   it("persists the scenario personality in plugin config", () => {

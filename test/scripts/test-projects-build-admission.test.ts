@@ -425,6 +425,63 @@ async function start(args: string[]) {
   await import(entryUrl);
 }
 
+describe("full-suite timing metadata", () => {
+  it("carries chunk targets into timing samples without changing launch selection", async () => {
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+    vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "1");
+    vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "same-parent");
+    vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", "0");
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    const files = ["test/scripts/run-with-env.test.ts", "test/scripts/run-node.test.ts"];
+    const config = "test/vitest/vitest.tooling.config.ts";
+    vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
+      files.map((file) => ({
+        config,
+        forwardedArgs: [file],
+        timingTargets: [file],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    );
+    const writeTimings = vi.spyOn(timings, "writeShardTimings");
+    commands.prepare.mockResolvedValue(0);
+    commands.reader.mockImplementation(() => ({
+      completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
+      getForwardedSignal: () => undefined,
+    }));
+
+    await runTestProjects(async () => {}, []);
+
+    expect(commands.reader).toHaveBeenCalledTimes(2);
+    const launches = commands.reader.mock.calls.map(([input]) => input);
+    expect(launches.map((input) => input.pnpmArgs)).toEqual(
+      files.map((file) => [
+        "exec",
+        "node",
+        "--no-maglev",
+        resolveVitestCliEntry(),
+        "run",
+        "--config",
+        config,
+        file,
+      ]),
+    );
+    for (const input of launches) {
+      expect(input.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeFalsy();
+      expect(input.env.OPENCLAW_VITEST_MAX_WORKERS).toBe("1");
+    }
+    expect(writeTimings).toHaveBeenCalledTimes(1);
+    const samples = writeTimings.mock.calls[0]?.[0] ?? [];
+    expect(samples).toHaveLength(2);
+    expect(new Set(samples.map((sample) => sample?.config)).size).toBe(2);
+    for (const sample of samples) {
+      expect(sample).toMatchObject({ baseConfig: config, includePatternCount: 1 });
+    }
+  });
+});
+
 describe("parallel cache lease completion", () => {
   it.each([
     { platform: "linux", phase: "preflight" },
@@ -819,16 +876,18 @@ describe("test-projects build admission", () => {
     expect(process.exitCode).toBe(failure === "throw" ? 1 : 7);
   });
 
-  it.each([modelTarget, "extensions/browser/src/browser/extension-install.test.ts"])(
-    "starts %s without runtime preparation",
-    async (target) => {
-      await start([target]);
-      expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
-      expect(commands.prepare).not.toHaveBeenCalled();
-      expect(commands.prepareE2e).not.toHaveBeenCalled();
-      expect(commands.reader).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    modelTarget,
+    "extensions/browser/src/browser/extension-install.test.ts",
+    "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
+  ])("starts %s without runtime preparation", async (target) => {
+    await start([target]);
+    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+    expect(commands.prepare).not.toHaveBeenCalled();
+    expect(commands.prepareE2e).not.toHaveBeenCalled();
+    expect(commands.reader).toHaveBeenCalledOnce();
+  });
 
   it.each(["build", "failed build", "prebuilt"])(
     "admits the built native-host integration after %s",
@@ -890,10 +949,10 @@ describe("test-projects build admission", () => {
     },
   );
 
-  it("coalesces mixed E2E and private QA preparation before marking only E2E prebuilt", async () => {
+  it("coalesces mixed package, E2E and private QA preparation before marking only E2E prebuilt", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
     const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-    await start([...targets, e2eTarget]);
+    await start([...targets, e2eTarget, "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts"]);
     try {
       await Promise.race([preparation.started, terminal.promise]);
       expect(commands.prepareE2e).toHaveBeenCalledOnce();

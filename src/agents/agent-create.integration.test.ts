@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   mutateConfigFileWithRetry,
+  readConfigFileSnapshotForWrite,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
@@ -19,21 +21,27 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
-import { beginAgentDeletion } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
@@ -145,11 +153,12 @@ it.each(["workspace", "workspace-write", "config"] as const)(
         await pause();
       }
     });
+    const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
       await fs.writeFile(stagedFile, "staged before publication");
       await pause();
-      return rollback;
+      return { commit, rollback };
     });
     const creation = createAgent({
       name: "prepared",
@@ -174,10 +183,11 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
       expect.soft(readAgentProvenance("prepared")).toBeUndefined();
       expect.soft(rollback).toHaveBeenCalledTimes(phase === "config" ? 1 : 0);
+      expect.soft(commit).not.toHaveBeenCalled();
       expect.soft(await fs.stat(stagedFile).catch(() => null)).toBeNull();
       if (phase !== "config") {
         expect.soft(await fs.readdir(workspace)).toEqual([]);
-        expect.soft(readWorkspaceStateSnapshot(workspace).setupExists).toBe(false);
+        expect.soft((await readWorkspaceStateSnapshot(workspace)).setupExists).toBe(false);
         expect.soft(prepareConfigCommit).not.toHaveBeenCalled();
         expect.soft(await fs.stat(state.sessionsDir("prepared")).catch(() => null)).toBeNull();
       } else {
@@ -207,15 +217,19 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     runId: "published",
   });
   const workspace = state.path("published-workspace");
-  const deletion = beginAgentDeletion({
+  const deletion = beginAgentDeletionJournal({
     agentId: "published",
+    operationId: randomUUID(),
     agentDir: state.agentDir("published"),
     workspaceDir: workspace,
     sessionsDir: state.sessionsDir("published"),
     deleteFiles: false,
   });
-  deletion.finish();
+  runOpenClawStateWriteTransaction((database) =>
+    completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+  );
   const rollback = vi.fn();
+  const commit = vi.fn();
   try {
     const created = await createAgent({
       name: "published",
@@ -225,7 +239,7 @@ it("finishes creation bookkeeping when delegated authority closes after successf
           throw new Error("creation authority closed");
         }
       },
-      prepareConfigCommit: async () => rollback,
+      prepareConfigCommit: async () => ({ commit, rollback }),
       transformConfig: async (params) => {
         const result = await transformConfigFileWithRetry(params);
         releaseAgentRunDelegatedAuthority(authority);
@@ -238,11 +252,54 @@ it("finishes creation bookkeeping when delegated authority closes after successf
       "agents.entries.published",
     );
     expect(readAgentDeletionJournal("published")).toBeUndefined();
-    expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
+    expect(commit).toHaveBeenCalledOnce();
     expect(rollback).not.toHaveBeenCalled();
+    expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
   } finally {
-    deletion.rollback();
     releaseAgentRunDelegatedAuthority(authority);
+    closeOpenClawStateDatabaseForTest();
+    await state.cleanup();
+  }
+});
+
+it("preserves env references from guided staging when preparation changes the environment", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    scenario: "minimal",
+    label: "guided-stage-env",
+  });
+  const oldToken = process.env.GUIDED_STAGE_TOKEN;
+  try {
+    process.env.GUIDED_STAGE_TOKEN = "synthetic-read-value";
+    const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    await state.writeConfig({
+      ...config,
+      gateway: { ...config.gateway, auth: { mode: "token", token: "${GUIDED_STAGE_TOKEN}" } },
+    });
+    const writeSnapshot = await readConfigFileSnapshotForWrite();
+    const staged = writeSnapshot.snapshot.sourceConfig;
+    expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
+    await Promise.resolve();
+    process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
+    const created = await createAgent({
+      name: "guided",
+      workspace: state.path("guided-workspace"),
+      stagedConfig: { config: staged, writeSnapshot },
+      prepareConfigCommit: async () => {
+        await Promise.resolve();
+        process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
+      },
+    });
+    expect(created).toMatchObject({ status: "created", agentId: "guided" });
+    const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
+    expect(saved.agents?.entries?.guided).toBeDefined();
+  } finally {
+    if (oldToken === undefined) {
+      delete process.env.GUIDED_STAGE_TOKEN;
+    } else {
+      process.env.GUIDED_STAGE_TOKEN = oldToken;
+    }
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   }
@@ -319,7 +376,11 @@ describe("agent roster persistence", () => {
     try {
       await state.writeConfig(config);
       const result = await createAgent({ name: "Worker", workspace: state.path("worker") });
-      expect(result).toMatchObject({ status: "created", agentId: "worker" });
+      expect(result).toMatchObject({
+        status: "created",
+        agentId: "worker",
+        configPath: state.configPath,
+      });
       return JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     } finally {
       closeOpenClawStateDatabaseForTest();

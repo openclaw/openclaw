@@ -13,12 +13,30 @@ and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Dashboard → Settings → This Mac → App**.
 
+Use the green window button to enter native full screen. The Dashboard's sidebar
+and chat controls remain available at the top of the window. Leaving full screen
+restores the normal titlebar and window controls.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
 bounded image model and renderer.
 
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
+
+## Requirements
+
+**OpenClaw.app requires macOS 15.0 (Sequoia) or later.** This also applies to
+its native `openclaw-mac` helper. [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements)
+require macOS 26 or later.
+
+The Node-based CLI and Gateway need a [supported Node version](/install/node)
+on an operating system supported by that runtime. Official Node 24 and Node 26
+macOS binaries require macOS 13.5 or later. Running the CLI on an older Mac
+does not make the native app compatible with that macOS version.
+
+Building from source also requires the toolchain listed in
+[macOS developer setup](/platforms/mac/dev-setup#prerequisites).
 
 ## Download
 
@@ -83,6 +101,13 @@ options, Tailscale, and discovery; **Gateways** manages saved Gateway profiles.
 A **Debug** tab appears while the developer toggle in **This Mac → Developer**
 is enabled. **About OpenClaw** opens the standard macOS About panel with the app
 version, build information, and credits.
+
+If the app-managed local Gateway is missing, outdated, or broken, the Connection
+tab offers **Install Gateway**, **Update Gateway**, or **Repair Gateway**. The
+action opens the existing setup prompt, shows installation progress, and checks
+the Gateway afterward. You can retry here after cancelling an earlier prompt.
+For an incompatible Gateway newer than the app, **Set Up Gateway** lets you review
+the setup choice. Independently managed Gateways retain their own update workflow.
 
 App-local settings (permissions, Quick Chat, voice, updates) live in
 Dashboard → Settings → This Mac and require a Gateway release that includes those pages.
@@ -161,17 +186,19 @@ page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and
 first-run model setup still runs when needed.
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width. Drag the divider in either direction to choose another width; the app remembers it. Widening the browser lets the dashboard switch to compact navigation, with a 400-point minimum for the dashboard and a 320-point minimum for the browser. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
+In the macOS app's embedded dashboard, clicking an external web link opens it as a **Mac tab** in the **Browser** tab of the chat side panel. On non-chat routes, it opens in the shell-level Browser dock. While Settings is open, external links open in the default browser because the Browser panel is hidden. WebKit renders Mac tabs natively, alongside **Agent browser tabs** backed by the Gateway-controlled browser. Older Control UI bundles that still send the legacy `inline` link request open the default browser; current bundles open Mac tabs through the native Browser bridge.
+
+Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 
-Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
+Right-click an external link in the dashboard to choose **Open in Browser Panel**, **Open in Default Browser**, or **Copy Link**. Modified clicks still open the default browser. New-window links inside a Mac tab open another Mac tab; pointer-activated downloads hand off to the default browser. Responses WebKit cannot display hand off only for pointer-activated main-frame navigation; other non-displayable responses are cancelled silently. Regular browser-hosted Control UI pages keep their normal link and context-menu behavior unless you enable the Browser panel link preference.
 
 ## Import browser logins
 
-The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+The first time a Mac tab opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 ## Sync cookies to a remote computer
 
@@ -241,10 +268,12 @@ own docs.
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
 | Capture logs                             | [macOS logging](/platforms/mac/logging)                                                     |
 | Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)                                                 |
+| Browse and install skills from the app   | [Skills in the macOS app](/platforms/mac/skills)                                            |
 
 ## Related
 
 - [Platforms](/platforms)
 - [Getting started](/start/getting-started)
+- [Onboarding](/start/onboarding) - the macOS app's first-run flow: where the Gateway runs, runtime install, and connecting a provider
 - [Gateway](/gateway)
 - [Exec approvals](/tools/exec-approvals)

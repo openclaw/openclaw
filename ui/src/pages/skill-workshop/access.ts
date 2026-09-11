@@ -6,14 +6,12 @@ export type SkillWorkshopAccess = {
   canApply: boolean;
   canRevise: boolean;
   canReject: boolean;
-  canScanHistory: boolean;
 };
 
 type SkillWorkshopAdminMethod =
   | "config.patch"
   | "skills.proposals.apply"
   | "skills.proposals.evaluate"
-  | "skills.proposals.historyScan"
   | "skills.proposals.reject"
   | "skills.proposals.requestRevision";
 
@@ -30,6 +28,5 @@ export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot): Ski
     canApply: canCallWorkshopAdminMethod(snapshot, "skills.proposals.apply"),
     canRevise: canCallWorkshopAdminMethod(snapshot, "skills.proposals.requestRevision"),
     canReject: canCallWorkshopAdminMethod(snapshot, "skills.proposals.reject"),
-    canScanHistory: canCallWorkshopAdminMethod(snapshot, "skills.proposals.historyScan"),
   };
 }

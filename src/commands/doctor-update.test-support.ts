@@ -38,10 +38,9 @@ const mocks = vi.hoisted(() => ({
   restartUpdatedGateway: vi.fn(),
   stopGatewayService: vi.fn(),
   waitForHealthyRestart: vi.fn(),
+  inspectGatewayRestart: vi.fn(),
   waitForHttpReadiness:
     vi.fn<typeof import("../cli/daemon-cli/restart-health.js").waitForGatewayHttpReadiness>(),
-  verifyUpdateServing:
-    vi.fn<typeof import("../infra/update-serving-verification.js").verifyUpdateServing>(),
   doctorCommand: vi.fn(),
   createUpdateConfigSnapshot: vi.fn(),
   createServiceConfigIO: vi.fn(),
@@ -89,14 +88,13 @@ vi.mock("../cli/daemon-cli.js", () => ({
 vi.mock("../cli/update-cli/update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
+  inspectGatewayRestart: mocks.inspectGatewayRestart,
   waitForGatewayHealthyRestart: mocks.waitForHealthyRestart,
   waitForGatewayHttpReadiness: mocks.waitForHttpReadiness,
   renderRestartDiagnostics: () => ["gateway not ready"],
   terminateStaleGatewayPids: vi.fn(),
-}));
-vi.mock("../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: mocks.verifyUpdateServing,
 }));
 vi.mock("../cli/update-cli/update-command-migrated.js", () => ({
   inspectActivatedUpdateState: mocks.inspectActivatedUpdateState,
@@ -304,36 +302,16 @@ export function installDoctorUpdateTestHooks(): void {
     mocks.revalidateManagedGatewayServiceAfterUpdate.mockImplementation(
       async ({ preManagedServiceStop }) => preManagedServiceStop.serviceUpdateVerdict,
     );
-    mocks.waitForHealthyRestart.mockReset().mockResolvedValue({
+    const healthy = {
       healthy: true,
       runtime: { status: "running" },
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
-      gatewayBootId: "doctor-boot",
-    });
+    };
+    mocks.waitForHealthyRestart.mockReset().mockResolvedValue(healthy);
+    mocks.inspectGatewayRestart.mockReset().mockResolvedValue(healthy);
     mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-    mocks.verifyUpdateServing.mockReset().mockImplementation(async (params) => ({
-      status: "verified",
-      receipt: {
-        runId: params.runId,
-        gateway: {
-          bootId: "doctor-boot",
-          version: params.expectedVersion,
-          buildId: params.expectedBuildId ?? null,
-        },
-        agentId: "main",
-        sessionKey: "doctor-session",
-        sessionId: "doctor-session-id",
-        agentRunId: "dc114b46-9c65-4b0d-9a88-14772c02983a",
-        verifiedAtMs: 1000,
-        transcript: {
-          generation: "doctor-generation",
-          maxSeq: 2,
-          user: { entryId: "doctor-user", seq: 1 },
-          assistant: { entryId: "doctor-assistant", seq: 2 },
-        },
-      },
-    }));
+
     mocks.doctorCommand.mockReset();
     mocks.createUpdateConfigSnapshot.mockReset().mockResolvedValue(undefined);
     mocks.createServiceConfigIO

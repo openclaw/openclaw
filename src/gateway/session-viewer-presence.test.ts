@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPresenceRecipientProjection } from "./presence-projection.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
@@ -97,5 +106,101 @@ describe("session viewer presence declarations", () => {
     declarations.stop();
     expect(declarations.replace("conn-a", ["alpha"])).toEqual([]);
     expect(broadcast).not.toHaveBeenCalled();
+  });
+});
+
+function recipient(scopes = ["operator.admin"]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      role: "operator",
+      scopes,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+    },
+  };
+}
+
+async function seedColdStore(count: number): Promise<string[]> {
+  const keys = Array.from({ length: count }, (_, index) => `agent:main:presence-${index}`);
+  for (const [index, sessionKey] of keys.entries()) {
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: `presence-${index}`, updatedAt: 1, visibility: "shared" },
+    );
+  }
+  // Fresh read-only handles expose repeated admission work hidden by a warm writer.
+  expect(
+    closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
+  ).toBe(true);
+  return keys;
+}
+
+describe("presence projection store admission", () => {
+  it("bounds a cold fanout to one metadata census per store, including repeated watches and recipients", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const watchedSessions = (await seedColdStore(64)).slice(0, 8);
+      const presence = [
+        { text: "first watcher", ts: 1, watchedSessions },
+        { text: "second watcher", ts: 2, watchedSessions: [...watchedSessions] },
+      ];
+      const { DatabaseSync } = requireNodeSqlite();
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      try {
+        const project = createPresenceRecipientProjection({ cfg: {}, presence });
+        expect(project(recipient())).toEqual(presence);
+        // Observe real unbounded session reads, without replacing the canonical
+        // validator or exact reader. Selected-row queries contain a WHERE clause.
+        const censuses = prepare.mock.calls.filter(([sql]) => {
+          const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
+          return normalized.includes('from "session_nodes"') && !normalized.includes(" where ");
+        });
+        expect(censuses).toHaveLength(1);
+        const preparedQueries = prepare.mock.calls.length;
+        expect(project(recipient())).toEqual(presence);
+        expect(prepare).toHaveBeenCalledTimes(preparedQueries);
+      } finally {
+        prepare.mockRestore();
+      }
+    });
+  });
+
+  it("does not admit stores until an eligible recipient demands a watched key", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const watchedSessions = await seedColdStore(1);
+      const person = { text: "watcher", ts: 1 };
+      const presence = [{ ...person, watchedSessions }];
+      const pending = recipient(["operator.read"]);
+      pending.authenticatedGitHubIdentitySync = async () => ({
+        profileId: "pending",
+        updatedAt: 1,
+      });
+      const node = recipient();
+      node.connect.role = "node";
+      const { DatabaseSync } = requireNodeSqlite();
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      try {
+        const project = createPresenceRecipientProjection({ cfg: {}, presence });
+        expect(project(pending)).toEqual([person]);
+        for (const denied of [recipient([]), node, null]) {
+          expect(project(denied)).toEqual([]);
+        }
+        expect(createPresenceRecipientProjection({ cfg: {}, presence: [] })(recipient())).toEqual(
+          [],
+        );
+        expect(
+          createPresenceRecipientProjection({
+            cfg: {},
+            presence: [person, { ...person, watchedSessions: [] }],
+          })(recipient()),
+        ).toEqual([person, person]);
+        expect(prepare).not.toHaveBeenCalled();
+
+        expect(project(recipient())).toEqual(presence);
+        expect(prepare).toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+      }
+    });
   });
 });

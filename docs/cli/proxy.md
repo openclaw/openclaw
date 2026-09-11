@@ -26,7 +26,7 @@ openclaw proxy purge
 
 ## Validate
 
-Checks the effective operator-managed proxy URL from `--proxy-url`, config (`proxy.proxyUrl`), or `OPENCLAW_PROXY_URL`, in that precedence order. Reports a config problem if no proxy is enabled and configured; pass `--proxy-url` for a one-off preflight without touching config.
+Checks the effective operator-managed proxy URL from `--proxy-url`, config (`proxy.proxyUrl`), or `OPENCLAW_PROXY_URL`, in that precedence order. Reports a config problem if no proxy is enabled and configured. Pass `--proxy-url` for a one-off preflight without touching config.
 
 Managed proxy URLs use `http://` for a plain forward-proxy listener, or `https://` when OpenClaw must open TLS to the proxy endpoint itself before sending proxy requests. Use `--proxy-ca-file` to trust a private CA for that TLS connection.
 
@@ -58,11 +58,11 @@ See [Network Proxy](/security/network-proxy) for deployment guidance and denial 
 
 ## Debug proxy
 
-`start` launches a local capturing proxy and prints its URL, CA cert path, and capture DB path; stop with Ctrl+C. Defaults to binding `127.0.0.1` unless `--host` is set.
+`start` launches a local capturing proxy and prints its URL, CA cert path, and capture DB path. Stop it with Ctrl+C. Defaults to binding `127.0.0.1` unless `--host` is set.
 
 `run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session.
 
-The debug proxy's direct upstream forwarding opens upstream sockets for diagnostics. When OpenClaw managed proxy mode is active, direct forwarding for proxy requests and CONNECT tunnels is disabled by default; set `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` only for approved local diagnostics.
+The debug proxy's direct upstream forwarding opens upstream sockets for diagnostics. When OpenClaw managed proxy mode is active, direct forwarding for proxy requests and CONNECT tunnels is disabled by default. Set `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` only for approved local diagnostics.
 
 `coverage` prints a JSON report (`summary` + per-transport `entries`) of which transports are captured, proxy-only, or uncovered.
 
@@ -84,7 +84,7 @@ wrap their rows under `sessions` and `rows`, respectively.
 
 `blob --id <blobId>` prints a captured payload blob's raw content.
 
-`purge` deletes all captured traffic metadata and blobs. Captures are local debugging data; purge when finished.
+`purge` deletes all captured traffic metadata and blobs. Captures are local debugging data. Purge them when you finish.
 
 ## Related
 

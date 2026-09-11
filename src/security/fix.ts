@@ -255,14 +255,14 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   changes: string[];
 }> {
-  const fixed = applyConfigFixes({ cfg: params.cfg, env: params.env });
   const channelFixes = await collectChannelSecurityConfigFixMutation({
-    cfg: fixed.cfg,
+    cfg: params.cfg,
     env: params.env,
     channelPlugins: params.channelPlugins,
   });
+  const fixed = applyConfigFixes({ cfg: channelFixes.cfg, env: params.env });
   return {
-    cfg: channelFixes.cfg,
+    cfg: fixed.cfg,
     changes: [...fixed.changes, ...channelFixes.changes],
   };
 }

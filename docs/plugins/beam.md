@@ -104,12 +104,13 @@ bare-id links and links with an older title still resolve, and the browser repla
 the name with the current title without adding history. Titles that produce no slug
 use the bare id. A configured Control UI base path prefixes the route, for example
 `/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
-32-character Beam id also work. Update the Beam skill before updating the receiver
-so its response validator accepts named links.
+32-character Beam id also work. Named links shipped in the 2026.8.2 receiver;
+update the Beam skill before updating the receiver so its response validator
+accepts them.
 
 Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 
-`sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
+`sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
 ## Continue on the Team Gateway
 
@@ -134,11 +135,19 @@ A continuation belongs to the authenticated operator who creates it. From then o
 
 User turns are attributed to the verified publisher of the current snapshot, using their current profile name and avatar, including merged profiles. Beam's upload format does not identify individual authors within a multi-user transcript. The uploader reference shares the snapshot's seven-day retention and is replaced on each upload. Shared-token uploads, failed profile resolution, and older snapshots without a recorded uploader display **User**; they never inherit the viewer's identity or a previous uploader's identity. Reupload an older snapshot through personal authentication to attribute it.
 
+### Delete
+
+Any operator with `operator.write` can delete a Beam from its sidebar row menu.
+Deletion is permanent and immediate. Re-uploading the same `beamId` recreates the
+row, whether through the manual skill or a still-active mirror's next upload.
+Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
+the next poll. Deleting a Beam does not affect continuations already created from it.
+
 ## Security boundary
 
 Beam publication is not remote control.
 
-- Continuing makes an independent Gateway-owned session. Beam itself has no archive, terminal, tool, or node capability.
+- Continuing makes an independent Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
 - It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.
@@ -181,29 +190,17 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 ## Troubleshooting
 
-`404 Not Found`
+**`404 Not Found`** The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
 
-: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+**`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
 
-`401 Unauthorized`
+**`405 Method Not Allowed`** The receiver accepts only `POST`.
 
-: The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
+**`413 Payload Too Large`** The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
 
-`405 Method Not Allowed`
+**`429 Too Many Requests`** The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
 
-: The receiver accepts only `POST`.
-
-`413 Payload Too Large`
-
-: The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
-
-`429 Too Many Requests`
-
-: The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
-
-`beam mirror upload blocked ... receiver returned redirect`
-
-: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
 
 ## Related
 

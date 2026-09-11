@@ -73,6 +73,7 @@ type ModelSelectionPreparation =
       status: "ready";
       catalog: ModelCatalogEntry[];
       runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
+      validateRuntimeSelection?: () => string | undefined;
     }
   | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
 
@@ -80,12 +81,30 @@ type ModelSelectionPreparation =
 export async function prepareModelSelectionRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  workspaceDir?: string;
   provider: string;
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  profileOverride?: string;
+  sessionEntry?: Pick<
+    SessionEntry,
+    | "agentRuntimeOverride"
+    | "authProfileOverride"
+    | "authProfileOverrideSource"
+    | "modelProvider"
+    | "providerOverride"
+  >;
 }): Promise<ModelSelectionPreparation> {
+  const sessionEntry = params.profileOverride
+    ? {
+        ...params.sessionEntry,
+        providerOverride: params.provider,
+        modelProvider: params.provider,
+        authProfileOverride: params.profileOverride,
+        authProfileOverrideSource: "user" as const,
+      }
+    : params.sessionEntry;
   const runtime = resolveModelRuntimeDirective(params);
   if (runtime.kind === "invalid") {
     return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
@@ -98,8 +117,22 @@ export async function prepareModelSelectionRuntime(params: {
       message: `Unknown provider "${params.provider}". Use /models to list providers.`,
     };
   }
+  let validateRuntimeSelection: (() => string | undefined) | undefined;
+  if (runtime.kind === "set") {
+    const { preparePublishedModelRuntimeChoice } =
+      await import("../../agents/model-runtime-choice.js");
+    const choice = await preparePublishedModelRuntimeChoice({
+      ...params,
+      sessionEntry,
+      runtimeId: runtime.runtime,
+    });
+    if (choice.kind === "unavailable") {
+      return { status: "rejected", reason: "invalid-runtime", message: choice.message };
+    }
+    validateRuntimeSelection = choice.validate;
+  }
   if (selected?.reasoning !== undefined) {
-    return { status: "ready", runtime, catalog: [...params.catalog] };
+    return { status: "ready", runtime, catalog: [...params.catalog], validateRuntimeSelection };
   }
   // The selected route owns its capabilities. A prepared default-provider row cannot
   // supply thinking or context metadata for an explicit cross-provider selection.
@@ -115,6 +148,7 @@ export async function prepareModelSelectionRuntime(params: {
   return {
     status: "ready",
     runtime,
+    validateRuntimeSelection,
     catalog: resolved
       ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],

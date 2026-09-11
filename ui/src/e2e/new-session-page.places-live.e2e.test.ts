@@ -131,7 +131,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
       const where = page.locator("#new-session-where-trigger");
       const model = page.locator('[data-chat-model-select="true"]');
       const start = page.getByRole("button", { name: "Start session" });
@@ -218,7 +218,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
-        await gateway.waitForRequest("chat.metadata");
+        await gateway.waitForRequest("models.list");
         await page.locator("#new-session-where-trigger").click();
 
         const profile = page.locator('[data-value="cloud:aws"]');
@@ -284,8 +284,8 @@ suite.define(() => {
         .toBeGreaterThan(requests);
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
-        .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+        .poll(() => runner.locator(".session-menu__description").textContent())
+        .toBe("No worker slots are available. Wait for a slot or pick another device.");
       // A disabled row keeps a muted meter with no utilization claim.
       await expect
         .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))

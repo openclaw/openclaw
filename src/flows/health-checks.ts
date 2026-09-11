@@ -113,3 +113,8 @@ export interface HealthCheck {
     findings: readonly HealthFinding[],
   ): Promise<HealthRepairResult>;
 }
+
+/** Opt-in diagnostics stay out of routine lint and repair passes. */
+export function isHealthCheckEnabledByDefault(check: HealthCheck): boolean {
+  return !("defaultEnabled" in check && check.defaultEnabled === false);
+}
