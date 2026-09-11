@@ -353,6 +353,10 @@ function createDefaultState(): WorkboardUiState {
     detailCommentBody: "",
     detailCommentDrafts: new Map(),
     busyCardIds: new Set(),
+    selectedCardIds: new Set(),
+    bulkDialog: null,
+    bulkSaving: false,
+    bulkResult: null,
     draggedCardId: null,
     dragOverStatus: null,
     dragBeforeCardId: null,
@@ -380,7 +384,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(state.draftSaving || state.busyCardIds.size || state.capturingSessionKeys.size);
+  return Boolean(
+    state.bulkSaving ||
+    state.draftSaving ||
+    state.busyCardIds.size ||
+    state.capturingSessionKeys.size,
+  );
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {

@@ -91,6 +91,20 @@ export function selectedWorkboardBoardParams(
 
 export function setWorkboardCards(state: WorkboardUiState, cards: WorkboardCard[]) {
   state.cards = cards;
+  const selectableIds = new Set(cards.filter(isActiveWorkboardCard).map((card) => card.id));
+  for (const id of state.selectedCardIds) {
+    if (!selectableIds.has(id)) {
+      state.selectedCardIds.delete(id);
+    }
+  }
+  if (state.bulkDialog) {
+    state.bulkDialog.cardIds = state.bulkDialog.cardIds.filter((id) =>
+      state.selectedCardIds.has(id),
+    );
+    if (!state.bulkDialog.cardIds.length) {
+      state.bulkDialog = null;
+    }
+  }
 }
 
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {

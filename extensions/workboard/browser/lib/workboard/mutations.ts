@@ -381,6 +381,7 @@ export async function dispatchWorkboard(params: {
   state.dispatching = true;
   state.error = null;
   state.lastDispatchSummary = null;
+  state.bulkResult = null;
   params.requestUpdate?.();
   try {
     const dispatchResult = await params.client.request(

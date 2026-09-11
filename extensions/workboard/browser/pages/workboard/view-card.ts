@@ -113,7 +113,21 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
       ? renderCardMoveControl(props, card, busy || !writable, { wide: widget })
       : nothing;
   const deleteAction = !widget && writable ? renderDeleteCardAction(props, card, busy) : nothing;
+  const selected = state.selectedCardIds.has(card.id);
   const alertDescriptionId = `workboard-card-alert-${surface}-${card.id}`;
+  const selectable = !widget && writable && !archived;
+  const selectionMode = selectable && state.selectedCardIds.size > 0;
+  const toggleSelection = () => {
+    if (!selectable || busy || state.dispatching) {
+      return;
+    }
+    if (state.selectedCardIds.has(card.id)) {
+      state.selectedCardIds.delete(card.id);
+    } else {
+      state.selectedCardIds.add(card.id);
+    }
+    props.onRequestUpdate?.();
+  };
   const actionsMenu =
     !widget && (writable || linkedSessionKey)
       ? html`
@@ -255,17 +269,38 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         archived ? "workboard-card--archived" : ""
       }
       ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${
-        widget ? "workboard-card--widget" : "workboard-card--openable"
-      }"
+        selected ? "workboard-card--selected" : ""
+      } ${widget ? "workboard-card--widget" : "workboard-card--openable"}"
       role=${widget ? nothing : "button"}
       tabindex=${widget ? nothing : "0"}
+      aria-pressed=${selectionMode ? String(selected) : nothing}
       aria-describedby=${alerts.length ? alertDescriptionId : nothing}
-      aria-haspopup=${widget ? nothing : "dialog"}
-      aria-expanded=${widget ? nothing : state.detailCardId === card.id ? "true" : "false"}
-      aria-controls=${widget ? nothing : workboardCardDetailDrawerId}
+      aria-keyshortcuts=${selectable ? "Shift+Enter Shift+Space" : nothing}
+      title=${
+        widget || !selectionMode
+          ? nothing
+          : t(selected ? "workboard.deselectCard" : "workboard.selectCard", { title: card.title })
+      }
+      aria-haspopup=${widget || selectionMode ? nothing : "dialog"}
+      aria-expanded=${
+        widget || selectionMode ? nothing : state.detailCardId === card.id ? "true" : "false"
+      }
+      aria-controls=${widget || selectionMode ? nothing : workboardCardDetailDrawerId}
       draggable=${writable && !archived && !state.dispatching ? "true" : "false"}
+      @mousedown=${(event: MouseEvent) => {
+        if (event.button === 0 && event.shiftKey && selectable && !isCardActionTarget(event)) {
+          event.preventDefault();
+          if (event.currentTarget instanceof HTMLElement) {
+            event.currentTarget.focus({ preventScroll: true });
+          }
+        }
+      }}
       @click=${(event: MouseEvent) => {
         if (!widget && !isCardActionTarget(event)) {
+          if (selectionMode || (event.shiftKey && selectable)) {
+            toggleSelection();
+            return;
+          }
           openCardDetails(state, card);
           props.onRequestUpdate?.();
         }
@@ -274,8 +309,12 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         if (widget || isCardActionTarget(event) || (event.key !== "Enter" && event.key !== " ")) {
           return;
         }
-        openCardDetails(state, card);
-        props.onRequestUpdate?.();
+        if (selectionMode || (event.shiftKey && selectable)) {
+          toggleSelection();
+        } else {
+          openCardDetails(state, card);
+          props.onRequestUpdate?.();
+        }
         event.preventDefault();
       }}
       @dragstart=${(event: DragEvent) => {
@@ -375,6 +414,15 @@ export function renderColumn(
           props.scopeAgentId,
         ),
     );
+  const columnMenuId = `workboard-column-menu-${status}`;
+  const selectableCards = cards.filter(
+    (card) => isActiveWorkboardCard(card) && !state.busyCardIds.has(card.id),
+  );
+  const closeColumnMenu = (event: MouseEvent) => {
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
+    }
+  };
   const renderCreateButton = (className: string, withLabel = false) => html`
     <button
       class=${className}
@@ -531,6 +579,44 @@ export function renderColumn(
                             >${icons.minimize}</span
                           >
                         </button>
+                        ${
+                          writable
+                            ? html`<div class="workboard-column__menu">
+                                <button
+                                  class="workboard-column__control"
+                                  type="button"
+                                  popovertarget=${columnMenuId}
+                                  aria-label=${t("workboard.columnActions", { column: label })}
+                                  title=${t("workboard.columnActions", { column: label })}
+                                  aria-expanded="false"
+                                >
+                                  ${icons.moreHorizontal}
+                                </button>
+                                <div
+                                  class="workboard-column__popover"
+                                  id=${columnMenuId}
+                                  popover="auto"
+                                  role="group"
+                                  aria-label=${t("workboard.columnActions", { column: label })}
+                                  ${ref(workboardPopoverRef("end"))}
+                                >
+                                  <button
+                                    type="button"
+                                    ?disabled=${!selectableCards.length || state.dispatching}
+                                    @click=${(event: MouseEvent) => {
+                                      closeColumnMenu(event);
+                                      for (const card of selectableCards) {
+                                        state.selectedCardIds.add(card.id);
+                                      }
+                                      props.onRequestUpdate?.();
+                                    }}
+                                  >
+                                    ${t("workboard.selectAllInColumn", { column: label })}
+                                  </button>
+                                </div>
+                              </div>`
+                            : nothing
+                        }
                         ${canCreate ? renderCreateButton("workboard-column__control") : nothing}
                       </div>`
                     : nothing

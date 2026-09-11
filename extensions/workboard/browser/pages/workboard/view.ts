@@ -51,6 +51,7 @@ import {
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
+import { renderSelectionActions, renderSelectionDialog } from "./view-selection.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 function dispatchSummaryMessage(state: WorkboardUiState) {
@@ -112,6 +113,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   const filtered = cardsForFilters();
   const visibleError = workboardErrorMessage(state, props.pageError);
   const writable = canMutate(props);
+  const selectedCards = state.cards.filter((card) => state.selectedCardIds.has(card.id));
   const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
   for (const status of state.statuses) {
     byStatus.set(status, []);
@@ -237,10 +239,18 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
       : nothing);
   const refreshStatus = state.loading ? t("common.refreshing") : refreshStatusLabel(state);
   // The active dialog owns the error alert while the board is inert.
-  const dialogOpen = props.overlayOpen || state.draftOpen || Boolean(getVisibleDetailCard(state));
+  const dialogOpen =
+    props.overlayOpen ||
+    state.draftOpen ||
+    Boolean(state.bulkDialog) ||
+    Boolean(getVisibleDetailCard(state));
   return html`
     <section class="workboard">
-      <div class="workboard-main" ?inert=${dialogOpen} aria-hidden=${dialogOpen ? "true" : nothing}>
+      <div
+        class="workboard-main"
+        ?inert=${dialogOpen || state.bulkSaving}
+        aria-hidden=${dialogOpen ? "true" : nothing}
+      >
         <header class="workboard-heading">
           ${props.heading}
           <div class="workboard-heading__actions settings-section__actions">
@@ -310,12 +320,18 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
             }
           </div>
         </header>
-        <div class="workboard-toolbar">
-          <div class="workboard-toolbar__filters">
-            <div class="workboard-toolbar__navigation">
-              ${renderStatusTabs(state, props.onRequestUpdate)}
-            </div>
-          </div>
+        <div
+          class="workboard-toolbar ${selectedCards.length ? "workboard-toolbar--selection" : ""}"
+        >
+          ${
+            selectedCards.length
+              ? renderSelectionActions(props)
+              : html`<div class="workboard-toolbar__filters">
+                  <div class="workboard-toolbar__navigation">
+                    ${renderStatusTabs(state, props.onRequestUpdate)}
+                  </div>
+                </div>`
+          }
           <div class="workboard-toolbar__tools">
             <div class="workboard-search-control">
               ${
@@ -582,7 +598,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
             </div>
           </div>
           ${
-            activeFilters.length
+            !selectedCards.length && activeFilters.length
               ? renderActiveFilters(activeFilters, props.onRequestUpdate)
               : nothing
           }
@@ -639,12 +655,19 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
       ${renderWorkboardToast({
         owner: state,
         outcomeSource: true,
-        message: visibleError ?? dispatchSummaryMessage(state),
+        message:
+          visibleError ??
+          (state.bulkResult
+            ? t("workboard.bulkResult", {
+                completed: String(state.bulkResult.completed),
+                total: String(state.bulkResult.total),
+              })
+            : dispatchSummaryMessage(state)),
         hidden: dialogOpen,
-        key: visibleError ?? state.lastDispatchSummary,
+        key: visibleError ?? state.bulkResult ?? state.lastDispatchSummary,
         tone: visibleError ? "error" : "info",
       })}
-      ${renderCardModal(props)} ${renderCardDetailsPanel(props)}
+      ${renderCardModal(props)} ${renderCardDetailsPanel(props)} ${renderSelectionDialog(props)}
     </section>
   `;
 }
