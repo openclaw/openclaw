@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
@@ -321,7 +322,7 @@ describe("prepared GitHub read authority", () => {
         env: {},
         getCurrentConfig: () => ({}),
         assertActive: () => {},
-        revalidateActive: async () => {
+        startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
             entered.resolve();
             await release.promise;
@@ -329,6 +330,7 @@ describe("prepared GitHub read authority", () => {
           if (!allowed) {
             throw new Error("grant revoked");
           }
+          return await start();
         },
         refresh,
       };
@@ -380,11 +382,12 @@ describe("prepared GitHub read authority", () => {
             throw new Error("caller closed");
           }
         },
-        revalidateActive: async () => {
+        startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
             entered.resolve();
             await release.promise;
           }
+          return await start();
         },
         refresh: async () => {},
       });
@@ -409,6 +412,96 @@ describe("prepared GitHub read authority", () => {
       }
     },
   );
+
+  it("starts credential and network operations inside current caller admission", async () => {
+    let admitted = false;
+    const assertAdmitted = () => expect(admitted).toBe(true);
+    mocks.runCommandBuffered.mockImplementation(async () => {
+      assertAdmitted();
+      return commandResult("native-admitted-start");
+    });
+    vi.mocked(fetch).mockImplementation(async () => {
+      assertAdmitted();
+      return new Response(JSON.stringify({ id: 101, login: "native-user", avatar_url: null }));
+    });
+    const identity = await prepareGitHubReadIdentity({
+      config: {},
+      agentId: "main",
+      env: {},
+      getCurrentConfig: () => ({}),
+      assertActive: () => {},
+      startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
+        await Promise.resolve();
+        admitted = true;
+        let result: T;
+        try {
+          result = start();
+        } finally {
+          admitted = false;
+        }
+        return await result;
+      },
+      refresh: async () => assertAdmitted(),
+    });
+    await identity.start(() => {
+      assertAdmitted();
+      return "read result";
+    });
+    expect(admitted).toBe(false);
+  });
+
+  it("releases admission during shared transport and authorizes each caller's final delivery", async () => {
+    const transport = createDeferredCore<string>();
+    const pending = new Map<string, Promise<string>>();
+    const fetchShared = vi.fn(() => transport.promise);
+    const caller = () => {
+      const state = { active: true, admitted: false };
+      const identity = createGitHubReadIdentity({
+        token: "synthetic-shared-token",
+        selection: { source: "system-detected", accountId: 101 },
+        assertSelected: () => {},
+        readToken: async () => "synthetic-shared-token",
+        startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
+          await Promise.resolve();
+          if (!state.active) {
+            throw new Error("grant revoked");
+          }
+          state.admitted = true;
+          let result: T;
+          try {
+            result = start();
+          } finally {
+            state.admitted = false;
+          }
+          return await result;
+        },
+      });
+      const started = createDeferredCore();
+      const result = identity.start(() => {
+        expect(state.admitted).toBe(true);
+        started.resolve();
+        return getOrCreatePromise(pending, identity.cacheScope, fetchShared);
+      });
+      return { state, identity, started, result };
+    };
+    const leader = caller();
+    const follower = caller();
+    await Promise.all([leader.started.promise, follower.started.promise]);
+    expect(leader.state.admitted || follower.state.admitted).toBe(false);
+    expect(fetchShared).toHaveBeenCalledOnce();
+    leader.state.active = false;
+    transport.resolve("shared result");
+    const [leaderResult, followerResult] = await Promise.all([leader.result, follower.result]);
+    const publish = vi.fn((value: string) => value);
+    await expect(leader.identity.start(() => publish(leaderResult))).rejects.toThrow(
+      "grant revoked",
+    );
+    expect(publish).not.toHaveBeenCalled();
+    await expect(follower.identity.start(() => publish(followerResult))).resolves.toBe(
+      "shared result",
+    );
+    expect(publish).toHaveBeenCalledOnce();
+  });
 
   it("refreshes before read credential verification and fences native rotation without changing publication snapshots", async () => {
     const config = { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } };
