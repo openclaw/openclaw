@@ -39,6 +39,29 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each(
+    ["/stop", "/approve approval-123 allow-once", "ordinary draft"].flatMap((draft) =>
+      ["keyboard", "button"].map((submission) => ({ draft, submission })),
+    ),
+  )(
+    "preserves control dispatch while history loads: $draft via $submission",
+    ({ draft, submission }) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        draft,
+        submitDisabledReason: "Loading history",
+        onSend,
+      });
+      if (submission === "keyboard") {
+        pressComposerEnter(container);
+      } else {
+        primaryButton(container).click();
+      }
+      expect(onSend).toHaveBeenCalledTimes(draft === "ordinary draft" ? 0 : 1);
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    },
+  );
+
   function renderActiveDictationActions(overrides: {
     finishActive: ReturnType<typeof vi.fn>;
     onSend?: ChatRunControlsProps["onSend"];
@@ -388,11 +411,14 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("does not steer from Enter while offline, matching the hidden Steer chip", () => {
+  it.each([
+    { connected: false, submitDisabledReason: null },
+    { connected: true, submitDisabledReason: "Loading history" },
+  ])("does not steer from Enter while admission is held: %j", (availability) => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
       canAbort: true,
-      connected: false,
+      ...availability,
       onAbort: vi.fn(),
       onQueueSteer,
       queue: [{ id: "queued", text: "queued", createdAt: 1, sessionKey: "main" }],
@@ -404,6 +430,7 @@ describe("renderChatComposer controls", () => {
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
     expect(onQueueSteer).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-queue__action")).toBeNull();
   });
 
   it("keeps empty Enter inert when no queued message can be steered", () => {

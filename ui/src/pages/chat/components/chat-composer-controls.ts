@@ -4,6 +4,7 @@ import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { isChatControlCommand } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
@@ -577,9 +578,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           </openclaw-tooltip>
         `
       : nothing;
-  const sendBusy = props.sending || Boolean(props.submitDisabledReason);
+  const sendDisabledReason =
+    props.canSend && isChatControlCommand(props.draft) ? null : props.submitDisabledReason;
+  const sendBusy = props.sending || Boolean(sendDisabledReason);
   const sendStatus =
-    props.submitDisabledReason ??
+    sendDisabledReason ??
     (props.sending
       ? t("chat.composer.sendingMessage")
       : hasComposedContent

@@ -11,6 +11,7 @@ import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
@@ -136,6 +137,9 @@ const resetRetryState = (
 };
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
   if (readQueuedMessageById(host, id)?.intent) {
     setChatError(host, t("chat.goals.admissionImmutable"));
     return;
@@ -235,6 +239,9 @@ export function moveQueuedChatMessage(
 }
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
+  if (isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
   const item = host.chatQueue.find((entry) => entry.id === id);
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
   const retriesUnconfirmed =

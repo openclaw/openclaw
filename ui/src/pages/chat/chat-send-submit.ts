@@ -3,7 +3,7 @@ import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/co
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { isChatControlCommand, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
@@ -152,7 +152,10 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
-  if (isInitialChatHistoryUnavailable(host)) {
+  if (
+    isInitialChatHistoryUnavailable(host) &&
+    (opts?.intent || !isChatControlCommand(messageOverride ?? host.chatMessage))
+  ) {
     return undefined;
   }
   const previousDraft = host.chatMessage;

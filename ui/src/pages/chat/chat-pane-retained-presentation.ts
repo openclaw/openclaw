@@ -22,6 +22,7 @@ import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
@@ -297,6 +298,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.requestUpdate?.();
     if (handoff.send) {
+      const composer = getChatComposerState(this.presentationId);
+      const editRevision = composer.editRevision;
       queueMicrotask(() => {
         // The initial pane applies its gateway snapshot after consuming the handoff.
         if (this.state !== state || state.sessionKey !== sessionKey) {
@@ -319,6 +322,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           this.isConnected &&
           this.active &&
           this.ownsHeaderOutcome(presentationOwner) &&
+          // IME and dictation own edits before they commit text to the draft store.
+          composer.editRevision === editRevision &&
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&

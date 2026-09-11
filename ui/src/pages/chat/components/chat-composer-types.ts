@@ -186,6 +186,7 @@ type ComposingDraft = {
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
     composerComposing: boolean;
+    editRevision: number;
     mentionMenu: HumanMentionMenu;
     mentionInput?: HumanMentionInput;
     composingDraft: ComposingDraft | null;

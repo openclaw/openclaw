@@ -14,6 +14,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -36,6 +37,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
@@ -46,7 +48,10 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    resetChatComposerState();
+    vi.unstubAllGlobals();
+  });
 
   it.each([false, true])(
     "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
@@ -293,6 +298,8 @@ describe("chat pane retained presentation lifecycle", () => {
   it.each([
     "ready",
     "draft edit",
+    "composition",
+    "canceled composition",
     "session change",
     "reconnect",
     "hide and return",
@@ -335,6 +342,28 @@ describe("chat pane retained presentation lifecycle", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(state.chatMessage).toBe("continue from the catalog");
 
+      let composingInput: HTMLTextAreaElement | null = null;
+      if (outcome === "composition" || outcome === "canceled composition") {
+        const { container } = renderComposerFixture({
+          paneId: pane.presentationId,
+          sessionKey: state.sessionKey,
+          draft: state.chatMessage,
+          getDraft: () => state.chatMessage,
+          onDraftChange: state.handleChatDraftChange,
+        });
+        composingInput = container.querySelector("textarea");
+        expect(composingInput).not.toBeNull();
+        composingInput!.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        composingInput!.value = "編集";
+        composingInput!.dispatchEvent(
+          new InputEvent("input", { bubbles: true, isComposing: true }),
+        );
+        if (outcome === "canceled composition") {
+          composingInput!.value = state.chatMessage;
+          composingInput!.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        }
+        expect(state.chatMessage).toBe("continue from the catalog");
+      }
       if (outcome === "draft edit") {
         state.handleChatDraftChange("keep my revised draft");
       } else if (outcome === "session change") {
@@ -372,6 +401,9 @@ describe("chat pane retained presentation lifecycle", () => {
         expect(state.handleSendChat).toHaveBeenCalledOnce();
       } else {
         expect(state.handleSendChat).not.toHaveBeenCalled();
+        if (outcome === "composition") {
+          expect(composingInput?.value).toBe("編集");
+        }
         expect(state.chatMessage).toBe(
           outcome === "draft edit" ? "keep my revised draft" : "continue from the catalog",
         );
