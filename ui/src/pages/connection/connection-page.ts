@@ -37,11 +37,11 @@ export class ConnectionPage extends OpenClawLightDomElement {
   @state() private gatewaySecretVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private systemInfoLoading = false;
 
   // Distinguishes an operator-edited session key from the stored selection so
   // Connect only overrides the per-gateway selection after an explicit edit.
   private sessionKeyDirty = false;
-  private systemInfoLoading = false;
 
   private readonly systemInfoPolling = new PollController(
     this,
@@ -212,6 +212,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       secret: this.settings.token || this.password,
       lastError: gateway.lastError,
       systemInfo: this.systemInfo,
+      systemInfoLoading: this.systemInfoLoading,
       systemInfoUnavailable: this.systemInfoUnavailable,
       dirty,
       showGatewaySecret: this.gatewaySecretVisible,

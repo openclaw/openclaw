@@ -183,6 +183,9 @@ export async function channelsListCommand(
     cfg,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
+    ...(metadataSnapshot.index.installRecords
+      ? { installRecords: metadataSnapshot.index.installRecords }
+      : {}),
   });
   const runtimeAccountsByChannel =
     opts.json === true
@@ -303,22 +306,32 @@ export async function channelsListCommand(
   if (opts.json) {
     type JsonChannelEntry = {
       accounts: string[];
+      label: string;
+      docsPath?: string;
       installed: boolean;
       origin: "configured" | "available" | "installable";
     };
     const chat: Record<string, JsonChannelEntry> = {};
+    const catalogById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
     for (const plugin of plugins) {
       const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
       const installed = isInstalled(plugin.id);
+      const catalog = catalogById.get(plugin.id);
+      const metadata = {
+        label: catalog?.meta.label ?? plugin.meta.label,
+        ...(catalog?.officialDocsPath ? { docsPath: catalog.officialDocsPath } : {}),
+      };
       if (accountIds && accountIds.length > 0) {
         chat[plugin.id] = {
           accounts: accountIds,
+          ...metadata,
           installed,
           origin: "configured",
         };
       } else if (showAll && shouldShowConfigured(plugin)) {
         chat[plugin.id] = {
           accounts: [],
+          ...metadata,
           installed,
           origin: "available",
         };
@@ -327,6 +340,8 @@ export async function channelsListCommand(
     for (const line of catalogOnlyLines) {
       chat[line.entry.id] = {
         accounts: [],
+        label: line.entry.meta.label,
+        ...(line.entry.officialDocsPath ? { docsPath: line.entry.officialDocsPath } : {}),
         installed: line.installed,
         origin: line.configured ? "configured" : line.installed ? "available" : "installable",
       };

@@ -7339,6 +7339,15 @@ describe("chat model controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("keeps a non-empty model list free of refresh failure chrome", () => {
+    const { state } = createOpenAiHeaderState();
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: true, status: "ready", refreshFailed: true },
+    });
+    expect(container.querySelector("[data-chat-model-option]")).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+  });
+
   it("shows a successful empty catalog without authentication guidance", () => {
     const { state } = createChatHeaderState({ models: [] });
     const onModelSetup = vi.fn();
@@ -7403,7 +7412,9 @@ describe("chat model controls", () => {
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, { onModelSelect });
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-chat-model-option]:not([data-chat-model-default="true"])',
+      ),
     ).find((button) => button.getAttribute("aria-selected") === "false");
     expect(modelOption).toBeInstanceOf(HTMLButtonElement);
     modelOption?.click();
@@ -7435,7 +7446,9 @@ describe("chat model controls", () => {
       expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
       expect(container.querySelector("[data-chat-model-selection-scope]")).toBeNull();
       const modelOption = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+        container.querySelectorAll<HTMLButtonElement>(
+          '[data-chat-model-option]:not([data-chat-model-default="true"])',
+        ),
       ).find((button) => button.getAttribute("aria-selected") === "false");
       modelOption?.click();
 
@@ -7620,7 +7633,9 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
     expect(modelSelect.getAttribute("title")).not.toBe(reason);
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-chat-model-option]:not([data-chat-model-default="true"])',
+      ),
     ).find((button) => button.getAttribute("aria-selected") === "false");
     modelOption?.click();
     container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
@@ -7631,7 +7646,7 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("hides the provenance footer for the configured default and resets a recorded pin", () => {
+  it("clears a recorded pin through the Default row and restores trigger focus", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5",
       modelProvider: "openai",
@@ -7641,8 +7656,7 @@ describe("chat model controls", () => {
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
 
-    expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+    expect(container.querySelector('[data-chat-model-default="true"]')).not.toBeNull();
 
     state.sessionsResult = createSessionsListResult({
       model: "gpt-5.4",
@@ -7651,7 +7665,7 @@ describe("chat model controls", () => {
     });
     renderModelControls(state, { onModelSelect }, container);
 
-    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    const reset = container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]');
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
     document.body.append(container);
@@ -7659,14 +7673,93 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Reset session model");
-    expect(reset?.title).toBe("Use default (GPT-5) for this session");
+    expect(reset?.textContent).toContain("Default");
     reset?.focus();
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
     expect(details?.open).toBe(false);
     expect(document.activeElement).toBe(modelSelect);
     container.remove();
+  });
+
+  it("renders a Default row when the configured default is missing from the catalog", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: createOpenAiModelCatalog(),
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onModelSelect });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.dataset.chatModelOption).toBe("openai/gpt-5");
+    expect(defaultRow?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
+      "gpt-5 · openai",
+    );
+    expect(defaultRow?.getAttribute("aria-selected")).toBe("false");
+    expect(defaultRow?.parentElement?.querySelector("[data-chat-model-option]")).toBe(defaultRow);
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+  });
+
+  it("keeps the Default row selectable when the default model needs sign-in", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: [
+        {
+          id: "gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+        ...createOpenAiModelCatalog(),
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, { onModelSelect, onModelSetup });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.disabled).toBe(false);
+    expect(defaultRow?.querySelector("[data-chat-model-auth-warning]")).not.toBeNull();
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    expect(onModelSetup).not.toHaveBeenCalled();
+  });
+
+  it("clears a pin matching an unavailable default through the Default row", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: [
+        {
+          id: "gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+        ...createOpenAiModelCatalog(),
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, { onModelSelect, onModelSetup });
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultRow?.getAttribute("aria-selected")).toBe("true");
+    expect(defaultRow?.disabled).toBe(false);
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    expect(onModelSetup).not.toHaveBeenCalled();
   });
 
   it("allows an inherited parent model to be reset to Default", () => {
@@ -7716,9 +7809,8 @@ describe("chat model controls", () => {
       const container = renderModelControls(state, { onModelSelect });
 
       expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
-      const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
-      expect(reset?.textContent?.trim()).toBe("Reset session model");
-      expect(reset?.title).toContain("for this session");
+      const reset = container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]');
+      expect(reset?.textContent).toContain("Default");
       reset?.click();
 
       expect(onModelSelect).toHaveBeenCalledWith("", "main");
@@ -7748,7 +7840,6 @@ describe("chat model controls", () => {
     const container = renderModelControls(state, { onModelSelect });
     document.body.append(container);
 
-    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
     const defaultRow = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.4"]',
     );
@@ -7769,7 +7860,8 @@ describe("chat model controls", () => {
       },
     };
     renderModelControls(state, { onModelSelect }, container);
-    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
     container.remove();
   });
 
@@ -7805,7 +7897,6 @@ describe("chat model controls", () => {
     );
     expect(container.querySelectorAll("[data-chat-model-provider]")).toHaveLength(0);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     picker!.open = true;
     picker!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
@@ -8195,9 +8286,11 @@ describe("chat model controls", () => {
     });
     const container = renderModelControls(state);
 
-    expect(container.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
-      "Kimi K2.5",
-    );
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="nvidia/kimi-k2.5"] .chat-controls__model-option-name',
+      )?.textContent,
+    ).toBe("Kimi K2.5");
   });
 
   it("keeps active context in picker details without crowding the compact trigger", () => {

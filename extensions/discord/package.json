@@ -10,10 +10,10 @@
   "dependencies": {
     "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.54",
+    "discord-api-types": "0.38.55",
     "libopus-wasm": "0.2.0",
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.18",
+    "typebox": "1.3.25",
     "undici": "8.10.2",
     "ws": "8.21.3",
     "zod": "4.4.3"

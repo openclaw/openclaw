@@ -121,7 +121,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   if (!context || !runtime) {
     return nothing;
   }
-  if (host.routeState.routeId === undefined) {
+  if (host.routeState.routeId === undefined && !host.routeState.routeFailed) {
     return renderConnectingSplash();
   }
   const gatewaySnapshot = context.gateway.snapshot;

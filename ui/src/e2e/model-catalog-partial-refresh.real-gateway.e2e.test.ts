@@ -124,11 +124,9 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__input").first();
           const model = composer.locator("[data-chat-model-select]");
           await model.click();
-          await page
-            .getByText("Some models could not be refreshed. Open Models to try again.", {
-              exact: true,
-            })
-            .waitFor();
+          // A failed background refresh must not add chrome above a usable list.
+          await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
+          expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           const stage = route === "new" ? "new" : "chat";
           await page.screenshot({
             path: path.join(suite.artifactDir, `${stage}-catalog.png`),

@@ -1,5 +1,4 @@
-import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -7,11 +6,11 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { icons } from "../../../components/icons.ts";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { highlightModelRow, pickerMenu } from "./chat-model-picker-search.ts";
 
 registerModelAccountsEnglish();
 
@@ -21,11 +20,17 @@ type AccountInventory = {
   accounts: UserModelAccount[];
   nextCursor?: string;
   loading: boolean;
+  open: boolean;
   error: string | null;
   isCurrent: () => boolean;
 };
 
 const inventories = new WeakMap<object, AccountInventory>();
+
+export type ChatModelAccountSection = {
+  render: (startIndex: number) => TemplateResult;
+  onClose: () => void;
+};
 
 export function renderChatModelAccountControl(params: {
   owner: object;
@@ -38,11 +43,10 @@ export function renderChatModelAccountControl(params: {
   onAutomatic?: () => void;
   onManage?: () => void;
   onRequestUpdate: () => void;
-  hint?: string;
-}) {
+}): ChatModelAccountSection | undefined {
   const { owner, selection, client } = params;
   if (!selection) {
-    return nothing;
+    return undefined;
   }
   let inventory = inventories.get(owner);
   if (
@@ -55,6 +59,7 @@ export function renderChatModelAccountControl(params: {
       selection,
       accounts: [],
       loading: false,
+      open: false,
       error: null,
       isCurrent: params.ownsSelection,
     };
@@ -137,11 +142,11 @@ export function renderChatModelAccountControl(params: {
         : []),
       ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
     ];
-  const selectAccount = (event: CustomEvent<{ item: { value: string } }>) => {
+  const selectAccount = (value: string, event: MouseEvent) => {
+    event.stopPropagation();
     if (!ownsInventory() || params.disabled) {
       return;
     }
-    const value = event.detail.item.value;
     if (value === "manage") {
       params.onManage?.();
     } else if (value === "automatic") {
@@ -159,61 +164,94 @@ export function renderChatModelAccountControl(params: {
       }
     }
   };
-  return html`
-    <div
-      class="chat-model-account chat-controls__model-provenance"
-      data-chat-account-selection=${selection.kind}
-    >
-      <span>${t("chat.modelAccounts.label")}</span>
-      <wa-dropdown
-        class="chat-model-account__picker"
-        placement="top-start"
-        aria-label=${t("chat.modelAccounts.label")}
-        @wa-show=${() => void loadAccounts()}
-        @wa-select=${selectAccount}
+  return {
+    onClose: () => {
+      currentInventory.open = false;
+      params.onRequestUpdate();
+    },
+    render: (startIndex) => html`
+      <section
+        class="chat-controls__provider-model-group"
+        data-chat-account-selection=${selection.kind}
+        aria-label=${t("chat.modelAccounts.section")}
       >
         <button
-          slot="trigger"
+          class="chat-controls__provider-heading chat-controls__account-heading"
           type="button"
-          class="chat-controls__inline-select-trigger"
-          data-chat-account-trigger
-          aria-label=${`${t("chat.modelAccounts.label")}: ${selection.label}`}
+          data-chat-account-group-toggle
+          aria-expanded=${currentInventory.open}
           ?disabled=${params.disabled}
+          @click=${() => {
+            currentInventory.open = !currentInventory.open;
+            params.onRequestUpdate();
+            if (currentInventory.open) {
+              void loadAccounts();
+            }
+          }}
         >
-          <span class="chat-controls__inline-select-label">${selection.label}</span>
+          <span class="chat-controls__provider-icon chat-controls__target-icon" aria-hidden="true"
+            >${icons.users}</span
+          >
+          <span class="chat-controls__provider-label">${t("chat.modelAccounts.section")}</span>
+          <span class="chat-controls__account-selection">${selection.label}</span>
           <span class="chat-controls__inline-select-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
+            >${currentInventory.open ? icons.chevronUp : icons.chevronDown}</span
           >
         </button>
-        ${options.map(
-          (option) => html`
-            <wa-dropdown-item
-              .value=${option.value}
-              data-chat-account-option=${option.value}
-              ?disabled=${option.disabled || params.disabled}
-              ${ref((element) => {
-                if (option.value === currentValue || option.value.startsWith("account:")) {
-                  syncDropdownItemRadio(element, option.value === currentValue);
-                }
-              })}
-            >
-              <span
-                >${option.label}${
-                  option.description ? html`<br /><small>${option.description}</small>` : nothing
-                }</span
+        <div
+          class="chat-controls__provider-model-list"
+          data-chat-model-list="true"
+          role="listbox"
+          aria-label=${t("chat.modelAccounts.section")}
+        >
+          ${options.map(
+            (option, index) => html`
+              <button
+                class="chat-controls__inline-select-option chat-controls__model-option"
+                type="button"
+                role="option"
+                aria-selected=${option.value === currentValue}
+                data-chat-account-option=${option.value}
+                data-chat-model-option=${`account:${option.value}`}
+                data-chat-model-index=${startIndex + index}
+                data-chat-model-name=${option.label.toLocaleLowerCase()}
+                data-chat-model-keywords=${option.description?.toLocaleLowerCase() ?? ""}
+                data-chat-model-provider-label="account"
+                ?hidden=${!currentInventory.open}
+                ?disabled=${option.disabled || params.disabled}
+                @mouseenter=${(event: MouseEvent) => {
+                  // SAFETY: Bound to each account option button's mouseenter event.
+                  const row = event.currentTarget as HTMLButtonElement;
+                  const menu = pickerMenu(row);
+                  if (menu) {
+                    highlightModelRow(menu, row);
+                  }
+                }}
+                @click=${(event: MouseEvent) => selectAccount(option.value, event)}
               >
-            </wa-dropdown-item>
-          `,
-        )}
-      </wa-dropdown>
-      ${params.hint ? html`<span class="chat-model-account__hint">${params.hint}</span>` : nothing}
-      ${
-        currentInventory.error
-          ? html`<span class="chat-model-account__error" role="alert"
-              >${currentInventory.error}</span
-            >`
-          : nothing
-      }
-    </div>
-  `;
+                <span class="chat-controls__model-option-provider" aria-hidden="true"
+                  >${icons.users}</span
+                >
+                <span class="chat-controls__model-option-copy">
+                  <span class="chat-controls__model-option-name"
+                    >${option.label}${option.description ? html`<br /><small>${option.description}</small>` : nothing}</span
+                  >
+                </span>
+                <span class="chat-controls__model-option-action">
+                  ${option.value === currentValue ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">${icons.check}</span>` : nothing}
+                </span>
+              </button>
+            `,
+          )}
+        </div>
+        ${
+          currentInventory.error
+            ? html`<span class="chat-controls__account-error" role="alert"
+                >${currentInventory.error}</span
+              >`
+            : nothing
+        }
+      </section>
+    `,
+  };
 }

@@ -55,6 +55,7 @@ extension DashboardManager {
     static func gatewayConnection(for target: DashboardGatewayTarget) async -> GatewayConnection {
         switch target {
         case .primary: GatewayConnection.shared
+        case .local: await MacGatewayConnectionFleet.shared.localConnection()
         case let .profile(id): await MacGatewayConnectionFleet.shared.connection(profileID: id)
         }
     }
@@ -102,14 +103,7 @@ extension DashboardManager {
         }
 
         if mode == .local {
-            let config = GatewayEndpointStore.localConfig()
-            return GatewayConnection.EndpointSnapshot(
-                config: config,
-                tls: GatewayTLSRoute.resolve(
-                    url: config.url,
-                    connectionMode: mode,
-                    configuredFingerprint: nil),
-                routeAuthority: nil)
+            return try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: false)
         }
 
         return nil
@@ -191,6 +185,13 @@ extension DashboardManager {
         _ target: DashboardGatewayTarget,
         source: DashboardWindowController?)
     {
+        if target == .local {
+            self.presentGatewayError(
+                DashboardPrimaryGatewayError.notPromotable,
+                title: String(localized: "Could Not Set Primary Gateway"),
+                over: source?.window)
+            return
+        }
         guard case let .profile(profileID) = target,
               let entry = gatewayEntries.first(where: { $0.id == target.bridgeID }),
               entry.canPromote

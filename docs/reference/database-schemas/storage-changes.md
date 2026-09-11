@@ -123,6 +123,15 @@ validation. After removing a derived archive file, pruning reacquires before the
 canonical row-deletion transaction; an acquisition failure propagates without
 deleting that recovery row.
 
+Usage-cache rollup writes, pruning, and refresh-lock changes use the same async
+agent-database admission. A cold mutation waits for the existing integrity worker;
+its compare-and-set transaction remains synchronous on the admitted connection.
+Refresh completion and cleanup await persistence. Operations capture their resolved
+database path before admission, and refresh-lock release retains that path and its
+original environment when the caller's directory or environment changes. Doctor reports rejected
+pruning operations before continuing to the next agent. Read-only cache snapshots
+retain their existing synchronous owner and do not create missing databases.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real
