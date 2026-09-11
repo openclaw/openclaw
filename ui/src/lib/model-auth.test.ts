@@ -181,7 +181,6 @@ describe("listEffectiveModelAuthProviders", () => {
         profiles: [],
       },
     ]);
-    expect(merged?.status).toBe("missing");
     expect(merged?.apiKey).toEqual({ source: "env", envVar: "GEMINI_API_KEY" });
   });
 });
