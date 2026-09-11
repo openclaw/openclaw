@@ -3,7 +3,6 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import type {
   Agent,
   AgentEvent,
@@ -195,7 +194,7 @@ export abstract class AgentSessionBase {
       throw new Error(
         `Authentication failed for "${model.provider}". ` +
           `Credentials may have expired or network is unavailable. ` +
-          `Run '${formatProviderLoginCommand(model.provider)}' to re-authenticate.`,
+          `Run '/login ${model.provider}' to re-authenticate.`,
       );
     }
     throw new Error(formatNoApiKeyFoundMessage(model.provider));
