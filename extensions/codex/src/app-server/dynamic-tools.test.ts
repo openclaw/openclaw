@@ -2667,6 +2667,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual(expectInputText("Sent."));
     expect(result.terminate).toBe(true);
+    expect(result.finalCurrentSourceReply).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
@@ -2710,6 +2711,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(progressResult).toEqual(expectInputText("Sent."));
     expect(progressResult.terminate).toBeUndefined();
+    expect(progressResult.finalCurrentSourceReply).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: false,
@@ -2723,11 +2725,13 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual(expectInputText("Sent."));
     expect(result.terminate).toBe(true);
+    expect(result.finalCurrentSourceReply).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
     expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(result)).not.toContain("finalCurrentSourceReply");
   });
 
   it.each([undefined, "message_tool_only"] as const)(
@@ -3080,6 +3084,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual(expectInputText("Sent."));
     expect(result.terminate).toBe(true);
+    expect(result.finalCurrentSourceReply).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,

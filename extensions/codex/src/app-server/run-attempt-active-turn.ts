@@ -67,6 +67,7 @@ export function activateCodexAttemptTurn(
     completion,
     userInputBridgeRef,
     steeringQueueRef,
+    serverRequestAdmission,
     deadlines,
     noteProgress,
     completeTurn,
@@ -108,7 +109,7 @@ export function activateCodexAttemptTurn(
     paramsForRun: params,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
-    signal: runAbortController.signal,
+    signal: AbortSignal.any([runAbortController.signal, serverRequestAdmission.signal]),
   });
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: resourceState.thread.threadId,
@@ -314,7 +315,7 @@ export function activateCodexAttemptTurn(
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (state.completed || state.terminalTurnNotificationQueued || state.finalSourceReplyCommit) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -407,6 +408,17 @@ export function activateCodexAttemptTurn(
     assertSteeringActive();
     return true;
   };
+  const assertTerminalReleaseInputAuthority = (assertCurrent?: () => void) => {
+    // The ordinary steering guard rejects the sealed final-source grace state.
+    // Revalidate both the caller's source lifetime and this live connection
+    // without reopening steering before an inbound message may interrupt it.
+    assertCurrent?.();
+    connection.assertCurrent();
+    runAbortController.signal.throwIfAborted();
+    if (!state.finalSourceReplyCommit || state.completed || state.terminalTurnNotificationQueued) {
+      throw new Error("codex app-server terminal-release grace is no longer active");
+    }
+  };
   const claimPendingUserInputAnswer = async (
     text: string,
     optionsLocal?: CodexSteeringQueueOptions,
@@ -449,13 +461,23 @@ export function activateCodexAttemptTurn(
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
   ) => {
     const canClaim = injectionGuard(assertCurrent);
+    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+    if (state.finalSourceReplyCommit) {
+      if (isInboundUserMessage) {
+        assertTerminalReleaseInputAuthority(assertCurrent);
+        lifecycle.interruptTurnForTerminalRelease("new_inbound_message");
+      }
+      // Final delivery sealed this queue. Let the canonical rejection path tell
+      // the gateway to admit the message on a fresh turn instead of losing it.
+      return await activeSteeringQueue.queue(text, optionsLocal, injectionGuard(assertCurrent));
+    }
     if (await claimPendingUserInputAnswer(text, optionsLocal, assertCurrent, authorityKind)) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
       return undefined;
     }
-    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+    if (isInboundUserMessage && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply", assertCurrent, authorityKind);

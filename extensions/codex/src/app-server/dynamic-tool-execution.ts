@@ -18,7 +18,9 @@ import {
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import {
+  createCommittedFinalSourceReplyResponse,
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
   withDynamicToolTerminalResolution,
@@ -59,6 +61,12 @@ type DynamicToolTimeoutDetails = {
   consoleMessage: string;
   meta: Record<string, unknown>;
 };
+
+function canProduceFinalSourceReplyDelivery(call: CodexDynamicToolCallParams): boolean {
+  // before_tool_call may rewrite finality, so the original arguments cannot
+  // safely narrow which message calls can produce an authoritative receipt.
+  return call.tool === "message";
+}
 
 function normalizeLogField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -157,34 +165,69 @@ export async function handleDynamicToolCallWithTimeout(params: {
   onFallbackSelected?: () => void;
   onTimeout?: () => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
+  onFinalSourceReplyDelivery?: () => void;
 }): Promise<CodexDynamicToolRuntimeResponse> {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
   // private observer terminal result exactly once across those competing paths.
   let didNotifyAgentToolResult = false;
+  let finalSourceReplyDelivered = false;
+  let acceptFinalSourceReplyDelivery = true;
+  let resolveFinalSourceReplyDelivery!: () => void;
+  const finalSourceReplyDelivery = new Promise<void>((resolve) => {
+    resolveFinalSourceReplyDelivery = resolve;
+  });
+  const shouldReconcileFinalSourceReply =
+    params.onFinalSourceReplyDelivery !== undefined &&
+    canProduceFinalSourceReplyDelivery(params.call);
   const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
   const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
     const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
     const ownerKey = params.toolBridge.sideEffectOwnerKeyForTool?.(params.call.tool);
+    const settledResponse =
+      !response.success && finalSourceReplyDelivered
+        ? createCommittedFinalSourceReplyResponse({
+            executedArguments:
+              response.executedArguments ??
+              executionSnapshot?.executedArguments ??
+              (isJsonObject(params.call.arguments) ? params.call.arguments : {}),
+          })
+        : response;
+    if (settledResponse.success && finalSourceReplyDelivered && !didNotifyAgentToolResult) {
+      notifyAgentToolResult({
+        toolName: params.call.tool,
+        result: {
+          content: [{ type: "text", text: "Source reply delivered." }],
+          details: { status: "success", sourceReplyDelivered: true },
+        },
+        isError: false,
+      });
+    }
     // The host observer owns active wrapper state. A bridge snapshot is only needed
     // after that wrapper settles while result post-processing remains pending.
     const observedExecutionStarted =
       executionSnapshot?.executionStarted ??
-      (conservativeRaceResponses.has(response) ? undefined : response.executionStarted);
+      (conservativeRaceResponses.has(settledResponse)
+        ? undefined
+        : settledResponse.executionStarted);
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
-      result: response,
+      result: settledResponse,
       arguments:
-        response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
+        settledResponse.executedArguments ??
+        executionSnapshot?.executedArguments ??
+        params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
       ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
       ...(observedExecutionStarted !== undefined
         ? { executionStarted: observedExecutionStarted }
         : {}),
-      outcome: response.success ? "success" : "failure",
-      ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
+      outcome: settledResponse.success ? "success" : "failure",
+      ...(!settledResponse.success
+        ? { failure: { error: readDynamicToolResponseText(settledResponse) } }
+        : {}),
     });
-    return withDynamicToolTerminalResolution(response, terminalResolution);
+    return withDynamicToolTerminalResolution(settledResponse, terminalResolution);
   };
   // The host observer replaces these conservative facts with exact boundary evidence.
   // Direct/older callers without one must still treat a raced terminal as dispatched.
@@ -251,7 +294,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
-    notifyFailedToolResult(message, terminalReason);
+    if (!finalSourceReplyDelivered && !shouldReconcileFinalSourceReply) {
+      notifyFailedToolResult(message, terminalReason);
+    }
     resolveAbort?.(createFailedAfterPossibleDispatch(message, terminalReason));
   };
   const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
@@ -269,7 +314,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
         ...timeoutDetails.meta,
         consoleMessage: timeoutDetails.consoleMessage,
       });
-      notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
+      if (!finalSourceReplyDelivered && !shouldReconcileFinalSourceReply) {
+        notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
+      }
       resolve(createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"));
     }, timeoutMs);
     timeout.unref?.();
@@ -280,17 +327,72 @@ export async function handleDynamicToolCallWithTimeout(params: {
     if (params.signal.aborted) {
       abortFromRun();
     }
-    const response = await Promise.race([
-      params.toolBridge.handleToolCall(params.call, {
-        signal: controller.signal,
-        onAgentToolResult: notifyAgentToolResult,
-        toolCallOrdinal: params.toolCallOrdinal,
-        retainExecutionSnapshot: true,
-      }),
-      abortPromise,
-      timeoutPromise,
+    const toolCall = params.toolBridge.handleToolCall(params.call, {
+      signal: controller.signal,
+      onAgentToolResult: (event) => {
+        // A raw source-delivery receipt is authoritative. Its bridge callback
+        // precedes optional result middleware, so defer any rewritten observer
+        // result and let finalizeTerminal publish one canonical success.
+        if (!finalSourceReplyDelivered || !event.isError) {
+          notifyAgentToolResult(event);
+        }
+      },
+      toolCallOrdinal: params.toolCallOrdinal,
+      retainExecutionSnapshot: true,
+      onFinalSourceReplyDelivery: () => {
+        if (!acceptFinalSourceReplyDelivery) {
+          return;
+        }
+        finalSourceReplyDelivered = true;
+        resolveFinalSourceReplyDelivery();
+        params.onFinalSourceReplyDelivery?.();
+      },
+    });
+    const toolCallOutcome = toolCall.then(
+      (response) => ({ kind: "tool" as const, response }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+    const initialOutcome = await Promise.race([
+      toolCallOutcome,
+      abortPromise.then((response) => ({ kind: "fallback" as const, response })),
+      timeoutPromise.then((response) => ({ kind: "fallback" as const, response })),
     ]);
-    if (!response.success && !didNotifyAgentToolResult) {
+    if (initialOutcome.kind === "error") {
+      throw initialOutcome.error;
+    }
+    let response = initialOutcome.response;
+    if (
+      initialOutcome.kind === "fallback" &&
+      shouldReconcileFinalSourceReply &&
+      !finalSourceReplyDelivered
+    ) {
+      // A transport may finish just after its cancellation signal. Keep the
+      // existing finalization grace as the bounded authority window so a raw
+      // delivery receipt wins before failure is published to either observer.
+      let reconciliationTimer: ReturnType<typeof setTimeout> | undefined;
+      const reconciliation = await Promise.race([
+        finalSourceReplyDelivery.then(() => ({ kind: "delivery" as const })),
+        toolCallOutcome,
+        new Promise<{ kind: "grace" }>((resolve) => {
+          reconciliationTimer = setTimeout(
+            () => resolve({ kind: "grace" }),
+            TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
+          );
+          reconciliationTimer.unref?.();
+        }),
+      ]);
+      if (reconciliationTimer) {
+        clearTimeout(reconciliationTimer);
+      }
+      if (
+        reconciliation.kind === "tool" &&
+        reconciliation.response.success &&
+        reconciliation.response.finalCurrentSourceReply === true
+      ) {
+        response = reconciliation.response;
+      }
+    }
+    if (!response.success && !didNotifyAgentToolResult && !finalSourceReplyDelivered) {
       notifyFailedToolResult(
         readDynamicToolResponseText(response),
         response.diagnosticTerminalReason ?? "failed",
@@ -302,9 +404,12 @@ export async function handleDynamicToolCallWithTimeout(params: {
       ? resolveCodexToolAbortTerminalReason(params.signal)
       : resolveToolExecutionErrorKind(error);
     const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
-    notifyFailedToolResult(message, terminalReason);
+    if (!finalSourceReplyDelivered) {
+      notifyFailedToolResult(message, terminalReason);
+    }
     return finalizeTerminal(createFailedAfterPossibleDispatch(message, terminalReason));
   } finally {
+    acceptFinalSourceReplyDelivery = false;
     if (timeout) {
       clearTimeout(timeout);
     }

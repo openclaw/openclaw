@@ -385,6 +385,11 @@ function emptyUserInputResponse(): JsonObject {
   return { ...emptyAgentHarnessUserInputAnswers() };
 }
 
+/** Builds the fail-closed response used once the turn stops admitting input. */
+export function createCodexUserInputCancellationResponse(): JsonObject {
+  return emptyUserInputResponse();
+}
+
 function declineElicitation(message?: string) {
   return createCodexElicitationResponse("decline", null, message ? { message } : null);
 }
