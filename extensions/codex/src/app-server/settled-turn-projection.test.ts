@@ -367,14 +367,13 @@ describe("projectSettledCodexMessages", () => {
     );
   });
 
-  it("skips OpenClaw custom messages instead of rejecting the history", () => {
+  it("skips transient runtime-context custom messages instead of rejecting the history", () => {
     expect(
       projectSettledCodexMessages([
         message({
           role: "custom",
           customType: "openclaw.runtime-context",
           content: "If nothing needs attention, reply HEARTBEAT_OK.",
-          details: { runtimeContextCarrier: true },
         }),
         message({ role: "user", content: "Send the update." }),
         toolCall(),
@@ -398,5 +397,15 @@ describe("projectSettledCodexMessages", () => {
         output: "Message sent.",
       },
     ]);
+  });
+
+  it("keeps durable custom notes fail-closed rather than silently dropping them", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "custom", customType: "note", content: "Durable operator note." }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("unsupported_content");
   });
 });
