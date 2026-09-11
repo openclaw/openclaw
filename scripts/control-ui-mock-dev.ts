@@ -2213,11 +2213,24 @@ async function createChatPickerScenario(
     "Inspect this session.",
     "The current state is available in the session controls.",
   );
+  const dashboardHistory = summaryHistory.map((message, index) =>
+    index === 0
+      ? {
+          ...message,
+          __openclaw: {
+            senderId: selfProfile.id,
+            senderIdentity: { type: "profile", id: selfProfile.id },
+            senderName: selfProfile.displayName,
+          },
+        }
+      : message,
+  );
   const fixtureHistories: Partial<Record<NonNullable<CliOptions["fixture"]>, unknown[]>> = {
     approval: buildApprovalChatHistory(baseTime),
     attachments: buildChatAttachmentHistory(baseTime),
     avatars: buildAvatarChatHistory(baseTime),
     "code-fences": buildCodeFenceChatHistory(baseTime),
+    dashboards: dashboardHistory,
     "update-blocked": buildCancelledChatHistory(baseTime),
   };
   const historyMessages = fixture
@@ -2425,7 +2438,7 @@ async function createChatPickerScenario(
         },
       },
       "agent:main:dashboard:release-health": {
-        messages: summaryHistory,
+        messages: dashboardHistory,
       },
       "agent:main:home-server": { messages: summaryHistory },
       "agent:main:cloud-refactor": { messages: summaryHistory },
@@ -2444,6 +2457,9 @@ async function createChatPickerScenario(
       {
         self: true,
         id: selfProfile.id,
+        ...(fixture === "dashboards"
+          ? { identity: { type: "profile" as const, id: selfProfile.id } }
+          : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,

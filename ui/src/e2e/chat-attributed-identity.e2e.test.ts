@@ -452,14 +452,16 @@ suite.define(() => {
     expect(revealedTouchHeight).toBeGreaterThan(restingTouchHeight ?? 0);
 
     await page.setViewportSize({ height: 760, width: 1180 });
-    // Own-message footer: the always-visible name must stay put when hover
-    // reveals the timestamp, which slots in to its left (right-aligned row).
+    // Own-message identity stays attached to the gutter avatar while the
+    // timestamp reveals below the bubble inside the reserved turn gap.
     const ownGroup = userGroups.first();
-    const ownName = ownGroup.locator(".chat-sender-name");
+    const ownName = ownGroup.locator(".chat-group-author__name");
+    const ownAvatar = ownGroup.locator(".chat-group-author .chat-avatar-slot");
     const ownBubble = ownGroup.locator(".chat-bubble");
     await page.mouse.move(0, 0);
     await expect(ownGroup.locator(".chat-group-timestamp")).toHaveCSS("opacity", "0");
     const restingNameBox = await ownName.boundingBox();
+    const ownAvatarBox = await ownAvatar.boundingBox();
     const ownBubbleBox = await ownBubble.boundingBox();
     await ownGroup.hover();
     const ownTimestamp = ownGroup.locator(".chat-group-timestamp");
@@ -468,12 +470,16 @@ suite.define(() => {
     const hoveredNameBox = await ownName.boundingBox();
     const timestampBox = await ownTimestamp.boundingBox();
     expect(hoveredNameBox?.x).toBe(restingNameBox?.x);
-    expect((restingNameBox?.x ?? 0) + (restingNameBox?.width ?? 0)).toBeCloseTo(
+    expect((restingNameBox?.x ?? 0) + (restingNameBox?.width ?? 0) / 2).toBeCloseTo(
+      (ownAvatarBox?.x ?? 0) + (ownAvatarBox?.width ?? 0) / 2,
+      0,
+    );
+    expect((timestampBox?.x ?? 0) + (timestampBox?.width ?? 0)).toBeCloseTo(
       (ownBubbleBox?.x ?? 0) + (ownBubbleBox?.width ?? 0),
       0,
     );
-    expect((timestampBox?.x ?? 0) + (timestampBox?.width ?? 0)).toBeLessThan(
-      hoveredNameBox?.x ?? 0,
+    expect(timestampBox?.y ?? 0).toBeGreaterThanOrEqual(
+      (ownBubbleBox?.y ?? 0) + (ownBubbleBox?.height ?? 0),
     );
 
     const footerOrder = await peerGroup
@@ -720,16 +726,18 @@ suite.define(() => {
       await expect(page.locator(".agent-chat__composer-combobox textarea")).toHaveValue("");
       const status = group.locator(".chat-send-status");
       await expect(status).toHaveText("· Not sent · Retry");
-      const footerLineCenters = await group
-        .locator(".chat-sender-name, .chat-send-status")
+      const identityAndStatus = await group
+        .locator(".chat-group-author__name, .chat-send-status")
         .evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();
-            return rect.top + rect.height / 2;
+            return { height: rect.height, left: rect.left, top: rect.top };
           }),
         );
-      expect(footerLineCenters).toHaveLength(2);
-      expect(footerLineCenters[0]).toBeCloseTo(footerLineCenters[1] ?? 0, 0);
+      expect(identityAndStatus).toHaveLength(2);
+      expect(identityAndStatus[0]?.height).toBeGreaterThan(0);
+      expect(identityAndStatus[1]?.height).toBeGreaterThan(0);
+      expect(identityAndStatus[1]?.left ?? 0).toBeLessThan(identityAndStatus[0]?.left ?? 0);
       expect(
         await group
           .locator(".chat-bubble")

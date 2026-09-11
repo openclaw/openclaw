@@ -2451,6 +2451,49 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("stacks the local user name under a gutter avatar", () => {
+    const container = document.createElement("div");
+    render(
+      renderMessageGroup(
+        createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
+          key: "local-user",
+          senderLabel: "Alice Example",
+          sender: {
+            id: "profile_123",
+            name: "Alice Example",
+            identity: { type: "profile", id: "profile_123" },
+          },
+          messages: [
+            {
+              key: "local-message",
+              message: { role: "user", content: "hello", timestamp: 1000 },
+            },
+          ],
+          timestamp: 1000,
+        }),
+        {
+          showReasoning: true,
+          showToolCalls: true,
+          assistantName: "OpenClaw",
+          avatarPlacement: "gutter",
+          userId: "profile_123",
+          userName: "Alice Example",
+        },
+      ),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group");
+    expect(group?.classList.contains("chat-group--stacked-author")).toBe(true);
+    expect(group?.querySelector(".chat-group-author__name")?.textContent).toContain(
+      "Alice Example",
+    );
+    expect(group?.querySelector(".chat-group-author .chat-avatar.user")).not.toBeNull();
+    expect(group?.querySelector(".chat-sender-name--stacked-author-footer")?.textContent).toContain(
+      "Alice Example",
+    );
+  });
+
   it("falls back to initials when a user avatar image fails", async () => {
     const container = document.createElement("div");
     const message = { role: "user", content: "hello", timestamp: 1000 };

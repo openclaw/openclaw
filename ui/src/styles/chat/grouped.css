@@ -80,9 +80,55 @@
   justify-content: start;
 }
 
-.chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot, .chat-group-author) {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
+}
+
+/* Keep the local author's identity attached to their avatar instead of
+   spending a persistent row below the bubble. The hover metadata still uses
+   the reserved turn gap, so timestamps and actions remain reachable. */
+.chat-group--stacked-author {
+  position: relative;
+  grid-template-rows: auto;
+  padding-bottom: calc(var(--chat-turn-gap) - var(--chat-footer-row-offset));
+}
+
+.chat-group-author {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-group-author > :is(.chat-avatar, .chat-avatar-slot) {
+  align-self: center;
+  margin-bottom: 0;
+}
+
+.chat-group-author__name {
+  display: block;
+  width: calc(var(--chat-avatar-column) + 8px);
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-group--stacked-author > .chat-group-footer {
+  position: absolute;
+  right: var(--chat-avatar-gutter);
+  bottom: 1px;
+  width: var(--chat-message-column-max);
+}
+
+.chat-sender-name--stacked-author-footer {
+  display: none;
 }
 
 .chat-group.chat-group--with-footer > .chat-group-messages {
@@ -1071,13 +1117,15 @@ img.chat-avatar.chat-avatar--logo {
   display: contents;
 }
 
-.chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot, .chat-group-author) {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: calc(100% + var(--chat-avatar-gap));
 }
 
-.chat-group--peer .chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-group--peer
+  .chat-message-avatar-anchor
+  > :is(.chat-avatar, .chat-avatar-slot, .chat-group-author) {
   inset-inline-start: auto;
   inset-inline-end: calc(100% + var(--chat-avatar-gap));
 }
@@ -1317,8 +1365,22 @@ img.chat-avatar.chat-avatar--logo {
     margin-inline: 0;
   }
 
-  .chat-group :is(.chat-avatar, .chat-avatar-slot) {
+  .chat-group :is(.chat-avatar, .chat-avatar-slot, .chat-group-author) {
     display: none;
+  }
+
+  .chat-group--stacked-author {
+    position: static;
+    grid-template-rows: auto auto;
+  }
+
+  .chat-group--stacked-author > .chat-group-footer {
+    position: static;
+    width: 100%;
+  }
+
+  .chat-sender-name--stacked-author-footer {
+    display: inline;
   }
 
   /* Peer names carry identity when narrow rows have no avatar column. */

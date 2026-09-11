@@ -362,6 +362,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? "workspace-conflict"
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
+  const hasStackedUserAuthor =
+    normalizedRole === "user" && !isPeerGroup && avatarPlacement === "gutter";
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -447,6 +449,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             group.sender,
           )
       : nothing;
+  const placedAvatar = hasStackedUserAuthor
+    ? html`<div class="chat-group-author">
+        ${avatar}
+        <span class="chat-group-author__name" title=${who}>${who}</span>
+      </div>`
+    : avatar;
 
   return html`
     <div
@@ -454,11 +462,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         opts.latestAssistant ? " chat-group--latest-assistant" : ""
       }${isPeerGroup ? " chat-group--peer" : ""}${
         isForwarded ? " chat-group--forwarded" : ""
-      }${senderHue === null ? "" : " chat-group--sender-tint"}"
+      }${hasStackedUserAuthor ? " chat-group--stacked-author" : ""}${
+        senderHue === null ? "" : " chat-group--sender-tint"
+      }"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${inlineUserAvatar ? nothing : avatar}
+      ${inlineUserAvatar ? nothing : placedAvatar}
       <div class="chat-group-messages">
         ${isForwarded ? renderForwardedAttribution(group, opts) : nothing}
         ${
@@ -487,7 +497,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 index,
                 {
                   ...opts,
-                  avatar: inlineUserAvatar && index === lastMessageIndex ? avatar : undefined,
+                  avatar: inlineUserAvatar && index === lastMessageIndex ? placedAvatar : undefined,
                 },
                 prepared,
               )}
@@ -546,7 +556,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                         isPeerGroup && group.sender?.identity?.type === "profile"
                           ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
                           : null,
-                        "chat-sender-name",
+                        `chat-sender-name${
+                          hasStackedUserAuthor ? " chat-sender-name--stacked-author-footer" : ""
+                        }`,
                       )
                 }
                 ${renderChatSendStatus(sendFailure, opts)}
