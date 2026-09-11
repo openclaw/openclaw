@@ -1,7 +1,7 @@
 import fs, { writeFileSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -47,7 +47,7 @@ import {
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -333,9 +333,19 @@ it.each(["cjs", "ts"])(
             });
           }
           expect(descriptors.nodes.get?.()).toBe(runtime.nodes);
-          const ttsDescriptor = Object.getOwnPropertyDescriptor(runtime, "tts")!;
-          expect(ttsDescriptor).toMatchObject({ get: expect.any(Function), set: undefined });
-          expect(Reflect.set(runtime, "tts", {})).toBe(false);
+          for (const key of [
+            "tts",
+            "mediaUnderstanding",
+            "modelAuth",
+            "imageGeneration",
+            "videoGeneration",
+            "musicGeneration",
+            "llm",
+          ] as const) {
+            const descriptor = Object.getOwnPropertyDescriptor(runtime, key)!;
+            expect(descriptor).toMatchObject({ get: expect.any(Function), set: undefined });
+            expect(Reflect.set(runtime, key, {})).toBe(false);
+          }
           for (const [key, prepared] of [
             ["config", configApi],
             ["state", state],
@@ -805,19 +815,19 @@ describe("clearPluginRegistryLoadCache", () => {
     (action) => {
       const original = createEmptyPluginRegistry();
       const candidate = createEmptyPluginRegistry();
-      pluginLoaderCacheState.set("original", original);
-      pluginLoaderCacheState.set("original-alias", original);
-      pluginLoaderCacheState.set("candidate", candidate);
-      pluginLoaderCacheState.set("candidate-alias", candidate);
+      getPluginLoaderCacheState().set("original", original);
+      getPluginLoaderCacheState().set("original-alias", original);
+      getPluginLoaderCacheState().set("candidate", candidate);
+      getPluginLoaderCacheState().set("candidate-alias", candidate);
       setActivePluginRegistry(original, "original");
       const snapshot = captureActivePluginRegistrySnapshot();
 
       stageActivePluginRegistry(candidate, "candidate", "default");
-      expect(pluginLoaderCacheState.get("original") === original).toBe(true);
-      expect(pluginLoaderCacheState.get("candidate") === candidate).toBe(true);
+      expect(getPluginLoaderCacheState().get("original") === original).toBe(true);
+      expect(getPluginLoaderCacheState().get("candidate") === candidate).toBe(true);
       // Reusing a key must not let the old value's retirement evict its successor.
-      pluginLoaderCacheState.set("reused-key", original);
-      pluginLoaderCacheState.set("reused-key", candidate);
+      getPluginLoaderCacheState().set("reused-key", original);
+      getPluginLoaderCacheState().set("reused-key", candidate);
 
       if (action === "commit") {
         commitStagedPluginRegistry(original, candidate);
@@ -827,10 +837,10 @@ describe("clearPluginRegistryLoadCache", () => {
 
       const committed = action === "commit";
       for (const key of ["original", "original-alias"]) {
-        expect(pluginLoaderCacheState.get(key) === original).toBe(!committed);
+        expect(getPluginLoaderCacheState().get(key) === original).toBe(!committed);
       }
       for (const key of ["candidate", "candidate-alias", "reused-key"]) {
-        expect(pluginLoaderCacheState.get(key) === candidate).toBe(committed);
+        expect(getPluginLoaderCacheState().get(key) === candidate).toBe(committed);
       }
     },
   );
@@ -839,17 +849,22 @@ describe("clearPluginRegistryLoadCache", () => {
     "rebuilds plugin registrations after runtime %s with unchanged load options",
     async (retirement) => {
       useNoBundledPlugins();
+      const event = `retirement-probe-${retirement}`;
+      const cleanup = vi.fn();
+      process.on(event, cleanup);
+      onTestFinished(() => {
+        process.off(event, cleanup);
+      });
       const plugin = writePlugin({
         id: "retirement-probe",
         body: `module.exports = {
           id: "retirement-probe",
           register(api) {
-            let closed = false;
-            api.registerRuntimeLifecycle({ id: "close", cleanup() { closed = true; } });
+            api.registerRuntimeLifecycle({ id: "close", cleanup() { process.emit(${JSON.stringify(event)}); } });
             api.registerTool({
               name: "retirement_probe", description: "Read fixture lifetime",
               parameters: { type: "object", properties: {} },
-              execute() { return { content: [{ type: "text", text: closed ? "closed" : "live" }] }; },
+              execute() { return { content: [{ type: "text", text: "live" }] }; },
             });
           },
         };`,
@@ -871,14 +886,17 @@ describe("clearPluginRegistryLoadCache", () => {
           },
         },
       };
-      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
         const tool = registry.tools[0]!.factory({ config: options.config });
         if (!tool || Array.isArray(tool)) {
           throw new Error("expected one lifetime probe tool");
         }
-        return await tool.execute("probe", {});
+        return tool;
       };
+      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+        await resolveTool(registry).execute("probe", {});
       const original = loadOpenClawPlugins(options);
+      const retainedTool = resolveTool(original);
       const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
       expect(loadOpenClawPlugins(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
@@ -890,17 +908,19 @@ describe("clearPluginRegistryLoadCache", () => {
         const replacement = loadOpenClawPlugins(replacementOptions);
         expect(replacement).not.toBe(original);
         expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
-        await vi.waitFor(async () => {
-          expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
-        });
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
         expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
         expect(
-          pluginLoaderCacheState.get(resolvePluginLoadCacheContext(replacementOptions).cacheKey),
+          getPluginLoaderCacheState().get(
+            resolvePluginLoadCacheContext(replacementOptions).cacheKey,
+          ),
         ).toBe(replacement);
       }
 
-      expect(pluginLoaderCacheState.get(originalKey) === undefined).toBe(true);
-      expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
+      expect(getPluginLoaderCacheState().get(originalKey) === undefined).toBe(true);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      await expect(read(original)).rejects.toThrow(/reloaded or disabled/);
+      expect(() => retainedTool.execute("probe", {})).toThrow(/reloaded or disabled/);
       const reloaded = loadOpenClawPlugins(options);
       expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
       expect(reloaded).not.toBe(original);

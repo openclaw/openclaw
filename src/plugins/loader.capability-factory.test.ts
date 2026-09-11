@@ -24,10 +24,15 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { createPluginCache, getPluginCache, withPluginCache } from "./plugin-cache.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { disposePluginRegistryInstances, setActivePluginRegistry } from "./runtime.js";
 import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
@@ -232,7 +237,6 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
           expect(Object.getOwnPropertyDescriptor(provider, contextSymbol)?.enumerable).toBe(false);
           const host = Reflect.get(provider, contextSymbol) as PluginCapabilityCatalogContext;
           if (context) {
-            expect(host).toBe(context);
             expect(context.formatErrorMessage).not.toHaveBeenCalled();
           }
           return host;
@@ -248,6 +252,10 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
             timeoutMs: 1000,
           }),
         ).toBe(true);
+        if (context) {
+          expect(context.formatErrorMessage).toHaveBeenCalledOnce();
+          expect(vi.mocked(context.formatErrorMessage).mock.contexts[0]).toBe(context);
+        }
         expect(resolveRuntime).not.toHaveBeenCalled();
       });
     },
@@ -280,7 +288,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
         expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
         expect(isPluginRegistryLoadInFlight(authored)).toBe(false);
         expect(resolvePluginRegistryLoadCacheKey(authored)).toBe(cacheKey);
-        expect(pluginLoaderCacheState.get(cacheKey)).toBe(registry);
+        expect(getPluginLoaderCacheState().get(cacheKey)).toBe(registry);
         expect(resolveCompatibleRuntimePluginRegistry(authored)).toBe(registry);
         const bound = getPluginRuntimeLoadContext(registry)!;
         const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
@@ -367,7 +375,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
   }, 120_000);
 
   it("partitions registry reuse by native context identity", async () => {
-    await withFactoryPlugin(extension, registerFactories, (options) => {
+    await withFactoryPlugin(extension, registerFactories, async (options) => {
       const firstContext = createContext();
       const firstOptions = { ...options, capabilityCatalogContext: firstContext };
       const first = loadOpenClawPlugins(firstOptions);
@@ -376,8 +384,19 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
       const secondContext = createContext();
       const second = loadOpenClawPlugins({ ...options, capabilityCatalogContext: secondContext });
       expect(second).not.toBe(first);
-      expect(Reflect.get(first.speechProviders[0]!.provider, contextSymbol)).toBe(firstContext);
-      expect(Reflect.get(second.speechProviders[0]!.provider, contextSymbol)).toBe(secondContext);
+      const firstHost = Reflect.get(
+        first.speechProviders[0]!.provider,
+        contextSymbol,
+      ) as PluginCapabilityCatalogContext;
+      const secondHost = Reflect.get(
+        second.speechProviders[0]!.provider,
+        contextSymbol,
+      ) as PluginCapabilityCatalogContext;
+      firstHost.formatErrorMessage(new Error("first"));
+      expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
+      expect(secondContext.formatErrorMessage).not.toHaveBeenCalled();
+      secondHost.formatErrorMessage(new Error("second"));
+      expect(secondContext.formatErrorMessage).toHaveBeenCalledOnce();
       const firstRuntime = getPluginRegistryRuntime(first)!;
       const secondRuntime = getPluginRegistryRuntime(second)!;
       firstRuntime.modelAuth.resolveProviderIdForAuth = () => "first-only";
@@ -387,6 +406,11 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
           metadataSnapshot: { plugins: [] },
         }),
       ).toBe("fixture");
+      await disposePluginRegistryInstances(first);
+      expect(() => firstHost.formatErrorMessage(new Error("retired"))).toThrow(/reloaded|disabled/);
+      expect(firstContext.formatErrorMessage).toHaveBeenCalledOnce();
+      expect(secondHost.formatErrorMessage(new Error("still live"))).toBe("ready");
+      expect(secondContext.formatErrorMessage).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -433,3 +457,62 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
     },
   );
 });
+
+it.each([false, true])(
+  "owns failed catalog initialization without revoking an earlier success (prior success: %s)",
+  async (priorSuccess) => {
+    await withFactoryPlugin(
+      "cjs",
+      'throw new Error("catalog inspection must not load full runtime");',
+      async (options, root) => {
+        fs.writeFileSync(
+          path.join(root, "plugin", "catalog.cjs"),
+          `let attempts = 0;
+          module.exports = () => {
+            if (++attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
+            return { speechProviders: [{
+              id: "factory-owner", label: "Catalog owner", isConfigured: () => true,
+              synthesize: async () => { throw new Error("inspection cannot synthesize"); },
+            }] };
+          };`,
+        );
+        const cache = createPluginCache();
+        const load = () =>
+          withPluginCache(cache, () =>
+            loadOpenClawPlugins({
+              ...options,
+              cache: false,
+              capabilityCatalog: { family: "speechProviders", context: createContext() },
+            }),
+          );
+        const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
+        try {
+          const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          if (priorSuccess) {
+            expect(retained?.isConfigured(context)).toBe(true);
+          }
+          expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
+          const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          if (priorSuccess) {
+            expect(retained?.isConfigured(context)).toBe(true);
+            expect(retried?.isConfigured(context)).toBe(true);
+          } else {
+            // Failed initialization discards its loader; the next attempt starts fresh.
+            expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
+          }
+          await retirePluginCache(cache);
+          if (priorSuccess) {
+            expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+            expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+          }
+        } finally {
+          await retirePluginCache(cache);
+        }
+      },
+      {
+        capabilityCatalogEntry: "./catalog.cjs",
+        contracts: { speechProviders: ["factory-owner"] },
+      },
+    );
+  },
+);

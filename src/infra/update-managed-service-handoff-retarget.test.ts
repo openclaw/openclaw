@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import * as pidIdentity from "../shared/pid-alive.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore as createStore } from "./update-managed-service-handoff-lease.js";
 import type {
   createManagedHandoffLeaseStore,
@@ -54,6 +55,10 @@ function fixture() {
   if (acquired.kind !== "acquired") {
     throw new Error("fixture busy");
   }
+  const stagedOptions = {
+    ...options,
+    existingIdentity: captureManagedUpdateLeaseDatabaseIdentity(options.databasePath),
+  };
   // Exercise the transaction's observation window using real owner operations.
   const racing = (beforeBegin: () => void) => {
     let pending: (() => void) | undefined = beforeBegin;
@@ -80,7 +85,7 @@ function fixture() {
     // without deleting the closed row. No fabricated lease grants reclamation.
     const common = `const fs=require('node:fs'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process');
 const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
-const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});`;
+const store=createManagedHandoffLeaseStore(${JSON.stringify(stagedOptions)});`;
     const executor =
       common +
       `process.once('message',lease=>{const closed=store.settle(lease,${JSON.stringify(uncertain ? "uncertain" : "closed")});if(!closed)throw new Error('complete failed');process.send(closed,()=>process.disconnect());});`;
@@ -105,7 +110,16 @@ if(!running)throw new Error('activation failed');child.send(running);
     expect(closed.action).toMatchObject({ phase: uncertain ? "uncertain" : "closed" });
     return closed;
   };
-  return { from, to, store, source: acquired.lease, racing, closedDestination, options };
+  return {
+    from,
+    to,
+    store,
+    source: acquired.lease,
+    racing,
+    closedDestination,
+    options,
+    stagedOptions,
+  };
 }
 
 unix.each(["failed", "inactive"])(
@@ -543,7 +557,7 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
 unix(
   "keeps a closed v2 generation occupied while its actors live and preserves late revoke",
   async () => {
-    const { to, store, source, options } = fixture();
+    const { to, store, source, stagedOptions } = fixture();
     const acquired = store.acquire(to, "closing-owner", {
       kind: "triage",
       phase: "reserved",
@@ -560,7 +574,7 @@ unix(
         `
     const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
     const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
-    const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
+    const store=createManagedHandoffLeaseStore(${JSON.stringify(stagedOptions)});
     process.stdin.resume();
     process.once('message',lease=>{const closed=store.settle(lease, "closed");if(!closed)throw new Error('completion refused');process.send(closed,()=>process.disconnect());});
   `,

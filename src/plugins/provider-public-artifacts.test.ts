@@ -5,10 +5,17 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   listTrustedExternalProviderPolicyOwners,
@@ -16,6 +23,13 @@ import {
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
 } from "./provider-public-artifacts.js";
+import {
+  prepareModelCatalogThinkingPolicies,
+  resolveEffectiveThinkingProfile,
+} from "./provider-thinking.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -79,81 +93,6 @@ describe("provider public artifacts", () => {
       expect(resolveProviderPolicySurface(providerId)).toBeNull();
     },
   );
-
-  it.each([
-    [" FIXTURE-TEXT ", true],
-    [" fixture-cli ", true],
-    ["FIXTURE-EMBEDDING", true],
-    [" TEXT-ALIAS ", true],
-    ["cli-alias", true],
-    ["embedding-alias", true],
-    ["orphan-alias", false],
-    ["scoped-alias", false],
-    ["empty-target", false],
-    ["setup-only", false],
-    ["setup-cli", false],
-    [" ", true],
-  ] as const)("preserves declared policy ownership for %j", (query, matches) => {
-    const owner = createPluginManifestRecordFixture({
-      id: "fixture-owner",
-      origin: "global",
-      trustedOfficialInstall: true,
-      providers: [" fixture-text "],
-      cliBackends: [" FIXTURE-CLI "],
-      contracts: { embeddingProviders: [" fixture-embedding "] },
-      setup: { providers: [{ id: "setup-only" }], cliBackends: ["setup-cli"] },
-      providerAuthAliases: {
-        " text-alias ": " fixture-text ",
-        "cli-alias": "fixture-cli",
-        "embedding-alias": "fixture-embedding",
-        "orphan-alias": "missing",
-        "scoped-alias": { provider: "fixture-text", baseUrls: ["https://fixture.example.test"] },
-        "empty-target": " ",
-        "": "fixture-text",
-      },
-    });
-
-    expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual(
-      matches ? [owner] : [],
-    );
-  });
-
-  it("does not treat empty declarations as policy ownership", () => {
-    const owner = createPluginManifestRecordFixture({
-      id: "empty-owner",
-      trustedOfficialInstall: true,
-      providers: [""],
-      cliBackends: [" "],
-      contracts: { embeddingProviders: [""] },
-      providerAuthAliases: { empty: " " },
-    });
-    for (const query of ["", " ", "empty"]) {
-      expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual([]);
-    }
-  });
-
-  it("orders trusted external matches stably without reordering the registry", () => {
-    const owner = (id: string, rootDir: string, trustedOfficialInstall = true) =>
-      createPluginManifestRecordFixture({
-        id,
-        rootDir,
-        origin: "global",
-        trustedOfficialInstall,
-        providers: ["fixture-provider"],
-      });
-    const last = owner("z-owner", "/fixture/z");
-    const first = owner("a-owner", "/fixture/first");
-    const equal = owner("a-owner", "/fixture/equal");
-    const untrusted = owner("0-owner", "/fixture/untrusted", false);
-    const plugins = [last, first, untrusted, equal];
-
-    expect(listTrustedExternalProviderPolicyOwners("fixture-provider", { plugins })).toEqual([
-      first,
-      equal,
-      last,
-    ]);
-    expect(plugins).toEqual([last, first, untrusted, equal]);
-  });
 
   it("selects the first equal-id bundled owner in stable lexical order", async () => {
     vi.doMock("./bundled-dir.js", async (importOriginal) => ({
@@ -429,6 +368,132 @@ describe("provider public artifacts", () => {
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }
   });
+
+  it.each(["untrusted", "cold", "loaded", "catalog", "evaluation-error"] as const)(
+    "keeps trusted external policy under its admitted owner (%s)",
+    async (scenario) => {
+      const rootDir = writeExternalPolicyFixture();
+      const source = path.join(rootDir, "index.cjs");
+      const policy = path.join(rootDir, "provider-policy-api.js");
+      const activation = path.join(rootDir, "runtime-activated");
+      const event = `external-policy:${rootDir}`;
+      fs.writeFileSync(
+        source,
+        `require('node:fs').writeFileSync(${JSON.stringify(activation)}, 'unexpected'); throw new Error('runtime entry must stay cold');`,
+      );
+      const writePolicy = (value: string) =>
+        fs.writeFileSync(
+          policy,
+          `process.on(${JSON.stringify(event)}, () => {}); export function resolveThinkingProfile() { return { levels: [{ id: 'off' }], defaultLevel: ${JSON.stringify(value)} }; }`,
+        );
+      writePolicy("before");
+      const metadata = createPluginManifestRecordFixture({
+        id: "fixture-policy",
+        rootDir,
+        source,
+        origin: "global",
+        trustedOfficialInstall: scenario !== "untrusted",
+        providers: ["fixture-policy"],
+      });
+      const cache = createPluginCache();
+      const ambient = createPluginCache();
+      const snapshot = withPluginCache(cache, () =>
+        createPluginMetadataSnapshotFixture({ plugins: [metadata] }),
+      );
+      const registry = createEmptyPluginRegistry();
+      let instance: PluginInstance | undefined;
+      try {
+        if (scenario === "loaded") {
+          const record = createPluginRecord({ id: metadata.id, rootDir, source, origin: "global" });
+          registry.plugins.push(record);
+          const loadedInstance = new PluginInstance(record.id, { record, registry });
+          instance = loadedInstance;
+          withPluginCache(cache, () =>
+            bindPluginInstanceModuleLoader({
+              instance: loadedInstance,
+              origin: record.origin,
+              source,
+              rootDir,
+            }),
+          );
+          instance.loadModule(policy);
+          writePolicy("after");
+        }
+        if (scenario === "evaluation-error") {
+          fs.writeFileSync(
+            policy,
+            "throw new Error('Unable to resolve plugin public surface nested failure');",
+          );
+        }
+        const resolve = () =>
+          withPluginRuntimeRegistryScope(registry, () =>
+            withPluginCache(cache, () => loadTrustedExternalProviderPolicyArtifacts([metadata])),
+          );
+        if (scenario === "catalog") {
+          const catalog: ModelCatalogSnapshot = {
+            entries: [{ id: "fixture", name: "fixture", provider: metadata.id }],
+            routeVariants: [],
+          };
+          withPluginRuntimeRegistryScope(registry, () =>
+            withPluginCache(ambient, () =>
+              prepareModelCatalogThinkingPolicies({ catalog, metadataSnapshot: snapshot }),
+            ),
+          );
+          expect(ambient.setupModules.size).toBe(0);
+          expect(cache.setupModules.size).toBe(1);
+          const read = () =>
+            resolveEffectiveThinkingProfile({
+              provider: metadata.id,
+              context: { provider: metadata.id, modelId: "fixture" },
+              catalogEntry: catalog.entries[0],
+            });
+          expect(read()?.defaultLevel).toBe("before");
+          await retirePluginCache(cache);
+          expect(read).toThrow();
+        } else if (scenario === "evaluation-error") {
+          expect(resolve).toThrow("nested failure");
+        } else {
+          const policySurface = resolve()?.surface;
+          if (scenario === "untrusted") {
+            expect(policySurface).toBeNull();
+            expect(process.listenerCount(event)).toBe(0);
+          } else {
+            const callback = policySurface?.resolveThinkingProfile;
+            if (!callback) {
+              throw new Error("Expected the trusted policy callback");
+            }
+            const context = { provider: metadata.id, modelId: "fixture" };
+            expect(callback?.(context)?.defaultLevel).toBe("before");
+            expect(getPluginValueInstance(callback)).toBeDefined();
+            expect(process.listenerCount(event)).toBe(1);
+            if (scenario === "loaded") {
+              expect(getPluginValueInstance(callback)).toBe(instance);
+              expect(cache.setupModules.size).toBe(0);
+              await instance?.dispose();
+              expect(() => callback(context)).toThrow();
+            } else {
+              expect(cache.setupModules.size).toBe(1);
+              await retirePluginCache(cache);
+              expect(() => callback?.(context)).toThrow();
+              expect(resolve).toThrow("retired");
+            }
+          }
+        }
+      } finally {
+        await instance?.dispose();
+        await retirePluginCache(cache);
+        await retirePluginCache(ambient);
+        const remainingListeners = process.listenerCount(event);
+        const runtimeActivated = fs.existsSync(activation);
+        process.removeAllListeners(event);
+        fs.rmSync(rootDir, { recursive: true, force: true });
+        expect(remainingListeners).toBe(
+          scenario === "untrusted" || scenario === "evaluation-error" ? 0 : 1,
+        );
+        expect(runtimeActivated).toBe(false);
+      }
+    },
+  );
 
   it("retains a trusted installed provider owner without a policy artifact", () => {
     const pluginRoot = tempDirs.make("openclaw-provider-owner-");

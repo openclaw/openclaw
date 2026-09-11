@@ -4,6 +4,7 @@
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { isAssistantMessageWithContent, isThinkingBlock } from "../thinking-signatures.js";
 import { log } from "./logger.js";
@@ -492,15 +493,17 @@ async function retryStreamWithoutThinking(
   notify: () => Promise<void>,
 ): Promise<AssistantMessage> {
   const retryStream = retry();
-  const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
-  for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
-    outer.push(chunk as Parameters<typeof outer.push>[0]);
-  }
-  const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
-  if (isSuccessfulRecoveryRetryResult(result)) {
-    await notify();
-  }
-  return result as AssistantMessage;
+  return await runPluginStreamConsumer(retryStream, async () => {
+    const resolvedRetry = await retryStream;
+    for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
+      outer.push(chunk as Parameters<typeof outer.push>[0]);
+    }
+    const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
+    if (isSuccessfulRecoveryRetryResult(result)) {
+      await notify();
+    }
+    return result as AssistantMessage;
+  });
 }
 
 async function pumpStreamWithRecovery(
@@ -512,29 +515,31 @@ async function pumpStreamWithRecovery(
 ): Promise<AssistantMessage> {
   let yieldedOutput = false;
   try {
-    const resolved = stream instanceof Promise ? await stream : stream;
-    for await (const chunk of resolved as AsyncIterable<unknown>) {
-      if (isAssistantMessageErrorEvent(chunk)) {
-        if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
-          if (yieldedOutput) {
-            log.warn(
-              `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-            );
-          } else {
-            sessionMeta.recoveredAnthropicThinking = true;
-            log.warn(
-              `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-            );
-            return retryStreamWithoutThinking(outer, retry, notify);
+    return await runPluginStreamConsumer(stream, async () => {
+      const resolved = await stream;
+      for await (const chunk of resolved as AsyncIterable<unknown>) {
+        if (isAssistantMessageErrorEvent(chunk)) {
+          if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
+            if (yieldedOutput) {
+              log.warn(
+                `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+              );
+            } else {
+              sessionMeta.recoveredAnthropicThinking = true;
+              log.warn(
+                `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+              );
+              return retryStreamWithoutThinking(outer, retry, notify);
+            }
           }
+        } else {
+          yieldedOutput = true;
         }
-      } else {
-        yieldedOutput = true;
+        outer.push(chunk as Parameters<typeof outer.push>[0]);
       }
-      outer.push(chunk as Parameters<typeof outer.push>[0]);
-    }
-    const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
-    return result as AssistantMessage;
+      const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
+      return result as AssistantMessage;
+    });
   } catch (error: unknown) {
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
       throw error;
@@ -601,18 +606,20 @@ export function wrapAnthropicStreamWithRecovery(
 
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      return stream.then(
-        (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
-        (error: unknown) => {
-          if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-            throw error;
-          }
-          requestMeta.recoveredAnthropicThinking = true;
-          log.warn(
-            `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-          );
-          return wrapRetryStreamWithRecoveryNotification(retry(), notify);
-        },
+      return runPluginStreamConsumer(stream, () =>
+        stream.then(
+          (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
+          (error: unknown) => {
+            if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+              throw error;
+            }
+            requestMeta.recoveredAnthropicThinking = true;
+            log.warn(
+              `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
+            );
+            return wrapRetryStreamWithRecoveryNotification(retry(), notify);
+          },
+        ),
       ) as ReturnType<StreamFn>;
     }
     return createRecoveryStream(stream, requestMeta, retry, notify);

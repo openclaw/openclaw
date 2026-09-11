@@ -331,6 +331,47 @@ describe("mutable update execution", () => {
         expect(mocks.validateCanary).not.toHaveBeenCalled();
       }),
   );
+  it("retains the live update run when stopped-service context capture fails", async () => {
+    await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
+      const control = path.join(dir, "leases");
+      await fs.mkdir(control);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+      const env = { OPENCLAW_STATE_DIR: dir };
+      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const params = executionParams("package");
+      params.root = dir;
+      params.opts.run = { runId, env };
+      mocks.maybeStopService.mockImplementation(async () => ({
+        ...inspectOrStopService("prepare"),
+        serviceEnv: env,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: dir,
+          fingerprint: "original",
+          refreshDefinition: false,
+        },
+      }));
+      mocks.captureManagedContext.mockRejectedValueOnce(
+        new Error("fixture config became unreadable"),
+      );
+      let recoveryRun: typeof params.opts.run;
+      mocks.maybeRestartService.mockImplementation(async (request) => {
+        recoveryRun = request.updateRun;
+        recoveryRun?.executorFence?.assertCurrent();
+        return "healthy";
+      });
+      await withUpdateCommandExecutor(runId, async (executor) => {
+        params.opts.run!.executorFence = await executor.enter(dir, { preflight: true });
+        const result = await executeMutableUpdate(params);
+        expect(result?.result.status).toBe("error");
+        expect(mocks.maybeRestartService).toHaveBeenCalledOnce();
+        expect(recoveryRun).toBe(params.opts.run);
+        expect(mocks.serviceStopped).toBe(true);
+        expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it("refuses service admission before mutable startup housekeeping", async () => {
     mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
       if (handoffFromGateway) {
@@ -410,6 +451,117 @@ describe("mutable update execution", () => {
             outcome === "incompatible" ? "plugin-incompatible" : "database-schema-preflight",
           );
         }
+      });
+    },
+  );
+
+  it.each(["registry", "artifact", "artifact-state-change"] as const)(
+    "refuses incompatible staged %s schemas before candidate rehearsal or activation",
+    async (target) => {
+      await withTestDir({ prefix: "openclaw-staged-schema-admission-" }, async (stage) => {
+        await fs.writeFile(
+          path.join(stage, "package.json"),
+          JSON.stringify({
+            name: "openclaw",
+            version: "2026.7.1",
+            openclaw: { schemaVersions: { state: 1, agent: 1 } },
+          }),
+        );
+        let databaseAdvanced = target !== "artifact-state-change";
+        mocks.pluginPreflight.mockImplementation(async () => {
+          databaseAdvanced = true;
+        });
+        mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
+          incompatible:
+            versions?.state === 1 && databaseAdvanced
+              ? [
+                  {
+                    kind: "state",
+                    path: "/fixture/default/state.sqlite",
+                    foundVersion: 17,
+                    supportedVersion: 1,
+                  },
+                ]
+              : [],
+          indeterminate: [],
+        }));
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
+          await validateCandidate(stage);
+          await beforeActivate();
+          return successfulUpdate;
+        });
+        const params = executionParams("package");
+        if (target !== "registry") {
+          params.tag = "/tmp/candidate.tgz";
+          params.packageInstallSpec = "/tmp/candidate.tgz";
+          params.packageTargetVersion = undefined;
+          params.packageTargetSchemaVersions = undefined;
+        }
+
+        const execution = await executeMutableUpdate(params);
+
+        expect(mocks.validateCanary.mock.calls.length).toBe(0);
+        expect(execution).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-schema-preflight" },
+        });
+        expect(mocks.serviceStopped).toBe(false);
+        if (target !== "registry") {
+          expect(mocks.pluginPreflight).toHaveBeenCalledTimes(
+            target === "artifact-state-change" ? 1 : 0,
+          );
+          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { metadata: "missing", openclaw: undefined },
+    { metadata: "malformed", openclaw: { schemaVersions: { state: "15", agent: 19 } } },
+  ])(
+    "retains registry schema admission when staged metadata is $metadata",
+    async ({ openclaw }) => {
+      await withTestDir({ prefix: "openclaw-staged-schema-retention-" }, async (stage) => {
+        await fs.writeFile(
+          path.join(stage, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.9.2", openclaw }),
+        );
+        let databaseAdvanced = false;
+        mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
+          incompatible:
+            databaseAdvanced && versions?.state === 15
+              ? [
+                  {
+                    kind: "state",
+                    path: "/fixture/default/state.sqlite",
+                    foundVersion: 17,
+                    supportedVersion: 15,
+                  },
+                ]
+              : [],
+          indeterminate: [],
+        }));
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
+          databaseAdvanced = true;
+          await validateCandidate(stage);
+          await beforeActivate();
+          return successfulUpdate;
+        });
+
+        const execution = await executeMutableUpdate({
+          ...executionParams("package"),
+          tag: "2026.9.2",
+          packageInstallSpec: "openclaw@2026.9.2",
+          packageTargetVersion: "2026.9.2",
+        });
+
+        expect(mocks.validateCanary.mock.calls.length).toBe(0);
+        expect(execution).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-schema-preflight" },
+        });
+        expect(mocks.serviceStopped).toBe(false);
       });
     },
   );

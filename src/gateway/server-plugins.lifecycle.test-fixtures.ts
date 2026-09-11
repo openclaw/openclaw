@@ -35,6 +35,7 @@ export type InstanceBindingProbeCoordinator = {
   runtimes: PluginRuntime[];
   serviceStarts: number;
   serviceStops: number;
+  gatewayStops: number[];
   onServiceStop?: () => void;
   serviceStopCompletion: ReturnType<typeof createDeferred<void>>;
   serviceStopFailure?: "rejection" | "timeout";
@@ -97,6 +98,7 @@ export function installInstanceBindingProbeCoordinator(options?: {
     runtimes: [],
     serviceStarts: 0,
     serviceStops: 0,
+    gatewayStops: [],
     serviceStopCompletion: createDeferred(),
     ...(options?.channels ? { channelProof: { events: [], monitors: [], observations: [] } } : {}),
     ...(options?.serviceStopFailure ? { serviceStopFailure: options.serviceStopFailure } : {}),
@@ -135,6 +137,7 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
     const coordinator = globalThis[Symbol.for("openclaw.test.gatewayInstanceBindingProbe")];
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
+    api.on("gateway_stop", () => { coordinator.gatewayStops.push(registryId); });
     if (coordinator.serviceStopFailure) {
       api.registerService({
         id: "instance-binding-service",

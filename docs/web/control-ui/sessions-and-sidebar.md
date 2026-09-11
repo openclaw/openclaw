@@ -51,7 +51,8 @@ cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
 automatically. Copy it into the composer to start a new attempt. **Show earlier
 messages** pages through messages that are still waiting or were stopped before
-processing; **Show latest messages** returns to the newest page. A long message
+processing; **Show latest messages** returns to the newest page. Incoming activity
+refreshes the page you are reading without changing your selection. A long message
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
 

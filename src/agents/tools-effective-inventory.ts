@@ -236,19 +236,18 @@ type ToolInventoryRuntimeModelContext = ReturnType<
 /** Keeps dynamic model hooks owned and scoped until inventory projection finishes. */
 export async function acquireEffectiveToolInventoryRuntimeModelContext(
   params: Parameters<typeof resolveStaticToolInventoryRuntimeModelContext>[0],
-): Promise<{
-  run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T) => T;
-  release: () => void;
-}> {
+): Promise<
+  { run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T) => T } & AsyncDisposable
+> {
   const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
   if (staticContext.runtimeModel) {
-    return { run: (project) => project(staticContext), release: () => {} };
+    return { run: (project) => project(staticContext), [Symbol.asyncDispose]: async () => {} };
   }
 
   const provider = normalizeProviderId(params.modelProvider ?? "");
   const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
-    return { run: (project) => project({}), release: () => {} };
+    return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
@@ -274,10 +273,11 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
     });
     const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
     if (!runtimeModel) {
-      return { run: (project) => project({}), release: () => {} };
+      return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
     }
     const context = { modelApi: runtimeModel.api, runtimeModel };
     let released = false;
+    let disposal: Promise<void> | undefined;
     const acquired = {
       run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T): T => {
         if (released) {
@@ -285,18 +285,16 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
         }
         return withPluginRuntimeGenerationScope(lease.snapshot, () => project(context));
       },
-      release: () => {
-        if (!released) {
-          released = true;
-          lease.release();
-        }
+      [Symbol.asyncDispose]() {
+        released = true;
+        return (disposal ??= lease[Symbol.asyncDispose]());
       },
     };
     transferred = true;
     return acquired;
   } finally {
     if (!transferred) {
-      lease.release();
+      await lease[Symbol.asyncDispose]();
     }
   }
 }

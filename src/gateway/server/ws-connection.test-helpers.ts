@@ -108,13 +108,22 @@ export function attachGatewayWsForTest(params: {
     }),
   } as unknown as WebSocketServer;
   const socket = params.socket ?? createGatewayWsTestSocket();
+  const transportEvents = new EventEmitter();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: {
+    socket: Object.assign(transportEvents, {
       remoteAddress: socket["_socket"].remoteAddress,
       localAddress: socket["_socket"].localAddress,
       localPort: socket["_socket"].localPort,
-    },
+      timeout: 0,
+      timeoutTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+      setTimeout(ms: number) {
+        clearTimeout(this.timeoutTimer);
+        this.timeout = ms;
+        this.timeoutTimer = ms ? setTimeout(() => transportEvents.emit("timeout"), ms) : undefined;
+        return this;
+      },
+    }),
   };
   (params.prepareIngressAttribution ?? prepareGatewayIngressAttribution)({
     req: upgradeReq as never,

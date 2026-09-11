@@ -117,7 +117,7 @@ describe("image model selection ownership", () => {
               ? "final"
               : "plain";
         const run = async () => {
-          let release: (() => void) | undefined;
+          let runtimeResources: AsyncDisposable | undefined;
           try {
             const runtime = await resolveImageRuntime(
               {
@@ -128,7 +128,7 @@ describe("image model selection ownership", () => {
                 preparedModelRuntime: snapshot,
               },
               (resources) => {
-                release = resources.release;
+                runtimeResources = resources;
               },
             );
             expect(runtime.model).toMatchObject({
@@ -138,7 +138,7 @@ describe("image model selection ownership", () => {
               baseUrl,
             });
           } finally {
-            release?.();
+            await runtimeResources?.[Symbol.asyncDispose]();
           }
         };
         if (scoped) {

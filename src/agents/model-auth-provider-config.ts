@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -31,7 +32,6 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
 import {
@@ -100,8 +100,8 @@ function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: 
 export function resolveProviderConfigSecretInput(
   cfg: OpenClawConfig | undefined,
   provider: string,
+  sourceConfig = resolveProviderSourceConfig(cfg, provider),
 ) {
-  const sourceConfig = resolveProviderSourceConfig(cfg, provider);
   const entry = resolveMergedModelProviderEntry(sourceConfig, provider);
   const path = entry ? `models.providers.${entry.providerKey}.apiKey` : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
@@ -405,11 +405,16 @@ export function canUseProfileAsProviderEntryApiKey(params: {
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(
+    params.cfg,
+    params.provider,
+    params.sourceConfig,
+  );
   if (ref) {
     return { kind: "none" };
   }

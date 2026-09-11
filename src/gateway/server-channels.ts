@@ -51,6 +51,7 @@ import {
   withPluginHttpRouteRegistry,
   type PluginHttpRouteHandoff,
 } from "../plugins/http-registry.js";
+import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
@@ -790,9 +791,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           const account = plugin.config.resolveAccount(cfg, id);
           const accountContext = createAccountContext(channelId, id, cfg, account, abort.signal);
           if (plugin.gateway?.stopAccount) {
+            const stopAccount = plugin.gateway.stopAccount;
+            const gateway = plugin.gateway;
             lifetime.teardown = {
               context: accountContext,
-              run: plugin.gateway.stopAccount.bind(plugin.gateway),
+              run: (context) =>
+                runPluginCleanup(stopAccount, () => stopAccount.call(gateway, context)),
             };
           }
           const described = plugin.config.describeAccount?.(account, cfg);
@@ -1234,8 +1238,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
     const cfg = getRuntimeConfig();
+    // Enter the registered owner's cleanup scope before accessing config getters.
     const configuredAccountIds =
-      !accountId || optsLocal.routeHandoff ? (plugin?.config.listAccountIds(cfg) ?? []) : [];
+      !accountId || optsLocal.routeHandoff
+        ? plugin
+          ? runPluginCleanup(plugin, () => plugin.config.listAccountIds(cfg))
+          : []
+        : [];
     const knownIds = new Set<string>(
       accountId ? [accountId] : [...lifecycleIds, ...configuredAccountIds],
     );
@@ -1286,15 +1295,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             // even after publication removes the account or replaces its registration.
             let teardown = lifetime?.teardown;
             if (!lifetime && plugin?.gateway?.stopAccount) {
+              const stopAccount = plugin.gateway.stopAccount;
+              const gateway = plugin.gateway;
               teardown = {
                 context: createAccountContext(
                   channelId,
                   id,
                   cfg,
-                  plugin.config.resolveAccount(cfg, id),
+                  runPluginCleanup(plugin, () => plugin.config.resolveAccount(cfg, id)),
                   new AbortController().signal,
                 ),
-                run: plugin.gateway.stopAccount.bind(plugin.gateway),
+                run: (context) =>
+                  runPluginCleanup(stopAccount, () => stopAccount.call(gateway, context)),
               };
             }
             if (teardown) {

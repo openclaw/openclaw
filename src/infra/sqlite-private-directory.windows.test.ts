@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectorySync,
 } from "./sqlite-private-directory.js";
+import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -60,6 +62,61 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
       expect(listing).toContain("(OI)(CI)(F)");
       expect(listing).not.toContain("(I)");
     }
+  });
+
+  it("protects a new file before its Node descriptor opens and preserves an existing winner", () => {
+    const directory = tempDirs.make("openclaw-private-file-");
+    const file = path.join(directory, "private.sqlite");
+    const open = fsSync.openSync;
+    let inspected = false;
+    const spy = vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
+      if (path.basename(String(pathname)) === "private.sqlite") {
+        const script = [
+          `$acl = [IO.File]::GetAccessControl('${file.replaceAll("'", "''")}')`,
+          "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+          "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",
+        ].join("; ");
+        const acl = JSON.parse(
+          childProcess.execFileSync(
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-Command", script],
+            {
+              encoding: "utf8",
+            },
+          ),
+        );
+        expect(acl.protected).toBe(true);
+        expect(acl.owner).toBe(acl.user);
+        expect(acl.rules.map((rule: { sid: string }) => rule.sid).toSorted()).toEqual(
+          [acl.user, "S-1-5-18", "S-1-5-32-544"].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        );
+        for (const rule of acl.rules) {
+          expect(rule).toMatchObject({ rights: 2032127, inherited: false, allow: 0 });
+        }
+        expect(() => fsSync.renameSync(file, file + ".replaced")).toThrow();
+        inspected = true;
+      }
+      return open(pathname, flags, mode);
+    });
+    let descriptor: number | undefined;
+    try {
+      descriptor = createPrivateWindowsFile(file);
+      expect(inspected).toBe(true);
+      fsSync.writeSync(descriptor, "winner");
+      fsSync.fsyncSync(descriptor);
+    } finally {
+      spy.mockRestore();
+      if (descriptor !== undefined) {
+        fsSync.closeSync(descriptor);
+      }
+    }
+    expect(() => createPrivateWindowsFile(file)).toThrow(
+      expect.objectContaining({ code: "EEXIST" }),
+    );
+    expect(fsSync.readFileSync(file, "utf8")).toBe("winner");
+    expect(fsSync.statSync(file).nlink).toBe(1);
   });
 
   it("rejects concurrent creation, existing files, and junctions without modifying them", async () => {

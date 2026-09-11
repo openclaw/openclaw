@@ -2,8 +2,14 @@ import fs, { type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sql } from "kysely";
+import {
+  requireDirectorySync,
+  syncDirectorySync,
+  type DirectoryReceipt,
+} from "./directory-durability.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   withExistingSqliteRollbackDatabase,
@@ -13,11 +19,32 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
+import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
 export type LeaseRow = { owner: string; payload_json: string; updated_at: number };
 export type LeaseTable = LeaseRow & { install_root: string };
 export const leaseQueries = (db: HandoffDatabase) =>
   getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
+
+function initializeLeaseSchema(db: HandoffDatabase): void {
+  executeSqliteQuerySync(
+    db,
+    leaseQueries(db)
+      .schema.createTable("managed_update_handoffs")
+      .ifNotExists()
+      .addColumn("install_root", "text", (column) => column.notNull().primaryKey())
+      .addColumn("owner", "text", (column) => column.notNull())
+      .addColumn("payload_json", "text", (column) => column.notNull())
+      .addColumn("updated_at", "integer", (column) => column.notNull())
+      .modifyEnd(sql`STRICT`),
+  );
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
 
 export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
   databasePath: string;
@@ -38,9 +65,9 @@ function assertPath(stat: Stats, kind: "directory" | "file") {
 }
 
 /**
- * The store chmods the file to 0600 after every write, so excess read bits on a
- * path we own are its own interrupted work: `open` creates the file under the
- * caller's umask, and a crash before that chmod leaves it readable. Restore the
+ * Earlier writers created the file under the caller's umask and chmodded it
+ * after schema creation. Excess read bits on a path we own can therefore be
+ * that interrupted work. Restore the
  * invariant instead of refusing, which would otherwise lock the product out of its
  * own state for every install root until an operator deleted the file by hand.
  *
@@ -66,6 +93,56 @@ function repairPrivateFileMode(databasePath: string, stat: Stats): Stats {
   }
   fs.chmodSync(databasePath, 0o600);
   return fs.lstatSync(databasePath);
+}
+
+function assertSamePath(stat: Stats, expected: Stats, kind: "directory" | "file"): void {
+  assertPath(stat, kind);
+  if (
+    (process.platform === "win32" &&
+      (stat.dev === 0 || stat.ino === 0 || expected.dev === 0 || expected.ino === 0)) ||
+    !sameFileIdentity(stat, expected)
+  ) {
+    throw new Error("managed handoff lease " + kind + " changed during initialization");
+  }
+}
+
+function createMissingDatabaseFile(databasePath: string, parentReceipt: DirectoryReceipt): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor =
+      process.platform === "win32"
+        ? createPrivateWindowsFile(databasePath)
+        : fs.openSync(
+            databasePath,
+            fs.constants.O_RDWR |
+              fs.constants.O_CREAT |
+              fs.constants.O_EXCL |
+              fs.constants.O_NOFOLLOW,
+            0o600,
+          );
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") {
+      throw error;
+    }
+  }
+  try {
+    if (descriptor !== undefined) {
+      fs.fchmodSync(descriptor, 0o600);
+      // SQLite commits schema on this inode; a crash here leaves its existing empty-file recovery.
+      fs.fsyncSync(descriptor);
+    }
+    const identity =
+      descriptor === undefined
+        ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath))
+        : fs.fstatSync(descriptor);
+    assertSamePath(fs.lstatSync(databasePath), identity, "file");
+    assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
+    requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
 }
 
 /** Capture only an already-admitted database, never provision one during recovery. */
@@ -144,28 +221,27 @@ export function createManagedHandoffLeaseDatabase(
       }
       fs.chmodSync(dir, 0o700);
     }
-    assertPath(fs.lstatSync(dir), "directory");
-    if (!write || fs.existsSync(databasePath)) {
-      assertPath(repairPrivateFileMode(databasePath, fs.lstatSync(databasePath)), "file");
+    const directoryIdentity = fs.lstatSync(dir);
+    assertPath(directoryIdentity, "directory");
+    if (write && !fs.existsSync(databasePath)) {
+      createMissingDatabaseFile(databasePath, {
+        path: dir,
+        realPath: fs.realpathSync.native(dir),
+        identity: directoryIdentity,
+      });
     }
-    const db = openNodeSqliteDatabase(databasePath, { readOnly: !write });
+    const databaseIdentity = repairPrivateFileMode(databasePath, fs.lstatSync(databasePath));
+    assertPath(databaseIdentity, "file");
+    const db = openNodeSqliteDatabase(
+      write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
+      { readOnly: !write },
+    );
     try {
+      assertSamePath(fs.lstatSync(dir), directoryIdentity, "directory");
+      assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
       setSqliteBusyTimeout(db, 5000);
       if (write) {
-        // Narrow the window the repair above exists for: `open` may have just
-        // created the file, and creating the table writes to disk before this.
-        fs.chmodSync(databasePath, 0o600);
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db)
-            .schema.createTable("managed_update_handoffs")
-            .ifNotExists()
-            .addColumn("install_root", "text", (column) => column.notNull().primaryKey())
-            .addColumn("owner", "text", (column) => column.notNull())
-            .addColumn("payload_json", "text", (column) => column.notNull())
-            .addColumn("updated_at", "integer", (column) => column.notNull())
-            .modifyEnd(sql`STRICT`),
-        );
+        initializeLeaseSchema(db);
       }
       return operation(db);
     } finally {

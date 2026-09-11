@@ -8,7 +8,7 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -49,7 +49,7 @@ async function listSavedSetupInferenceCandidates(params: {
   deps: DetectSetupInferenceDeps;
   signal: AbortSignal;
 }): Promise<SetupInferenceCandidate[]> {
-  const { loadProviderAuthMethod } = await import("./setup-inference-credentials.js");
+  const { withSetupProviderAuthMethod } = await import("./setup-inference-credentials.js");
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const candidates: SetupInferenceCandidate[] = [];
@@ -66,10 +66,12 @@ async function listSavedSetupInferenceCandidates(params: {
       : params.choices.find((entry) => choiceMatchesCredential(entry, credential));
     let modelRef = saved?.modelRef;
     if (!modelRef && choice) {
-      const loaded = await loadProviderAuthMethod({ ...params, choice });
+      const loaded = await withSetupProviderAuthMethod({ ...params, choice }, ({ method }) => ({
+        modelRef: method.starterModel,
+      }));
       params.signal.throwIfAborted();
       if (!("error" in loaded)) {
-        modelRef = loaded.method.starterModel;
+        modelRef = loaded.modelRef;
       }
     }
     if (!modelRef) {
@@ -335,61 +337,23 @@ async function discoverSetupInference(
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
   );
   if (discoveryChoices.length > 0) {
-    const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-    // Runtime metadata must be resolved with consent under this lease, not reused
-    // from option preparation before awaited CLI probes could permit a replacement.
-    const discovery = await withPluginLifecycleLease({ signal }, async () => {
-      let discoveryConfig = cfg;
-      const enabledChoices: ProviderAuthChoiceMetadata[] = [];
-      for (const choice of discoveryChoices) {
-        signal.throwIfAborted();
-        // Keep unaccepted choices visible, but do not import their runtime during discovery.
-        const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
-          workspaceDir: workspace,
-        });
-        signal.throwIfAborted();
-        if (!enabled.enabled) {
-          continue;
-        }
-        discoveryConfig = (deps.enablePluginInConfig ?? enablePluginInConfig)(
-          discoveryConfig,
-          choice.pluginId,
-        ).config;
-        enabledChoices.push(choice);
-      }
-      const providers = enabledChoices.length
-        ? (
-            deps.resolvePluginProviders ??
-            (await import("../plugins/providers.runtime.js")).resolvePluginProvidersCore
-          )({
-            config: discoveryConfig,
-            workspaceDir: workspace,
-            mode: "setup",
-            includeUntrustedWorkspacePlugins: false,
-            onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
-          })
-        : [];
-      return { discoveryConfig, enabledChoices, providers };
-    });
-    signal.throwIfAborted();
-    const discovered = await Promise.all(
-      discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
-        const provider = discovery.providers.find(
-          (candidate) =>
-            candidate.pluginId === choice.pluginId &&
-            normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-        );
+    const { probeSetupProviderChoices } = await import("../plugins/provider-setup-availability.js");
+    const discovered = await probeSetupProviderChoices(
+      {
+        config: cfg,
+        workspaceDir: workspace,
+        choices: discoveryChoices,
+        signal,
+        enablePluginInConfig: deps.enablePluginInConfig,
+        resolvePluginProviders: deps.resolvePluginProviders,
+      },
+      async (choice, provider, context): Promise<SetupInferenceCandidate | null> => {
         const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
         if (!method?.appGuidedSetup) {
           return null;
         }
         try {
-          const candidate = await method.appGuidedSetup.detect({
-            config: discovery.discoveryConfig,
-            env: process.env,
-            workspaceDir: workspace,
-            signal,
-          });
+          const candidate = await method.appGuidedSetup.detect({ ...context, signal });
           signal.throwIfAborted();
           if (!candidate) {
             return null;
@@ -423,7 +387,7 @@ async function discoverSetupInference(
           );
           return null;
         }
-      }),
+      },
     );
     candidates.push(...discovered.filter((candidate) => candidate !== null));
   }

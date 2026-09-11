@@ -130,7 +130,7 @@ export async function executeMutableUpdate(
     admittedTargetSchemaVersions = versions;
   };
   const preflightPlugins = async (targetVersion: string | null) => {
-    await recheckSchemas(params.packageTargetSchemaVersions);
+    await recheckSchemas(admittedTargetSchemaVersions);
     const { preflightConfiguredNpmPluginTargets } =
       await import("./update-command-plugin-preflight.js");
     const context = admission!.contexts.at(-1)!;
@@ -141,7 +141,7 @@ export async function executeMutableUpdate(
       channel: params.channel,
       timeoutMs: params.updateStepTimeoutMs,
     });
-    await recheckSchemas(params.packageTargetSchemaVersions);
+    await recheckSchemas(admittedTargetSchemaVersions);
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
@@ -171,15 +171,6 @@ export async function executeMutableUpdate(
     params.installKind === "git"
       ? readCurrentGitUpdateRecovery(params.root)
       : verifyPackageUpdateRecovery(params.root);
-  const recoverStoppedService = async () =>
-    maybeRestartServiceAfterFailedMutableUpdate({
-      recovery: await originalRecovery(),
-      preManagedServiceStop,
-      jsonMode: Boolean(opts.json),
-      nodeRunner: params.packageUpdateNodeRunner,
-      timeoutMs: updateStepTimeoutMs,
-      invocationCwd: params.invocationCwd,
-    });
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -281,7 +272,15 @@ export async function executeMutableUpdate(
       }
     } catch (err) {
       params.stop();
-      await recoverStoppedService();
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        recovery: await originalRecovery(),
+        updateRun: opts.run,
+        preManagedServiceStop,
+        jsonMode: Boolean(opts.json),
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
+      });
       throw new Error(`Failed to capture managed gateway update state: ${String(err)}`, {
         cause: err,
       });
@@ -289,11 +288,10 @@ export async function executeMutableUpdate(
 
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
-      const updateLabel = params.updateInstallKind === "git" ? "Git updates" : "Package updates";
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         [
-          `${updateLabel} cannot run from inside the gateway service process.`,
+          `${params.updateInstallKind === "git" ? "Git updates" : "Package updates"} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${formatCliCommand("openclaw update")}\` from a terminal outside the gateway service.`,
         ].join("\n"),
@@ -313,20 +311,17 @@ export async function executeMutableUpdate(
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
   const readCandidateSource = async (env: NodeJS.ProcessEnv) => {
-    if (!params.legacyConfigPlan) {
-      return withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-      );
+    if (params.legacyConfigPlan) {
+      const context = await captureTargetDatabaseSchemaContext(env, {
+        legacyConfigPlan: params.legacyConfigPlan,
+      });
+      if (context.legacyConfigPlan) {
+        return { config: context.config, hash: context.configSnapshot.hash };
+      }
     }
-    const context = await captureTargetDatabaseSchemaContext(env, {
-      legacyConfigPlan: params.legacyConfigPlan,
-    });
-    if (!context.legacyConfigPlan) {
-      return withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-      );
-    }
-    return { config: context.config, hash: context.configSnapshot.hash };
+    return withOwnedManagedUpdateEnv(env, () =>
+      readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+    );
   };
   const validateCandidate = async (root: string) => {
     assertUpdateCommandRecovery(opts);
@@ -342,10 +337,19 @@ export async function executeMutableUpdate(
       assertCurrent?: () => void,
     ) => {
       signal?.throwIfAborted();
-      if (stagedPluginAdmission) {
-        // Explicit artifacts acquire their version from the private staged package,
-        // before rehearsal or activation can mutate any serving state.
-        try {
+      try {
+        if (params.updateInstallKind === "package") {
+          // The staged manifest owns schema support, including artifacts without registry metadata.
+          await recheckSchemas(
+            parsePackageOpenClawSchemaVersions(
+              await tryReadJson<unknown>(path.join(root, "package.json")),
+            ) ?? admittedTargetSchemaVersions,
+          );
+          signal?.throwIfAborted();
+          assertCurrent?.();
+        }
+        if (stagedPluginAdmission) {
+          // Explicit artifacts acquire their version before rehearsal or activation.
           await preflightPlugins(await readPackageVersion(root));
           signal?.throwIfAborted();
           assertCurrent?.();
@@ -354,12 +358,12 @@ export async function executeMutableUpdate(
           );
           signal?.throwIfAborted();
           assertCurrent?.();
-        } catch (error) {
-          if (error instanceof UpdatePreMutationError) {
-            candidateFailureReason = error.reason;
-          }
-          throw error;
         }
+      } catch (error) {
+        if (error instanceof UpdatePreMutationError) {
+          candidateFailureReason = error.reason;
+        }
+        throw error;
       }
       if (
         params.shouldRestart &&
@@ -460,9 +464,7 @@ export async function executeMutableUpdate(
       candidateFailureReason = undefined;
       // Repair's disposable state is gone; only surviving candidate changes may authorize activation.
       validation = await validate();
-      if (validation.status === "error") {
-        candidateFailureReason = validation.reason;
-      }
+      candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
     }
     if (validation.status === "ok" && !doctorConfigWrites && doctorConfigChanges.length) {
       const warning = createUpdateDoctorConfigWarningStep(root, doctorConfigChanges);
@@ -585,7 +587,9 @@ export async function executeMutableUpdate(
         getDoctorContext,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
-      result = await runPackageInstallUpdate(packageUpdate);
+      result = params.stagedPackage
+        ? await params.stagedPackage.run(packageUpdate)
+        : await runPackageInstallUpdate(packageUpdate);
     } else {
       result = await updateGitInstall({
         root: params.root,

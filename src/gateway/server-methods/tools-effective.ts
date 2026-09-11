@@ -415,7 +415,7 @@ async function resolveBaseToolsEffectiveInventory(
       }),
     );
   } finally {
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
   }
 }
 
@@ -574,7 +574,7 @@ async function projectMcpCatalog(params: {
       return appendMcpInventoryGroups({ base: params.base, mcpInventory });
     });
   } finally {
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
   }
 }
 

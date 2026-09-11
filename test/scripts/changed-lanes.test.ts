@@ -1249,7 +1249,6 @@ describe("scripts/changed-lanes", () => {
       "src/config/schema.test.ts",
       "src/plugins/manifest-registry.test.ts",
       "extensions/whatsapp/src/monitor.ts",
-      "src/gateway/server-runtime-state.ts",
       "scripts/docs-list.js",
       "docs/ci.md",
     ].map((file) => ({ paths: [file], selected: false })),

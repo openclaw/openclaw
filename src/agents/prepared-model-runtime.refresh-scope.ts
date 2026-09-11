@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
-  listConfiguredOwnerInputs,
   normalizePreparedModelRuntimeInput,
   ownerKey,
 } from "./prepared-model-runtime.owner.js";
+import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -98,6 +99,7 @@ export function updateOwnersForScopedRefresh(
     if (options.retireStandalone && owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
+      releasePreparedPluginPublication(owner);
       continue;
     }
     owner.generation += 1;

@@ -264,6 +264,9 @@ importers:
       ignore:
         specifier: 7.0.7
         version: 7.0.7
+      import-meta-resolve:
+        specifier: 4.2.0
+        version: 4.2.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0

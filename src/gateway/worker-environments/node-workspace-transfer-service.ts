@@ -702,6 +702,16 @@ export function createNodeWorkspaceTransferService(options: {
       );
     },
 
+    fenceEnvironment(environmentId: string, reason?: Error): void {
+      const context = contexts.get(environmentId);
+      // Abort synchronously so every in-flight response and capability for this owner is
+      // fenced at once; cleanup (scratch removal, map entry) settles behind the queue.
+      if (context && !context.abortController.signal.aborted) {
+        context.abortController.abort(reason ?? new Error("Worker environment credential revoked"));
+      }
+      void closeEnvironment(environmentId).catch(() => undefined);
+    },
+
     close: closeEnvironment,
 
     async closeAll(): Promise<void> {

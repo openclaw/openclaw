@@ -261,7 +261,7 @@ describe("prepared build candidate lifetime", () => {
       try {
         expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
         PreparedModelRuntimeOwnerNotPublishedError,
@@ -304,7 +304,7 @@ describe("prepared build candidate lifetime", () => {
         expect(mocks.discoverModels).toHaveBeenCalledOnce();
       } finally {
         finish.resolve();
-        await Promise.allSettled([first, retry?.then((lease) => lease.release())]);
+        await Promise.allSettled([first, retry?.then((lease) => lease[Symbol.asyncDispose]())]);
         await Promise.all(builds.mock.results.map((result) => result.value.completion));
         builds.mockRestore();
         vi.useRealTimers();
