@@ -14,7 +14,6 @@ import {
   parseSendPolicyCommandBody,
   parseSlashCommandOrNull,
 } from "./reply/commands-slash-parse.js";
-import { isModelIndependentDirectiveCommand } from "./reply/directive-handling.parse.js";
 import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
 
 type ListThinkingLevels = (
@@ -592,7 +591,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
-      modelIndependent: (args) => isModelIndependentDirectiveCommand("trace", args),
+      modelIndependent: "directive",
       args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
       argsMenu: "auto",
     }),
@@ -617,7 +616,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
-      modelIndependent: (args) => isModelIndependentDirectiveCommand("reasoning", args),
+      modelIndependent: "directive",
       textAliases: ["/reasoning", "/reason"],
       args: [
         defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
@@ -625,7 +624,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
-      modelIndependent: (args) => isModelIndependentDirectiveCommand("elevated", args),
+      modelIndependent: "directive",
       textAliases: ["/elevated", "/elev"],
       args: [
         defineCommandArgument("mode", "on, off, ask, or full", {
@@ -635,7 +634,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
-      modelIndependent: (args) => isModelIndependentDirectiveCommand("exec", args),
+      modelIndependent: "directive",
       args: [
         defineCommandArgument("host", "auto, sandbox, gateway, or node", {
           choices: ["auto", "sandbox", "gateway", "node"],
@@ -657,9 +656,7 @@ export function buildBuiltinChatCommands(
       "options",
       "essential",
       {
-        modelIndependent: (args) =>
-          !shouldForwardModelCommandToServer(args) ||
-          isModelIndependentDirectiveCommand("model", args),
+        modelIndependent: "directive",
         args: [
           defineCommandArgument(
             "model",
@@ -673,7 +670,7 @@ export function buildBuiltinChatCommands(
       modelIndependent: "always",
     }),
     defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
-      modelIndependent: (args) => isModelIndependentDirectiveCommand("queue", args),
+      modelIndependent: "directive",
       args: [
         defineCommandArgument("mode", "queue mode", {
           choices: ["steer", "followup", "collect", "interrupt"],

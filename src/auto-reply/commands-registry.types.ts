@@ -85,7 +85,7 @@ export type ChatCommandDefinition = {
   /** Handler is safe to resolve while another run owns the session execution slot. */
   activeRunSafe?: true;
   /** Browser command forms that do not need the selected chat model; authorization still applies. */
-  modelIndependent?: "always" | "no-args" | ((args: string) => boolean);
+  modelIndependent?: "always" | "no-args" | "directive" | ((args: string) => boolean);
 };
 
 /** Provider-facing native command registration shape. */

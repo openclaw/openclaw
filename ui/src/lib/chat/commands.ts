@@ -5,8 +5,15 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
-import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import {
+  buildBuiltinChatCommands,
+  shouldForwardModelCommandToServer,
+} from "../../../../src/auto-reply/commands-registry.shared.js";
 import type { ChatCommandDefinition } from "../../../../src/auto-reply/commands-registry.types.js";
+import {
+  isModelIndependentDirectiveCommand,
+  resolveReplyDirectiveCommand,
+} from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -705,6 +712,14 @@ export function isModelIndependentChatCommand(text: string): boolean {
     return false;
   }
   const policy = parsed.command.modelIndependent;
+  if (policy === "directive") {
+    const name = resolveReplyDirectiveCommand(parsed.command.key);
+    return (
+      name !== undefined &&
+      ((name === "model" && !shouldForwardModelCommandToServer(parsed.args)) ||
+        isModelIndependentDirectiveCommand(name, parsed.args))
+    );
+  }
   return (
     policy === "always" ||
     (policy === "no-args"
