@@ -73,7 +73,7 @@ export class TerminalIntentQueue {
 
   private persist(): void {
     if (this.persistent) {
-      persistTerminalActions(this.actions.filter((action) => action.kind !== "catalog"));
+      persistTerminalActions(this.actions);
     }
   }
 

@@ -2,13 +2,27 @@
 // local storage could let one Control UI window steal another window's shells.
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { TerminalPanelAction } from "./terminal-panel-session-types.ts";
+import type {
+  TerminalPanelAction,
+  TerminalPanelCatalogReference,
+} from "./terminal-panel-session-types.ts";
 
 const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
 const TERMINAL_ACTIONS_KEY = "openclaw.terminal.actions.v1";
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function catalogReference(value: unknown): TerminalPanelCatalogReference | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return nonEmptyString(value.catalogId) &&
+    nonEmptyString(value.hostId) &&
+    nonEmptyString(value.threadId)
+    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
+    : null;
 }
 
 function terminalAction(value: unknown): TerminalPanelAction | null {
@@ -30,6 +44,12 @@ function terminalAction(value: unknown): TerminalPanelAction | null {
   }
   if (value.kind === "restore" || value.kind === "open") {
     return { kind: value.kind, agentId };
+  }
+  // v2026.9.4 persisted pending catalog requests. Drain those once through the
+  // existing dock owner; new catalog requests use non-persistent page queues.
+  if (value.kind === "catalog") {
+    const catalog = catalogReference(value.catalog);
+    return catalog ? { kind: "catalog", agentId, catalog } : null;
   }
   return null;
 }
