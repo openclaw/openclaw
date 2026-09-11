@@ -73,7 +73,7 @@ const expectations: Record<
   "legacy-roster.json": { providers: ["openai"] },
   "models-allow.json": { providers: ["fixture-provider"], model: "fixture-model" },
   "oauth-only.json": { providers: ["openai"] },
-  "operator-container.json": { providers: ["xai"], model: "grok-4.3" },
+  "operator-container.json": { providers: ["openai", "xai"], model: "grok-4.3" },
   "operator-host.json": { providers: ["xai"], model: "grok-4.3" },
   "peanutto.json": {
     providers: ["openai", "xai", "ollama"],
