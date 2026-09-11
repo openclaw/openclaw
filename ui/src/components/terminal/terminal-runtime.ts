@@ -1,5 +1,6 @@
 import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeTerminalKeyboardReserve } from "./terminal-keyboard-reserve.ts";
 
 function isEventListener(value: unknown): value is EventListener {
   return typeof value === "function";
@@ -26,6 +27,9 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   const mouseUpCandidate = asOptionalRecord(terminal)?.handleMouseUp;
   let handleMouseUp = isEventListener(mouseUpCandidate) ? mouseUpCandidate : undefined;
   let disposed = false;
+  // Soft-keyboard viewport reserve for Android Chrome. See
+  // observeTerminalKeyboardReserve for the full explanation.
+  const cleanupKeyboardReserve = observeTerminalKeyboardReserve(options.parent);
   // Ghostty 0.4.0 drops resize notifications during its 50ms fit lock. Measure
   // through its public addon, but let one owner apply every final layout size.
   controller.fit = () => {
@@ -44,6 +48,7 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
     disposed = true;
     observer?.disconnect();
     measurement.dispose();
+    cleanupKeyboardReserve();
     // ghostty-web 0.4.0 clears isOpen before cleanup, skipping this listener removal.
     if (handleMouseUp) {
       document.removeEventListener("mouseup", handleMouseUp);
