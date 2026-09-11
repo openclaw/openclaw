@@ -317,6 +317,17 @@ export function isChannelProgressAttentionLine(line: string | ChannelProgressDra
   );
 }
 
+/** Lines that reserve bounded progress capacity. */
+export function isChannelProgressPriorityLine(line: string | ChannelProgressDraftLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return (
+    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
+  );
+}
+
 const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
@@ -1217,11 +1228,32 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
   /** Merge limits for rolling progress drafts. */
   params: { maxLines: number },
 ): TLine[] {
+  // The shipped SDK lacks the compositor's effective preview mode and keeps its attention policy.
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressAttentionLine);
+}
+
+export function mergeChannelProgressDraftLineForStreaming<
+  TLine extends string | ChannelProgressDraftLine,
+>(lines: TLine[], line: TLine, params: { maxLines: number; toolProgress: boolean }): TLine[] {
+  return mergeProgressDraftLine(
+    lines,
+    line,
+    params.maxLines,
+    params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
+  );
+}
+
+function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  line: TLine,
+  limit: number,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
+): TLine[] {
   const normalized = normalizeChannelProgressDraftLineIdentity(line);
   if (!normalized) {
     return lines;
   }
-  const maxLines = Math.max(1, params.maxLines);
+  const maxLines = Math.max(1, limit);
   const lineKeys = resolveProgressDraftLineMergeKeys(line);
   if (lineKeys.length > 0) {
     const existingIndex = lines.findIndex((entry) =>
@@ -1237,7 +1269,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       }
       const next = [...lines];
       next[existingIndex] = replacement;
-      return limitProgressDraftLines(next, maxLines);
+      return limitProgressDraftLines(next, maxLines, isPriorityLine);
     }
   } else {
     const previous = lines.at(-1);
@@ -1245,21 +1277,20 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return lines;
     }
   }
-  return limitProgressDraftLines([...lines, line], maxLines);
+  return limitProgressDraftLines([...lines, line], maxLines, isPriorityLine);
 }
 
 function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine>(
   lines: TLine[],
   maxLines: number,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
 ): TLine[] {
   let attentionSlots = maxLines;
-  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressAttentionLine).length);
+  let ordinarySlots = Math.max(0, maxLines - lines.filter(isPriorityLine).length);
   // Keep attention through tool/commentary bursts without changing arrival order.
   return lines
     .toReversed()
-    .filter((line) =>
-      isChannelProgressAttentionLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
-    )
+    .filter((line) => (isPriorityLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0))
     .toReversed();
 }
 
@@ -1307,7 +1338,7 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
   return [...new Set(keys)];
 }
 
-export function formatChannelProgressDraftText(params: {
+type ChannelProgressDraftTextParams = {
   /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
   /** Channel streaming config source for progress label and bounds. */
@@ -1327,7 +1358,27 @@ export function formatChannelProgressDraftText(params: {
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
   diffStat?: ChannelProgressDraftDiffStat;
-}): string {
+};
+
+export function formatChannelProgressDraftText(params: ChannelProgressDraftTextParams): string {
+  return formatProgressDraftText(params, isChannelProgressAttentionLine);
+}
+
+export function formatChannelProgressDraftTextForStreaming(
+  params: ChannelProgressDraftTextParams & { toolProgress: boolean },
+): string {
+  return formatProgressDraftText(
+    params,
+    params.toolProgress && params.presentation !== "summary"
+      ? isChannelProgressPriorityLine
+      : isChannelProgressAttentionLine,
+  );
+}
+
+function formatProgressDraftText(
+  params: ChannelProgressDraftTextParams,
+  isPriorityLine: typeof isChannelProgressAttentionLine,
+): string {
   const narration = compactProgressText(
     params.narration?.replace(/\s+/g, " ").trim() ?? "",
     PROGRESS_DRAFT_NARRATION_MAX_CHARS,
@@ -1335,7 +1386,7 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
-  const attention = params.lines.filter(isChannelProgressAttentionLine);
+  const attention = params.lines.filter(isPriorityLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
     maxLines: maxLines - attention.length,
     maxLineChars,
@@ -1353,10 +1404,7 @@ export function formatChannelProgressDraftText(params: {
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
   // Attention owns capacity before plans and routine progress consume the window.
-  const visibleLines = [
-    ...params.lines.filter((line) => !isChannelProgressAttentionLine(line)),
-    ...attention,
-  ];
+  const visibleLines = [...params.lines.filter((line) => !isPriorityLine(line)), ...attention];
   const renderedToolLines = visibleLines
     .map((line) => {
       if (params.presentation === "summary") {

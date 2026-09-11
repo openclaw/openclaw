@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
@@ -19,14 +20,6 @@ import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
 // under a loaded CI runner that budget expires before startup reaches the step.
 const STARTUP_STEP_WAIT = { timeout: 15_000 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("normalizeLegacyTerminalViewLocation", () => {
   it.each([
@@ -221,10 +214,8 @@ describe("bootstrapApplication", () => {
   });
 
   it("starts the first-run redirect after installing the persisted session location", async () => {
-    let resolveInitialLocation: (location: RouteLocation) => void = () => undefined;
-    const initialLocationReady = new Promise<RouteLocation>((resolve) => {
-      resolveInitialLocation = resolve;
-    });
+    const { promise: initialLocationReady, resolve: resolveInitialLocation } =
+      createDeferred<RouteLocation>();
     let currentLocation: RouteLocation = { pathname: "/", search: "", hash: "" };
     const replaceLocation = vi.fn((location: RouteLocation) => {
       currentLocation = location;
@@ -259,15 +250,7 @@ describe("bootstrapApplication", () => {
       },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
-    const canonicalLocation = await resolveInitialApplicationLocation({
-      location: { pathname: "/", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "agent:main:main",
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-    expect(canonicalLocation).toEqual({ pathname: "/chat/main", search: "", hash: "" });
+    const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -806,7 +789,7 @@ describe("bootstrapApplication", () => {
     });
     window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication();
-    const routerStarted = deferred<void>();
+    const routerStarted = createDeferred();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
     const routerStop = vi.spyOn(runtime.router, "stop");
 

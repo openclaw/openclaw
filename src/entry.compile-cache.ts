@@ -105,15 +105,16 @@ type OpenClawCompileCacheRespawnPlan = {
 };
 
 type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string) => void;
+  writeError: (message: string) => void | Promise<void>;
 };
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
   installRoot: string;
   compileCacheDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): OpenClawCompileCacheRespawnPlan | undefined {
-  const env = process.env;
+  const env = params.env ?? process.env;
   const argv = process.argv;
   const platform = process.platform;
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
@@ -145,12 +146,14 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-  prepareWriteError?: () => Promise<(message: string) => void>;
+  env?: NodeJS.ProcessEnv;
+  prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
     compileCacheDir: getCompileCacheDir?.(),
+    env: params.env,
   });
   if (!plan) {
     return false;
@@ -176,7 +179,9 @@ function runOpenClawCompileCacheRespawnPlan(
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message: string) => process.stderr.write(message),
+    writeError: (message: string) => {
+      process.stderr.write(message);
+    },
   },
 ): ChildProcess {
   return runRespawnChildWithSignalBridge({
@@ -186,7 +191,7 @@ function runOpenClawCompileCacheRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
-      runtime.writeError(
+      return runtime.writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }\n`,

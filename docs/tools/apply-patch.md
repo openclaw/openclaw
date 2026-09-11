@@ -20,9 +20,23 @@ The tool accepts a single `input` string that wraps one or more file operations:
 @@ optional change context
 -old line
 +new line
+*** Update File: src/old-name.ts
+*** Move to: src/new-name.ts
+@@
+ context line
+-old line
++new line
+*** Update File: src/tail.ts
+@@
++appended last line
+*** End of File
 *** Delete File: obsolete.txt
 *** End Patch
 ```
+
+`*** Move to:` goes on the line directly after its `*** Update File:` header.
+`*** End of File` goes after the hunk lines it terminates, marking that the hunk
+runs to the end of the file.
 
 ## Parameters
 

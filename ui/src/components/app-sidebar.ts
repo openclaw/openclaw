@@ -384,7 +384,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
-  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
+  toggleSessionMenu(
+    session: SidebarRecentSession,
+    trigger: HTMLElement,
+    catalogMenu?: CatalogSessionMenuRequest,
+  ): void {
+    if (catalogMenu) {
+      if (this.sidebarMenus.catalogMenu.isOpenFor(catalogMenu.key)) {
+        this.sidebarMenus.catalogMenu.close();
+        return;
+      }
+      const rect = trigger.getBoundingClientRect();
+      this.openCatalogMenu(catalogMenu, rect.right, rect.bottom + 4, trigger);
+      return;
+    }
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
@@ -632,7 +645,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 ? nothing
                 : renderPanelRefreshStatus({
                     status: this.sessionData.sessionCatalogRefreshStatus,
-                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
                     className: "sidebar-session-error sidebar-session-catalog-error",
                   })
             }

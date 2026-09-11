@@ -461,6 +461,9 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
     expect(result.expectsCompletionMessage).toBe(false);
+    expect(result.note).toContain(
+      "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.",
+    );
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,
@@ -501,6 +504,39 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.extraSystemPrompt).toContain("at most one retry");
     await vi.waitFor(() =>
       expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
+    );
+
+    hoisted.listSwarmRunsForGroupMock.mockReturnValue([
+      { ...registerInput, execution: { status: "running" } },
+    ]);
+    const second = await spawnSubagentDirect(
+      { task: "collect parallel evidence", collect: true },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    expect(second.status).toBe("accepted");
+    expect(second.note).toBe(
+      "Collector run: no completion notification is sent. The requester must explicitly collect this run's result with the available collector wait capability, using its run id.",
+    );
+  });
+
+  it.each([
+    { name: "explicit group", params: { collect: true, groupId: "chosen-group" } },
+    {
+      name: "Code Mode implicit group",
+      params: { collect: true, swarmLaunchReplayKey: "cm-receipt:bridge:1" },
+    },
+    { name: "ordinary spawn", params: { collect: false } },
+  ])("keeps the existing receipt for $name", async ({ params }) => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+    const result = await spawnSubagentDirect(
+      { task: "receipt guidance", ...params },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    expect(result.status).toBe("accepted");
+    expect(result.note).toBe(
+      params.collect
+        ? "Collector run: no completion notification is sent. The requester must explicitly collect this run's result with the available collector wait capability, using its run id."
+        : "The final reply returns to the requester as a completion event. Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY.",
     );
   });
 
@@ -1369,9 +1405,8 @@ describe("spawnSubagentDirect seam flow", () => {
       };
       if (
         scoped.readOnly !== true ||
-        scoped.scopedLiveProviderDiscovery !== true ||
-        scoped.providerDiscoveryProviderIds?.[0] !== "openai" ||
-        scoped.providerDiscoveryProviderIds.length !== 1
+        scoped.scopedLiveProviderDiscovery !== undefined ||
+        scoped.providerDiscoveryProviderIds !== undefined
       ) {
         return await hoisted.loadFullModelCatalogMock();
       }
@@ -1404,8 +1439,6 @@ describe("spawnSubagentDirect seam flow", () => {
       agentDir: expect.any(String),
       workspaceDir: resolveUserPath("/tmp/workspace-main"),
       readOnly: true,
-      providerDiscoveryProviderIds: ["openai"],
-      scopedLiveProviderDiscovery: true,
     });
     expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
@@ -1660,6 +1693,32 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       { task: "try an unsandboxed child" },
       { agentSessionKey: "agent:main:main" },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cannot spawn unsandboxed"),
+    });
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("rejects a split-key sandboxed requester spawning an unsandboxed native child via the explicit sandboxed flag", async () => {
+    // Regression for the ClawSweeper P1 finding on #137779: when the durable parent-lineage
+    // key (agent:main:main) replaces a sandboxed non-main policy key, key-derived sandbox
+    // status alone would classify the requester as unsandboxed and admit an unsandboxed child.
+    // The active classification must be preserved via the explicit ctx.sandboxed flag, mirroring
+    // the visible/ACP spawn paths, so admission still rejects before child persistence/launch.
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({
+      // Durable lineage key is not itself classified as sandboxed; only the original policy
+      // key was. This isolates the test from key-derived status.
+      sandboxed: false,
+      sandboxRequired: false,
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "try an unsandboxed child from a split-key sandboxed parent" },
+      {
+        agentSessionKey: "agent:main:main",
+        sandboxed: true,
+      },
     );
     expect(result).toMatchObject({
       status: "forbidden",

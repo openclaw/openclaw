@@ -239,6 +239,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     reconcileChatRunLifecycle(state, {
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
+      errorMessage: payload.errorMessage?.trim()
+        ? resolveGatewayErrorText(payload, null)
+        : undefined,
       runId: terminalRunId,
       sessionKey: state.sessionKey,
       sessionKeys,
@@ -392,14 +395,16 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         discardStreamSegmentIndexes(state, boundary.replacedSegmentIndexes);
         let visibleMessages = materializeVisibleStream({ includeCurrent: false });
         if (boundary.tailMessage && !shouldHideAssistantChatMessage(boundary.tailMessage)) {
-          visibleMessages = appendTerminalAssistantMessage(
-            visibleMessages,
-            rememberLiveTerminalRun(
-              boundary.tailMessage,
-              terminalRunId,
-              boundary.afterBoundaryRunId,
-            ),
+          const liveTail = rememberLiveTerminalRun(
+            boundary.tailMessage,
+            terminalRunId,
+            boundary.afterBoundaryRunId,
           );
+          // A retired commentary item keeps its own identity even when the answer
+          // repeats its text. The sequence fence reconciles only the later answer.
+          visibleMessages = appendTerminalAssistantMessage(visibleMessages, liveTail, {
+            preserveKeyedCommentary: boundary.preserveKeyedCommentary,
+          });
           publishVisibleTerminal(
             boundary.tailMessage,
             visibleMessages,

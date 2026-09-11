@@ -15,6 +15,14 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+    kind: "ready",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
@@ -385,6 +393,7 @@ describe("applySessionModelSelection", () => {
     expect(result).toMatchObject({ status: "applied", runtimeChange: { kind: "clear" } });
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBe("default");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
@@ -425,7 +434,7 @@ describe("applySessionModelSelection", () => {
     expect(result).not.toHaveProperty("configuredDefaultUpdate");
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBe("default");
     expect(sessionEntry.modelOverrideRouteResolution).toBeUndefined();
     expect(sessionEntry).toMatchObject({
       authProfileOverride: "openai:work",

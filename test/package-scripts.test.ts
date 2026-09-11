@@ -211,9 +211,11 @@ describe("package scripts", () => {
       "package script build:docker",
     ).split(" && ");
 
-    expect(commands.indexOf("pnpm plugins:assets:build")).toBeLessThan(
-      commands.indexOf("node scripts/runtime-postbuild.mjs"),
-    );
+    const assets = commands.indexOf("pnpm plugins:assets:build");
+    const postbuild = commands.indexOf("node scripts/runtime-postbuild.mjs");
+    expect(assets).toBeGreaterThanOrEqual(0);
+    expect(postbuild).toBeGreaterThanOrEqual(0);
+    expect(assets).toBeLessThan(postbuild);
   });
 
   it("cleans package builds before validating release contents", () => {
@@ -285,77 +287,62 @@ describe("package scripts", () => {
     },
   );
 
-  it("runs node workspace transfer coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
+  it("keeps required native coverage in Windows CI", () => {
+    const requiredTargets = [
       "src/node-host/node-worker-transfer-client.test.ts",
-    );
-  });
-
-  it("runs generated module formatting coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("test/scripts/format-generated-module.test.ts");
-  });
-
-  it("runs direct-run entrypoint coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
-  });
-
-  it("runs compiled worker path, IPC, transform, and cleanup coverage in Windows CI", () => {
-    expect(readWindowsCiPartScripts().flatMap(readProjectTestTargets)).toEqual(
-      expect.arrayContaining([
-        "test/scripts/vitest-worker-artifacts.test.ts",
-        "test/scripts/vitest-worker-artifacts.transforms.test.ts",
-      ]),
-    );
-  });
-
-  it("runs Docker package process-tree coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
+      "test/scripts/format-generated-module.test.ts",
+      "test/scripts/direct-run-entrypoints.test.ts",
+      "test/scripts/vitest-worker-artifacts.test.ts",
+      "test/scripts/vitest-worker-artifacts.transforms.test.ts",
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-    );
-  });
-
-  it("runs the Doctor managed-service SecretRef renderer in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
       "src/commands/doctor-gateway-auth-token.windows.test.ts",
-    );
-  });
-
-  it("runs legacy session importer atomicity coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
       "src/infra/state-migrations.legacy-session-store.test.ts",
-    );
-  });
-
-  it("runs SQLite snapshot path coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/sqlite-snapshot.test.ts");
-  });
-
-  it("runs shared-state ownership coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/state/openclaw-state-ownership.test.ts");
-  });
-
-  it("runs mixed-case local media file URL coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/media/local-media-path.windows.test.ts");
-  });
-
-  it("runs sandbox media staging file URL coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+      "src/state/openclaw-state-ownership.test.ts",
+      "src/media/local-media-path.windows.test.ts",
       "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
-    );
-  });
-
-  it("runs the native OpenSSH resolver proof in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/ssh-client.windows.test.ts");
-  });
-
-  it("runs native port diagnostics coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/ports.test.ts");
-  });
-
-  it("runs native LAN advertisement coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
+      "src/infra/ssh-client.windows.test.ts",
+      "src/infra/ports.test.ts",
       "src/infra/advertised-lan-host.windows.test.ts",
-    );
+      "src/test-utils/openclaw-test-state.test.ts",
+      "src/snapshot/local-repository.windows.test.ts",
+      "src/commands/backup-verify.test.ts",
+      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+      "test/scripts/run-with-env.test.ts",
+      "test/scripts/ts-topology.test.ts",
+      "extensions/mxc/test/mxc-backend.test.ts",
+      "extensions/mxc/test/sandbox-policy-loader.test.ts",
+      "src/agents/bash-tools.exec.script-preflight.test.ts",
+      "src/infra/exec-allowlist-pattern.test.ts",
+      "src/infra/executable-path.test.ts",
+      "src/plugin-sdk/node-host.test.ts",
+      "src/process/terminal-pty.test.ts",
+      "src/tui/tui.resolve-codex-bin.test.ts",
+      "src/infra/fs-safe-remove.test.ts",
+      "src/agents/tools/media-tool-file-url.windows.test.ts",
+      "src/media/web-media.file-url.windows.test.ts",
+      "extensions/msteams/src/media-helpers.test.ts",
+      "extensions/msteams/src/messenger.test.ts",
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+      "src/utils.test.ts",
+      "src/commands/agents.commands.list.test.ts",
+      "src/cli/daemon-cli/status.print.test.ts",
+      "packages/terminal-core/src/display-string.test.ts",
+      "src/agents/sandbox/fs-paths.test.ts",
+      "src/agents/sessions/tools/render-utils.test.ts",
+      "src/agents/agent-tools.read.windows.test.ts",
+      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/sessions/tools/path-utils.test.ts",
+      "src/agents/provider-local-service.env-case.test.ts",
+      "src/infra/process-env.test.ts",
+      "src/cli/mcp-cli.path-case.windows.test.ts",
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    ];
+    const actualTargets = new Set(readWindowsCiPartScripts().flatMap(readProjectTestTargets));
+
+    expect(requiredTargets.filter((target) => !actualTargets.has(target))).toEqual([]);
   });
 
   it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
@@ -370,130 +357,11 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs shared test-state cleanup coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/test-utils/openclaw-test-state.test.ts");
-  });
-
-  it("runs snapshot repository verification coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "src/snapshot/local-repository.windows.test.ts",
-    );
-  });
-
-  it("runs backup verification coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/commands/backup-verify.test.ts");
-  });
-
-  it("runs SQLite transcript archive worker coverage in Windows CI", () => {
-    const windowsCi = readWindowsCiCoverageScript();
-    expect(windowsCi).toContain(
-      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
-    );
-  });
-
   it("runs cross-OS installer behavior coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
-    );
     expect(
       readWindowsCiPartScripts()
         .flatMap(readProjectTestTargets)
         .filter((target) => target === "test/scripts/install-ps1.test.ts"),
     ).toHaveLength(1);
-  });
-
-  it("runs env launcher coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("test/scripts/run-with-env.test.ts");
-  });
-
-  it("runs ts-topology entrypoint coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("test/scripts/ts-topology.test.ts");
-  });
-
-  it("runs Windows-only MXC backend coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("extensions/mxc/test/mxc-backend.test.ts");
-    expect(script).toContain("extensions/mxc/test/sandbox-policy-loader.test.ts");
-  });
-
-  it("runs Windows-only exec script preflight coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "src/agents/bash-tools.exec.script-preflight.test.ts",
-    );
-  });
-
-  it("runs Windows-only exec allowlist matching coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/exec-allowlist-pattern.test.ts");
-  });
-
-  it("runs native executable resolution coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/executable-path.test.ts");
-  });
-
-  it("runs node-host npm shim and PTY launcher coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("src/plugin-sdk/node-host.test.ts");
-    expect(script).toContain("src/process/terminal-pty.test.ts");
-    expect(script).toContain("src/tui/tui.resolve-codex-bin.test.ts");
-  });
-
-  it("runs Windows-only safe removal coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain("src/infra/fs-safe-remove.test.ts");
-  });
-
-  it("runs web and Teams file URL coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("src/agents/tools/media-tool-file-url.windows.test.ts");
-    expect(script).toContain("src/media/web-media.file-url.windows.test.ts");
-    expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
-    expect(script).toContain("extensions/msteams/src/messenger.test.ts");
-  });
-
-  it("runs native usage footer home-path coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "src/auto-reply/usage-bar/template.windows.test.ts",
-    );
-  });
-
-  it("runs native media-understanding file URL coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "src/media-understanding/attachments.file-url.windows.test.ts",
-    );
-  });
-
-  it("runs shared home display and visible command coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("src/utils.test.ts");
-    expect(script).toContain("src/commands/agents.commands.list.test.ts");
-    expect(script).toContain("src/cli/daemon-cli/status.print.test.ts");
-    expect(script).toContain("packages/terminal-core/src/display-string.test.ts");
-    expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
-    expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
-  });
-
-  it("runs native OS-home path tool coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("src/agents/agent-tools.read.windows.test.ts");
-    expect(script).toContain("src/agents/agent-tools.read.host-operations.test.ts");
-    expect(script).toContain("src/agents/sessions/tools/path-utils.test.ts");
-  });
-
-  it("runs child environment and native doctor coverage in Windows CI", () => {
-    const script = readWindowsCiCoverageScript();
-
-    expect(script).toContain("src/agents/provider-local-service.env-case.test.ts");
-    expect(script).toContain("src/infra/process-env.test.ts");
-    expect(script).toContain("src/cli/mcp-cli.path-case.windows.test.ts");
-  });
-
-  it("runs explicit memory extra-file casing coverage in Windows CI", () => {
-    expect(readWindowsCiCoverageScript()).toContain(
-      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
-    );
   });
 });

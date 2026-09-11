@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -325,10 +326,8 @@ test.each(["session id", "updated at"] as const)(
       },
     });
     let releaseBlockingMutation = () => {};
-    let markBlockingMutationStarted = () => {};
-    const blockingMutationStarted = new Promise<void>((resolve) => {
-      markBlockingMutationStarted = resolve;
-    });
+    const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
+      createDeferred();
     const blockingMutation = runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: [sessionKey],
@@ -501,10 +500,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   });
   await runtimeCleanupStarted;
   let patchSettled = false;
-  let markPatchPreflight = () => {};
-  const patchPreflight = new Promise<void>((resolve) => {
-    markPatchPreflight = resolve;
-  });
+  const { promise: patchPreflight, resolve: markPatchPreflight } = createDeferred();
   const patch = directSessionReq(
     "sessions.patch",
     {
@@ -548,10 +544,7 @@ test("sessions.patch waits for an in-flight session lifecycle mutation", async (
     },
   });
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const mutation = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],

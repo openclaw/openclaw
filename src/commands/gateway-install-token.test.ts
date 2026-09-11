@@ -171,6 +171,18 @@ describe("resolveGatewayInstallToken", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("refuses missing required auth without generating config during deferred load", async () => {
+    const result = await resolveGatewayInstallToken({
+      config: { gateway: { auth: { mode: "token" } } },
+      env: {},
+      requireExisting: true,
+      generateIfMissing: createGeneration(),
+    });
+    expect(result.unavailableReason).toContain("existing Gateway token");
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("persists an auto-generated token with the captured write guards", async () => {
     const generation = createGeneration();
     const baseSnapshot = generation.snapshot;
@@ -190,7 +202,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.warnings.join("\n")).toContain("saving to config");
     expect(replaceConfigFileMock).toHaveBeenCalledOnce();
     expect(firstReplaceConfigRequest()).toStrictEqual({
-      nextConfig: {
+      sourceConfig: {
         gateway: {
           auth: {
             mode: "token",

@@ -4,6 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -313,8 +317,9 @@ async function postEmbeddingRequest(params: {
   input: string[];
   signal?: AbortSignal;
   inputType?: EmbeddingProviderCallOptions["inputType"];
+  deadlineControl?: MemorySearchDeadlineControl;
 }): Promise<number[][]> {
-  const { client, input } = params;
+  const { client, input, deadlineControl } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
   const body = {
     model: client.model,
@@ -324,7 +329,18 @@ async function postEmbeddingRequest(params: {
   };
   const localServiceLease =
     client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(client.localServiceTarget, params.signal)
+      ? await client.acquireLocalService(
+          {
+            ...client.localServiceTarget,
+            ...(deadlineControl
+              ? {
+                  onReadinessWait: (waiting: boolean) =>
+                    deadlineControl.report(waiting ? "pause" : "resume"),
+                }
+              : {}),
+          },
+          params.signal,
+        )
       : undefined;
   try {
     return await withRemoteHttpResponse({
@@ -438,6 +454,7 @@ async function createOpenAICompatibleEmbeddingProvider(
       input: inputs.map(embeddingInputToText),
       signal: callOptions?.signal,
       inputType: callOptions?.inputType,
+      deadlineControl: callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
     });
   };
   return {

@@ -76,63 +76,33 @@ function withImplicitComponentAttachmentBlock(
   };
 }
 
-function hasClassicOnlyBlocks(spec: DiscordComponentMessageSpec): boolean {
-  return (spec.blocks ?? []).every((block) => block.type === "text" || block.type === "file");
-}
-
-function hasUnsupportedClassicFeatures(spec: DiscordComponentMessageSpec): boolean {
-  return Boolean(spec.modal || spec.container);
-}
-
-function hasAtMostOneNonSpoilerFile(spec: DiscordComponentMessageSpec): boolean {
-  let fileBlockCount = 0;
-  for (const block of spec.blocks ?? []) {
-    if (block.type !== "file") {
-      continue;
-    }
-    fileBlockCount += 1;
-    if (block.spoiler) {
-      return false;
-    }
-  }
-  return fileBlockCount <= 1;
-}
-
-type ClassicDiscordMessageDecision =
-  | {
-      mode: "classic";
-      reason: "plain-text-single-file";
-    }
-  | {
-      mode: "components";
-      reason: "unsupported-feature" | "unsupported-block" | "multiple-or-spoiler-files";
-    };
-
-/**
- * Keep the downgrade rules explicit because this path is only safe when the
- * spec means exactly what a plain Discord message can represent.
- */
-function getClassicDiscordMessageDecision(
+function resolveClassicDiscordMessage(
   spec: DiscordComponentMessageSpec,
-): ClassicDiscordMessageDecision {
-  if (hasUnsupportedClassicFeatures(spec)) {
-    return { mode: "components", reason: "unsupported-feature" };
+): { text: string; filename?: string } | undefined {
+  if (spec.modal || spec.container) {
+    return undefined;
   }
-  if (!hasClassicOnlyBlocks(spec)) {
-    return { mode: "components", reason: "unsupported-block" };
+  const parts = hasNonEmptyString(spec.text) ? [spec.text] : [];
+  // Only the leading text block can mirror the fallback caption. Later matching
+  // blocks are authored content, so retain their repetitions and order.
+  let captionToMatch: string | undefined = parts[0];
+  let filename: string | undefined;
+  for (const block of spec.blocks ?? []) {
+    if (block.type === "text") {
+      if (!hasNonEmptyString(block.text)) {
+        continue;
+      }
+      if (block.text !== captionToMatch) {
+        parts.push(block.text);
+      }
+      captionToMatch = undefined;
+    } else if (block.type === "file" && !block.spoiler && filename === undefined) {
+      filename = resolveDiscordComponentAttachmentName(block.file);
+    } else {
+      return undefined;
+    }
   }
-  if (!hasAtMostOneNonSpoilerFile(spec)) {
-    return { mode: "components", reason: "multiple-or-spoiler-files" };
-  }
-  return { mode: "classic", reason: "plain-text-single-file" };
-}
-
-function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
-  const parts = [
-    spec.text,
-    ...(spec.blocks ?? []).flatMap((block) => (block.type === "text" ? [block.text] : [])),
-  ];
-  return uniqueStrings(parts.filter(hasNonEmptyString)).join("\n\n");
+  return { text: parts.join("\n\n"), filename };
 }
 
 type DiscordComponentSendOpts = {
@@ -261,15 +231,15 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
-  const classicDecision = getClassicDiscordMessageDecision(spec);
-  if (opts.mediaUrl && classicDecision.mode === "classic") {
-    return await sendMessageDiscord(to, collapseClassicComponentText(spec), {
+  const classicMessage = opts.mediaUrl ? resolveClassicDiscordMessage(spec) : undefined;
+  if (classicMessage) {
+    return await sendMessageDiscord(to, classicMessage.text, {
       cfg: opts.cfg,
       accountId: opts.accountId,
       token: opts.token,
       rest: opts.rest,
       mediaUrl: opts.mediaUrl,
-      filename: opts.filename?.trim() || extractComponentAttachmentNames(spec)[0],
+      filename: opts.filename?.trim() || classicMessage.filename,
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,

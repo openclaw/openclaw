@@ -1,4 +1,3 @@
-// Network Policy module implements ip behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -215,6 +214,18 @@ export function isLinkLocalIpAddress(raw: string | undefined): boolean {
   return normalized.range() === "linkLocal";
 }
 
+/** True for unspecified IPs, including IPv4 embedded in IPv6 transition forms. */
+export function isUnspecifiedIpAddress(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  if (!parsed || parsed.range() === "loopback") {
+    return false;
+  }
+  const normalized = isIpv6Address(parsed)
+    ? (extractEmbeddedIpv4FromIpv6(parsed) ?? parsed)
+    : parsed;
+  return normalized.range() === "unspecified";
+}
+
 /** True for cloud metadata IP literals, including mapped and embedded forms. */
 export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
   const parsed = parseLooseIpAddress(raw);
@@ -266,6 +277,11 @@ export function isBlockedSpecialUseIpv6Address(
     // RFC8215 local-use NAT64 can carry deployment-specific more-specific
     // prefixes, so the literal alone cannot prove which IPv4 bits a router
     // will use. Block the allocation instead of guessing a public decoy.
+    return true;
+  }
+  if (isCloudMetadataIpAddress(address.toString())) {
+    // Metadata endpoints stay blocked even when operators opt into the wider
+    // ULA range for fake-ip proxy compatibility.
     return true;
   }
   if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
@@ -396,7 +412,12 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     );
   }
   if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-    return comparableIp.match([comparableBase, prefixLength]);
+    // A base normalized from IPv6 is mapped: its prefix includes 96 mapped bits.
+    // Shorter prefixes contain the whole mapped block, equivalent to IPv4 /0.
+    const ipv4PrefixLength = isIpv6Address(baseAddress)
+      ? Math.max(0, prefixLength - 96)
+      : prefixLength;
+    return comparableIp.match([comparableBase, ipv4PrefixLength]);
   }
   if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
     return comparableIp.match([comparableBase, prefixLength]);

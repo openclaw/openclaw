@@ -47,6 +47,7 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
       if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
@@ -632,6 +633,7 @@ const resolveConfiguredImageModelForTest: NonNullable<
     (candidate) => candidate.id === model || candidate.id === `${provider}/${model}`,
   );
   return {
+    logicalRef: { provider, model },
     model: {
       ...configuredModel,
       id: model,
@@ -3403,6 +3405,7 @@ describe("image compression policy", () => {
   it("keeps runtime Anthropic media limits for dated model variants", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, model) => ({
+        logicalRef: { provider: _provider, model },
         model: {
           mediaInput: {
             image: model.includes("opus")
@@ -3439,6 +3442,7 @@ describe("image compression policy", () => {
   it("merges partial configured Anthropic media policy with runtime side limits", async () => {
     testing.setProviderDepsForTest({
       resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        logicalRef: { provider: _provider, model: _model },
         model: {
           mediaInput: {
             image: options?.skipProviderRuntimeHooks

@@ -41,7 +41,7 @@ describe("watch-node shutdown cleanup", () => {
     vi.useFakeTimers();
     const fakeProcess = new FakeProcess();
     const child = new FakeChild();
-    let resolvedCode: number | undefined;
+    let resolvedCode: Awaited<ReturnType<typeof runWatchMain>> | undefined;
 
     const run = runWatchMain({
       args: ["gateway"],
@@ -60,7 +60,7 @@ describe("watch-node shutdown cleanup", () => {
     expect(child.signals).toEqual(["SIGTERM"]);
 
     await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(143);
+    await expect(run).resolves.toBe(process.platform === "win32" ? 143 : "SIGKILL");
     expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
@@ -98,7 +98,7 @@ describe("watch-node shutdown cleanup", () => {
     const runner = new FakeChild();
     const doctor = new FakeChild();
     const children = [runner, doctor];
-    let resolvedCode: number | undefined;
+    let resolvedCode: Awaited<ReturnType<typeof runWatchMain>> | undefined;
 
     const run = runWatchMain({
       args: ["gateway"],
@@ -121,7 +121,7 @@ describe("watch-node shutdown cleanup", () => {
     expect(doctor.signals).toEqual(["SIGTERM"]);
 
     await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(143);
+    await expect(run).resolves.toBe(process.platform === "win32" ? 143 : "SIGKILL");
     expect(doctor.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 });

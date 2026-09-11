@@ -98,6 +98,7 @@ function withBrowserTabDetails(
     return result;
   }
   const url = readStringValue(details.url);
+  const protocol = url ? URL.parse(url)?.protocol : undefined;
   const title = readStringValue(details.title);
   return {
     ...result,
@@ -105,7 +106,9 @@ function withBrowserTabDetails(
       ...details,
       browserTab: {
         ...identity,
-        ...(url ? { url: truncateUtf16Safe(url, 2048) } : {}),
+        ...(url && (protocol === "http:" || protocol === "https:")
+          ? { url: truncateUtf16Safe(url, 2048) }
+          : {}),
         ...(title ? { title: truncateUtf16Safe(title, 512) } : {}),
       },
     },

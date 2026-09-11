@@ -47,6 +47,8 @@ import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
@@ -445,19 +447,41 @@ export function activatePluginRegistry(
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
   const previousHookRegistry = getGlobalPluginRegistry();
+  let stagedVersion: number | undefined;
+  const isCurrentStage = () =>
+    stagedVersion !== undefined &&
+    getActivePluginRegistry() === registry &&
+    getActivePluginRegistryVersion() === stagedVersion;
   try {
-    // Install the complete bundle before hook-runner initialization so hook composition never
-    // observes contributions from two loads. Activation failure restores the prior selection.
-    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    // Install the complete bundle before hooks, but never resume a displaced activation.
+    stagedVersion = stageActivePluginRegistry(
+      registry,
+      cacheKey,
+      runtimeSubagentMode,
+      workspaceDir,
+    );
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
     initializeGlobalHookRunner(registry);
     activateContextEngineRegistrations(registry);
     commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+    if (!isCurrentStage()) {
+      throw new Error("Plugin registry activation was superseded");
+    }
   } catch (error) {
-    rollbackStagedPluginRegistry(activeSnapshot);
-    if (previousHookRegistry) {
-      initializeGlobalHookRunner(previousHookRegistry);
-    } else {
-      resetGlobalHookRunner();
+    if (isCurrentStage()) {
+      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot);
+      if (
+        getActivePluginRegistry() === activeSnapshot.activeRegistry &&
+        getActivePluginRegistryVersion() === rollbackVersion
+      ) {
+        if (previousHookRegistry) {
+          initializeGlobalHookRunner(previousHookRegistry);
+        } else {
+          resetGlobalHookRunner();
+        }
+      }
     }
     throw error;
   }

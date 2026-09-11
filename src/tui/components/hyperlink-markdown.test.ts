@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
@@ -17,6 +18,25 @@ function osc8Targets(raw: string) {
 }
 
 describe("HyperlinkMarkdown", () => {
+  it.each([
+    "alexandertheodorewilliamson@example.org",
+    "pneumonoultramicroscopicsilicovolcanoconiosis",
+    "requireConfirmationForMutatingActions",
+    `${"a".repeat(31)}e\u0301clair`,
+  ])("wraps %s without inserting spaces into its text", (text) => {
+    const constructed = new HyperlinkMarkdown(text, 0, 0, markdownTheme);
+    const updated = new HyperlinkMarkdown("previous text", 0, 0, markdownTheme);
+    updated.setText(text);
+
+    for (const width of [120, 16]) {
+      for (const markdown of [constructed, updated]) {
+        const lines = markdown.render(width);
+        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+        expect(lines.map((line) => stripAnsi(line).trimEnd()).join("")).toBe(text);
+      }
+    }
+  });
+
   it("does not reallocate prepared lines for an unchanged same-width redraw", () => {
     const markdown = new HyperlinkMarkdown(
       "مرحبا [docs](https://example.test/path)",

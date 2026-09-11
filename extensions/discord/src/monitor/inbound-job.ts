@@ -9,6 +9,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type DiscordInboundJobRuntimeField =
   | "runtime"
+  | "buildContext"
   | "abortSignal"
   | "guildHistories"
   | "client"
@@ -36,6 +37,7 @@ export function buildDiscordInboundJob(
 ): DiscordInboundJob {
   const {
     runtime,
+    buildContext,
     abortSignal,
     guildHistories,
     client,
@@ -61,6 +63,7 @@ export function buildDiscordInboundJob(
     },
     runtime: {
       runtime,
+      buildContext,
       abortSignal,
       guildHistories,
       client,

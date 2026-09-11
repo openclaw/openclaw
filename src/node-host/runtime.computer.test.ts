@@ -120,6 +120,45 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
 }
 
 describe("private worker computer runtime", () => {
+  it("joins watcher and disconnect cleanup until physical computer close settles", async () => {
+    const host = await startComputer();
+    const physicalClose = createDeferredCore();
+    let physicalCloseFinished = false;
+    host.close.mockImplementationOnce(async () => {
+      await physicalClose.promise;
+      physicalCloseFinished = true;
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      expect(
+        await host.invoke({
+          operation: "snapshot",
+          providerGeneration: descriptor.provider.generation,
+          params: { executionId },
+        }),
+      ).toMatchObject({ ok: true });
+      let closed = false;
+      closing = host.runtime.close().then(() => {
+        closed = true;
+      });
+      await vi.waitFor(() => expect(host.close).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(physicalCloseFinished).toBe(false);
+      expect(closed).toBe(false);
+
+      physicalClose.resolve();
+      await closing;
+      expect(physicalCloseFinished).toBe(true);
+      expect(host.close).toHaveBeenCalledOnce();
+    } finally {
+      physicalClose.resolve();
+      await closing;
+      await host.runtime.close();
+    }
+  });
+
   it("awaits the registered provider preparation before publishing the first manifest", async () => {
     const gate = createDeferredCore();
     const prepare = vi.fn(() => gate.promise);

@@ -65,6 +65,7 @@ import {
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.doctor.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyCurrentConversationBindings,
@@ -2166,7 +2167,7 @@ describe("state migrations", () => {
               ...params,
               context: params.context as PluginDoctorStateMigrationContext,
             });
-            return { changes: result.changes, warnings: result.warnings };
+            return result;
           },
         },
       },
@@ -2197,6 +2198,25 @@ describe("state migrations", () => {
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
     await expectMissingPath(eventPath);
     await expect(fs.stat(`${eventPath}.migrated`)).resolves.toBeDefined();
+
+    const rewritten = `${JSON.stringify({ ...event, query: "rewritten archive" })}\n`;
+    await fs.writeFile(`${eventPath}.migrated`, rewritten);
+    const continued = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(
+      continued.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      outcome: "warning",
+      warnings: [expect.stringContaining("changed other than by append")],
+    });
+    expect(() => throwIfDoctorStateMigrationRefused(continued.stepReceipts)).not.toThrow();
+    expect(continued.stepReceipts.some((receipt) => receipt.outcome === "refused")).toBe(false);
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
+    await expect(fs.readFile(`${eventPath}.migrated`, "utf8")).resolves.toBe(rewritten);
   });
 
   it("runs doctor-only repairs after the automatic migration check", async () => {

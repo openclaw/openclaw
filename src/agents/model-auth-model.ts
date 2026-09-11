@@ -188,6 +188,7 @@ export async function hasAvailableAuthForProvider(params: {
     provider,
     preferredProfile,
     forModel: params.modelId,
+    includePendingOAuthRefresh: true,
   });
   for (const candidate of order) {
     try {
@@ -264,6 +265,7 @@ export async function getApiKeyForModelCore(params: {
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,
+    modelBaseUrl: params.model.baseUrl,
     secretSentinels: params.secretSentinels,
   });
 }

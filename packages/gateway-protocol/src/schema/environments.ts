@@ -85,6 +85,7 @@ export const RequiredNodeCommandSchema = closedObject({
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
@@ -124,6 +125,12 @@ function createEnvironmentSummaryProperties() {
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
+    preparation: Type.Optional(
+      closedObject({
+        purpose: Type.Union([Type.Literal("reserve"), Type.Literal("build")]),
+        key: NonEmptyString,
+      }),
+    ),
   };
 }
 
@@ -149,11 +156,20 @@ export const WorkerMachineOptionSchema = closedObject({
   cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   default: Type.Optional(Type.Boolean()),
+  os: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 });
 
 export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {
   minItems: 1,
-  maxItems: 32,
+  maxItems: 64,
+});
+
+/** Provider-authored operating system choice for one configured worker profile. */
+export const WorkerOperatingSystemSchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 64 }),
+  label: Type.String({ minLength: 1, maxLength: 64 }),
+  default: Type.Optional(Type.Boolean()),
+  disabledReason: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 /** Placement execution modes shared by runtime requirements and worker providers. */
@@ -175,6 +191,9 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
     ]),
   ),
   machines: Type.Optional(WorkerMachineOptionsSchema),
+  operatingSystems: Type.Optional(
+    Type.Array(WorkerOperatingSystemSchema, { minItems: 1, maxItems: 8 }),
+  ),
 });
 
 /** List response containing all gateway-visible environment summaries. */
@@ -197,6 +216,18 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 
 /** Create result uses the same public summary shape as list and status. */
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
+
+/** Prepares a configured profile's local Git project without dispatching a session. */
+export const EnvironmentsPrepareParamsSchema = closedObject({
+  profileId: NonEmptyString,
+  projectPath: NonEmptyString,
+});
+
+export const EnvironmentsPrepareResultSchema = closedObject({
+  environmentId: NonEmptyString,
+  preparationKey: NonEmptyString,
+  reused: Type.Boolean(),
+});
 
 /** Destroys one durable worker environment by its gateway-owned id. */
 export const EnvironmentsDestroyParamsSchema = closedObject({
@@ -242,10 +273,13 @@ export type RequiredNodeCommandState = Static<typeof RequiredNodeCommandStateSch
 export type RequiredNodeCommand = Static<typeof RequiredNodeCommandSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
+export type WorkerOperatingSystem = Static<typeof WorkerOperatingSystemSchema>;
 export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;
+export type EnvironmentsPrepareParams = Static<typeof EnvironmentsPrepareParamsSchema>;
+export type EnvironmentsPrepareResult = Static<typeof EnvironmentsPrepareResultSchema>;
 export type EnvironmentsDestroyParams = Static<typeof EnvironmentsDestroyParamsSchema>;
 export type EnvironmentsDestroyResult = Static<typeof EnvironmentsDestroyResultSchema>;
 export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>;

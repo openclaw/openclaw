@@ -1,5 +1,6 @@
 {
   "id": "diagnostics-otel",
+  "categories": ["gateway"],
   "name": "Diagnostics OpenTelemetry",
   "description": "OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs.",
   "activation": {

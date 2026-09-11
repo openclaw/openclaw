@@ -112,8 +112,8 @@ export function createGatewayEventLoopHealthMonitor(
   let firstDegradedAtMs: number | null = null;
 
   try {
-    // Match Node's interval delay histogram range and precision.
-    histogram = createHistogram({ lowest: 1_000n, highest: 2n ** 63n - 1n, figures: 3 });
+    // The default range covers 104 days; the int64 maximum fails on Linux Bun.
+    histogram = createHistogram({ lowest: 1_000, figures: 3 });
   } catch {
     histogram = null;
   }

@@ -9,6 +9,12 @@ export function cloneTaskRecord(record: TaskRecord): TaskRecord {
   };
 }
 
+/** Observer notifications need detached metadata, never runtime-owned detail. */
+export function cloneTaskRecordForObserver(record: TaskRecord): Omit<TaskRecord, "detail"> {
+  const { detail: _detail, ...snapshot } = record;
+  return snapshot;
+}
+
 export function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
   // Detached runtimes can report lifecycle times captured before the registry
   // inserted or restored the row; keep createdAt as the visible lifecycle floor.

@@ -44,6 +44,7 @@ import {
 import { resolveSubagentThinkingOverride } from "../subagents/spawn/subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
+import { resolveAgentTimeoutMs } from "../timeout.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
@@ -418,6 +419,10 @@ export async function maybeSpawnVisibleSession(params: {
         model: resolvedModel,
         ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         task: params.task,
+        timeoutMs:
+          runTimeoutSeconds === 0
+            ? 0
+            : resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds }),
         parentSessionKey: requesterKey,
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.

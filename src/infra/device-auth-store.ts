@@ -232,19 +232,27 @@ export function clearDeviceAuthToken(params: {
   let cleared = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
-        .deleteFrom("device_auth_tokens")
-        .where("device_id", "=", params.deviceId)
-        .where("role", "=", normalizeDeviceAuthRole(params.role));
-      const query =
-        params.expectedToken === undefined
-          ? baseQuery
-          : baseQuery.where("token", "=", params.expectedToken);
-      cleared = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+      cleared = clearDeviceAuthTokenFromDatabase(db, params);
     },
     { env: params.env },
   );
   return cleared;
+}
+
+/** Join token-owner recovery without opening a different profile or transaction. */
+export function clearDeviceAuthTokenFromDatabase(
+  db: DatabaseSync,
+  params: { deviceId: string; role: string; expectedToken?: string },
+): boolean {
+  const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
+    .deleteFrom("device_auth_tokens")
+    .where("device_id", "=", params.deviceId)
+    .where("role", "=", normalizeDeviceAuthRole(params.role));
+  const query =
+    params.expectedToken === undefined
+      ? baseQuery
+      : baseQuery.where("token", "=", params.expectedToken);
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
 /** Load one device token bound to an exact normalized gateway origin. */

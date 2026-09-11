@@ -9,6 +9,10 @@ sidebarTitle: "Build and develop"
 
 Contributor notes for building the Control UI and running it against a Gateway you choose.
 
+Every command on this page runs from a checkout of the `openclaw/openclaw`
+repository with `pnpm install` already done. A packaged CLI install has no
+`pnpm` scripts.
+
 ## Build and develop the UI
 
 The Gateway serves static files from `dist/control-ui`:
@@ -41,6 +45,33 @@ pnpm ui:dev
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
 
+To use the real Gateway's capabilities, media, and native plugin UI while
+developing, select its URL when starting Vite:
+
+```bash
+OPENCLAW_UI_DEV_GATEWAY_URL=http://127.0.0.1:18789 pnpm ui:dev --host 127.0.0.1 --port 5173
+```
+
+Configured development binds to loopback by default. Open `http://127.0.0.1:5173` and use the Gateway's normal authentication and
+device pairing. The target accepts `http://`, `https://`, `ws://`, or `wss://`,
+including a configured Gateway base path. Keep credentials out of this setting.
+Add the exact browser origin to `gateway.controlUi.allowedOrigins` when needed;
+the development proxy preserves the browser's Origin and does not provide
+authentication credentials.
+
+Vite serves the UI and its hot reload connection, and proxies Gateway requests.
+The UI keeps credentials and saved settings scoped to the actual Gateway. An
+owner pairing handoff can be delivered on the dev page while retaining its
+original Gateway destination and fragment. To use another Gateway, restart
+Vite with the new target; an already-open page cannot forward requests through
+the replacement target. Reload the page after restarting Vite.
+
+UI edits use Vite's normal hot reload or page reload. Start the Gateway's source
+watch separately when developing its implementation. Stopping Vite stops its
+proxy, without stopping the Gateway or deleting either application's state.
+Without `OPENCLAW_UI_DEV_GATEWAY_URL`, `pnpm ui:dev` retains its existing
+standalone connection behavior. This setting does not affect `pnpm ui:build`.
+
 For a standalone preview with synthetic data, use:
 
 ```bash
@@ -69,6 +100,24 @@ browser extensions, or an already-controlling service worker. Browser-level
 navigation outside the app is outside its control. Production connection settings
 and `pnpm ui:dev` behavior are unchanged; use that command when you intentionally
 need a real Gateway or external integration.
+
+## Talk live smoke test
+
+Maintainers can exercise the browser Talk paths end to end from the repository
+root. Replace each placeholder with a real key:
+
+```bash
+OPENAI_API_KEY=<openai-key> GEMINI_API_KEY=<gemini-key> \
+  node --import tsx scripts/dev/realtime-talk-live-smoke.ts
+```
+
+The run verifies the OpenAI backend WebSocket bridge, a synthesized PCM24
+speech-to-response audio roundtrip, OpenAI browser WebRTC SDP exchange, Google
+Live constrained-token browser setup with a JPEG frame and `describe_view`
+function roundtrip, and the Gateway relay browser adapter with fake microphone
+media. Pass `--openai-audio-cycles 3` for a short repeated OpenAI connect,
+talkback, and close soak. The command prints provider status only and does not
+log secrets.
 
 ## Debugging/testing: dev server + remote Gateway
 
