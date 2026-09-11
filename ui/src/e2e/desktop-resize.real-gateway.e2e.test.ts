@@ -695,7 +695,12 @@ suite.define(() => {
                 ),
               )
               .toBe(3);
-            await panel.getByText(/^Desktop disconnected:/u).waitFor({ state: "visible" });
+            await panel
+              .getByRole("button", { name: "Reconnect", exact: true })
+              .waitFor({ state: "visible" });
+            expect(await panel.locator(".desktop-status").textContent()).toContain(
+              "Desktop disconnected:",
+            );
             expect(
               observations.every((result) => result.ok === true && !result.passwordPresent),
             ).toBe(true);
