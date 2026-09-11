@@ -32,7 +32,6 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -53,7 +52,6 @@ import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -65,9 +63,14 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
-import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withUpdateInProgressEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
+  formatManagedServicePackageUpdatePlan,
   resolveManagedServicePackageUpdatePlan,
   resolvePackageRuntimePreflight,
   type ManagedServiceRootRedirect,
@@ -274,39 +277,11 @@ async function updateCommandInternal(
     managedServiceNodeRunner = servicePlan.nodeRunner;
     if (managedServiceRootRedirect) {
       root = managedServiceRootRedirect.root;
-      if (!opts.json) {
-        defaultRuntime.log(
-          theme.muted(
-            `Targeting managed gateway service package root: ${managedServiceRootRedirect.root}`,
-          ),
-        );
-        defaultRuntime.log(
-          theme.warn(
-            `Shell OpenClaw root differs from the managed gateway service root: ${managedServiceRootRedirect.previousRoot}`,
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted(
-            `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-          ),
-        );
-        if (managedServiceNodeRunner) {
-          defaultRuntime.log(
-            theme.muted(`Managed gateway service Node: ${managedServiceNodeRunner}`),
-          );
-        }
+    }
+    if (!opts.json) {
+      for (const { level, message } of formatManagedServicePackageUpdatePlan(servicePlan)) {
+        defaultRuntime.log(theme[level](message));
       }
-    } else if (managedServiceNodeRunner && !opts.json) {
-      defaultRuntime.log(
-        theme.warn(
-          `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${managedServiceNodeRunner}).`,
-        ),
-      );
-      defaultRuntime.log(
-        theme.muted(
-          `Using the managed service Node for this update so the gateway can start after the upgrade.`,
-        ),
-      );
     }
     packageUpdateNodeRunner = managedServiceNodeRunner;
   }

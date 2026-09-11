@@ -235,57 +235,27 @@ struct ConnectionSettingsView: View {
     }
 
     private var gatewayInstallerRow: some View {
-        LabeledContent {
-            Button("Recheck") { self.refreshGatewayStatus() }
-        } label: {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(self.gatewayStatusColor)
-                    .frame(width: 8, height: 8)
-                Text(self.gatewayStatus.message)
-            }
-            if let detail = self.gatewayInstallerDetail {
-                Text(detail)
-            }
-            if let failure = self.gatewayManager.lastFailureReason {
-                Text(String(format: String(localized: "Last failure: %@"), failure))
-                    .foregroundStyle(.red)
-            }
-        }
-    }
-
-    private var gatewayInstallerDetail: String? {
-        var parts: [String] = []
-        if let gatewayVersion = self.gatewayStatus.gatewayVersion,
-           let required = self.gatewayStatus.requiredGateway,
-           gatewayVersion != required
-        {
-            parts.append(String(
-                format: String(localized: "Installed: %@ · Required: %@"), gatewayVersion, required))
-        } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
-            parts.append(String(format: String(localized: "Gateway %@ detected"), gatewayVersion))
-        }
-        if let node = self.gatewayStatus.nodeVersion {
-            parts.append("Node \(node)")
-        }
-        if case let .attachedExisting(details) = self.gatewayManager.status {
-            parts.append(details ?? String(localized: "Using existing gateway instance"))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        GatewayInstallerView(
+            status: self.gatewayStatus,
+            failure: self.gatewayManager.lastFailureReason,
+            existingGatewayDetails: {
+                if case let .attachedExisting(details) = self.gatewayManager.status {
+                    return details ?? String(localized: "Using existing gateway instance")
+                }
+                return nil
+            }(),
+            isInstalling: CLIInstallPrompter.shared.isPrompting,
+            installStatus: CLIInstallPrompter.shared.installStatus,
+            onInstall: {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(
+                    reason: "connection-settings", userInitiated: true)
+            },
+            onRecheck: self.refreshGatewayStatus)
     }
 
     private func refreshGatewayStatus() {
         guard self.state.connectionMode == .local, self.gatewayManager.installation == .managed else { return }
         self.gatewayManager.refreshEnvironmentStatus(force: true)
-    }
-
-    private var gatewayStatusColor: Color {
-        if self.localGatewayFailure != nil { return .red }
-        switch self.gatewayStatus.kind {
-        case .ok: return .green
-        case .checking: return .secondary
-        case .missingNode, .missingGateway, .incompatible, .error: return .orange
-        }
     }
 
     // MARK: - Remote

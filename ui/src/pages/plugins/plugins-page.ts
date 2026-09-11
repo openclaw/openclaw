@@ -106,8 +106,6 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly discovery = new PluginDiscoveryController(this, {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
-    capture: () => this.gateway.capture(),
-    isCurrent: (scope) => this.gateway.isCurrent(scope),
     onEntriesChanged: () => this.syncCatalogIcons(),
   });
 
@@ -322,9 +320,6 @@ class PluginsPage extends OpenClawLightDomElement {
           void this.showCatalogDetail(catalogId);
         } else {
           void this.discovery.refresh();
-          void this.discovery.refreshCategories();
-          void this.discovery.refreshFeatured();
-          void this.discovery.refreshTrending();
         }
       }
     } else {

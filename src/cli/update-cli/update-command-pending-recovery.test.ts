@@ -32,7 +32,6 @@ import type { UpdateCommandOptions } from "./shared.js";
 import * as updateConfig from "./update-command-config.js";
 import * as updateExecutor from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -40,6 +39,7 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 import { updateCommand } from "./update-command.js";

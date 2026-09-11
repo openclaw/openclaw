@@ -761,40 +761,46 @@ describe("createModelSelectionState catalog loading", () => {
     ).toBe(272_000);
   });
 
-  it("uses the first visible provider wildcard model when the configured primary is filtered out", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
-      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
-      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
-    ]);
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          models: {
-            "openai/*": {},
-            "vllm/*": {},
+  it.each([
+    ["anthropic", "claude-opus-4-5", "openai/*", "gpt-5.5-codex", 1],
+    ["openai/team", "claude-opus-4-5", "openai/*", "gpt-5.5-codex", 1],
+    ["openai", "openai/team/Reader", "openai/team/*", "team/Reader", 1],
+    ["openai", "team/Reader", "openai/team/*", "team/Reader", 0],
+  ] as const)(
+    "selects %s/%s with wildcard %s",
+    async (defaultProvider, defaultModel, allow, selectedModel, catalogLoads) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      if (catalogLoads) {
+        vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+          { provider: defaultProvider, id: defaultModel, name: "Configured primary" },
+          { provider: "openai", id: selectedModel, name: "Allowed model" },
+          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+        ]);
+      }
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: `${defaultProvider}/${defaultModel}` },
+            models: { [allow]: {}, "vllm/*": {} },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      hasModelDirective: false,
-    });
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider,
+        defaultModel,
+        provider: defaultProvider,
+        model: defaultModel,
+        hasModelDirective: false,
+      });
 
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-5.5-codex");
-    expect(state.allowedModelKeys.has("anthropic/claude-opus-4-5")).toBe(false);
-    expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
-  });
+      expect(state.provider).toBe("openai");
+      expect(state.model).toBe(selectedModel);
+      expect(loadModelCatalogLocal).toHaveBeenCalledTimes(catalogLoads);
+    },
+  );
 
   it("does not reject wildcard-only policy before an explicit model directive is resolved", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();

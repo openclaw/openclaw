@@ -8,6 +8,7 @@ import {
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -36,30 +37,6 @@ import { createCliOutputFailoverError } from "./output-error.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
-
-function appendCliOutputParseBuffer(buffer: Buffer, chunk: string) {
-  if (!chunk) {
-    return { buffer, exceeded: false };
-  }
-  const chunkBuffer = Buffer.from(chunk);
-  if (buffer.byteLength + chunkBuffer.byteLength <= CLI_RUNNER_OUTPUT_PARSE_BYTES) {
-    return {
-      buffer: Buffer.concat([buffer, chunkBuffer], buffer.byteLength + chunkBuffer.byteLength),
-      exceeded: false,
-    };
-  }
-  const remainingBytes = CLI_RUNNER_OUTPUT_PARSE_BYTES - buffer.byteLength;
-  return {
-    buffer:
-      remainingBytes <= 0
-        ? buffer
-        : Buffer.concat(
-            [buffer, chunkBuffer.subarray(0, remainingBytes)],
-            CLI_RUNNER_OUTPUT_PARSE_BYTES,
-          ),
-    exceeded: true,
-  };
-}
 
 type ExecuteCliProcessOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
@@ -137,15 +114,13 @@ export async function executeCliProcess(params: {
       })
     : null;
   let stdoutTail = "";
-  let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+  const stdoutCapture = createCapturedOutputBuffers();
   let stdoutBytes = 0;
   const stdoutHash = crypto.createHash("sha256");
-  let stdoutParseExceeded = false;
   let stderrTail = "";
-  let stderrParseBuffer: Buffer = Buffer.alloc(0);
+  const stderrCapture = createCapturedOutputBuffers();
   let stderrBytes = 0;
   const stderrHash = crypto.createHash("sha256");
-  let stderrParseExceeded = false;
   // Only the core lifecycle owner may publish recovery facts. Plugin records
   // carry output, never the authority or deadline used to protect its execution.
   const reportStreamProgress = createModelCallStreamProgressReporter(
@@ -171,10 +146,8 @@ export async function executeCliProcess(params: {
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
     stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-    if (!stdoutParseExceeded) {
-      const next = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-      stdoutParseBuffer = next.buffer;
-      stdoutParseExceeded = next.exceeded;
+    if (chunk && stdoutCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
     streamingParser?.push(chunk);
   };
@@ -183,10 +156,8 @@ export async function executeCliProcess(params: {
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
     stderrTail = appendCliOutputTail(stderrTail, chunk);
-    if (!stderrParseExceeded) {
-      const next = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-      stderrParseBuffer = next.buffer;
-      stderrParseExceeded = next.exceeded;
+    if (chunk && stderrCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stderrCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
   };
 
@@ -377,7 +348,9 @@ export async function executeCliProcess(params: {
   }
 
   let stdout: string | undefined;
-  const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
+  // Preserve replacement characters when the byte limit clips a UTF-8 sequence.
+  const readStdout = () =>
+    (stdout ??= Buffer.concat(stdoutCapture.chunks, stdoutCapture.bytes).toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
   const stderrDiagnostic = stderrTail.trim();
   const processDiagnostics = {
@@ -413,7 +386,7 @@ export async function executeCliProcess(params: {
     params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && !stdoutParseExceeded
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
       ? parseCliOutput({
           raw: readStdout(),
           backend: params.backend,
@@ -507,7 +480,7 @@ export async function executeCliProcess(params: {
       );
     }
     const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
-    const stderr = stderrParseBuffer.toString("utf8").trim();
+    const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
@@ -517,7 +490,7 @@ export async function executeCliProcess(params: {
     });
   }
 
-  if (stdoutParseExceeded && !streamedJsonlOutput) {
+  if (stdoutCapture.truncatedBytes > 0 && !streamedJsonlOutput) {
     throw createCliFailoverError(
       `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
       "format",

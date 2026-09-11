@@ -53,6 +53,63 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Handle model access after sign-in
+
+Existing consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
+after credentials are saved. When effective restrictions can hide the provider's
+models, the existing `prompter.select` receives these options:
+
+| Value  | Label                        | Effect                                                      |
+| ------ | ---------------------------- | ----------------------------------------------------------- |
+| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
+| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
+
+Render the supplied message and options, and return the selected option's value.
+Do not assume that every `select` call chooses a provider or auth method. Neither
+choice activates a new default model. No choice is requested when restrictions
+are absent or already allow the whole provider.
+
+Canceling or rejecting this post-save selection does not undo saved credentials.
+The flow throws `ProviderAuthConfigApplyError`, which extends
+`ProviderCredentialsSavedError`; report that credentials were saved instead of
+treating it as a failed credential exchange. Cancellation at the selection leaves
+restrictions unchanged. A later application failure can leave the policy saved
+but not active in the running Gateway. Keep credential persistence and model
+visibility outcomes distinct.
+
+### Defer the choice to a later reply
+
+For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
+receives a `PreparedProviderModelAccess` request and replaces the post-save
+`select` call; it does not apply the choice. Retain that request with the current
+login record from `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow`.
+
+After login finishes, use `offerProviderLoginModelAccess` with the same record,
+the prepared request, and the login's completion message. Deliver its structured
+reply. Pass the subsequent command to `answerProviderLoginModelAccess` with the
+same registry and flow key. This owner validates the answer, applies the choice,
+returns the final reply, and releases the completed record. Do not reconstruct a
+wildcard write from the button text or reuse a prepared request for a new login.
+Release the record on cancellation or a terminal failure.
+
+### Keep hosted writes authorized
+
+Hosted callers supply `signal` and `assertCurrent` to check the current login,
+sender authority, and selected provider/method before effects and after awaited
+work. An abort signal or matching login identifier alone is not current
+authorization. `beforePersistentEffect` remains the credential-persistence
+preparation callback. Browser authorization ends after the credential phase;
+the later model choice uses the current conversation or wizard authority.
+
+For a deferred choice, pass the answering command's current authority check as
+`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
+supplied: it is the policy writer's current config. Otherwise read the host's
+current config. The original login callback does not authorize a later command.
+Let the shared owner report the visibility outcome:
+a saved policy is not proof that the running Gateway applied it.
+
 ## Walkthrough
 
 <Steps>

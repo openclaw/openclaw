@@ -71,7 +71,7 @@ describe("Crabline provider-native inbound message identity", () => {
             id: inbound.id,
           });
         } finally {
-          await transport.cleanup?.();
+          await transport.cleanupAfterGatewayStop?.();
         }
       });
     },
@@ -132,10 +132,10 @@ describe("Crabline provider-native inbound message identity", () => {
             `qa-bus message id is ambiguous for selected account: ${first.id}`,
           );
         } finally {
-          await secondTransport.cleanup?.();
+          await secondTransport.cleanupAfterGatewayStop?.();
         }
       } finally {
-        await firstTransport.cleanup?.();
+        await firstTransport.cleanupAfterGatewayStop?.();
       }
     });
   });

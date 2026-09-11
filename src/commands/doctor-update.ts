@@ -8,7 +8,6 @@ import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { tryResolveInvocationCwd } from "../cli/update-cli/shared.js";
-import { withOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-managed-context.js";
 import {
   continueMigratedUpdateInFreshProcess,
   inspectActivatedUpdateState,
@@ -20,7 +19,10 @@ import {
   createUpdateRunProgress,
   failUpdateCommandRun,
 } from "../cli/update-cli/update-command-run.js";
-import { resolveServiceRefreshEnv } from "../cli/update-cli/update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withOwnedManagedUpdateEnv,
+} from "../cli/update-cli/update-command-service-env.js";
 import { resolveUnsafeUpdateRecoveryGuidance } from "../cli/update-cli/update-recovery-guidance.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { isDefaultInstallIdentity, resolveStateDir } from "../config/paths.js";

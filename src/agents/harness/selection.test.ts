@@ -1167,6 +1167,9 @@ describe("runAgentHarnessAttempt", () => {
         storePath: admission.storePath,
       };
       params.bootstrapContextRunKind = "heartbeat";
+      params.model = { ...params.model, contextWindow: 180_000 };
+      params.modelContextWindow = 200_000;
+      params.contextTokenBudget = 180_000;
       params.userTurnTranscriptRecorder =
         boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
@@ -1181,6 +1184,12 @@ describe("runAgentHarnessAttempt", () => {
             promptError: false,
             aborted: false,
             yieldAborted: false,
+            runtimeContext: {
+              provider: params.provider,
+              modelId: params.modelId,
+              modelContextWindow: 200_000,
+              tokenBudget: 180_000,
+            },
           }),
         );
       } else {

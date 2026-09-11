@@ -44,7 +44,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registry.providers.push({
       pluginId: record.id,
       pluginName: record.name,
-      provider: normalizedProvider,
+      provider: { ...normalizedProvider, pluginRoot: record.rootDir },
       source: record.source,
       rootDir: record.rootDir,
     });

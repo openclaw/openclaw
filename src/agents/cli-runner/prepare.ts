@@ -68,6 +68,7 @@ import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-c
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -831,6 +832,17 @@ async function prepareCliRunContextWithinReadFence(
     if (effectiveAuthProfileId) {
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
+  }
+  if (
+    effectiveAuthProfileId &&
+    authCredential &&
+    !isSetupCredentialAccessible({
+      profileId: effectiveAuthProfileId,
+      credential: authCredential,
+      agentDir,
+    })
+  ) {
+    throw new Error("This saved sign-in is inactive. Test and activate it in Model Setup.");
   }
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude

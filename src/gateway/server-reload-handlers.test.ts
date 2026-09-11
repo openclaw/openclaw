@@ -17,11 +17,6 @@ import {
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
-import {
-  clearCurrentProviderAuthState as clearWarmedProviderAuthState,
-  getCurrentProviderAuthStates,
-  publishProviderAuthWarmSnapshot,
-} from "../agents/model-provider-auth-state.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
@@ -333,7 +328,6 @@ const hoisted = vi.hoisted(() => ({
     async (_cfg: OpenClawConfig, _options?: { catalogMode?: "live" | "static" }) => {},
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
-  clearCurrentProviderAuthState: vi.fn(() => {}),
   reloadSessionMcpRuntimes: vi.fn(async () => {}),
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
@@ -453,13 +447,6 @@ vi.mock("../agents/context.js", () => ({
   refreshContextWindowCache: async (cfg: OpenClawConfig) => {
     hoisted.reloadEvents.push("refresh-context-window");
     await hoisted.refreshContextWindowCache(cfg);
-  },
-}));
-
-vi.mock("../agents/model-provider-auth.js", () => ({
-  clearCurrentProviderAuthState: () => {
-    hoisted.reloadEvents.push("clear-provider-auth");
-    hoisted.clearCurrentProviderAuthState();
   },
 }));
 
@@ -1062,7 +1049,6 @@ afterEach(() => {
   hoisted.rejectPendingPreparedModelRuntimeReplacement.mockClear();
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
-  hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.reloadSessionMcpRuntimes.mockClear();
   hoisted.reloadSessionMcpRuntimes.mockResolvedValue(undefined);
   hoisted.buildGatewayCronService.mockClear();
@@ -2881,7 +2867,7 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("clears provider auth before reload and after plugin replacement", async () => {
+  it("refreshes prepared models and context after plugin replacement", async () => {
     const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
       hoisted.reloadEvents.push("prepare-plugins");
       await params.commitRuntime();
@@ -2897,14 +2883,12 @@ describe("gateway hot reload model state", () => {
     const nextConfig = { plugins: { enabled: true } } as OpenClawConfig;
     await applyHotReload(createPluginReloadPlan(), nextConfig);
 
-    const firstResetIndex = hoisted.reloadEvents.indexOf("clear-provider-auth");
-    expect(firstResetIndex).toBeGreaterThanOrEqual(0);
-    expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
-      "clear-provider-auth",
+    const firstPrepareIndex = hoisted.reloadEvents.indexOf("prepare-plugins");
+    expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
+    expect(hoisted.reloadEvents.slice(firstPrepareIndex)).toEqual([
       "prepare-plugins",
       "stale-prepared-model-runtime",
       "replace-plugins",
-      "clear-provider-auth",
       "refresh-prepared-model-runtime",
       "refresh-context-window",
     ]);
@@ -2945,96 +2929,6 @@ describe("gateway hot reload model state", () => {
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
     );
   });
-
-  it.each([
-    {
-      name: "heartbeat",
-      changedPath: "agents.defaults.heartbeat.target",
-      nextConfig: { agents: { defaults: { heartbeat: { target: "telegram" } } } },
-    },
-    {
-      name: "auth",
-      changedPath: "auth.order.openai",
-      nextConfig: { auth: { order: { openai: ["openai:fixture"] } } },
-    },
-    {
-      name: "model provider",
-      changedPath: "models.providers.openai",
-      nextConfig: {
-        models: {
-          providers: {
-            openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [] },
-          },
-        },
-      },
-    },
-    {
-      name: "agent roster",
-      changedPath: "agents.entries.worker",
-      nextConfig: {
-        agents: { entries: { main: {}, worker: { workspace: "/virtual/worker-workspace" } } },
-      },
-    },
-  ] satisfies Array<{ name: string; changedPath: string; nextConfig: OpenClawConfig }>)(
-    "keeps $name reloads lazy and authenticates the next user lookup once",
-    async ({ changedPath, nextConfig }) => {
-      const { applyHotReload } = createReloadHandlersForTest();
-      const readProfiles = vi.fn(() => ({
-        "openai:fixture": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "provider-auth-test-fixture",
-        },
-      }));
-      publishProviderAuthWarmSnapshot({
-        agents: [
-          {
-            agentId: "main",
-            configFingerprint: "previous-config-fingerprint",
-            providers: [["openai", false]],
-          },
-        ],
-      });
-      hoisted.clearCurrentProviderAuthState.mockImplementationOnce(clearWarmedProviderAuthState);
-
-      try {
-        await applyHotReload(
-          createHotTailPlan({
-            changedPaths: [changedPath],
-            hotReasons: [changedPath],
-          }),
-          nextConfig,
-        );
-
-        expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
-        expect(getCurrentProviderAuthStates()).toBeNull();
-
-        const { hasAuthForModelProvider } = await vi.importActual<
-          typeof import("../agents/model-provider-auth.js")
-        >("../agents/model-provider-auth.js");
-        await expect(
-          hasAuthForModelProvider({
-            provider: "openai",
-            cfg: nextConfig,
-            agentDir: "/virtual/provider-auth-agent",
-            workspaceDir: "/virtual/provider-auth-workspace",
-            env: {},
-            allowPluginSyntheticAuth: false,
-            discoverExternalCliAuth: false,
-            store: {
-              version: 1,
-              get profiles() {
-                return readProfiles();
-              },
-            },
-          }),
-        ).resolves.toBe(true);
-        expect(readProfiles).toHaveBeenCalledOnce();
-      } finally {
-        clearWarmedProviderAuthState();
-      }
-    },
-  );
 
   it("refreshes context metadata when the default workspace changes", async () => {
     const { applyHotReload, setState } = createReloadHandlersForTest(

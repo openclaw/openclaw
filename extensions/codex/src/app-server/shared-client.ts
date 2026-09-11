@@ -363,7 +363,8 @@ async function resolveCodexAppServerClientStartContext(
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const requestedStartOptions =
-    options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
+    options?.startOptions ??
+    resolveCodexAppServerRuntimeOptions({ pluginConfig: options?.pluginConfig }).start;
   const desktopGeneration = shouldTrackDesktopGeneration(
     requestedStartOptions,
     options?.pluginConfig,

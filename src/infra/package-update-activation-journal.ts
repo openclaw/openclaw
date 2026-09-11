@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { z } from "zod";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -220,11 +219,11 @@ export function openPackageActivationJournal(anchor: string) {
       db,
       queries(db)
         .selectFrom("package_activation")
-        .select([
+        .select((eb) => [
           "slot",
-          sql<number>`length(CAST(descriptor_json AS BLOB))`.as("descriptor_bytes"),
-          sql<number>`length(CAST(intent_json AS BLOB))`.as("intent_bytes"),
-          sql<number>`length(CAST(publications_json AS BLOB))`.as("publications_bytes"),
+          eb.fn<number>("length", [eb.cast("descriptor_json", "blob")]).as("descriptor_bytes"),
+          eb.fn<number>("length", [eb.cast("intent_json", "blob")]).as("intent_bytes"),
+          eb.fn<number>("length", [eb.cast("publications_json", "blob")]).as("publications_bytes"),
         ])
         .limit(2),
     ).rows;

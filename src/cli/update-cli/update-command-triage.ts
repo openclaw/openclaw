@@ -15,7 +15,6 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
   isVerifiedUpdateRollback,
@@ -24,6 +23,7 @@ import {
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 

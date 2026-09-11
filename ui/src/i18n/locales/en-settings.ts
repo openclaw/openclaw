@@ -276,6 +276,15 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
+    login: {
+      action: "Connect provider",
+      title: "Connect a provider",
+      description: "Save credentials for this agent. Choose the active model separately.",
+      done: "Provider credentials saved.",
+      finishing: "Credentials are being saved. Wait for the result.",
+      sessionExpired:
+        "This sign-in session ended. Close this dialog and refresh Models to check the result.",
+    },
     subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
@@ -343,7 +352,7 @@ const enSettings = {
       replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
-      removed: "API key removed.",
+      removed: "Saved API keys removed.",
       authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
     },
     probe: {
@@ -428,9 +437,6 @@ const enSettings = {
       adminRequired: "Browsing only. Model changes require operator.admin access.",
     },
     notes: {
-      saveKey: "Save API key for {provider} from Control UI",
-      removeKey: "Remove API key for {provider} from Control UI",
-      addProvider: "Add model provider {provider} from Control UI",
       defaultModel: "Update defaults from Control UI",
     },
   },

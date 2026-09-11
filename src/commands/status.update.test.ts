@@ -55,6 +55,50 @@ describe("resolveUpdateAvailability", () => {
     });
   });
 
+  it("reports a stale build when dist was built from a different commit", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        root: "/tmp/repo",
+        sha: "abc123456789",
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+        builtSha: "def987654321",
+      },
+    });
+
+    // Pulling without rebuilding keeps the old dist running, which is invisible
+    // from HEAD alone and is exactly what a failed update leaves behind.
+    expect(formatUpdateOneLiner(update)).toContain(
+      "stale build (running def98765, run pnpm build)",
+    );
+  });
+
+  it("stays quiet when the built commit matches HEAD", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        root: "/tmp/repo",
+        sha: "abc123456789",
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+        builtSha: "abc123456789",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).not.toContain("stale build");
+  });
+
   it("flags registry update when latest version is newer", () => {
     const latestVersion = nextMajorVersion(VERSION);
     const update = buildUpdate({

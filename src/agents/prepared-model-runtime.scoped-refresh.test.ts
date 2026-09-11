@@ -298,6 +298,7 @@ describe("prepared model runtime scoped refresh", () => {
         ],
       };
       setPreparedModelFullCatalogAuth(previous, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: change === "synthetic-credential" ? {} : profiles },
         authModes: { demo: "api_key" },
         credentials:
@@ -306,6 +307,7 @@ describe("prepared model runtime scoped refresh", () => {
             : {},
       });
       setPreparedModelFullCatalogAuth(failed, {
+        providerAuthLabels: new Map(),
         authStore: {
           version: 1,
           profiles:
@@ -417,6 +419,7 @@ describe("prepared model runtime scoped refresh", () => {
       });
       const auth = {
         authModes: { "discovered-provider": "api_key" as const },
+        providerAuthLabels: new Map(),
         authStore: { version: 1 as const, profiles: {} },
         credentials: mocks.authStorage.getAll(),
       };
@@ -584,6 +587,7 @@ describe("prepared model runtime scoped refresh", () => {
     setPreparedModelFullCatalogAuth(catalog, {
       authStore: { version: 1, profiles: {} },
       authModes: { demo: "api_key" },
+      providerAuthLabels: new Map(),
       credentials: { demo: { type: "api_key", key: "post-startup-key" } },
     });
     const owner = await prepareCatalogOwner(config, [catalog]);
@@ -710,6 +714,7 @@ describe("prepared model runtime scoped refresh", () => {
     });
     setPreparedModelFullCatalogAuth(catalog, {
       authModes: { custom: "api_key" },
+      providerAuthLabels: new Map(),
       authStore: { version: 1, profiles: {} },
       credentials: mocks.authStorage.getAll(),
     });
@@ -742,6 +747,7 @@ describe("prepared model runtime scoped refresh", () => {
         };
         setPreparedModelFullCatalogAuth(failed, {
           authModes: { custom: "api_key" },
+          providerAuthLabels: new Map(),
           authStore: { version: 1, profiles: {} },
           credentials: mocks.authStorage.getAll(),
         });

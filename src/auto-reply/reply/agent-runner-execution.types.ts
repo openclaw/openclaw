@@ -114,6 +114,8 @@ export type AgentTurnExecutionResult = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = {
+  /** The admitted queued delivery owner settles every terminal outcome. */
+  completionSource?: "reply-dispatch";
   commandBody: string;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;

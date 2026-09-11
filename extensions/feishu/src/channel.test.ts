@@ -2165,39 +2165,23 @@ describe("feishuPlugin actions", () => {
   // silent-drop this PR removes. Post-fix the resolver rejects the malformed
   // intent before the text branch, at both the top level and inside attachments[].
   it.each([
-    {
-      label: "top-level `file: {}`",
-      params: { file: {} },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "top-level `buffer: {}`",
-      params: { buffer: {} },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
-    {
-      label: "top-level `base64: {}`",
-      params: { base64: {} },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
-    {
-      label: "top-level `file: 42`",
-      params: { file: 42 },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "nested `attachments: [{ file: {} }]`",
-      params: { attachments: [{ file: {} }] },
-      expectedError: "`file` attachment-intent parameter is not supported",
-    },
-    {
-      label: "nested `attachments: [{ buffer: {} }]`",
-      params: { attachments: [{ buffer: {} }] },
-      expectedError: "buffer/base64 payloads are not supported",
-    },
+    ["top-level `file: {}`", { file: {} }, "`file` attachment-intent parameter is not supported"],
+    ["top-level `buffer: {}`", { buffer: {} }, "buffer/base64 payloads are not supported"],
+    ["top-level `base64: {}`", { base64: {} }, "buffer/base64 payloads are not supported"],
+    ["top-level `file: 42`", { file: 42 }, "`file` attachment-intent parameter is not supported"],
+    [
+      "nested `attachments: [{ file: {} }]`",
+      { attachments: [{ file: {} }] },
+      "`file` attachment-intent parameter is not supported",
+    ],
+    [
+      "nested `attachments: [{ buffer: {} }]`",
+      { attachments: [{ buffer: {} }] },
+      "buffer/base64 payloads are not supported",
+    ],
   ])(
-    "rejects malformed (non-string) $label attachment intent on send instead of text-only success",
-    async ({ params, expectedError }) => {
+    "rejects malformed (non-string) %s attachment intent on send instead of text-only success",
+    async (_label, params, expectedError) => {
       await expect(
         feishuPlugin.actions?.handleAction?.({
           action: "send",
@@ -3537,67 +3521,35 @@ describe("feishuPlugin actions", () => {
   });
 
   it.each([
-    {
-      name: "message reads",
-      action: "read",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "message edits",
-      action: "edit",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" },
-    },
-    {
-      name: "reaction addition",
-      action: "react",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", emoji: "THUMBSUP" },
-    },
-    {
-      name: "reaction removal",
-      action: "react",
-      params: {
+    ["message reads", "read", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["message edits", "edit", { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" }],
+    [
+      "reaction addition",
+      "react",
+      { messageId: "om_blocked", chatId: "oc_blocked", emoji: "THUMBSUP" },
+    ],
+    [
+      "reaction removal",
+      "react",
+      {
         messageId: "om_blocked",
         chatId: "oc_blocked",
         emoji: "THUMBSUP",
         remove: true,
       },
-    },
-    {
-      name: "reaction clearing",
-      action: "react",
-      params: { messageId: "om_blocked", chatId: "oc_blocked", clearAll: true },
-    },
-    {
-      name: "reaction lookup",
-      action: "reactions",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin creation",
-      action: "pin",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin removal",
-      action: "unpin",
-      params: { messageId: "om_blocked", chatId: "oc_blocked" },
-    },
-    {
-      name: "pin lookup",
-      action: "list-pins",
-      params: { chatId: "oc_blocked" },
-    },
-    {
-      name: "channel info",
-      action: "channel-info",
-      params: { chatId: "oc_blocked" },
-    },
-    {
-      name: "member info",
-      action: "member-info",
-      params: { chatId: "oc_blocked", memberId: "ou_blocked" },
-    },
-  ])("rejects blocked Feishu $name before provider content reads", async ({ action, params }) => {
+    ],
+    [
+      "reaction clearing",
+      "react",
+      { messageId: "om_blocked", chatId: "oc_blocked", clearAll: true },
+    ],
+    ["reaction lookup", "reactions", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin creation", "pin", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin removal", "unpin", { messageId: "om_blocked", chatId: "oc_blocked" }],
+    ["pin lookup", "list-pins", { chatId: "oc_blocked" }],
+    ["channel info", "channel-info", { chatId: "oc_blocked" }],
+    ["member info", "member-info", { chatId: "oc_blocked", memberId: "ou_blocked" }],
+  ])("rejects blocked Feishu %s before provider content reads", async (_name, action, params) => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action,
@@ -3626,29 +3578,13 @@ describe("feishuPlugin actions", () => {
   });
 
   it.each([
-    {
-      name: "message reads",
-      action: "read",
-      params: { messageId: "om_unknown", chatId: "oc_unknown" },
-    },
-    {
-      name: "pin lookup",
-      action: "list-pins",
-      params: { chatId: "oc_unknown" },
-    },
-    {
-      name: "channel info",
-      action: "channel-info",
-      params: { chatId: "oc_unknown" },
-    },
-    {
-      name: "member info",
-      action: "member-info",
-      params: { chatId: "oc_unknown", memberId: "ou_unknown" },
-    },
+    ["message reads", "read", { messageId: "om_unknown", chatId: "oc_unknown" }],
+    ["pin lookup", "list-pins", { chatId: "oc_unknown" }],
+    ["channel info", "channel-info", { chatId: "oc_unknown" }],
+    ["member info", "member-info", { chatId: "oc_unknown", memberId: "ou_unknown" }],
   ])(
-    "does not expose failed metadata lookup details for ambiguous Feishu $name",
-    async ({ action, params }) => {
+    "does not expose failed metadata lookup details for ambiguous Feishu %s",
+    async (_name, action, params) => {
       getChatInfoMock.mockRejectedValueOnce(new Error("chat not found"));
 
       await expect(

@@ -90,6 +90,9 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onModelPickerOpen: () => undefined,
     onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
+    onConnect: () => undefined,
+    canConnect: () => false,
+    loginBusy: false,
     ...overrides,
   };
 }

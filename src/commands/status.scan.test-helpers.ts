@@ -2,6 +2,7 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -321,27 +322,7 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: {
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    },
+    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       count: 0,
       paths: [],

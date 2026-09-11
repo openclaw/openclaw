@@ -74,10 +74,6 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
       });
     } catch {
       signal.throwIfAborted();
-      throw serviceError(
-        "invalid_project",
-        "Project must be an accessible local Git checkout root with a HEAD commit",
-      );
     }
     if (!project) {
       throw serviceError(

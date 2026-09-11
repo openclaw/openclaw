@@ -15,6 +15,26 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 ## Getting started
 
+In a private chat, send `/login openrouter` or select OpenRouter from `/login`.
+Choose **Sign in with OpenRouter**, approve access in your browser, and return
+to chat. OpenClaw receives the browser callback and saves the credential before
+reporting success. Use `/login cancel` to cancel a pending sign-in.
+
+Login saves access without choosing a starter model. If current model restrictions
+hide OpenRouter models, choose **Show all OpenRouter models** or **Keep current
+restrictions**. The credential stays saved either way. In the Control UI, use
+**Settings → Models → Connect** for the same credential-only flow, then use the
+model menu to choose a model from the Gateway's catalog.
+
+Chat browser sign-in uses the Gateway's managed [Tailscale HTTPS address](/gateway/tailscale).
+With Tailscale Serve, your browser must have access to the same tailnet. If no
+managed HTTPS address is available, enable Serve and retry, or use the CLI flow
+below. The callback does not sign you in to the Control UI.
+
+The Control UI uses hosted completion when opened at the managed HTTPS address.
+When opened through localhost or another address, it keeps manual redirect
+completion so browsers outside the tailnet can still finish setup.
+
 <Tabs>
   <Tab title="OAuth">
     <Steps>

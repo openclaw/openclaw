@@ -3,8 +3,9 @@ import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCrabboxBinary } from "./crabbox-binary.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
-import { CRABBOX_WORKER_PROVIDER_ID, findCrabboxBinary } from "./crabbox-worker-profile.js";
+import { CRABBOX_WORKER_PROVIDER_ID } from "./crabbox-worker-profile.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -96,7 +97,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         return { status: "skipped", changes: [] };
       }
       try {
-        const binary = await managedBinary.ensureManagedCrabboxBinary({
+        const { binary } = await managedBinary.ensureManagedCrabboxBinary({
           binary: managedBinary.resolveManagedCrabboxBinaryPath(ctx.env),
           env: ctx.env,
         });

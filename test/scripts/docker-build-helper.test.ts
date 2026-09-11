@@ -3525,11 +3525,21 @@ process.on("SIGTERM", () => {
         lane === "published"
           ? source.slice(0, source.indexOf("phase storage-preflight"))
           : `source ${shellQuote(OPENCLAW_E2E_INSTANCE_HELPER_PATH)}\nsource ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}`;
+      // The published stop proof must inspect this fixture's listener, not a host Gateway.
+      const tcpProbeAdapter = `
+eval "$(declare -f openclaw_e2e_probe_tcp | sed '1s/openclaw_e2e_probe_tcp/fixture_probe_tcp/')"
+openclaw_e2e_probe_tcp() {
+  local port="$2"
+  [ "$port" != 18789 ] || port="$(cat "$PORT_FILE")"
+  fixture_probe_tcp "$1" "$port" "\${3:-400}"
+}
+`;
       const script = `${setup}
 trap - EXIT ERR INT TERM
 assert_prepublish_fixture_idle() { :; }
 assert_baseline_state() { :; }
 check_gateway_status() { :; }
+${tcpProbeAdapter}
 # This fixture chooses an ephemeral port; retain the actual readiness implementation.
 eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
 openclaw_e2e_wait_gateway_ready() {
@@ -3549,6 +3559,17 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
           encoding: "utf8",
           timeout: 40_000,
         });
+      const probeListener = () =>
+        spawnSync(
+          "bash",
+          [
+            "-c",
+            `source ${shellQuote(OPENCLAW_E2E_INSTANCE_HELPER_PATH)}
+${tcpProbeAdapter}
+openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
+          ],
+          { env, encoding: "utf8", timeout: 5_000 },
+        );
       const records = (): Array<{ pid: number; managed: boolean }> =>
         existsSync(startsPath)
           ? readFileSync(startsPath, "utf8")
@@ -3593,7 +3614,9 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
         expect(replacement.managed).toBe(true);
         expect(replacement.pid).not.toBe(initial.pid);
         expect(isProcessRunning(initial.pid)).toBe(false);
+        expect(probeListener().status).toBe(0);
         expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
+        expect(probeListener().status).toBe(1);
         await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
       } finally {
         systemctl("stop", "openclaw-gateway.service");
@@ -7829,6 +7852,64 @@ done
     expect(staleObject.status).toBe(1);
     expect(staleObject.stdout).not.toContain('"loaded"');
   });
+
+  it.each(["selected", "default"] as const)(
+    "mounts the %s Doctor contract and canonical-path shims from the same checkout",
+    (targetMode) => {
+      const workDir = tempDirs.make("openclaw-doctor-contract-mounts-");
+      const targetRoot =
+        targetMode === "selected" ? join(workDir, "selected target") : process.cwd();
+      const contractPath = "scripts/e2e/lib/doctor-install-switch";
+      const shimNames = ["systemctl", "loginctl", "busctl", "systemd-exec-start.mjs"];
+      if (targetMode === "selected") {
+        const targetContract = join(targetRoot, contractPath);
+        mkdirSync(join(targetContract, "shims"), { recursive: true });
+        copyFileSync(DOCTOR_SWITCH_SCENARIO_PATH, join(targetContract, "scenario.sh"));
+        for (const name of shimNames) {
+          copyFileSync(join(contractPath, "shims", name), join(targetContract, "shims", name));
+        }
+      }
+      writeFileSync(join(workDir, "openclaw-current.tgz"), "unused package transport fixture");
+      writeExecutables(join(workDir, "bin"), {
+        timeout: PASSTHROUGH_TIMEOUT_SCRIPT,
+        docker: `#!/bin/bash
+set -euo pipefail
+case "$1 \${2:-}" in
+  "image inspect") exit 0 ;;
+  "run "*) printf '%s\\0' "$@" >"$TMPDIR/docker-run-args" ;;
+  *) exit 9 ;;
+esac
+`,
+      });
+      const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_SKIP_DOCKER_BUILD=1
+export OPENCLAW_DOCKER_E2E_IMAGE=doctor-contract-fixture
+export OPENCLAW_CURRENT_PACKAGE_TGZ="$TMPDIR/openclaw-current.tgz"
+unset DOCKER_E2E_HARNESS_ROOT_DIR OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR OPENCLAW_DOCKER_E2E_REPO_ROOT
+${targetMode === "selected" ? `export OPENCLAW_DOCKER_E2E_REPO_ROOT=${shellQuote(targetRoot)}` : ""}
+bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
+`;
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const args = readFileSync(join(workDir, "docker-run-args"), "utf8").split("\0");
+      const mounts = args.flatMap((arg, index) => (arg === "-v" ? [args[index + 1]] : []));
+      // Service inspection uses /usr/local/bin, outside the target directory overlay.
+      // Both views must select one fixture while shared helpers stay trusted.
+      expect(mounts.filter((mount) => mount?.includes(":/usr/local/bin/"))).toEqual(
+        shimNames.map(
+          (name) => `${targetRoot}/${contractPath}/shims/${name}:/usr/local/bin/${name}:ro`,
+        ),
+      );
+      expect(mounts).toContain(`${targetRoot}/${contractPath}:/app/${contractPath}:ro`);
+      expect(mounts).toContain(`${process.cwd()}/scripts/e2e:/app/scripts/e2e:ro`);
+      expect(mounts).toContain(`${process.cwd()}/scripts/lib:/app/scripts/lib:ro`);
+      expect(args).toContain("doctor-contract-fixture");
+      expect(args).toContain(`${contractPath}/scenario.sh`);
+    },
+  );
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {
     const runner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");

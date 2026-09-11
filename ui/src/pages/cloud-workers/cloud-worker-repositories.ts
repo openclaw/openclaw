@@ -10,11 +10,11 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import { readCloudWorkerProfiles } from "./cloud-worker-config.ts";
 import {
   buildCloudWorkerPreparedPoolPatch,
@@ -38,18 +38,15 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
     draft: CloudWorkerRepository;
   } | null = null;
   @state() private poolDraft: string | null = null;
-  @state() private busy = false;
-  @state() private error: string | null = null;
-  @state() private notice: string | null = null;
+
+  private readonly configSave = new CloudWorkerConfigSave(this);
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
       this.editor = null;
       this.poolDraft = null;
-      this.busy = false;
-      this.error = null;
-      this.notice = null;
+      this.configSave.update({ busy: false, error: null, notice: null });
     },
   });
   private readonly subscriptions = new SubscriptionsController(this).effect(
@@ -67,7 +64,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
   }
 
   private editable() {
-    return this.canManage && !this.busy;
+    return this.canManage && !this.configSave.state.busy;
   }
 
   private async save(
@@ -78,47 +75,17 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
     if (!scope || !this.editable()) {
       return false;
     }
-    this.busy = true;
-    this.error = null;
-    this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
-    try {
-      const patched = await runtimeConfig.patchFromSnapshot((base) => {
-        const built = build(base);
-        return "error" in built
-          ? { error: t(`cloudWorkersPage.errors.${built.error}`) }
-          : {
-              options: {
-                raw: built.patch,
-                replacePaths: built.replacePaths,
-                note: "cloud workers: update repository defaults or prepared pool",
-                canDispatch: () =>
-                  isCurrent() &&
-                  canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
-              },
-            };
-      });
-      if (!isCurrent()) {
-        return false;
-      }
-      if (!patched) {
-        this.error =
-          runtimeConfig.state.lastError ?? t("cloudWorkersPage.errors.settingsSaveFailed");
-        return false;
-      }
-      this.notice = t("labsPage.restartRequired");
-      return true;
-    } catch (error) {
-      if (isCurrent()) {
-        this.error = formatUiError(error);
-      }
-      return false;
-    } finally {
-      if (isCurrent()) {
-        this.busy = false;
-      }
-    }
+    return this.configSave.save(runtimeConfig, isCurrent, {
+      build,
+      note: "cloud workers: update repository defaults or prepared pool",
+      canDispatch: () =>
+        isCurrent() &&
+        canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
+      failed: () => t("cloudWorkersPage.errors.settingsSaveFailed"),
+      success: () => t("labsPage.restartRequired"),
+    });
   }
 
   private openEditor(mapping?: CloudWorkerRepository) {
@@ -132,14 +99,13 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
         profileId: readCloudWorkerProfiles(this.config())[0]?.id ?? "",
       },
     };
-    this.error = null;
-    this.notice = null;
+    this.configSave.update({ error: null, notice: null });
   }
 
   private changeDraft(patch: Partial<CloudWorkerRepository>) {
     if (this.editor) {
       this.editor = { ...this.editor, draft: { ...this.editor.draft, ...patch } };
-      this.error = null;
+      this.configSave.update({ error: null });
     }
   }
 
@@ -222,10 +188,10 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
           control: html` <button
               class="btn btn--sm"
               type="button"
-              ?disabled=${this.busy}
+              ?disabled=${this.configSave.state.busy}
               @click=${() => {
                 this.editor = null;
-                this.error = null;
+                this.configSave.update({ error: null });
               }}
             >
               ${t("common.cancel")}
@@ -264,7 +230,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
               @input=${(event: Event) => {
                 if (event.currentTarget instanceof HTMLInputElement) {
                   this.poolDraft = event.currentTarget.value;
-                  this.error = null;
+                  this.configSave.update({ error: null });
                 }
               }}
               @keydown=${(event: KeyboardEvent) => {
@@ -324,8 +290,8 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
           : renderSettingsEmpty(t("cloudWorkersPage.repositoriesEmpty")),
       )}
       ${this.renderEditor()}
-      ${this.error ? html`<div class="callout warning" role="alert">${this.error}</div>` : nothing}
-      ${this.notice ? html`<div class="callout warning" role="status">${this.notice}</div>` : nothing}
+      ${this.configSave.state.error ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>` : nothing}
+      ${this.configSave.state.notice ? html`<div class="callout warning" role="status">${this.configSave.state.notice}</div>` : nothing}
     `;
   }
 }

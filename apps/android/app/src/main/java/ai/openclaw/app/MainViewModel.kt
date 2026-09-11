@@ -20,6 +20,7 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
@@ -532,6 +533,8 @@ class MainViewModel private constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val sessionDiffAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
     runtimeState(initial = SessionCatalogState()) { it.sessionCatalogState }
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
@@ -1698,6 +1701,12 @@ class MainViewModel private constructor(
       !runtime.chatSessionBranchesLoading.value &&
       runtime.chatSessionBranches.value.any { it.leafEntryId == leafEntryId && !it.active }
   }
+
+  suspend fun loadSessionDiff(
+    sessionKey: String,
+    agentId: String?,
+    expectedGatewayStableId: String,
+  ): SessionDiffSnapshot = ensureRuntime().loadSessionDiff(sessionKey, agentId, expectedGatewayStableId)
 
   suspend fun listWorkspaceFiles(
     path: String?,

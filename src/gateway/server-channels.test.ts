@@ -407,6 +407,8 @@ describe("server-channels auto restart", () => {
       const snapshotChannels = Object.keys(
         managerA.getRuntimeSnapshot().channelAccounts,
       ).toSorted();
+      expect(managerA.isAccountListed("slack", DEFAULT_ACCOUNT_ID)).toBe(false);
+      expect(managerB.isAccountListed("slack", DEFAULT_ACCOUNT_ID)).toBe(true);
 
       await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
       const stopped = {
@@ -1303,6 +1305,144 @@ describe("server-channels auto restart", () => {
     expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
   });
 
+  it.each(["thaw", "health-monitor"] as const)(
+    "keeps %s recovery limited to listed accounts while an unlisted sibling stays active",
+    async (recovery) => {
+      const admitted = new Map<string, ChannelGatewayContext<TestAccount>>();
+      const starts: string[] = [];
+      const stops: string[] = [];
+      installTestRegistry(
+        createTestPlugin({
+          listAccountIds: () => ["listed"],
+          startAccount: async (context) => {
+            admitted.set(context.accountId, context);
+            starts.push(context.accountId);
+            context.setStatus({
+              accountId: context.accountId,
+              connected: true,
+              lastTransportActivityAt: Date.now(),
+            });
+            await new Promise<void>((resolve) => {
+              context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+          },
+          stopAccount: async (context) => {
+            stops.push(context.accountId);
+          },
+        }),
+      );
+      const manager = createManager();
+      await manager.startChannels();
+      await manager.startChannel("discord", "recovered");
+      const listedSignal = admitted.get("listed")?.abortSignal;
+      const recoveredSignal = admitted.get("recovered")?.abortSignal;
+
+      if (recovery === "thaw") {
+        const errors: string[] = [];
+        expect(
+          await restartRunningChannelAccounts(manager, {
+            shouldContinue: () => true,
+            onError: (message) => errors.push(message),
+          }),
+        ).toEqual([]);
+        expect(errors).toEqual([]);
+      } else {
+        const monitor = startChannelHealthMonitor({
+          channelManager: manager,
+          timing: { monitorStartupGraceMs: 2, channelConnectGraceMs: 0, staleEventThresholdMs: 1 },
+        });
+        try {
+          await vi.advanceTimersByTimeAsync(2);
+          await monitor.waitForIdle();
+        } finally {
+          monitor.shutdown();
+        }
+      }
+
+      expect(starts).toEqual(["listed", "recovered", "listed"]);
+      expect(stops).toEqual(["listed"]);
+      expect(listedSignal?.aborted).toBe(true);
+      expect(admitted.get("listed")?.abortSignal.aborted).toBe(false);
+      expect(recoveredSignal?.aborted).toBe(false);
+      expect(manager.getRuntimeSnapshot().channelAccounts.discord).toMatchObject({
+        listed: { running: true },
+        recovered: { running: true },
+      });
+    },
+  );
+
+  it.each(["thaw", "health-monitor"] as const)(
+    "does not recreate an account removed while %s awaits its stop",
+    async (recovery) => {
+      let accountIds = ["removed"];
+      const stopStarted = createDeferred();
+      const releaseStop = createDeferred();
+      const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+        context.setStatus({
+          accountId: context.accountId,
+          connected: true,
+          lastTransportActivityAt: Date.now(),
+        });
+        await new Promise<void>((resolve) => {
+          context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+      installTestRegistry(
+        createTestPlugin({
+          listAccountIds: () => accountIds,
+          resolveAccount: () => ({ enabled: true, configured: true }),
+          startAccount,
+          stopAccount: async () => {
+            stopStarted.resolve();
+            await releaseStop.promise;
+          },
+        }),
+      );
+      const manager = createManager();
+      await manager.startChannels();
+      const errors: string[] = [];
+      const monitor =
+        recovery === "health-monitor"
+          ? startChannelHealthMonitor({
+              channelManager: manager,
+              timing: {
+                monitorStartupGraceMs: 2,
+                channelConnectGraceMs: 0,
+                staleEventThresholdMs: 1,
+              },
+            })
+          : undefined;
+      const thaw =
+        recovery === "thaw"
+          ? restartRunningChannelAccounts(manager, {
+              shouldContinue: () => true,
+              onError: (message) => errors.push(message),
+            })
+          : undefined;
+      try {
+        if (monitor) {
+          await vi.advanceTimersByTimeAsync(2);
+        }
+        await stopStarted.promise;
+        accountIds = [];
+        releaseStop.resolve();
+        if (thaw) {
+          expect(await thaw).toEqual([]);
+        }
+        await monitor?.waitForIdle();
+
+        expect(errors).toEqual([]);
+        expect(startAccount).toHaveBeenCalledOnce();
+        expect(firstStartAccountContext(startAccount).abortSignal.aborted).toBe(true);
+        expect(manager.getRuntimeSnapshot().channelAccounts.discord?.removed).toBeUndefined();
+      } finally {
+        releaseStop.resolve();
+        monitor?.shutdown();
+        await thaw;
+      }
+    },
+  );
+
   it("retries only the failed account after a partial host-thaw restart", async () => {
     let failStop = true;
     const errors: string[] = [];
@@ -1549,6 +1689,52 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
+  });
+
+  it("does not repeat a thaw recovery start after the pending account is removed", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const releaseTask = createDeferred();
+    const startAccount = vi.fn(async () => await releaseTask.promise);
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+    await manager.startChannels();
+    const startChannel = manager.startChannel;
+    const recoveryStart = vi.spyOn(manager, "startChannel").mockImplementation(async (...args) => {
+      const outcome = await startChannel(...args);
+      accountIds = [];
+      return outcome;
+    });
+    const errors: string[] = [];
+    try {
+      const restartTask = restartRunningChannelAccounts(manager, {
+        shouldContinue: () => true,
+        onError: (message) => errors.push(message),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const pendingTargets = await restartTask;
+      expect(pendingTargets).toEqual([{ channelId: "discord", accountId: DEFAULT_ACCOUNT_ID }]);
+      expect(recoveryStart).toHaveBeenCalledOnce();
+      expect(startAccount).toHaveBeenCalledOnce();
+      expect(
+        await restartRunningChannelAccounts(
+          manager,
+          { shouldContinue: () => true, onError: (message) => errors.push(message) },
+          { kind: "deferred-retry", targets: pendingTargets },
+        ),
+      ).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(recoveryStart).toHaveBeenCalledOnce();
+    } finally {
+      releaseTask.resolve();
+      await flushMicrotasks();
+    }
   });
 
   it("sanitizes late writes from an abandoned stopAccount racing a replacement", async () => {
@@ -3989,6 +4175,56 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
 
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject(recorded);
+  });
+
+  it("keeps an explicitly admitted account visible when plugin enumeration omits it", async () => {
+    const admitted = new Map<string, ChannelGatewayContext<TestAccount>>();
+    const describeAccount = vi.fn(() => ({
+      accountId: "recovered",
+      enabled: true,
+      configured: false,
+    }));
+    const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+      admitted.set(context.accountId, context);
+      await new Promise<void>((resolve) => {
+        context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const plugin = createTestPlugin({
+      listAccountIds: () => [],
+      resolveAccount: () => ({ enabled: true, configured: true }),
+      describeAccount,
+      startAccount,
+    });
+    installTestRegistry(plugin);
+    const manager = createManager();
+
+    await expect(manager.startChannel("discord", "recovered")).resolves.toEqual(
+      new Map([["recovered", { status: "handed-off" }]]),
+    );
+    expect(describeAccount).toHaveBeenCalledOnce();
+    describeAccount.mockClear();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.recovered).toMatchObject({
+      accountId: "recovered",
+      enabled: true,
+      configured: true,
+      running: true,
+      lifecycle: "starting",
+    });
+    expect(describeAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channels.discord?.accountId).toBe(DEFAULT_ACCOUNT_ID);
+
+    await manager.startChannel("discord", "sibling");
+    await manager.stopChannel("discord", "recovered");
+
+    expect(admitted.get("recovered")?.abortSignal.aborted).toBe(true);
+    expect(admitted.get("sibling")?.abortSignal.aborted).toBe(false);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord).toMatchObject({
+      sibling: { accountId: "sibling", enabled: true, configured: true, running: true },
+    });
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord).not.toHaveProperty("recovered");
+    expect(manager.getRuntimeSnapshot().channels.discord?.accountId).toBe(DEFAULT_ACCOUNT_ID);
   });
 
   it("starts enabled accounts without requiring diagnostic inspection", async () => {

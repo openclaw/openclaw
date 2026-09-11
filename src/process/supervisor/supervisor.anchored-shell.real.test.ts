@@ -238,22 +238,14 @@ describe("supervisor anchored shell real process ownership", () => {
       try {
         await expect(fixture.run.wait()).resolves.toMatchObject({ exitCode: 0, exitSignal: null });
         const cleanup = fixture.cleanup();
-        if (ignoreTerm) {
-          await expect(cleanup).rejects.toThrow("cleanup identity lost");
-        } else {
-          await cleanup;
-          expect(isProcessAlive(pid)).toBe(false);
-        }
+        await cleanup;
+        expect(isProcessAlive(pid)).toBe(false);
         await waitForDead(pid, 5_000);
       } finally {
         await fixture.release();
         killPidIfAlive(pid);
         await waitForDead(pid, 5_000);
-        if (ignoreTerm) {
-          await expect(fixture.supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
-        } else {
-          await fixture.supervisor.shutdown();
-        }
+        await fixture.supervisor.shutdown();
       }
     },
   );

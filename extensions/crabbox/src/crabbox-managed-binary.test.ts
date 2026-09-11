@@ -4,6 +4,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal, createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
@@ -69,13 +70,36 @@ async function fixture(version = "0.54.0") {
 }
 
 describe("managed Crabbox", () => {
+  it("probes the executable in the caller's supplied environment and working directory", async () => {
+    const root = tempDirs.make("crabbox-probe-env-");
+    const binary = path.join(root, "crabbox");
+    const env = { PATH: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const command = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "crabbox 0.56.0",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(ensureManagedCrabboxBinary({ binary, env, cwd: root })).resolves.toEqual({
+      binary,
+      version: "0.56.0",
+    });
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      [binary, "--version"],
+      expect.objectContaining({ baseEnv: env, cwd: root }),
+    );
+  });
+
   it.each(["0.55.0", "0.55.1", "1.0.0"])(
     "uses supported operator version %s without network or state mutation",
     async (version) => {
       const test = await fixture(version);
       await expect(
         ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
-      ).resolves.toBe(test.candidate);
+      ).resolves.toEqual({ binary: test.candidate, version });
       expect(test.fetch).not.toHaveBeenCalled();
       await expect(fs.access(test.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({
         code: "ENOENT",
@@ -86,7 +110,10 @@ describe("managed Crabbox", () => {
   it("upgrades an old candidate, preserves its complete distribution, and reuses it offline", async () => {
     const test = await fixture();
     const params = { binary: test.candidate, env: test.env, runCommand };
-    await expect(ensureManagedCrabboxBinary(params)).resolves.toBe(test.binary);
+    await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
+      binary: test.binary,
+      version: CRABBOX_MIN_VERSION,
+    });
     expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
@@ -98,8 +125,12 @@ describe("managed Crabbox", () => {
         );
       }
     }
+    await fs.writeFile(test.binary, "0.56.0");
     test.fetch.mockRejectedValue(new Error("offline"));
-    await expect(ensureManagedCrabboxBinary(params)).resolves.toBe(test.binary);
+    await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
+      binary: test.binary,
+      version: "0.56.0",
+    });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
       path.basename(path.dirname(test.binary)),
@@ -111,7 +142,7 @@ describe("managed Crabbox", () => {
     await fs.rm(test.candidate);
     await expect(
       ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
-    ).resolves.toBe(test.binary);
+    ).resolves.toEqual({ binary: test.binary, version: CRABBOX_MIN_VERSION });
   });
 
   it("rejects mismatched archive bytes without publication and permits a later retry", async () => {
@@ -125,7 +156,10 @@ describe("managed Crabbox", () => {
     await expect(ensureManagedCrabboxBinary(params)).rejects.toThrow("checksum mismatch");
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
     expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
-    await expect(ensureManagedCrabboxBinary(params)).resolves.toBe(test.binary);
+    await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
+      binary: test.binary,
+      version: CRABBOX_MIN_VERSION,
+    });
   });
 
   it("rejects an executable whose version disagrees with the verified release", async () => {
@@ -180,7 +214,7 @@ describe("managed Crabbox", () => {
       finish.resolve();
       await retained;
     }
-    await expect(retained).resolves.toBe(test.binary);
+    await expect(retained).resolves.toEqual({ binary: test.binary, version: CRABBOX_MIN_VERSION });
     expect(test.fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -204,7 +238,10 @@ describe("managed Crabbox", () => {
     controller.abort(new Error("caller stopped"));
     await result;
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
-    await expect(ensureManagedCrabboxBinary(params)).resolves.toBe(test.binary);
+    await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
+      binary: test.binary,
+      version: CRABBOX_MIN_VERSION,
+    });
   });
 
   it("uses another process's verified installation when it wins publication", async () => {
@@ -213,13 +250,14 @@ describe("managed Crabbox", () => {
     vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
       if (destination === path.dirname(test.binary) && typeof source === "string") {
         await fs.cp(source, destination, { recursive: true });
+        await fs.writeFile(test.binary, "0.56.0");
         throw Object.assign(new Error("destination exists"), { code: "EEXIST" });
       }
       await rename(source, destination);
     });
     await expect(
       ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
-    ).resolves.toBe(test.binary);
+    ).resolves.toEqual({ binary: test.binary, version: "0.56.0" });
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
     ).toBe("keep me");
@@ -237,7 +275,7 @@ describe("managed Crabbox", () => {
       await fs.writeFile(path.join(destination, "operator-note"), "preserve this");
       await expect(
         ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
-      ).resolves.toBe(test.binary);
+      ).resolves.toEqual({ binary: test.binary, version: CRABBOX_MIN_VERSION });
       expect(await fs.readFile(test.binary, "utf8")).toBe(CRABBOX_MIN_VERSION);
       expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
       const parent = path.dirname(destination);
@@ -309,7 +347,10 @@ describe("managed Crabbox", () => {
       "corrupt",
     );
     test.fetch.mockRejectedValue(new Error("offline"));
-    await expect(ensureManagedCrabboxBinary(params)).resolves.toBe(test.binary);
+    await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
+      binary: test.binary,
+      version: CRABBOX_MIN_VERSION,
+    });
   });
 
   it("refuses a symlinked managed directory without changing its target", async () => {
@@ -407,7 +448,9 @@ describe("managed Crabbox", () => {
       await vi.advanceTimersByTimeAsync(1);
       vi.useRealTimers();
       if (succeeds) {
-        await expect(result).resolves.toEqual({ value: test.binary });
+        await expect(result).resolves.toEqual({
+          value: { binary: test.binary, version: CRABBOX_MIN_VERSION },
+        });
       } else {
         await expect(result).resolves.toEqual({
           error: expect.objectContaining({ name: "TimeoutError" }),

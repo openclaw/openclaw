@@ -13,14 +13,10 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import { findCrabboxBinary, resolveCrabboxBinary } from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import {
-  findCrabboxBinary,
-  operationLeaseId,
-  parseCrabboxProfile,
-  resolveCrabboxBinary,
-} from "./crabbox-worker-profile.js";
+import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
@@ -31,7 +27,10 @@ import {
 } from "./crabbox-worker-timeouts.js";
 
 vi.mock("./crabbox-managed-binary.js", () => ({
-  ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => binary),
+  ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
+    binary,
+    version: "0.55.0",
+  })),
 }));
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
@@ -76,7 +75,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 beforeEach(() => {
   vi.mocked(ensureManagedCrabboxBinary)
     .mockReset()
-    .mockImplementation(async (params) => params?.binary ?? "crabbox");
+    .mockImplementation(async (params) => ({
+      binary: params?.binary ?? "crabbox",
+      version: "0.55.0",
+    }));
   // Provider instances share durable state within a replay test, never across test cases.
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-provider-"));
 });
@@ -292,7 +294,10 @@ describe("Crabbox worker provider", () => {
 
   it("uses the managed binary for discovery and the complete worker lifecycle", async () => {
     const managedBinary = path.resolve(path.sep, "managed", "crabbox");
-    vi.mocked(ensureManagedCrabboxBinary).mockResolvedValue(managedBinary);
+    vi.mocked(ensureManagedCrabboxBinary).mockResolvedValue({
+      binary: managedBinary,
+      version: "0.55.0",
+    });
     const runCommand = vi.fn<CrabboxCommandRunner>(async (argv) => {
       if (argv[1] === "providers") {
         return commandResult({
@@ -353,7 +358,7 @@ describe("Crabbox worker provider", () => {
 
   it("does not allocate after cancellation during managed binary acquisition", async () => {
     const acquisitionStarted = createDeferred<void>();
-    const acquisition = createDeferred<string>();
+    const acquisition = createDeferred<CrabboxBinary>();
     vi.mocked(ensureManagedCrabboxBinary).mockImplementation(() => {
       acquisitionStarted.resolve();
       return acquisition.promise;
@@ -370,7 +375,10 @@ describe("Crabbox worker provider", () => {
 
     await acquisitionStarted.promise;
     controller.abort();
-    acquisition.resolve(path.resolve(path.sep, "managed", "crabbox"));
+    acquisition.resolve({
+      binary: path.resolve(path.sep, "managed", "crabbox"),
+      version: "0.55.0",
+    });
     await rejected;
 
     expect(runCommand).not.toHaveBeenCalled();
@@ -3287,7 +3295,7 @@ describe("Crabbox worker provider", () => {
     vi.useFakeTimers();
     const heartbeatStarted = createDeferred<AbortSignal>();
     const acquisitionStarted = createDeferred<void>();
-    const acquisition = createDeferred<string>();
+    const acquisition = createDeferred<CrabboxBinary>();
     let heartbeatCount = 0;
     const provider = providerWithRunner(async (argv, options) => {
       if (argv[1] === "inspect") {
@@ -3684,6 +3692,12 @@ describe("Crabbox binary resolution", () => {
     ).toBe(SIBLING_BINARY);
     expect(
       resolveCrabboxBinary({
+        pathEnv: toolsDir,
+        isExecutable: (candidate) => candidate === SIBLING_BINARY || candidate === pathBinary,
+      }),
+    ).toBe(pathBinary);
+    expect(
+      resolveCrabboxBinary({
         openclawRoot: OPENCLAW_ROOT,
         pathEnv: [path.resolve(path.sep, "not-executable"), toolsDir].join(path.delimiter),
         isExecutable: (candidate) => candidate === pathBinary,
@@ -3703,6 +3717,48 @@ describe("Crabbox binary resolution", () => {
         isExecutable: () => false,
       }),
     ).toBe("crabbox");
+  });
+
+  it.each([
+    { extensions: ["", ".com", ".bat", ".cmd", ".exe"], preferred: ".exe" },
+    { extensions: ["", ".com", ".bat", ".cmd"], preferred: ".cmd" },
+    { extensions: ["", ".com", ".bat"], preferred: ".bat" },
+    { extensions: ["", ".com"], preferred: ".com" },
+    { extensions: [""], preferred: "" },
+  ])("selects the preferred Windows executable suffix $preferred", ({ extensions, preferred }) => {
+    const toolsDir = path.resolve(path.sep, "tools");
+    const pathBinary = path.join(toolsDir, "crabbox");
+    const executables = new Set(
+      [SIBLING_BINARY, pathBinary].flatMap((binary) =>
+        extensions.map((extension) => `${binary}${extension}`),
+      ),
+    );
+    const discovery = {
+      platform: "win32" as const,
+      pathEnv: toolsDir,
+      isExecutable: (candidate: string) => executables.has(candidate),
+    };
+
+    expect(resolveCrabboxBinary(discovery)).toBe(`${pathBinary}${preferred}`);
+    expect(resolveCrabboxBinary({ ...discovery, openclawRoot: OPENCLAW_ROOT })).toBe(
+      `${SIBLING_BINARY}${preferred}`,
+    );
+  });
+
+  it("preserves Windows PATH directory order ahead of executable suffix preference", () => {
+    const first = path.resolve(path.sep, "first-tools");
+    const second = path.resolve(path.sep, "second-tools");
+    const firstBinary = path.join(first, "crabbox.cmd");
+    const secondBinary = path.join(second, "crabbox.exe");
+    const executables = new Set([firstBinary, secondBinary]);
+
+    expect(
+      resolveCrabboxBinary({
+        platform: "win32",
+        pathEnv: `${first};${second}`,
+        isExecutable: (candidate) => executables.has(candidate),
+      }),
+    ).toBe(firstBinary);
   });
 
   it("distinguishes executable discovery from the dispatch fallback", () => {

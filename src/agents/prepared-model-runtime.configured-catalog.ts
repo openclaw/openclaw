@@ -27,6 +27,7 @@ function createConfiguredModelCatalogSnapshot(params: {
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): ModelCatalogSnapshot {
+  const replace = params.agentFacts.input.config.models?.mode === "replace";
   const configuredEntries = dedupeByKey(
     [
       ...buildConfiguredModelCatalog({
@@ -37,15 +38,19 @@ function createConfiguredModelCatalogSnapshot(params: {
             : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
         manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
       }),
-      ...params.configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
-      ...params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
-        const model = params.templateModelRegistry.find(provider, modelId);
-        return model ? [modelCatalogRowToEntry(model)] : [];
-      }),
+      ...(replace
+        ? []
+        : params.configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model))),
+      ...(replace
+        ? []
+        : params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            const model = params.templateModelRegistry.find(provider, modelId);
+            return model ? [modelCatalogRowToEntry(model)] : [];
+          })),
     ],
     resolveModelCatalogIdentityKey,
   );
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
+  const staticEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
     modelCatalogRowToEntry(model),
   );
   return {

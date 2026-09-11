@@ -9,7 +9,6 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { modelKey } from "../shared/model-key.js";
 import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
@@ -77,7 +76,7 @@ export function normalizeAgentModelRefForConfig(model: string): string {
 
   const { provider, modelId: modelSuffix } = parsed;
   const normalizedModel = normalizeProviderCatalogModelIdForConfig(provider, modelSuffix);
-  return modelKey(provider, normalizedModel);
+  return `${provider}/${normalizedModel}`;
 }
 
 /** Normalizes primary/fallback refs without replacing unchanged config values. */

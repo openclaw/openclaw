@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
-import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 export type PreparedSimpleCompletionModel =
   | {
@@ -45,5 +45,5 @@ export type PrepareSimpleCompletionModelForAgentParams = {
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
-  modelResolver?: typeof resolveModelAsync;
+  modelResolver?: SimpleCompletionModelResolver;
 };

@@ -1952,3 +1952,27 @@
     transform: rotate(360deg);
   }
 }
+
+.provider-usage-window-group__windows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: var(--space-3);
+}
+
+.provider-usage-window-group__title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  margin-bottom: var(--space-2);
+}
+
+.provider-usage-progress--ok > span {
+  background: var(--ok);
+}
+
+.provider-usage-progress--warn > span {
+  background: var(--warn);
+}
+
+.provider-usage-progress--danger > span {
+  background: var(--danger);
+}

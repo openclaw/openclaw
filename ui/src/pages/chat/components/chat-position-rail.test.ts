@@ -44,7 +44,11 @@ describe("conversation position rail", () => {
       key: `row-${index}`,
       content: html`<div>${index}</div>`,
     }));
-    const { container, session } = await mountTestTranscript("rail-notification", rows, transcript);
+    const { container, session, renderRows } = await mountTestTranscript(
+      "rail-notification",
+      rows,
+      transcript,
+    );
     try {
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
@@ -54,7 +58,11 @@ describe("conversation position rail", () => {
         observer.emitTarget(container, 800, 600);
       }
       const ids = rows.map((row) => row.key);
-      session.syncMessageRows(new Map(ids.map((id) => [id, id])));
+      session.syncMessageRows(
+        new Map(ids.map((id) => [id, id])),
+        new Map(ids.map((id) => [id, id])),
+      );
+      renderRows(rows);
       const currentId = () => session.activeMessageId(["row-2", "row-3"]);
       container.scrollTop = 50;
       container.dispatchEvent(new Event("scroll"));
@@ -99,7 +107,10 @@ describe("conversation position rail", () => {
       key: `row-${index}`,
       content: html`<div>${index}</div>`,
     }));
-    const { container, transcript, session } = await mountTestTranscript("rail-offset", rows);
+    const { container, transcript, session, renderRows } = await mountTestTranscript(
+      "rail-offset",
+      rows,
+    );
     try {
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
@@ -110,7 +121,11 @@ describe("conversation position rail", () => {
         observer.emitTarget(container, 800, 600);
       }
       const ids = rows.map((row) => row.key);
-      session.syncMessageRows(new Map(ids.map((id) => [id, id])));
+      session.syncMessageRows(
+        new Map(ids.map((id) => [id, id])),
+        new Map(ids.map((id) => [id, id])),
+      );
+      renderRows(rows);
       // No scroll event or render between these queries: mounted rows are stale.
       container.scrollTop = 100;
       expect(session.activeMessageId(ids)).toBe("row-2");
@@ -308,7 +323,7 @@ describe("conversation position rail", () => {
     transcript.hostDisconnected();
   });
 
-  it("does not target a final-answer action owner folded behind dashboard work", () => {
+  it("targets the visible final answer before later dashboard commentary and tools", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),
       { ...message("final", "assistant", "Design ready", 2, "run-1"), phase: "final_answer" },
@@ -339,7 +354,7 @@ describe("conversation position rail", () => {
       landmarks = projectChatTranscript(props, session).positionMessages;
       return html``;
     });
-    expect(landmarks).toEqual([messages[0], messages[3]]);
+    expect(landmarks).toEqual([messages[0], messages[1]]);
     transcript.hostDisconnected();
   });
 });

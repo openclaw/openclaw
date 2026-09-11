@@ -922,6 +922,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
   });
   for (const method of providerDefinition.auth) {
     if (method.id === "oauth" || method.id === "device-code") {
+      method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
       method.run = chatGPTAuthRuns[method.id];
       continue;
     }

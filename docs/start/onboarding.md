@@ -97,7 +97,8 @@ tool-capable model with at least 16K of measured effective context already
 loaded in a reachable LM Studio or Ollama server. Detection runs on the
 Gateway host, including when the macOS app connects to a Linux Gateway. Detection
 only presents choices: it does not test, activate, install, or save any candidate.
-Select the connection you want before OpenClaw runs a real completion and saves it.
+Select the connection you want before OpenClaw saves any returned credential and runs one
+confirmation turn without tools. It activates the connection only after success.
 In particular, an existing Codex subscription is never selected automatically.
 If setup fails, the app keeps the detailed reason visible so you can retry or
 choose another connection. Local discovery never pulls or downloads a model.
@@ -112,9 +113,9 @@ staged package's source and capabilities, with integrity when available before i
 enabling it, including verified first-party packages. Review the details, then
 explicitly confirm acceptance to continue.
 Declining or confirmed cancellation stops that attempt without selecting another
-inference route. When the Gateway confirms that the live AI test failed before
-saving the connection, the app shows the failure and lets you retry or choose a
-different connection. Runtime plugins installed for that attempt are kept.
+inference route. If the confirmation turn fails, the app shows the failure and
+keeps the saved credential. Choose the saved sign-in in **Model Setup** to retry
+without signing in again. Runtime plugins installed for that attempt are kept.
 
 Fresh installs also ask whether existing native provider conversations should
 appear in the sidebar. This is discovery in place, not transcript copying, and is
@@ -167,8 +168,12 @@ so another provider can opt in without adding provider-specific macOS code.
 The manual key/token picker uses the same provider registry. In every route,
 the provider supplies its starter model and configuration. If the starter is an
 alias, OpenClaw tests and saves the provider's canonical model name while
-preserving existing model settings that the starter does not replace. The credential is stored only after
-that live test succeeds.
+preserving existing model settings that the starter does not replace.
+A replacement credential stays inactive until you accept **Activate this saved
+sign-in?** after verification. Declining keeps your current connection and the
+saved replacement. Setup preserves unrelated configuration edits made during
+verification. If the same connection settings change, review them and retry the
+saved sign-in instead of overwriting the newer settings.
 Continuing remains locked until one backend has passed, so the first agent
 chat cannot start without working inference.
 </Step>

@@ -1,5 +1,6 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
@@ -42,6 +43,8 @@ import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 registerSettingsEnglish();
 
 type ModelProvidersViewProps = {
+  usageClient?: GatewayBrowserClient | null;
+  usageAgentId?: string;
   connected: boolean;
   loading: boolean;
   refreshing: boolean;
@@ -103,6 +106,9 @@ type ModelProvidersViewProps = {
   onModelPickerOpen: () => void;
   onCatalogRetry: () => void;
   onOpenModelSetup: () => void;
+  onConnect: (card: ModelProviderCard) => void;
+  canConnect: (card: ModelProviderCard) => boolean;
+  loginBusy: boolean;
 };
 
 function configMutationDisabled(props: ModelProvidersViewProps): boolean {
@@ -297,6 +303,18 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   return html`
     <div class="model-providers__card-actions">
       ${
+        props.canConnect(card) && card.profiles.length === 0
+          ? html`<button
+              class="btn btn--sm"
+              data-models-connect-provider=${card.id}
+              ?disabled=${mutationDisabled || props.loginBusy}
+              @click=${() => props.onConnect(card)}
+            >
+              ${t("modelProviders.login.action")}
+            </button>`
+          : nothing
+      }
+      ${
         isConfigured
           ? html`
               <button
@@ -321,7 +339,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
                 ${
-                  card.hasConfigApiKey
+                  card.hasConfigApiKey ||
+                  card.profiles.some((profile) => profile.type === "api_key")
                     ? t("modelProviders.apiKey.replace")
                     : t("modelProviders.apiKey.set")
                 }
@@ -329,7 +348,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
       }
       ${
-        card.hasConfigApiKey
+        card.hasConfigApiKey ||
+        card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported)
           ? html`
               <button
                 class="btn btn--sm danger"
@@ -372,11 +392,14 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
       ${
         card.profiles.length > 0 && props.canViewProfiles
           ? renderProviderProfiles(card, {
+              usageClient: props.usageClient,
+              usageAgentId: props.usageAgentId,
               busy: props.busy,
               canMutate: props.canMutate && !props.configBusy,
               mutationBlockedReason: props.mutationBlockedReason,
               profileOrders: props.profileOrders,
-              onOpenModelSetup: props.onOpenModelSetup,
+              onAddAccount: props.canConnect(card) ? () => props.onConnect(card) : undefined,
+              addAccountDisabled: props.loginBusy || configMutationDisabled(props),
               onProfileOrderChange: props.onProfileOrderChange,
               onRequestLogout: props.onRequestLogout,
             })
@@ -655,6 +678,10 @@ export function renderModelProvidersPageShell(props: {
   onOpenModelSetup: () => void;
   selectedAgentId: string;
   body: TemplateResult;
+  onConnect: () => void;
+  connectDisabled: boolean;
+  login: TemplateResult;
+  loginMessage?: ModelProviderRowMessage;
 }): TemplateResult {
   return html`
     ${renderSettingsPageHeader({
@@ -668,11 +695,20 @@ export function renderModelProvidersPageShell(props: {
           allowAll: false,
           selectedId: props.selectedAgentId,
         })}
+        <button
+          class="btn"
+          data-models-connect
+          ?disabled=${props.connectDisabled}
+          @click=${props.onConnect}
+        >
+          ${t("modelProviders.login.action")}
+        </button>
         <button class="btn" @click=${props.onOpenModelSetup}>
           ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
         </button>
       `,
     })}
-    ${renderSettingsWorkspace(props.body)}
+    ${renderSettingsWorkspace(html`${renderMutationMessage(props.loginMessage)}${props.body}`)}
+    ${props.login}
   `;
 }

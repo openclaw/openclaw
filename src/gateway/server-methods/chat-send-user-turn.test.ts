@@ -621,6 +621,85 @@ describe("prepareChatSendUserTurn", () => {
     }
   });
 
+  it("exposes an ordinary WebChat inline image as managed media for downstream staging", async () => {
+    const persistedPath = "/state/media/inbound/photo.png";
+    const persist = vi
+      .spyOn(chatAttachments, "persistInboundImagesForTranscript")
+      .mockResolvedValueOnce({
+        entries: [
+          {
+            id: "photo.png",
+            path: persistedPath,
+            sourceIndex: 0,
+            imageKind: "inline",
+            fact: {
+              url: "media://inbound/photo.png",
+              contentType: "image/png",
+              kind: "image",
+              sizeBytes: 10,
+            },
+          },
+        ],
+        omission: "none",
+      });
+    try {
+      const { controller } = createUserTurnInputController();
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "inspect",
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          }),
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-inline",
+          sessionKey: "agent:main:main",
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({
+          imageOrder: ["inline"],
+          parsedImages: [
+            { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+          ],
+        }),
+        client: null,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      const managedMedia = await prepared.pluginBoundMediaPromise;
+      expect(managedMedia).toEqual([
+        {
+          path: persistedPath,
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ]);
+      const ctx = {
+        media: [{ path: "uploads/report.pdf", workspaceDir: "/workspace" }],
+      } as MsgContext;
+      applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
+      applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
+      expect(ctx.media).toEqual([
+        { path: "uploads/report.pdf", workspaceDir: "/workspace" },
+        {
+          path: persistedPath,
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ]);
+    } finally {
+      persist.mockRestore();
+    }
+  });
+
   it.each([
     { kind: "audio" as const, mimeType: "audio/mpeg", fileName: "voice.mp3" },
     { kind: "video" as const, mimeType: "video/mp4", fileName: "clip.mp4" },

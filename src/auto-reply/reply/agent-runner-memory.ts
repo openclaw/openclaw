@@ -1751,6 +1751,7 @@ export async function runMemoryFlushIfNeeded(params: {
           abortSignal: deferredLifecycle.signal,
           onDeferredLifecycleOwner: deferredLifecycle.adopt,
           onDeferredLifecycleAbort: deferredLifecycle.abort,
+          onRetryWait: deferredLifecycle.beginRetryWait,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,

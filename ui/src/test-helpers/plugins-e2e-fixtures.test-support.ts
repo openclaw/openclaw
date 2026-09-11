@@ -112,69 +112,85 @@ export const finalDiscoveryPageItems = [
   availableDiscoveryPlugin(0, "Final page"),
 ] satisfies PluginDiscoveryEntry[];
 
-export const discoveryResult = {
-  items: [
-    localOnlyDiscoveryPlugin,
-    memoryDiscoveryPlugin,
-    matrixDiscoveryPlugin,
-    telegramDiscoveryPlugin,
-    ...Array.from({ length: 22 }, (_, index) => availableDiscoveryPlugin(index, "First page")),
-  ],
-  nextCursor: "catalog-page-2",
-} satisfies PluginDiscoveryResult;
-
-export const featuredResult = {
-  items: [
-    memoryDiscoveryPlugin,
-    matrixDiscoveryPlugin,
-    {
-      ...memoryDiscoveryPlugin,
-      id: "ch_bG9uZy1jb250ZXh0",
-      catalog: {
-        ...memoryDiscoveryPlugin.catalog,
-        name: "Long Context",
-        summary: "Keep long-running work focused.",
-        categories: ["context"],
-        icon: "book-open",
-      },
-      local: {
-        present: false,
-        installed: false,
-        enabled: false,
-        state: "not-installed",
-        action: "install",
-      },
-    },
-    ...Array.from({ length: 6 }, (_, index) => availableDiscoveryPlugin(index, "Featured")),
-    {
-      ...memoryDiscoveryPlugin,
-      id: "ch_ZW5hYmxlZA",
-      catalog: { ...memoryDiscoveryPlugin.catalog, name: "Already Enabled" },
-      local: {
-        present: true,
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        pluginId: "already-enabled",
-        action: "manage",
-      },
-    },
-  ],
-} satisfies PluginDiscoveryResult;
+const discoveryCategoryDefinitions = [
+  ["channels", "Channels", "Messaging.", "message-circle"],
+  ["models", "Models", "Model providers.", "brain"],
+  ["agent-runtimes", "Agent runtimes", "Agent execution and native sessions.", "bot"],
+  ["memory", "Memory", "Memory systems.", "database"],
+  ["context", "Context", "Context tools.", "book-open"],
+  ["voice", "Voice", "Voice tools.", "message-square"],
+  ["web", "Web", "Web tools.", "globe"],
+  ["media", "Media", "Media tools.", "palette"],
+  ["security", "Security", "Security tools.", "shield"],
+  ["integrations", "Integrations", "Service connectors.", "plug"],
+  ["developer-tools", "Developer tools", "Software development.", "code-xml"],
+  ["infrastructure", "Infrastructure", "Hosting and systems.", "server"],
+  ["documents-files", "Documents & files", "Document and file workflows.", "files"],
+  ["inbox-collaboration", "Inbox & collaboration", "Email and teamwork.", "inbox"],
+  ["productivity", "Productivity", "Tasks and work organization.", "list-todo"],
+  ["scheduling", "Scheduling", "Calendars and appointments.", "calendar-days"],
+  ["finance-payments", "Finance & payments", "Accounting and payments.", "wallet-cards"],
+  ["sales-marketing", "Sales & marketing", "Sales and marketing.", "megaphone"],
+  ["data-analytics", "Data & analytics", "Data analysis and reporting.", "chart-no-axes-combined"],
+  ["agent-orchestration", "Agent orchestration", "Agent workflows.", "workflow"],
+  ["research", "Research", "Research and synthesis.", "search"],
+  ["other", "Other", "Other plugins.", "package"],
+] as const;
 
 export const discoveryCategories = {
-  categories: [
-    ["channels", "Channels", "Messaging.", "message-circle"],
-    ["models", "Models", "Model providers.", "brain"],
-    ["memory", "Memory", "Memory systems.", "brain"],
-    ["context", "Context", "Context tools.", "book-open"],
-    ["voice", "Voice", "Voice tools.", "message-square"],
-    ["media", "Media", "Media tools.", "palette"],
-    ["web", "Web", "Web tools.", "globe"],
-    ["tools", "Tools", "Agent tools.", "wrench"],
-    ["runtime", "Runtime", "Runtime tools.", "git-branch"],
-    ["gateway", "Gateway", "Gateway tools.", "activity"],
-    ["security", "Security", "Security tools.", "shield"],
-    ["other", "Other", "Other plugins.", "package"],
-  ].map(([slug, label, description, icon], order) => ({ slug, label, description, icon, order })),
+  categories: discoveryCategoryDefinitions.map(([slug, label, description, icon], order) => ({
+    slug,
+    label,
+    description,
+    icon,
+    order,
+  })),
+};
+
+const firstDiscoveryPageItems = Array.from({ length: 22 }, (_, index) =>
+  availableDiscoveryPlugin(index, "First page"),
+);
+const additionalOverviewShelfItems: PluginDiscoveryEntry[] = [];
+for (const [index, plugin] of firstDiscoveryPageItems.slice(0, 6).entries()) {
+  additionalOverviewShelfItems.push({
+    ...plugin,
+    catalog: {
+      ...plugin.catalog,
+      featured: true,
+      trending: true,
+      featuredRank: index + 2,
+      trendingRank: index + 2,
+    },
+  });
+}
+
+export const discoveryResult: PluginDiscoveryResult = {
+  items: [
+    localOnlyDiscoveryPlugin,
+    {
+      ...memoryDiscoveryPlugin,
+      catalog: {
+        ...memoryDiscoveryPlugin.catalog,
+        featured: true,
+        trending: true,
+        featuredRank: 0,
+        trendingRank: 1,
+      },
+    },
+    {
+      ...matrixDiscoveryPlugin,
+      catalog: {
+        ...matrixDiscoveryPlugin.catalog,
+        featured: true,
+        trending: true,
+        featuredRank: 1,
+        trendingRank: 0,
+      },
+    },
+    telegramDiscoveryPlugin,
+    ...additionalOverviewShelfItems,
+    ...firstDiscoveryPageItems.slice(6),
+  ],
+  categories: discoveryCategories.categories,
+  nextCursor: "catalog-page-2",
 };

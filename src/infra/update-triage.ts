@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import { z } from "zod";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
-import { withOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-managed-context.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   stripGatewayServiceMarkerEnv,
+  withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
 import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";

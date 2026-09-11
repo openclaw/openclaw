@@ -1,6 +1,6 @@
 {
   "id": "fal",
-  "categories": ["models", "media"],
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },

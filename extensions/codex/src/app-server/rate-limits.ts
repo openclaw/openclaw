@@ -216,18 +216,46 @@ export function summarizeCodexAccountUsage(
 }
 
 /** Converts Codex app-server rate-limit payloads into OpenAI/Codex usage windows. */
-export function buildCodexAppServerUsageSnapshot(value: unknown): ProviderUsageSnapshot {
+export function buildCodexAppServerUsageSnapshot(
+  value: unknown,
+  options: { accountDetails?: boolean } = {},
+): ProviderUsageSnapshot {
   const snapshot = selectCodexProviderUsageSnapshot(value);
   const entries = snapshot ? readWindowEntries(snapshot) : [];
   const windows = entries
     .map((entry) => readProviderUsageWindow(entry, entries))
     .filter((window): window is UsageWindow => Boolean(window));
-  return {
+  const result: ProviderUsageSnapshot = {
     provider: "openai",
     displayName: PROVIDER_LABELS.openai,
     windows,
     ...(snapshot ? { plan: resolveCodexProviderUsagePlan(snapshot) } : {}),
   };
+  if (options.accountDetails && snapshot) {
+    result.plan =
+      normalizeOptionalString(snapshot.planType) ?? normalizeOptionalString(snapshot.plan_type);
+    for (const extra of collectCodexRateLimitSnapshots(value)) {
+      if (extra === snapshot) {
+        continue;
+      }
+      const extraEntries = readWindowEntries(extra);
+      for (const entry of extraEntries) {
+        const window = readProviderUsageWindow(entry, extraEntries);
+        if (window) {
+          windows.push({ ...window, groupLabel: formatLimitLabel(extra) });
+        }
+      }
+    }
+    const credits = isJsonObject(snapshot.credits) ? snapshot.credits : undefined;
+    const balance =
+      typeof credits?.balance === "string"
+        ? parseStrictFiniteNumber(credits.balance)
+        : asFiniteNumber(credits?.balance);
+    if (balance !== undefined && balance >= 0 && credits?.unlimited !== true) {
+      result.billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
+  }
+  return result;
 }
 
 function isCodexUsageLimitError(codexErrorInfo: JsonValue | null | undefined): boolean {
@@ -291,7 +319,7 @@ function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string
   return undefined;
 }
 
-function collectCodexRateLimitSnapshots(value: JsonValue | undefined): JsonObject[] {
+function collectCodexRateLimitSnapshots(value: unknown): JsonObject[] {
   const snapshots: JsonObject[] = [];
   const seen = new Set<string>();
   collectRateLimitSnapshots(value, snapshots, seen);
@@ -299,7 +327,7 @@ function collectCodexRateLimitSnapshots(value: JsonValue | undefined): JsonObjec
 }
 
 function collectRateLimitSnapshots(
-  value: JsonValue | undefined,
+  value: unknown,
   snapshots: JsonObject[],
   seen: Set<string>,
 ): void {
@@ -488,7 +516,7 @@ function isCodexLimitSnapshot(snapshot: JsonObject): boolean {
 }
 
 function selectCodexProviderUsageSnapshot(value: unknown): JsonObject | undefined {
-  const snapshots = collectCodexRateLimitSnapshots(value as JsonValue | undefined);
+  const snapshots = collectCodexRateLimitSnapshots(value);
   return snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
 }
 

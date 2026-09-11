@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Resolves a supported Crabbox binary through the bundled plugin before delegation.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   accessSync,
@@ -25,7 +24,11 @@ import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ensureManagedCrabboxBinary } from "../extensions/crabbox/cli-runtime-api.js";
+import {
+  ensureManagedCrabboxBinary,
+  findCrabboxBinary,
+  type CrabboxBinary,
+} from "../extensions/crabbox/cli-runtime-api.js";
 import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mts";
 import {
   prepareCrabboxSourceCapsule,
@@ -62,26 +65,24 @@ type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
 const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
-// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
-// exceed the snappy default probe timeout while it renders `run --help` or does
-// first-run init. Retry the metadata probes once with this generous timeout so a
-// single slow probe does not hard-fail the wrapper and block all remote validation.
+// Cold help rendering can exceed the normal metadata deadline.
 const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
-const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.platform);
-const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const candidateBinary =
-  repoLocal ??
-  pathLocal ??
+  findCrabboxBinary({
+    openclawRoot: ignoreRepoBinary ? undefined : repoRoot,
+    pathEnv: process.env[resolvePathEnvKey(process.env)],
+  }) ??
   resolveGitCommonCrabboxBinary(process.env, process.platform) ??
   "crabbox";
-let binary: string;
+let cli: CrabboxBinary;
 try {
-  binary = await ensureManagedCrabboxBinary({ binary: candidateBinary });
+  cli = await ensureManagedCrabboxBinary({ binary: candidateBinary });
 } catch (error) {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
 }
+const { binary, version } = cli;
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -136,16 +137,6 @@ function commandCandidates(command: string, platform: Platform) {
   return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, `${command}.com`, command];
 }
 
-function resolveCrabboxBinary(platform: Platform) {
-  const base = resolve(repoRoot, "../crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function resolvePathBinary(command: string, env: ProcessEnv, platform: Platform) {
   const pathValue = env[resolvePathEnvKey(env)] ?? "";
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
@@ -178,13 +169,10 @@ function resolveGitCommonCrabboxBinary(env: ProcessEnv, platform: Platform) {
   const absoluteGitCommonDir = isAbsolute(gitCommonDir)
     ? gitCommonDir
     : resolve(repoRoot, gitCommonDir);
-  const base = resolve(absoluteGitCommonDir, "../..", "crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
+  return findCrabboxBinary({
+    openclawRoot: resolve(absoluteGitCommonDir, ".."),
+    platform,
+  });
 }
 
 function isExecutableFile(path: PathLike, platform: Platform) {
@@ -481,12 +469,7 @@ function recoveryCommandArgument(value: string) {
   return `'${text.replaceAll("'", "'\\''")}'`;
 }
 
-// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
-// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
-// on the first call, then be instant and clean on the next. Retrying keeps the
-// warm path fast (one ~instant probe) while stopping a single slow probe from
-// tripping the sanity/provider-list guards and blocking all remote validation.
-function probeCrabboxMetadata(command: string, commandArgs: string[]) {
+function probeCrabboxHelp(command: string, commandArgs: string[]) {
   const first = checkedOutput(command, commandArgs);
   if (first.status === 0 && first.text.length > 0) {
     return first;
@@ -3713,23 +3696,17 @@ function applyRunTransforms(
   }
 }
 
-const version = probeCrabboxMetadata(binary, ["--version"]);
 const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
-const help = probeCrabboxMetadata(binary, [...helpCommand, "--help"]);
+const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-if (
-  version.status !== 0 ||
-  version.text.length === 0 ||
-  help.status !== 0 ||
-  commandValueOptionsFromHelp.size === 0
-) {
+if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
   console.error(
-    `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
+    `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
   );
-  console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
+  console.error("[crabbox] selected binary failed --help sanity checks");
   process.exit(2);
 }
 
@@ -3787,7 +3764,7 @@ let normalizedArgs = ensureAwsMacOnDemandMarket(
 );
 
 console.error(
-  `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
+  `[crabbox] bin=${displayBinary} version=${version} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
 );
 if (providerSelection.source === "policy") {
   console.error(

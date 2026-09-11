@@ -245,6 +245,13 @@
   font-family: var(--mono);
 }
 
+/* The inert preview cannot open links; the marker jumps to the full message. */
+.chat-position-rail__preview-copy a {
+  color: inherit;
+  text-decoration: none;
+  cursor: inherit;
+}
+
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }

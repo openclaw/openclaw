@@ -26,7 +26,9 @@ async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSession
       logging.setLoggerOverride({ level: "warn", file: logPath });
       const operation = diagnostics?.artifactPreparation
         ? "session.lifecycle.artifacts-prepare"
-        : "session.transcript.batch";
+        : diagnostics?.archivePruning
+          ? "session.history.archive-prune"
+          : "session.transcript.batch";
       try {
         await expect(
           runExclusiveSqliteSessionWrite(
@@ -147,6 +149,36 @@ test("artifact preparation file logs retain numeric phases without payload field
   });
   expect(record.content).not.toContain("synthetic-private-session");
   expect(record.content).not.toContain("synthetic-private-marker");
+});
+
+test("archive pruning file logs whitelist partial stage observations", async () => {
+  const archivePruning = {
+    trigger: "initial" as const,
+    admissionMs: 1200.4,
+    asyncAdmissions: 1,
+    checkpointCalls: 2,
+    checkpointIncomplete: 1,
+    checkpointMs: 20.6,
+    checkpointMaxMs: 19.6,
+    completed: false,
+    archiveName: "synthetic-private-archive",
+    content: "synthetic-private-transcript",
+  };
+  const record = await readFailedWriterLog(new Error("synthetic pruning failure"), {
+    archivePruning,
+  });
+  expect(record.details.archivePruning).toEqual({
+    trigger: "initial",
+    admissionMs: 1200,
+    asyncAdmissions: 1,
+    checkpointCalls: 2,
+    checkpointIncomplete: 1,
+    checkpointMs: 21,
+    checkpointMaxMs: 20,
+    completed: false,
+  });
+  expect(record.content).not.toContain("synthetic-private-archive");
+  expect(record.content).not.toContain("synthetic-private-transcript");
 });
 
 test.each([false, true])(

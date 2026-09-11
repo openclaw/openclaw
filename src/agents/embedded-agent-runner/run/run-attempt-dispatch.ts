@@ -452,6 +452,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextTokenBudget === undefined
       ? {}
       : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.modelContextWindow === undefined
+      ? {}
+      : { modelContextWindow: runtime.modelContextWindow }),
     ...(runtime.authoredContextTokenCap === undefined
       ? {}
       : { authoredContextTokenCap: runtime.authoredContextTokenCap }),

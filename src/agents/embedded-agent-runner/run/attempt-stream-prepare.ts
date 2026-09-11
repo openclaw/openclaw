@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
+import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -688,6 +689,13 @@ export function prepareEmbeddedAttemptStream(input: {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,
       sessionId: attempt.sessionId,
+      diagnosticOwner: input.diagnosticOwner,
+      onRetryWaitCompleted: () => attempt.replyOperation?.recordActivity(),
+      isCurrent: () =>
+        registration?.delegatedAuthority !== undefined &&
+        validateAgentRunDelegatedAuthority(registration.delegatedAuthority) &&
+        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
+        ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle,
       trajectoryRecorder: input.trajectoryRecorder ?? null,
       clearActiveRun: () =>
         clearActiveEmbeddedRun(

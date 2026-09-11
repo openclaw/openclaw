@@ -14,6 +14,8 @@ Use **Search settings** to find pages and configuration fields. Add `tag:storage
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
+In **Models**, **Connect** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. **Configure Models** keeps the separate [setup and activation flow](/start/onboarding). If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:

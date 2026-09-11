@@ -61,13 +61,12 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
     : -1;
   const existing = host.chatStreamSegments[existingIndex];
   const handoff =
-    progress.itemId && progress.text && (!existing || existing.pendingStreamText)
+    progress.itemId && progress.text
       ? retireCommentaryStream(host, {
           runId: payload.runId,
           itemId: progress.itemId,
           text: progress.text,
           timestamp: payload.ts,
-          pendingStreamText: existing?.pendingStreamText,
         })
       : null;
   progress.text = handoff?.text ?? progress.text;
@@ -96,7 +95,6 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       segment === existing
         ? {
             ...segment,
-            pendingStreamText: handoff?.pendingStreamText,
             text:
               segment.text.replace(/\s+/gu, " ").trim() === progress.text
                 ? segment.text
@@ -117,7 +115,6 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       ts: payload.ts,
       runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
-      ...(handoff?.pendingStreamText ? { pendingStreamText: handoff.pendingStreamText } : {}),
     },
   ];
   return true;

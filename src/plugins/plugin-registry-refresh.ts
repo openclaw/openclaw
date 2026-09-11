@@ -7,7 +7,7 @@ import {
   type PluginRegistrySnapshot,
 } from "./plugin-registry-snapshot.js";
 
-export function refreshPluginRegistry(
+export async function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
   if (!params.config) {

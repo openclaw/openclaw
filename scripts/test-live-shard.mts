@@ -410,6 +410,7 @@ export function resolveLiveShardPreparation(files: string[]): LiveShardPreparati
   if (
     files.some(isSourceGatewayLiveTest) ||
     files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
+    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {

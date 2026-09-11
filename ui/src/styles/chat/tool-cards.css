@@ -222,6 +222,12 @@
   flex-shrink: 0;
 }
 
+.chat-tool-msg-summary__icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
 .chat-tool-msg-summary__icon svg {
   width: 16px;
   height: 16px;

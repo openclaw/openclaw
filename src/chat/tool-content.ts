@@ -1,4 +1,5 @@
 // Normalizes tool result content for chat transcript rendering.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_USE_ID_FIELDS = [
@@ -53,4 +54,63 @@ export function resolveToolUseId(block: ToolContentBlock): string | undefined {
     }
   }
   return undefined;
+}
+
+export function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
+  const raw = value.isError ?? value.is_error;
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
+const MAX_ERROR_DETECT_CHARS = 20_000;
+const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
+
+function hasToolErrorStatus(value: unknown): boolean {
+  return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
+}
+
+export function isToolErrorOutput(outputText: string | undefined): boolean {
+  if (!outputText) {
+    return false;
+  }
+  const trimmed = outputText.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (TOOL_NOT_FOUND_PATTERN.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.length > MAX_ERROR_DETECT_CHARS) {
+    return false;
+  }
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed)) {
+    return false;
+  }
+  const obj = parsed;
+  const explicitErrorFlag = readToolErrorFlag(obj);
+  if (explicitErrorFlag !== undefined) {
+    return explicitErrorFlag;
+  }
+  if ("error" in obj) {
+    const value = obj.error;
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      return true;
+    }
+  }
+  return hasToolErrorStatus(obj.status);
 }

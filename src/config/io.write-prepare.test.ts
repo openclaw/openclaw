@@ -1317,13 +1317,20 @@ describe("config io write prepare", () => {
     ).toEqual({ agents: { defaults, entries: { main: {}, ops: {} } }, gateway: { mode: "local" } });
   });
 
-  it("preserves authored Google model params under normalized config keys", () => {
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["together/moonshotai/Kimi-K2.5", "together/moonshotai/Kimi-K2.6"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])("preserves separate authored model params when writing %s", (authored, canonical) => {
     const params = { thinking: { level: "high" } };
     const sourceConfig = {
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3-pro-preview": { alias: "Gemini", params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: {
+            [authored]: { alias: "Selected", params },
+            "custom/model": { alias: "Control" },
+          },
         },
       },
     };
@@ -1332,9 +1339,10 @@ describe("config io write prepare", () => {
         runtimeConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
               models: {
-                "google/gemini-3.1-pro-preview": { alias: "Gemini", params },
+                [canonical]: { alias: "Selected", params },
+                "custom/model": { alias: "Control" },
               },
             },
           },
@@ -1343,8 +1351,8 @@ describe("config io write prepare", () => {
         nextConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
-              models: { "google/gemini-3.1-pro-preview": {} },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
+              models: { [canonical]: {}, "custom/model": { alias: "Control" } },
             },
           },
         },
@@ -1352,8 +1360,8 @@ describe("config io write prepare", () => {
     ).toEqual({
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3.1-pro-preview": { params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: { [canonical]: { params }, "custom/model": { alias: "Control" } },
         },
       },
     });

@@ -1,4 +1,3 @@
-// Lmstudio tests cover models plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -33,14 +32,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-function jsonResponse(payload: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-}
-
 function malformedJsonResponse(): Response {
   return new Response("{ nope", {
     status: 200,
@@ -71,7 +62,7 @@ describe("lmstudio-models", () => {
     vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const key = params?.key ?? "qwen3-8b-instruct";
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [
             {
               type: "llm",
@@ -87,7 +78,7 @@ describe("lmstudio-models", () => {
         });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return jsonResponse({ status: "loaded", instance_id: "inst-loaded" });
+        return Response.json({ status: "loaded", instance_id: "inst-loaded" });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -446,7 +437,7 @@ describe("lmstudio-models", () => {
 
   it("discovers llm models and maps metadata", async () => {
     const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
-      jsonResponse({
+      Response.json({
         models: [
           {
             type: "llm",
@@ -540,7 +531,7 @@ describe("lmstudio-models", () => {
     { label: "unknown", supportsTools: undefined },
   ])("preserves $label native tool support in discovered models", async ({ supportsTools }) => {
     const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
-      jsonResponse({
+      Response.json({
         models: [
           {
             type: "llm",
@@ -600,7 +591,7 @@ describe("lmstudio-models", () => {
     {
       name: "reports wrong-shaped model list payloads with owned errors",
       responses: () =>
-        [[], { models: {} }, { models: [null] }].map((payload) => jsonResponse(payload)),
+        [[], { models: {} }, { models: [null] }].map((payload) => Response.json(payload)),
     },
   ])("$name", async ({ responses }) => {
     for (const response of responses()) {
@@ -621,7 +612,7 @@ describe("lmstudio-models", () => {
       loaded_instances: [],
     };
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ models: [null, model, [], "invalid-model", 42] }),
+      Response.json({ models: [null, model, [], "invalid-model", 42] }),
     );
 
     const result = await fetchLmstudioModels({
@@ -634,7 +625,7 @@ describe("lmstudio-models", () => {
 
   it("discovers valid local models from partially malformed catalogs", async () => {
     const fetchMock = vi.fn(async () =>
-      jsonResponse({
+      Response.json({
         models: [null, { type: "llm", key: "qwen3-8b-instruct" }, []],
       }),
     );
@@ -653,7 +644,7 @@ describe("lmstudio-models", () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
     const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
-      jsonResponse({ models: [] }),
+      Response.json({ models: [] }),
     );
 
     const result = await fetchLmstudioModels({
@@ -785,7 +776,7 @@ describe("lmstudio-models", () => {
     const variantKey = `${canonicalKey}@q4_k_m`;
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [
             {
               type: "llm",
@@ -816,7 +807,7 @@ describe("lmstudio-models", () => {
   it("reports malformed model load JSON with an owned error", async () => {
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
         });
       }
@@ -857,7 +848,7 @@ describe("lmstudio-models", () => {
     });
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
         });
       }
@@ -889,7 +880,7 @@ describe("lmstudio-models", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
         });
       }
@@ -979,12 +970,12 @@ describe("lmstudio-models", () => {
   ])("$name", async ({ params, body, status, expected }) => {
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {
-        return jsonResponse({
+        return Response.json({
           models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
         });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return status === 200 ? jsonResponse({ status: body }) : new Response(body, { status });
+        return status === 200 ? Response.json({ status: body }) : new Response(body, { status });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 /**
  * Runs `/btw` side questions against the active conversation without resuming
@@ -28,12 +27,7 @@ import type {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -723,32 +717,14 @@ async function withBtwPreparedRuntime(
   input: Parameters<typeof acquirePublishedPreparedModelRuntime>[0],
   run: (snapshot: PreparedModelRuntimeSnapshot) => Promise<ReplyPayload | undefined>,
 ): Promise<ReplyPayload | undefined> {
-  const result = createDeferredCore<ReplyPayload | undefined>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  void trackOwner(async () => {
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
-    const work = new AsyncWorkScope();
-    const runInScope = work.run(() =>
-      withPluginRuntimeGenerationScope(lease.snapshot, () => AsyncLocalStorage.snapshot()),
-    );
-    const closeWork = () => runInScope(() => work.beginClose(parentSignal?.reason));
-    parentSignal?.addEventListener("abort", closeWork, { once: true });
-    if (parentSignal?.aborted) {
-      closeWork();
-    }
-    try {
-      result.resolve(await runInScope(() => work.track(() => run(lease.snapshot))));
-    } catch (error) {
-      result.reject(error);
-    } finally {
-      await work.runWhenIdle(() => undefined);
-      await runInScope(() => work.drain());
-      parentSignal?.removeEventListener("abort", closeWork);
-      lease.release();
-    }
-  }).catch((error: unknown) => result.reject(error));
-  return await result.promise;
+    onAcquired(lease);
+    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
+      captureWorkContext();
+      return run(lease.snapshot);
+    });
+  });
 }
 
 /** Answers a side question using sanitized session context and no tool execution. */

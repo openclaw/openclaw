@@ -37,7 +37,7 @@ for results, cancel work, or inspect Gateway resources.
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
 | [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [Gateway protocol RPC methods](/gateway/protocol/rpc-methods) | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
 | [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
@@ -45,7 +45,7 @@ for results, cancel work, or inspect Gateway resources.
 
 1. Run or discover a Gateway.
 2. Connect over the [Gateway protocol](/gateway/protocol).
-3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+3. Call documented RPC methods from [Gateway protocol RPC methods](/gateway/protocol/rpc-methods).
 4. Pin the OpenClaw version you test against.
 5. Recheck the RPC reference when upgrading OpenClaw.
 
@@ -318,7 +318,7 @@ plugins loaded by OpenClaw.
 - [Building a Gateway client](/gateway/clients)
 - [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
-- [Gateway RPC reference](/reference/rpc)
+- [Gateway protocol RPC methods](/gateway/protocol/rpc-methods)
 - [CLI agent command](/cli/agent)
 - [CLI message command](/cli/message)
 - [Agent loop](/concepts/agent-loop)

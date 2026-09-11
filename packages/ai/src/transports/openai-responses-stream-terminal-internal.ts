@@ -60,6 +60,7 @@ type TerminalOptions = {
     tier: ResponseCreateParamsStreaming["service_tier"] | undefined,
   ) => void;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  resolveResponseModel?: () => string | undefined;
 };
 
 function splitToolCallId(id: string): [string, string | undefined] {
@@ -309,7 +310,9 @@ export function createResponsesTerminalController(params: {
     responseId = response.id,
   ) => {
     output.responseId = responseId || output.responseId;
-    output.responseModel = response.model?.trim() || undefined;
+    output.responseModel = options?.resolveResponseModel
+      ? options.resolveResponseModel()?.trim() || undefined
+      : response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
     if (usage) {

@@ -381,6 +381,8 @@ Example (OpenAI-compatible):
 
     Recommended: set explicit values that match your proxy/model limits.
 
+    Model-selection metadata keeps capabilities tied to the API and endpoint that supplied them. A configured route change discards metadata from the previous route, while an explicit `thinkingLevelMap` is applied to the configured model.
+
   </Accordion>
   <Accordion title="Proxy-route shaping rules">
     - For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.

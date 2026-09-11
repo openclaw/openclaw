@@ -18,13 +18,16 @@ extension DashboardWindowController {
         do {
             let request = try DashboardBrowserMessageHandler.decode(message.body)
             switch request {
-            case let .open(tabId, url, _):
+            case let .open(tabId, url, sessionKey, _):
                 // Activation is presentation owned by the requesting web panel.
-                let openedTabId = try self.nativeBrowser.open(tabId: tabId, url: url)
+                let openedTabId = try self.nativeBrowser.open(tabId: tabId, url: url, sessionKey: sessionKey)
                 replyHandler(["ok": true, "tabId": openedTabId], nil)
                 return
             case let .navigate(tabId, url):
                 try self.nativeBrowser.navigate(tabId: tabId, url: url)
+            case let .action(.download, tabId):
+                self.downloadBrowserReply(tabId: tabId, replyHandler: replyHandler)
+                return
             case let .action(.snapshot, tabId):
                 self.captureBrowserReply(tabId: tabId, point: nil, replyHandler: replyHandler)
                 return
@@ -63,6 +66,29 @@ extension DashboardWindowController {
         self.window != nil && self.canDeliverNativeCommands &&
             self.notificationSourceID == sourceID && self.hasCurrentBrowserSession &&
             Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+    }
+
+    private func downloadBrowserReply(
+        tabId: String,
+        replyHandler: @escaping DashboardBrowserMessageHandler.ReplyHandler)
+    {
+        let sourceID = self.notificationSourceID
+        Task { @MainActor [weak self] in
+            do {
+                guard let self, self.canUseBrowserDocument(sourceID: sourceID) else {
+                    throw DashboardBrowserError.unavailable
+                }
+                let cancelled = try await self.nativeBrowser.download(tabId: tabId) { [weak self] in
+                    self?.canUseBrowserDocument(sourceID: sourceID) == true
+                }
+                guard self.canUseBrowserDocument(sourceID: sourceID) else {
+                    throw DashboardBrowserError.unavailable
+                }
+                replyHandler(["ok": true, "cancelled": cancelled], nil)
+            } catch {
+                replyHandler(["ok": false, "error": error.localizedDescription], nil)
+            }
+        }
     }
 
     private func captureBrowserReply(

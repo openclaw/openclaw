@@ -113,6 +113,74 @@ describe("context-window-guard", () => {
     });
   });
 
+  it.each([
+    ["caps custom input by its native window", "custom", "tiny", 3_000, 16_000, 3_000],
+    ["keeps authored input above lower discovery", "custom", "tiny", 32_000, 16_000, 16_000],
+    [
+      "keeps a native-window override without an input cap",
+      "custom",
+      "tiny",
+      32_000,
+      undefined,
+      32_000,
+    ],
+    [
+      "ignores stale native metadata for fixed models",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      350_000,
+      350_000,
+    ],
+    [
+      "caps input by the fixed provider window",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      2_000_000,
+      1_000_000,
+    ],
+    [
+      "ignores a non-finite cap before fixed-window clamping",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      Infinity,
+      200_000,
+    ],
+    ["ignores a sub-token native window", "custom", "tiny", 0.5, 16_000, 16_000],
+    ["keeps whole-token guard normalization", "custom", "tiny", 32_000.9, 16_000.9, 16_000],
+  ] as const)(
+    "resolves configured context limits (%s)",
+    (_case, provider, modelId, contextWindow, contextTokens, expected) => {
+      const configured = openRouterModelConfig({ contextWindow, contextTokens });
+      const providerConfig = configured.models.providers.openrouter;
+      const cfg = {
+        models: {
+          providers: {
+            [provider]: {
+              ...providerConfig,
+              models: providerConfig.models.map((model) =>
+                Object.assign({}, model, { id: modelId }),
+              ),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expect(
+        resolveContextWindowInfo({
+          cfg,
+          provider,
+          modelId,
+          modelContextTokens: 8_000,
+          modelContextWindow: 8_000,
+          defaultTokens: 200_000,
+        }),
+      ).toEqual({ source: "modelsConfig", tokens: expected });
+    },
+  );
+
   it.each([false, true])("uses the exact row's context window (exact first=%s)", (exactFirst) => {
     const models = openRouterModelConfig({
       contextWindow: 128_000,

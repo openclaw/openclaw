@@ -120,8 +120,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
                   { provider: providerId, modelId: "model", agentId: "main" },
                 ],
               },
-              options?.abortSignal,
-              "static",
+              { abortSignal: options?.abortSignal, catalogMode: "static" },
             );
       try {
         expect(current.registrations.length).toBe(1);

@@ -86,7 +86,9 @@ describe("SQLite session row persistence", () => {
         const decodes = parse.mock.calls.filter(([text]) =>
           text.includes("identity-decode-payload:"),
         ).length;
-        expect(decodes).toBeLessThanOrEqual(iterations * 3);
+        // One decode per patch: preparation owns the only hydration of the row; the commit
+        // revalidates the persisted row without decoding and the writer reuses that row.
+        expect(decodes).toBeLessThanOrEqual(iterations);
       } finally {
         parse.mockRestore();
         unsubscribe();

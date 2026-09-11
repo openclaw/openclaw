@@ -7,19 +7,13 @@ import {
   resolveExplicitAuthOrderSelection,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import {
-  clearCurrentProviderAuthState,
-  warmCurrentProviderAuthStateOffMainThread,
-} from "../../agents/model-provider-auth.js";
-import { prepareModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { refreshModelAuthStateAfterMutation } from "./models-auth-refresh.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
-import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import type { ModelAuthOrderSetResult } from "./models-auth-status.types.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -124,30 +118,17 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      clearModelAuthStatusUsageCache();
-      clearCurrentProviderAuthState();
       const result: ModelAuthOrderSetResult = { provider, profileIds };
       // The store already started auth publication. Await that owner so immediate status
       // is current, but do not report a committed write as failed if publication rejects.
       try {
-        await prepareModelRuntimeSnapshot({
-          agentId: scope.agentId,
-          agentDir: preparedSnapshot.agentDir,
-          workspaceDir: preparedSnapshot.workspaceDir,
-          config: preparedSnapshot.config,
-        });
+        await refreshModelAuthStateAfterMutation(context, "update", scope.agentId);
       } catch (err) {
         log.warn(`auth profile order saved but runtime publication failed: ${formatForLog(err)}`);
         result.warning =
           "Profile priority saved. Live status is unavailable; refresh Models or restart the Gateway.";
       }
       respond(true, result, undefined);
-      void Promise.all([
-        refreshActiveProviderAuthRuntimeSnapshot(),
-        warmCurrentProviderAuthStateOffMainThread(cfg),
-      ]).catch((err: unknown) => {
-        log.warn(`provider auth state refresh after reorder failed: ${formatForLog(err)}`);
-      });
     });
   },
 };
