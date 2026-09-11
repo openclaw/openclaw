@@ -17,6 +17,8 @@ import {
   pathForPluginSettings,
   pathForRoute,
   pathForWorkboardBoard,
+  pathForTerminalSession,
+  terminalSessionIdFromPath,
   pluginSettingsIdFromPath,
   restoreBridgedRouteLocation,
   routeIdFromPath,
@@ -42,6 +44,17 @@ const AGENT_PANEL_CASES = [
 ] as const satisfies readonly AgentsPanel[];
 
 const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "terminal session",
+    routeId: "terminal",
+    location: { pathname: "/terminal/pty-123", search: "", hash: "" },
+  },
+  {
+    label: "mounted terminal session",
+    routeId: "terminal",
+    basePath: "/ui",
+    location: { pathname: "/ui/terminal/pty-123", search: "", hash: "" },
+  },
   {
     label: "person Activity",
     routeId: "activity",
@@ -733,5 +746,29 @@ describe("Plugin Settings route paths", () => {
     expect(pluginSettingsIdFromPath(reservedIdPath)).toBe("discover");
     expect(routeIdFromPath(reservedIdPath)).toBe("plugin-settings");
     expect(pluginSettingsIdFromPath("/settings/plugins/calendar/extra")).toBeNull();
+  });
+});
+
+describe("terminal route paths", () => {
+  it.each(["", "/openclaw"])("resolves terminal paths under %s", (basePath) => {
+    expect(routeIdFromPath(`${basePath}/terminal`, basePath)).toBe("terminal");
+    const path = pathForTerminalSession("pty:one ?#%", basePath);
+    expect(path).toBe(`${basePath}/terminal/pty%3Aone%20%3F%23%25`);
+    expect(terminalSessionIdFromPath(path, basePath)).toBe("pty:one ?#%");
+    expect(routeIdFromPath(path, basePath)).toBe("terminal");
+    expect(inferBasePathFromPathname(path)).toBe(basePath);
+  });
+
+  it.each(["/terminal/a/b", "/terminal/%ZZ", "/terminal/%20"])(
+    "rejects invalid terminal identity %s",
+    (path) => {
+      expect(terminalSessionIdFromPath(path)).toBeNull();
+      expect(routeIdFromPath(path)).toBeNull();
+    },
+  );
+
+  it("does not consume a different mount's terminal identity", () => {
+    expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+    expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
   });
 });

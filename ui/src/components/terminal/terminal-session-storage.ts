@@ -2,31 +2,13 @@
 // local storage could let one Control UI window steal another window's shells.
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  TerminalPanelAction,
-  TerminalPanelCatalogReference,
-} from "./terminal-panel-session-types.ts";
+import type { TerminalPanelAction } from "./terminal-panel-session-types.ts";
 
 const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
 const TERMINAL_ACTIONS_KEY = "openclaw.terminal.actions.v1";
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function catalogReference(value: unknown): TerminalPanelCatalogReference | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return nonEmptyString(value.catalogId) &&
-    nonEmptyString(value.hostId) &&
-    nonEmptyString(value.threadId)
-    ? {
-        catalogId: value.catalogId,
-        hostId: value.hostId,
-        threadId: value.threadId,
-      }
-    : null;
 }
 
 function terminalAction(value: unknown): TerminalPanelAction | null {
@@ -49,16 +31,12 @@ function terminalAction(value: unknown): TerminalPanelAction | null {
   if (value.kind === "restore" || value.kind === "open") {
     return { kind: value.kind, agentId };
   }
-  if (value.kind === "catalog") {
-    const catalog = catalogReference(value.catalog);
-    return catalog ? { kind: "catalog", agentId, catalog } : null;
-  }
   return null;
 }
 
-export function loadPersistedTerminalSessionIds(): string[] {
+export function loadPersistedTerminalSessionIds(scope = ""): string[] {
   try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_SESSIONS_KEY);
+    const raw = globalThis.sessionStorage?.getItem(TERMINAL_SESSIONS_KEY + scope);
     if (!raw) {
       return [];
     }
@@ -71,9 +49,9 @@ export function loadPersistedTerminalSessionIds(): string[] {
   }
 }
 
-export function persistTerminalSessionIds(ids: readonly string[]): void {
+export function persistTerminalSessionIds(ids: readonly string[], scope = ""): void {
   try {
-    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(ids));
+    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY + scope, JSON.stringify(ids));
   } catch {
     // Storage may be unavailable (private mode); reattach just won't work.
   }

@@ -16,6 +16,7 @@ import { takeGraphemes } from "./lib/graphemes.ts";
 
 export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_ACTIVITY_PATH_PARAM = "__openclawActivityPath";
+export const INTERNAL_TERMINAL_PATH_PARAM = "__openclawTerminalPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
@@ -38,6 +39,7 @@ type AgentRoutePath = {
 const APP_ROUTE_DEFINITIONS = {
   settings: { path: "/settings" },
   chat: { path: "/chat" },
+  terminal: { path: "/terminal" },
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
@@ -418,6 +420,22 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
   return catalogShare ? "chat" : null;
 }
 
+export function pathForTerminalSession(sessionId: string, basePath = ""): string {
+  return `${pathForRoute("terminal", basePath)}/${encodeURIComponent(sessionId)}`;
+}
+
+export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
+  const encoded = routePathSuffix(pathname, "terminal", basePath);
+  if (!encoded || encoded.includes("/")) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(encoded).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
   const encodedBoardId = routePathSuffix(pathname, "workboard", basePath);
   if (!encodedBoardId || encodedBoardId.includes("/")) {
@@ -432,6 +450,9 @@ export function workboardBoardIdFromPath(pathname: string, basePath = ""): strin
 }
 
 function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {
+  if (terminalSessionIdFromPath(pathname, basePath)) {
+    return "terminal";
+  }
   if (pluginTabSlugFromPath(pathname, basePath)) {
     return "plugin";
   }

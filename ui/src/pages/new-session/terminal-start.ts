@@ -52,6 +52,7 @@ export async function startNewSessionInTerminal(
     cwd = created.path;
   }
   return startCatalogSessionInTerminal(
+    client,
     {
       catalogId: params.catalogId,
       agentId: params.agentId,

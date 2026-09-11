@@ -80,6 +80,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
+    basePath: "",
+    replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;

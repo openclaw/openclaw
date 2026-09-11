@@ -5,6 +5,7 @@ import type {
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { TerminalRouteTarget } from "../../pages/terminal/route-location.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -64,6 +65,8 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
   readonly fullscreen: boolean;
+  readonly page: boolean;
+  readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
   readonly catalogReadyTimeoutMs: number;
   terminalPanelErrorText: string | null;

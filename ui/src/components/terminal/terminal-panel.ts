@@ -12,6 +12,7 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
+import type { TerminalRouteTarget } from "../../pages/terminal/route-location.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
@@ -68,6 +69,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** Main-route terminal owns its queue and restore state independently of docks. */
+  @property({ type: Boolean }) page = false;
+  @property({ attribute: false }) routeTarget: TerminalRouteTarget = null;
 
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
@@ -223,30 +227,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.closeTerminalPanel();
       return;
     }
-    if (detail?.catalogStart) {
-      event.stopImmediatePropagation();
-      this.dockLayout.setOpen(true);
-      detail.catalogStart.respondWith(
-        this.terminalSessions.startCatalogSession(
-          detail.catalogStart.params,
-          detail.catalogStart.isCurrent,
-        ),
-      );
-      return;
-    }
-    if (detail?.terminalSessionId || detail?.catalog || detail?.open === true) {
+    if (detail?.terminalSessionId || detail?.open === true) {
       if (!this.available) {
         return;
-      }
-      if (detail.catalog) {
-        this.dockLayout.setDock("main");
       }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
         ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
-        : detail.catalog
-          ? this.terminalSessions.openCatalogSession(detail.catalog)
-          : this.terminalSessions.restoreSessions());
+        : this.terminalSessions.restoreSessions());
       return;
     }
     this.toggle();

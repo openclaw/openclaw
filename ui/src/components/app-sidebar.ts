@@ -16,7 +16,11 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  buildCatalogSessionKey,
+  catalogSessionKeyFromSearch,
+  type CatalogSessionKey,
+} from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -527,6 +531,17 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const navigationState = this.getSessionNavigationState();
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
+    const terminalCatalog =
+      this.activeRouteId === "terminal"
+        ? catalogSessionKeyFromSearch(
+            this.context?.router.getState().matches[0]?.location.search ?? "",
+          )
+        : null;
+    const catalogRouteSessionKey = terminalCatalog
+      ? buildCatalogSessionKey(terminalCatalog, expandedAgentId)
+      : isSessionRouteId(this.activeRouteId)
+        ? this.getRouteSessionKey()
+        : "";
     const liveRows = [
       ...(this.sessionData.sessionsResult?.sessions ?? []),
       ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
@@ -559,7 +574,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         catalogs: {
           catalogs,
           basePath: this.basePath,
-          routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
+          routeSessionKey: catalogRouteSessionKey,
           newSessionAgentId: expandedAgentId,
           mainKey: this.sessionMainKey(),
           loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,

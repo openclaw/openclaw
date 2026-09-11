@@ -1,4 +1,5 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { pathForTerminalSession } from "../../app-route-paths.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
@@ -707,6 +708,11 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
       this.attachmentDraft.clearAfterSubmit(true);
+      context.replace("terminal", {
+        pathname: pathForTerminalSession(result.sessionId, context.basePath),
+        search: "",
+        hash: "",
+      });
     } catch (error) {
       if (requestId === this.submitRequestToken && this.gateway.client === client) {
         this.error = error instanceof Error ? error.message : String(error);
