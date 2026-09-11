@@ -11,7 +11,7 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "dependencies": {
-    "@microsoft/mxc-sdk": "0.7.0",
+    "@microsoft/mxc-sdk": "0.8.0",
     "zod": "4.4.3"
   },
   "openclaw": {
