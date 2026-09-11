@@ -6,6 +6,14 @@ const LOCK_DISTANCE_PX = 7;
 const DIRECTION_RATIO = 1.25;
 const FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+// Elements that own their own horizontal drag, so the edge swipe must not claim
+// it. `canvas` covers surfaces that render their own selection instead of using
+// DOM text: the terminal drags to select, and the VNC view drags the remote
+// pointer. Neither has a DOM ancestor that matches any other entry here, since
+// the hidden textarea a terminal keeps for IME is a sibling of the canvas, not a
+// parent of it.
+const SWIPE_OPT_OUT_SELECTOR =
+  "a, button, canvas, input, textarea, select, pre, [role='slider'], [contenteditable]:not([contenteditable='false'])";
 
 type Swipe = {
   identifier: number;
@@ -131,11 +139,7 @@ export class NavDrawerSwipeOwner {
       if (!(target instanceof Element)) {
         return false;
       }
-      if (
-        target.matches(
-          "a, button, input, textarea, select, pre, [role='slider'], [contenteditable]:not([contenteditable='false'])",
-        )
-      ) {
+      if (target.matches(SWIPE_OPT_OUT_SELECTOR)) {
         return true;
       }
       return target instanceof HTMLElement && target.scrollWidth > target.clientWidth + 1;
