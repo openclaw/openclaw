@@ -4,10 +4,8 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
   clearNativeHookRelayBridgesForTests,
@@ -15,6 +13,7 @@ import {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
   registerNativeHookRelayBridge,
+  retainNativeHookRelayOperation,
   renewNativeHookRelayBridgeRecord,
   unregisterNativeHookRelayBridge,
   isRetryableNativeHookRelayBridgeLookupError,
@@ -53,6 +52,7 @@ import type {
   NativeHookRelayPermissionApprovalRequester,
   NativeHookRelayProcessResponse,
   NativeHookRelayRegistration,
+  OwnedNativeHookRelayRegistrationHandle,
   RegisterNativeHookRelayParams,
 } from "./native-hook-relay-types.js";
 import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
@@ -64,6 +64,11 @@ import {
   readNonEmptyString,
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
+import {
+  assertNativeHookRelayForegroundCurrent,
+  drainNativeHookRelayWork,
+  prepareNativeHookRelayMcpPolicy,
+} from "./native-hook-relay-work.js";
 export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 export type {
@@ -80,6 +85,7 @@ const { relays, relayBridges, invocations } = nativeHookRelayState;
 type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
+  policyReady: Promise<void>;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   removeAbortListener?: () => void;
@@ -97,8 +103,8 @@ export type NativeHookRelayRetention = Readonly<{
   onDispose: () => void;
 }>;
 
-type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
-  retention: NativeHookRelayRetention;
+type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams & {
+  retention?: NativeHookRelayRetention;
 };
 
 function readRelayLifetime(
@@ -157,9 +163,9 @@ export function registerNativeHookRelay(
 }
 
 /** Private-local bundled runtime entrypoint; not exported through the public SDK. */
-export function registerRetainedNativeHookRelay(
-  params: RetainedNativeHookRelayParams,
-): ActiveNativeHookRelayRegistrationHandle {
+export function registerOwnedNativeHookRelay(
+  params: OwnedNativeHookRelayParams,
+): OwnedNativeHookRelayRegistrationHandle {
   const { retention, ...registrationParams } = params;
   return registerNativeHookRelayInternal(registrationParams, retention);
 }
@@ -167,7 +173,7 @@ export function registerRetainedNativeHookRelay(
 function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   retention: NativeHookRelayRetention | undefined,
-): ActiveNativeHookRelayRegistrationHandle {
+): OwnedNativeHookRelayRegistrationHandle {
   pruneExpiredNativeHookRelays();
   pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayKey(params.relayId, "id") ?? randomUUID();
@@ -180,16 +186,22 @@ function registerNativeHookRelayInternal(
   }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const stateDbPath = resolveOpenClawStateSqlitePath();
+  let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
+  const policy = prepareNativeHookRelayMcpPolicy(
+    params,
+    stateDbPath,
+    () => partialRegistration !== undefined && relays.get(relayId) === partialRegistration,
+  );
   const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
     deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
     deferOnUnregister: true,
   });
-  let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
   try {
     const retained =
       params.runBeforeToolCall && retention
         ? retainBeforeToolCallForNativeHookRelay(params.runBeforeToolCall)
         : undefined;
+    let deferMcpToolApprovals: boolean | undefined;
     const registration = {
       relayId,
       provider: params.provider,
@@ -201,18 +213,9 @@ function registerNativeHookRelayInternal(
       sessionId: params.sessionId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.config ? { config: params.config } : {}),
-      deferMcpToolApprovals:
-        params.autoApproveMcpTools === true ||
-        // Native hook names lose raw identity; let Codex apply the prepared per-tool config.
-        (params.agentId ? loadMcpToolGrants(params.agentId).length > 0 : false) ||
-        Object.keys({ ...params.projectedMcpServers, ...params.config?.mcp?.servers }).some(
-          (serverName) =>
-            resolveProjectedMcpCodexToolApprovalMode(
-              serverName,
-              params.config?.mcp?.servers?.[serverName] ?? {},
-              params.projectedMcpServers?.[serverName],
-            ) !== undefined,
-        ),
+      get deferMcpToolApprovals() {
+        return deferMcpToolApprovals;
+      },
       runId: params.runId,
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.requester ? { requester: params.requester } : {}),
@@ -229,9 +232,14 @@ function registerNativeHookRelayInternal(
     } as ActiveNativeHookRelayRegistration;
     partialRegistration = registration;
     relays.set(relayId, registration);
+    const policyReady = policy.then((prepared) => {
+      deferMcpToolApprovals = prepared;
+    });
+    retainNativeHookRelayOperation(relayId, policyReady);
     setRelayLifetime(registration, {
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
+      policyReady,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
     });
@@ -245,11 +253,33 @@ function registerNativeHookRelayInternal(
         throw new Error("native hook relay registration aborted");
       }
     }
-    registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);
+    const bridge = registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);
     scheduleNativeHookRelayExpiry(relayId, registration);
-    const handle: ActiveNativeHookRelayRegistrationHandle = {
+    let pendingRenewal = Promise.resolve();
+    const ready = Promise.all([bridge.ready, policyReady]).then(() => undefined);
+    // Component owners report failure even when a public synchronous caller never awaits readiness.
+    void ready.catch(() => undefined);
+    const handle: OwnedNativeHookRelayRegistrationHandle = {
       ...registration,
       ...buildNativeHookRelayCommandPlan({ ...params, relayId, generation }),
+      get deferMcpToolApprovals() {
+        return deferMcpToolApprovals;
+      },
+      ready,
+      prepareInvocation: async () => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
+        }
+        const foregroundToken = lifetime.foregroundToken;
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
+        await policyReady;
+        // Only direct transport failure may use the existing Gateway route.
+        await bridge.ready.catch(() => undefined);
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
+      },
+      drain: () =>
+        drainNativeHookRelayWork({ policyReady, bridge, readRenewal: () => pendingRenewal }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {
@@ -259,26 +289,37 @@ function registerNativeHookRelayInternal(
         if (renewedExpiresAtMs === undefined) {
           return;
         }
-        const bridge = relayBridges.get(relayId);
-        if (bridge && bridge.server.listening) {
-          try {
-            const renewal = renewNativeHookRelayBridgeRecord(current, bridge, renewedExpiresAtMs);
-            if (renewal === "unavailable") {
-              return;
-            }
-            if (renewal === "ownership-changed") {
-              log.debug("native hook relay bridge record ownership changed", { relayId });
-              unregisterNativeHookRelay(relayId, current);
-              return;
-            }
-          } catch (error) {
-            log.debug("failed to renew native hook relay bridge record", { error, relayId });
+        pendingRenewal = pendingRenewal.then(async () => {
+          if (relays.get(relayId) !== current) {
             return;
           }
-        }
-        current.expiresAtMs = renewedExpiresAtMs;
-        handle.expiresAtMs = renewedExpiresAtMs;
-        scheduleNativeHookRelayExpiry(relayId, current);
+          if (bridge.server.listening) {
+            try {
+              const renewal = await renewNativeHookRelayBridgeRecord(
+                current,
+                bridge,
+                renewedExpiresAtMs,
+              );
+              if (renewal === "unavailable") {
+                return;
+              }
+              if (renewal === "ownership-changed") {
+                log.debug("native hook relay bridge record ownership changed", { relayId });
+                unregisterNativeHookRelay(relayId, current);
+                return;
+              }
+            } catch (error) {
+              log.debug("failed to renew native hook relay bridge record", { error, relayId });
+              return;
+            }
+          }
+          if (relays.get(relayId) !== current) {
+            return;
+          }
+          current.expiresAtMs = renewedExpiresAtMs;
+          handle.expiresAtMs = renewedExpiresAtMs;
+          scheduleNativeHookRelayExpiry(relayId, current);
+        });
       },
       unregister: () => deactivateNativeHookRelayForeground(relayId, registration),
     };
@@ -325,7 +366,7 @@ function unregisterNativeHookRelay(
   delete (registration as ActiveNativeHookRelayRegistration & { [RELAY_LIFETIME]?: RelayLifetime })[
     RELAY_LIFETIME
   ];
-  unregisterNativeHookRelayBridge(relayId, {
+  void unregisterNativeHookRelayBridge(relayId, {
     ...options,
     ...(bridge ? { expectedBridge: bridge } : {}),
   });
@@ -390,6 +431,11 @@ async function resolveNativeHookRelayInvocationBinding(
   if (!lifetime) {
     throw new Error("native hook relay registration is inactive");
   }
+  // Gateway fallback shares policy readiness without depending on HTTP locator publication.
+  await lifetime.policyReady;
+  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+    throw new Error("native hook relay registration is inactive");
+  }
   const claim = lifetime.retention?.readClaim(rawPayload);
   if (claim && event === "pre_tool_use" && lifetime.retained && lifetime.retention) {
     const retained = lifetime.retained;
@@ -430,19 +476,8 @@ async function resolveNativeHookRelayInvocationBinding(
     throw new Error("native hook relay foreground invocation not allowed");
   }
   const foregroundToken = lifetime.foregroundToken;
-  const assertActive = () => {
-    if (
-      relays.get(registration.relayId) !== registration ||
-      Date.now() > registration.expiresAtMs
-    ) {
-      throw new Error("native hook relay registration is inactive");
-    }
-    registration.signal?.throwIfAborted();
-    registration.assertActive?.();
-    if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
-      throw new Error("native hook relay foreground invocation not allowed");
-    }
-  };
+  const assertActive = () =>
+    assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
   return { ...registration, assertActive };
 }
 
@@ -650,11 +685,11 @@ function normalizeAllowedEvents(
 }
 
 export const testing = {
-  clearNativeHookRelaysForTests(): void {
+  async clearNativeHookRelaysForTests(): Promise<void> {
     for (const [relayId, registration] of relays) {
       unregisterNativeHookRelay(relayId, registration);
     }
-    clearNativeHookRelayBridgesForTests();
+    await clearNativeHookRelayBridgesForTests();
     invocations.length = 0;
     clearNativeHookRelayPermissionsForTests();
   },
@@ -671,8 +706,10 @@ export const testing = {
     void relayId;
     throw new Error("native hook relay bridge files were retired");
   },
-  getNativeHookRelayBridgeRecordForTests(relayId: string): Record<string, unknown> | undefined {
-    const record = readNativeHookRelayBridgeRecordIfExists(relayId);
+  async getNativeHookRelayBridgeRecordForTests(
+    relayId: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const record = await readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
   },
   isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {

@@ -83,8 +83,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     normalizedQuery: string,
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
-    let releaseGeneration: (() => void) | undefined;
-    return await this.withManagerOperation(async () => {
+    let releaseGeneration: (() => Promise<void>) | undefined;
+    const runSearch = async () => {
       opts?.onDebug?.({ backend: "builtin" });
       if (this.providerRequirement.mode === "required") {
         await this.ensureProviderInitialized();
@@ -254,8 +254,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         if (leasedIdentity.status === "valid") {
           break;
         }
-        releaseGeneration();
+        const release = releaseGeneration;
         releaseGeneration = undefined;
+        await release();
         if (
           identityAttempt > 0 ||
           leasedIdentity.status !== "mismatched" ||
@@ -473,8 +474,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         maxResults,
         minScore,
       });
-    }).finally(() => {
-      releaseGeneration?.();
+    };
+    return await this.withManagerOperation(async () => {
+      try {
+        return await runSearch();
+      } finally {
+        await releaseGeneration?.();
+      }
     });
   }
 

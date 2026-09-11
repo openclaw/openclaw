@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
@@ -87,6 +88,7 @@ let prepareSshSandboxExec: typeof import("./ssh.js").prepareSshSandboxExec;
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
 
 describe("ssh subprocess env sanitization", () => {
+  const ownedDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirs: string[] = [];
   let envSnapshot: ReturnType<typeof captureFullEnv>;
 
@@ -293,6 +295,36 @@ describe("ssh subprocess env sanitization", () => {
         allowFailure: true,
       }),
     ).rejects.toThrow("ssh stream failed");
+  });
+
+  it("does not spawn an upload after authority is revoked during local traversal", async () => {
+    let current = true;
+    const localDir = ownedDirs.make("openclaw-ssh-upload-admission-");
+    await fs.writeFile(path.join(localDir, "payload.txt"), "synthetic payload");
+    spawnMock.mockImplementation(() => {
+      throw new Error("unexpected native spawn");
+    });
+    try {
+      const uploading = uploadDirectoryToSshTarget({
+        session: {
+          command: "ssh",
+          configPath: "/tmp/openclaw-test-ssh-config",
+          host: "openclaw-sandbox",
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("runtime removed");
+            }
+          },
+        },
+        localDir,
+        remoteDir: "/remote/workspace",
+      });
+      current = false;
+      await expect(uploading).rejects.toThrow("runtime removed");
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      spawnMock.mockReset();
+    }
   });
 
   it("filters blocked secrets before spawning ssh uploads", async () => {

@@ -2,7 +2,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
-import { escapeRegExp } from "../utils.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { removeDirectiveSpan } from "./reply/directive-parsing.js";
 
 export type { ModelSelectionScope } from "../config/types.agent-defaults.js";

@@ -16,6 +16,7 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -151,7 +152,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           activateGlobalSideEffects: false,
         });
         const donorSource =
-          mode === "raw-donor" ? undefined : new PluginRegistryInspectionResources();
+          mode === "raw-donor"
+            ? undefined
+            : new PluginRegistryInspectionResources(retireInspectionInstances);
         donorSource?.attach(donor.registry);
         const record = createPluginRecord({ id, source: entry });
         donor.registry.plugins.push(record);
@@ -196,15 +199,16 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               expect(donorCurrent?.()).toBe(false);
             }
             expect(connections.every((connection) => connection.database.isOpen)).toBe(true);
+            const warnings: string[] = [];
             const createLease = () =>
               createContextEngineLogicalTurnLease({
                 identity: { runId: "copied-source-run", sessionId: "copied-source-session" },
                 config,
                 workspaceDir: state.workspaceDir,
-                warn: () => {},
+                warn: (message) => warnings.push(message),
               });
             lease = await withPluginRuntimeRegistryScope(copied, createLease);
-            expect(lease.effectiveEngineId).toBe(id);
+            expect(lease.effectiveEngineId, warnings.join("\n")).toBe(id);
             expect(lease.degraded).toBe(false);
             expect(bridge.factoryCalls).toBe(1);
             expect(connections.length).toBe(2);
@@ -276,8 +280,8 @@ it.each([false, true])(
   async (failedDependency) => {
     const donor = createEmptyPluginRegistry();
     const target = createEmptyPluginRegistry();
-    const donorSource = new PluginRegistryInspectionResources();
-    const primarySource = new PluginRegistryInspectionResources();
+    const donorSource = new PluginRegistryInspectionResources(retireInspectionInstances);
+    const primarySource = new PluginRegistryInspectionResources(retireInspectionInstances);
     donorSource.attach(donor);
     primarySource.attach(target);
     const record = { id: "uncovered-engine", source: "/synthetic/uncovered-engine.cjs" };

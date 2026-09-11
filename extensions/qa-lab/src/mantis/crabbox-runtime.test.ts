@@ -27,8 +27,8 @@ describe("Mantis Crabbox binary admission", () => {
       await fs.writeFile(
         executable,
         process.platform === "win32"
-          ? '@echo off\r\n> "%CRABBOX_PROBE_CWD_FILE%" echo %CD%\r\necho crabbox 0.55.0\r\n'
-          : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 0.55.0\\n"\n',
+          ? '@echo off\r\n> "%CRABBOX_PROBE_CWD_FILE%" echo %CD%\r\necho crabbox 0.56.0\r\n'
+          : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 0.56.0\\n"\n',
         { mode: 0o755 },
       );
       const download = vi

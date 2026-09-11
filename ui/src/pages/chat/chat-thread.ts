@@ -263,6 +263,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.initialTurnId === next.initialTurnId &&
     previous.pendingInputs === next.pendingInputs &&
     previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
     previous.workerSetupPending === next.workerSetupPending &&

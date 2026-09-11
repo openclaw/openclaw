@@ -33,6 +33,7 @@ export type UpdateCommandOptions = {
   /** In-process executor only; workers must reacquire authority, never deserialize this. */
   /** Legacy live context is unsupported; its presence is refusal-only. */
   recovery?: unknown;
+  reapplyLocalOverrides?: boolean;
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;
@@ -489,19 +490,40 @@ export async function tryWriteCompletionCache(
   return "failed";
 }
 
+export async function requestUpdateDowngradeConfirmation(params: {
+  json: boolean;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<"confirmed" | "cancelled" | "confirmation-required"> {
+  if (!process.stdin.isTTY || params.json) {
+    return "confirmation-required";
+  }
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const targetLabel = params.targetVersion ?? `${params.tag} (unknown)`;
+  const message = `Downgrading from ${params.currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({ message: stylePromptMessage(message), initialValue: false });
+  return isCancel(ok) || !ok ? "cancelled" : "confirmed";
+}
+
 export async function confirmUpdateDowngrade(params: {
   opts: UpdateCommandOptions;
   currentVersion: string | null;
   targetVersion: string | null;
   tag: string;
 }): Promise<boolean> {
-  const { confirm, isCancel } = await import("@clack/prompts");
   const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
-  const { stylePromptMessage } =
-    await import("../../../packages/terminal-core/src/prompt-style.js");
   const { opts, currentVersion, targetVersion, tag } = params;
+  const decision = await requestUpdateDowngradeConfirmation({
+    json: Boolean(opts.json),
+    currentVersion,
+    targetVersion,
+    tag,
+  });
   const run = opts.run!;
-  if (!process.stdin.isTTY || opts.json) {
+  if (decision === "confirmation-required") {
     finishUpdateRun(
       run.runId,
       { status: "skipped", reason: "downgrade-confirmation-required" },
@@ -513,14 +535,7 @@ export async function confirmUpdateDowngrade(params: {
     defaultRuntime.exit(1);
     return false;
   }
-
-  const targetLabel = targetVersion ?? `${tag} (unknown)`;
-  const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
-  const ok = await confirm({
-    message: stylePromptMessage(message),
-    initialValue: false,
-  });
-  if (isCancel(ok) || !ok) {
+  if (decision === "cancelled") {
     finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
     if (!opts.json) {
       defaultRuntime.log(theme.muted("Update cancelled."));
@@ -528,6 +543,5 @@ export async function confirmUpdateDowngrade(params: {
     defaultRuntime.exit(0);
     return false;
   }
-
   return true;
 }

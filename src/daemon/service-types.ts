@@ -1,3 +1,4 @@
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 /** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceStagedFiles } from "./service-stage.js";
@@ -101,6 +102,8 @@ export type GatewayServiceUnitInspection = {
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Report failed effective inspection even when a read-only caller accepts the local definition. */
+  onInspectionFailure?: (reason: ServiceInspectionReason) => void;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
   loadForInspection?: GatewayServiceUnitInspection;
@@ -111,7 +114,7 @@ export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-a
 export type GatewayServiceLoadState =
   | { status: "loaded" }
   | { status: "not-loaded" }
-  | { status: "unknown"; detail: string };
+  | { status: "unknown"; detail: string; inspectionReason?: ServiceInspectionReason };
 
 const SERVICE_DEFINITION_ARTIFACTS = {
   "service-directory":
@@ -292,6 +295,7 @@ export function resolveManagedGatewayServiceProcessEnv(
 }
 
 export type GatewayServiceState = {
+  inspectionReason?: ServiceInspectionReason;
   installed: boolean;
   loadState: GatewayServiceLoadState;
   running: boolean;

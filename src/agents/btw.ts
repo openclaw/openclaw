@@ -43,12 +43,12 @@ import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resol
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
@@ -529,6 +529,7 @@ async function resolveRuntimeModel(params: {
     cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
+    agentId: params.agentId,
     harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
@@ -719,7 +720,7 @@ async function withBtwPreparedRuntime(
 ): Promise<ReplyPayload | undefined> {
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
-    onAcquired(lease);
+    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
     return withPluginRuntimeGenerationScope(lease.snapshot, () => {
       captureWorkContext();
       return run(lease.snapshot);

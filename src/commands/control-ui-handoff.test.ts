@@ -2,13 +2,17 @@ import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:https";
+import type { Socket } from "node:net";
 import path from "node:path";
 import type { PeerCertificate } from "node:tls";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
-import type { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { resolveControlUiHandoffTarget, waitForControlUiDocument } from "./control-ui-handoff.js";
 
@@ -302,6 +306,109 @@ describe("waitForControlUiDocument", () => {
     expect(head.release).toHaveBeenCalledOnce();
     expect(diagnostic.release).toHaveBeenCalledOnce();
   });
+
+  it.each(["request", "body"] as const)(
+    "keeps the observed HTTP failure when the diagnostic %s fails",
+    async (failure) => {
+      const head = guardedResponse(new Response(null, { status: 503 }));
+      const diagnostic = guardedResponse(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new Error("diagnostic body failed"));
+            },
+          }),
+          { status: 503, headers: { "content-type": "text/plain" } },
+        ),
+      );
+      const fetch = vi.fn().mockResolvedValueOnce(head);
+      if (failure === "request") {
+        fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
+      } else {
+        fetch.mockResolvedValueOnce(diagnostic);
+      }
+
+      await expect(
+        waitForControlUiDocument({ url: documentUrl, deps: { fetch } }),
+      ).resolves.toEqual({
+        ready: false,
+        reason: "Control UI dashboard is unavailable (HTTP 503).",
+        status: 503,
+      });
+      expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+      expect(head.release).toHaveBeenCalledOnce();
+      expect(diagnostic.release).toHaveBeenCalledTimes(failure === "body" ? 1 : 0);
+    },
+  );
+
+  it.each(["complete", "broken"] as const)(
+    "preserves a real HTTP failure with a %s diagnostic body",
+    async (body) => {
+      const methods: string[] = [];
+      const responses: Array<{ method: string; status: number }> = [];
+      const releases: string[] = [];
+      const diagnosticSocket = createDeferredCore<Socket>();
+      const diagnosticClosed = createDeferredCore();
+      await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
+        await withServer(
+          (request, response) => {
+            methods.push(request.method ?? "");
+            response.writeHead(503, { "content-type": "text/plain", connection: "close" });
+            if (request.method === "HEAD") {
+              response.end();
+              return;
+            }
+            diagnosticSocket.resolve(request.socket);
+            request.socket.once("close", () => diagnosticClosed.resolve());
+            response.write("Asset build failed");
+            if (body === "complete") {
+              response.end();
+            }
+          },
+          async (baseUrl) => {
+            const result = await waitForControlUiDocument({
+              url: `${baseUrl}/dashboard/`,
+              deps: {
+                fetch: async (request) => {
+                  const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
+                  const method = String(request.init?.method);
+                  responses.push({ method, status: guarded.response.status });
+                  if (method === "GET" && body === "broken") {
+                    // Fault the real body only after guarded fetch has delivered its headers.
+                    (await diagnosticSocket.promise).destroy();
+                  }
+                  return {
+                    ...guarded,
+                    release: async () => {
+                      await guarded.release();
+                      releases.push(method);
+                    },
+                  };
+                },
+              },
+            });
+            await diagnosticClosed.promise;
+
+            expect(result).toEqual({
+              ready: false,
+              reason:
+                body === "complete"
+                  ? "Asset build failed"
+                  : "Control UI dashboard is unavailable (HTTP 503).",
+              status: 503,
+            });
+            expect(methods).toEqual(["HEAD", "GET"]);
+            expect(responses).toEqual([
+              { method: "HEAD", status: 503 },
+              { method: "GET", status: 503 },
+            ]);
+            // Observe release and socket closure before withServer tears the fixture down.
+            expect(releases).toEqual(["GET", "HEAD"]);
+          },
+        );
+      });
+    },
+  );
 
   it("does not expose HTML when a terminal failure becomes ready during diagnostic fetch", async () => {
     const head = guardedResponse(new Response(null, { status: 503 }));

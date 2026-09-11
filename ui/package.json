@@ -13,8 +13,8 @@
     "@codemirror/commands": "6.11.0",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
-    "@codemirror/state": "6.7.1",
-    "@codemirror/view": "6.43.9",
+    "@codemirror/state": "6.7.4",
+    "@codemirror/view": "6.43.11",
     "@lezer/highlight": "1.2.3",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
@@ -25,7 +25,7 @@
     "@novnc/novnc": "1.7.0",
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
-    "@openclaw/libterminal": "0.3.2",
+    "@openclaw/libterminal": "0.3.3",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/mermaid-renderer": "workspace:*",
     "@openclaw/model-catalog-core": "workspace:*",
@@ -58,7 +58,7 @@
     "openclaw": "workspace:*",
     "pako": "3.0.1",
     "playwright": "1.62.1",
-    "postcss": "8.5.26",
+    "postcss": "8.5.28",
     "vite": "8.2.2",
     "vitest": "5.0.0"
   }

@@ -6,6 +6,41 @@ import Testing
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `named profile hosting repair requires restart before activation`() async throws {
+        try #require(AppProfile.current.isActive)
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: ["gatewayPort": nil, hostsLocalGatewayWithRemotePrimaryKey: false])
+        {
+            let reservedPort = GatewayEnvironment.gatewayPort()
+            #expect(OpenClawConfigFile.saveDict(["gateway": [
+                "mode": "remote", "port": reservedPort,
+                "remote": [
+                    "transport": "ssh",
+                    "sshTarget": "operator@gateway.example",
+                    "url": "ws://127.0.0.1:\(reservedPort)",
+                    "remotePort": 18789,
+                ],
+            ]]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            for _ in 0..<2 {
+                do {
+                    try state.setHostsLocalGatewayWithRemotePrimary(true)
+                    Issue.record("A reserved port change must require a restart")
+                } catch PrimaryGatewayControlError.localHostingRequiresRestart {}
+                #expect(!state.hostsLocalGatewayWithRemotePrimary)
+                #expect(state.localGatewayHostingNotice == nil)
+            }
+            let root = OpenClawConfigFile.loadDict()
+            #expect(OpenClawConfigFile.gatewayPort(root: root) != reservedPort)
+            #expect(RemotePortTunnel.localPort(root: root) == reservedPort)
+        }
+    }
+
+    @Test
     func `preview constructor uses launch namespace and owned config`() async throws {
         // Fail before touching defaults when the bundle was launched without its resource owner.
         let profile = try #require(AppProfile.current.name)

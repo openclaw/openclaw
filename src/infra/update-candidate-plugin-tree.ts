@@ -81,7 +81,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
   }
   function assertSource(source: string) {
     if (isPathInside(source, privateRoot) || isPathInside(privateRoot, source)) {
-      throw new Error("Plugin copy source overlaps candidate state");
+      throw new Error("Plugin copy source overlaps update state");
     }
   }
   async function discoverHoistedDependencies(directory: string): Promise<void> {
@@ -338,7 +338,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
   for (const [source, target] of copies) {
     const destination = resolvePathViaExistingAncestorSync(target);
     if (!isPathInside(privateRoot, destination)) {
-      throw new Error("Plugin copy destination escapes candidate state");
+      throw new Error("Plugin copy destination escapes update state");
     }
     for (const [other] of copies) {
       if (isPathInside(other, destination) || isPathInside(destination, other)) {
@@ -360,7 +360,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
   // literal node_modules directory and cannot bind a relocated module owner.
   for (const link of hostLinks) {
     if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(link)))) {
-      throw new Error("Plugin host link escapes candidate state");
+      throw new Error("Plugin host link escapes update state");
     }
     await fs.mkdir(path.dirname(link), { recursive: true });
     const existing = await fs.lstat(link).catch((error: unknown) => {
@@ -374,7 +374,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
         !existing.isSymbolicLink() ||
         path.resolve(path.dirname(link), await fs.readlink(link)) !== candidateRoot
       ) {
-        throw new Error("Plugin host link conflicts with its candidate owner");
+        throw new Error("Plugin host link conflicts with its update owner");
       }
     } else {
       await fs.symlink(candidateRoot, link, process.platform === "win32" ? "junction" : "dir");
@@ -388,7 +388,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
       : params.project(source);
     const target = projected(real);
     if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(alias)))) {
-      throw new Error("Plugin module alias escapes candidate state");
+      throw new Error("Plugin module alias escapes update state");
     }
     const existing = await fs.lstat(alias).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT")) {
@@ -413,7 +413,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
         !stat.isSymbolicLink() ||
         path.resolve(path.dirname(file), await fs.readlink(file)) !== candidateRoot
       ) {
-        throw new Error("Copied plugin host link does not target the candidate");
+        throw new Error("Copied plugin host link does not target the update");
       }
       return;
     }
@@ -425,7 +425,7 @@ export async function copyUpdateCandidatePluginTrees(params: {
         !isPathInside(privateRoot, target) &&
         !(isHostLauncher(file) && isPathInside(candidateRoot, target))
       ) {
-        throw new Error("Copied plugin symlink escapes candidate state");
+        throw new Error("Copied plugin symlink escapes update state");
       }
       return;
     }

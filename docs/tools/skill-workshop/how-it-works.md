@@ -48,6 +48,9 @@ Open **Plugins → Workshop** and select the agent whose skills you want to insp
 - **Suggestions** contains pending proposals that you can evaluate, revise,
   apply, or reject.
 
+Action confirmations dismiss automatically. A warning that a suggestion changed
+stays visible so you can review the updated draft.
+
 Past applied, rejected, quarantined, and stale proposals remain available through
 CLI and Gateway inspection. They are not listed as a separate Control UI section
 or counted as installed skills.

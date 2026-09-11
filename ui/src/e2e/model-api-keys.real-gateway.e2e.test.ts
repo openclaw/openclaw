@@ -77,7 +77,7 @@ suite.define(() => {
           const card = page.locator('[data-provider-id="fixture"]');
           await card.waitFor();
           await page.screenshot({ path: path.join(suite.artifactDir, "before-edit.png") });
-          await card.getByRole("button", { name: "Replace key" }).click();
+          await card.getByRole("button", { name: "Set API key" }).click();
           await card.getByLabel("API key").fill(key);
           await card.getByRole("button", { name: "Save", exact: true }).click();
           await expect.poll(() => card.textContent()).toContain("Secret saved.");

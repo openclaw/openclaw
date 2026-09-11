@@ -148,7 +148,7 @@ describe("prepared model runtime reload auth adoption", () => {
             try {
               expect(nested.snapshot).toBe(lease.snapshot);
             } finally {
-              nested.release();
+              await nested[Symbol.asyncDispose]();
             }
           },
           () => (active ? lease.snapshot : undefined),
@@ -158,7 +158,7 @@ describe("prepared model runtime reload auth adoption", () => {
         );
       } finally {
         active = false;
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
       await snapshot.loadFullModelCatalog({ refresh: true });
       if (!owner.catalogInventory) {
@@ -530,7 +530,7 @@ describe("prepared model runtime reload auth adoption", () => {
         workspaceDir: "/tmp/unused-workspace",
       });
       expect(lease.snapshot.config).toBe(replacementConfig);
-      lease.release();
+      await lease[Symbol.asyncDispose]();
     } finally {
       configBuild.resolve({ agentDir: state.agentDir("default"), wrote: false });
       authBuild.resolve({ agentDir: state.agentDir("default"), wrote: false });

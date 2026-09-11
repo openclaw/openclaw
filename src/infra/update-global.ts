@@ -530,6 +530,20 @@ export function canResolveRegistryVersionForPackageTarget(value: string): boolea
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
 }
 
+/** Same-version registry targets are no-ops; explicit artifacts still require validation/install. */
+export function isPackageTargetAlreadyCurrent(params: {
+  currentVersion: string | null;
+  targetVersion: string | null;
+  target: string;
+}): boolean {
+  return (
+    params.currentVersion !== null &&
+    params.targetVersion !== null &&
+    params.currentVersion === params.targetVersion &&
+    canResolveRegistryVersionForPackageTarget(params.target)
+  );
+}
+
 async function resolvePortableGitPathPrepend(): Promise<string[]> {
   if (process.platform !== "win32") {
     return [];

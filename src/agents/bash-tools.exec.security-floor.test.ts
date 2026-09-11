@@ -710,7 +710,7 @@ describe("exec security floor", () => {
         baseUrl: "https://example.invalid",
       }),
       auth: { source: "synthetic", mode: "aws-sdk" },
-      release: () => {},
+      [Symbol.asyncDispose]: async () => {},
     });
     const completion = createDeferred<never>();
     const completionEntered = createDeferred();

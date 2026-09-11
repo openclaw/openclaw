@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
   isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
@@ -628,22 +629,31 @@ export function finishInterruptedUpdateBeforeActivation(
   ) {
     throw new Error("Update interruption requires its live pre-activation transaction");
   }
-  // The same canonical subset previously checked by the recovery writer. No bootstrap or migration.
-  const interruptionSchema = ["schema_meta", "config_machine_state", "update_runs"]
-    .map((table) => {
-      const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
-      const marker = ") STRICT;";
-      const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
-      if (start < 0 || end < 0) {
-        throw new Error("Interrupted update schema is unavailable.");
-      }
-      return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
-    })
-    .join("\n");
+  const recoveryTable = "config_machine_state";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${recoveryTable} (`);
+  const marker = ") STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < 0) {
+    throw new Error("Interrupted update schema is unavailable.");
+  }
+  const recoverySchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
   assertCurrent();
   runExistingOpenClawStateWriteTransaction(
-    ({ db }) => {
+    ({ db, path: pathname }) => {
       assertCurrent();
+      // Older targets can omit recovery storage and predate STRICT metadata.
+      // The existing writer validates metadata ownership/version; present recovery
+      // storage must still match its canonical shape before excluding recovery.
+      const recoveryObject = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<{ "main.sqlite_schema": { name: string } }>(db)
+          .selectFrom("main.sqlite_schema")
+          .select("name")
+          .where("name", "=", recoveryTable),
+      );
+      if (recoveryObject) {
+        assertSqliteSchemaContains(db, pathname, recoverySchema);
+      }
       if (
         !readRecoveries(db).some(
           (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
@@ -663,7 +673,7 @@ export function finishInterruptedUpdateBeforeActivation(
       assertCurrent();
     },
     options,
-    { schemaSql: interruptionSchema, operationLabel: "update.interrupted" },
+    { schemaSql: schema, operationLabel: "update.interrupted" },
   );
 }
 

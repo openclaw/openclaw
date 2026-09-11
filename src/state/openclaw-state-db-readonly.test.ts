@@ -22,6 +22,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   isArtifactPreservingStateRead,
+  iterateOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -42,6 +43,129 @@ function createOptions(stateDir: string) {
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
+  await withTempDir("openclaw-state-sync-read-", async (root) => {
+    const options = createOptions(root);
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    expect(() =>
+      withExistingOpenClawStateDatabaseReadOnly(() => Promise.resolve(1), options),
+    ).toThrow("SQLite source read must remain synchronous");
+    const exclusion = acquireOpenClawStateDatabaseFileExclusion(options.path);
+    exclusion.release();
+  });
+});
+
+it.each(["complete", "return", "throw"] as const)(
+  "ends the native stream snapshot before close on %s",
+  async (ending) => {
+    await withTempDir("openclaw-state-stream-snapshot-", async (root) => {
+      const source = openOpenClawStateDatabase(createOptions(root));
+      let reader: DatabaseSync | undefined;
+      let finalized = false;
+      let transactionAtClose: boolean | undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
+      const close = DatabaseSync.prototype.close;
+      vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (this: DatabaseSync) {
+        if (this === reader) {
+          transactionAtClose = this.isTransaction;
+        }
+        close.call(this);
+      });
+      const rows = iterateOpenClawStateDatabaseReadOnly(source, function* ({ db }) {
+        reader = db;
+        try {
+          yield db.prepare("SELECT 1 AS value").get()?.value;
+        } finally {
+          expect(db.isOpen).toBe(true);
+          expect(db.isTransaction).toBe(true);
+          finalized = true;
+        }
+      });
+      try {
+        expect((await rows.next()).value).toBe(1);
+        if (ending === "complete") {
+          expect((await rows.next()).done).toBe(true);
+        } else if (ending === "return") {
+          await rows.return();
+        } else {
+          const failure = new Error("stream consumer failed");
+          await expect(rows.throw(failure)).rejects.toBe(failure);
+        }
+        expect(finalized).toBe(true);
+        expect(transactionAtClose).toBe(false);
+        expect(reader?.isOpen).toBe(false);
+      } finally {
+        await rows.return();
+      }
+    });
+  },
+);
+
+it("retains stream handle custody when native close fails until explicit close succeeds", async () => {
+  await withTempDir("openclaw-state-stream-close-", async (root) => {
+    const source = openOpenClawStateDatabase(createOptions(root));
+    const failure = new Error("reader close failed");
+    let refuseClose = true;
+    let reader: DatabaseSync | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
+    const close = DatabaseSync.prototype.close;
+    const closeSpy = vi.spyOn(DatabaseSync.prototype, "close");
+    closeSpy.mockImplementation(function (this: DatabaseSync) {
+      if (this === reader && refuseClose) {
+        throw failure;
+      }
+      close.call(this);
+    });
+    const rows = iterateOpenClawStateDatabaseReadOnly(source, function* ({ db }) {
+      reader = db;
+      yield db.prepare("SELECT 1 AS value").get()?.value;
+      yield 2;
+    });
+    try {
+      expect((await rows.next()).value).toBe(1);
+      await expect(rows.return()).rejects.toBe(failure);
+      expect(reader?.isOpen).toBe(true);
+      expect(() => acquireOpenClawStateDatabaseFileExclusion(source.path)).toThrow(
+        "reader close failed",
+      );
+      expect(reader?.isOpen).toBe(true);
+      refuseClose = false;
+      closeOpenClawStateDatabaseForTest();
+      expect(reader?.isOpen).toBe(false);
+      const exclusion = acquireOpenClawStateDatabaseFileExclusion(source.path);
+      exclusion.release();
+    } finally {
+      refuseClose = false;
+      await rows.return();
+      closeOpenClawStateDatabaseForTest();
+      closeSpy.mockRestore();
+    }
+  });
+});
+
+it("rejects non-filesystem stream sources without interpreting their logical path as a file", async () => {
+  await withTempDir("openclaw-state-memory-stream-", async (root) => {
+    const db = new DatabaseSync(":memory:");
+    const pathname = path.join(root, "logical-state.sqlite");
+    const rows = iterateOpenClawStateDatabaseReadOnly(
+      { db, path: pathname, walMaintenance: { checkpoint: () => false, close: () => false } },
+      function* () {
+        yield "unreachable";
+      },
+    );
+    try {
+      await expect(rows.next()).rejects.toThrow(
+        "Streaming shared-state reads require a filesystem-backed database",
+      );
+      expect(fs.readdirSync(root)).toEqual([]);
+    } finally {
+      await rows.return();
+      db.close();
+    }
+  });
 });
 
 it("waits for a transient database lock before a fresh read-only schema inspection", async () => {

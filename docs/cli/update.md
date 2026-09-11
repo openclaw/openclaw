@@ -94,6 +94,27 @@ An agent updating the Gateway that hosts its own session should use the
 host; verify that the destination is not that same Gateway. Normal execution
 approvals and deployment ownership still apply.
 
+## Native service commands during updates
+
+Native service install, restart, and stop commands launched by the updater through
+the target CLI retain the original update owner while their child processes settle. A command whose owner exits or
+loses its lease cannot start another native mutation or commit its pending config
+changes. A new update remains excluded while a registered child or its process
+group is still alive.
+
+The target runtime must support this ownership handoff. Candidate validation checks
+that support before stopping the Gateway or activating its replacement. A missing
+target CLI or an older target without support is refused; the updater does not
+invoke the old runtime installer as a substitute. Authorized installation-root
+changes bind the destination CLI separately while retaining the original update owner. Update-owned commands also refuse unmanaged
+restart/stop and detached restart or Windows Startup-folder fallbacks that cannot
+retain this ownership. Ordinary user-invoked `openclaw gateway` commands keep their
+existing behavior.
+
+This target-CLI protection does not cover every Doctor or plugin child, the
+in-process service preparation before package mutation, or the separate
+deferred-install activation checks.
+
 ## Options
 
 Updater-managed `openclaw update finalize` runs repair Doctor without an automatic
@@ -112,6 +133,7 @@ phase limits are unchanged.
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
+| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
@@ -138,6 +160,21 @@ restoring that link and its launchers does not verify the mutable checkout's
 runtime. Recovery stays unverified and does not authorize an automatic restart;
 inspect the checkout and recovery report before restarting it.
 
+For a profile without a runtime database, an older npm target initializes its
+compatible state before the updater records history. The selected release's
+Doctor runs before activation, including when npm's install hooks already created
+the database. Existing databases retain their downgrade protections.
+
+Explicit package specs on a fresh profile first stage with a temporary OpenClaw
+profile. The updater inspects the staged runtime's declared schema and Node
+requirements before admitting changes to the selected profile. Artifacts without
+declared schema support are refused without creating the profile's runtime database.
+Preparation uses the original package spec and owning package manager.
+
+A fresh-profile `--dry-run` leaves the database absent and does not record a run.
+If package metadata cannot be resolved, retry with an exact published `--tag`;
+failed target selection does not initialize the profile with the updater's schema.
+
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
@@ -154,7 +191,7 @@ changes before modifying the checkout. Use `openclaw update status` to inspect
 the current branch, version, and update availability.
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow and records a skipped run without changing the installation.
+In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow without changing the installation. It records a skipped run only when the profile already has a runtime database.
 </Note>
 
 <Warning>

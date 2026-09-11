@@ -242,7 +242,7 @@ describe("sessions.patch", () => {
             params: {
               key: sessionKey,
               permissionMode,
-              ...(prepareCatalog && index === 0 ? { thinkingLevel: "off" } : {}),
+              ...(prepareCatalog && index === 0 ? { thinkingLevel: "low" } : {}),
             },
             client: requestClient,
             context: requestContext,
@@ -290,7 +290,7 @@ describe("sessions.patch", () => {
           if (prepareCatalog) {
             expect(
               loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.thinkingLevel,
-            ).toBe("off");
+            ).toBe("low");
           }
         } finally {
           catalogRelease.resolve();

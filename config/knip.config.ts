@@ -215,6 +215,9 @@ const rootEntries = [
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
+  // OpenGrep rule tests read these as static source inputs; they are never executed.
+  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
+  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
@@ -245,8 +248,6 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
-  // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
-  "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.

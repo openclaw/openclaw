@@ -8,7 +8,7 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
-import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
+import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {

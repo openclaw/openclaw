@@ -212,19 +212,17 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
     expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
+    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(menu?.querySelector('[role="separator"]')?.previousElementSibling?.className).toBe(
+      "sidebar-agent-menu__agent-grid",
+    );
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
       [...(menu?.querySelectorAll("wa-dropdown-item") ?? [])].map((element) =>
         element.getAttribute("value"),
       ),
-    ).toEqual([
-      "agent:main",
-      "agent:research",
-      "command:new-agent",
-      "command:capabilities",
-      "command:agent-settings",
-    ]);
+    ).toEqual(["agent:main", "agent:research", "command:capabilities", "command:agent-settings"]);
 
     const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
     expect(agentRows).toHaveLength(2);
@@ -463,7 +461,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it("collapses a single-agent roster to the three agent actions", async () => {
+  it.each([0, 1])("keeps only the two agent actions with %i configured agents", async (count) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -473,7 +471,7 @@ describe("AppSidebar agent chip", () => {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
-        agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
+        agents: count === 0 ? [] : [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
       },
     );
     sidebar.connected = true;
@@ -483,13 +481,14 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
+    expect(menu?.querySelector('[role="separator"]')).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
     expect(
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:new-agent", "command:capabilities", "command:agent-settings"]);
+    ).toEqual(["command:capabilities", "command:agent-settings"]);
   });
 
   it("navigates to the agents settings page with the active agent preselected", async () => {

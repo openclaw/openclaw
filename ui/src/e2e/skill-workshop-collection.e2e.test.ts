@@ -219,7 +219,13 @@ describe("Workshop current collection", () => {
           "skills.proposals.inspect",
           fixture.responses["skills.proposals.inspect"],
         );
-        await gateway.resolveDeferred(method, {});
+        const record = inspect.response.record;
+        await gateway.resolveDeferred(
+          method,
+          action === "Apply"
+            ? { record, targetSkillFile: `skills/${record.target.skillKey}/SKILL.md` }
+            : record,
+        );
         await expect.poll(() => page.locator(".sw-row").count()).toBe(remaining);
         const notice = page.locator(".sw-action-toast");
         await expect

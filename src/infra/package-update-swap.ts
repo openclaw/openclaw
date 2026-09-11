@@ -18,9 +18,12 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
+  PackageIntegrityTimeoutError,
   readPackageVersionIfPresent,
+  type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
 import {
   createNpmPackageRootLinkLifecycle,
   verifyNpmRootRecovery,
@@ -28,14 +31,13 @@ import {
 import {
   PackageUpdateActivationError,
   type PackageUpdateTransaction,
-  type StagedPackageInstall,
   type StagedPackageSwapResult,
+  type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   verifyPackageUpdateRecovery,
-  type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import {
   finalizeNativePackageStage,
@@ -55,16 +57,9 @@ export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
-export async function swapStagedPackageInstall(params: {
-  stage: StagedPackageInstall;
-  installTarget: ResolvedGlobalInstallTarget;
-  packageName: string;
-  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
-  beforeActivate?: () => Promise<void>;
-  onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  timeoutMs?: number;
-}): Promise<StagedPackageSwapResult> {
+export async function swapStagedPackageInstall(
+  params: StagedPackageSwapParams,
+): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;
@@ -82,6 +77,7 @@ export async function swapStagedPackageInstall(params: {
     : params.installTarget.packageRoot;
   const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
   const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
+  const warnings: string[] = [];
   const step = (
     exitCode: number,
     stdoutTail: string | null,
@@ -94,6 +90,15 @@ export async function swapStagedPackageInstall(params: {
     exitCode,
     stdoutTail,
     stderrTail,
+    ...(exitCode === 0 && warnings.length > 0
+      ? {
+          advisory: {
+            kind: "recoverable-maintenance" as const,
+            message: warnings.join("\n"),
+          },
+          warnings: [...warnings],
+        }
+      : {}),
   });
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
     return {
@@ -112,9 +117,11 @@ export async function swapStagedPackageInstall(params: {
   );
   let shimBackupDir: string | undefined;
   let hadPackage = false;
+  let replayLocalOverrides: (() => Promise<void>) | undefined;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
   let previousRoot: PackageRootIntegrityFingerprint | undefined;
+  let previousIdentity: PackageDirectoryIdentity | undefined;
   let rootLink: ReturnType<typeof createNpmPackageRootLinkLifecycle> | undefined;
   let packageBackedUp = false;
   let displacedCandidateRoot: string | undefined;
@@ -132,7 +139,7 @@ export async function swapStagedPackageInstall(params: {
   let activationCompleted = false;
   const verifyNpmRecovery = (root: string, fromBackup: boolean) =>
     verifyNpmRootRecovery(
-      { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims },
+      { root, fromBackup, hadPackage, previousRoot, previousIdentity, targetSwapRoot, shims },
       params.timeoutMs,
     );
   const restoreSwap = async (assertCurrent = () => {}): Promise<string[]> => {
@@ -191,7 +198,15 @@ export async function swapStagedPackageInstall(params: {
         await verifyNpmRecovery(targetSwapRoot, false);
         // Returning to absence cannot establish a verified previous runtime.
         packageRollbackVerified =
-          hadPackage && previousRoot?.kind === "directory" && messages.length === 0;
+          hadPackage &&
+          (previousRoot?.kind === "directory" ||
+            (!previousRoot && previousIdentity !== undefined)) &&
+          messages.length === 0;
+        if (packageRollbackVerified && !previousRoot) {
+          warnings.push(
+            "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
+          );
+        }
         if (previousRoot?.kind === "link" && messages.length === 0) {
           messages.push(
             `${rollback.length > 0 ? "Restored" : "Verified"} the npm package link and affected launchers; external checkout runtime integrity is unverified.`,
@@ -263,11 +278,29 @@ export async function swapStagedPackageInstall(params: {
         ? await readPackageVersionIfPresent(params.installTarget.packageRoot)
         : null;
     if (hadPackage && !native) {
-      // Unreadable or unbounded rollback material must fail while the old
-      // package is still live, before beforeActivate may stop its service.
-      previousRoot = await baseline.rootEntry(targetSwapRoot);
-      previousVersion = previousRoot.kind === "directory" ? previousRoot.tree.version : null;
-      if (previousRoot.kind === "link") {
+      try {
+        previousRoot = await baseline.rootEntry(targetSwapRoot);
+      } catch (error) {
+        if (!(error instanceof PackageIntegrityTimeoutError)) {
+          throw error;
+        }
+        // Capture the identity before mutation even when the full walk exhausted its budget.
+        previousIdentity =
+          (await createPackageIntegrityReader(params.timeoutMs).directoryIdentity(
+            targetSwapRoot,
+          )) ?? undefined;
+        if (!previousIdentity) {
+          throw error;
+        }
+        warnings.push(
+          `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
+        );
+      }
+      previousVersion =
+        previousRoot?.kind === "directory"
+          ? previousRoot.tree.version
+          : (previousIdentity?.version ?? null);
+      if (previousRoot?.kind === "link") {
         rootLink = createNpmPackageRootLinkLifecycle({
           liveRoot: targetSwapRoot,
           backupRoot,
@@ -281,7 +314,16 @@ export async function swapStagedPackageInstall(params: {
         (await readPackageDistInventoryIfPresent(params.installTarget.packageRoot!)) ??
         (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
+    replayLocalOverrides = await preparePackageSwapLocalOverrides({
+      ...params,
+      hadPackage,
+      rootLinked: Boolean(rootLink),
+      targetSwapRoot,
+      backupRoot,
+    });
     packageRollbackVerified = hadPackage && previousVersion !== null;
+  };
+  const readLaunchers = async (launcherReader: ReturnType<typeof createPackageIntegrityReader>) => {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     const shimNames = new Set([params.packageName, "openclaw"]);
     const shimEntries =
@@ -291,7 +333,7 @@ export async function swapStagedPackageInstall(params: {
             await (
               native
                 ? fs.readdir(params.stage.layout.binDir)
-                : baseline.entries(params.stage.layout.binDir)
+                : launcherReader.entries(params.stage.layout.binDir)
             ).catch((error: unknown) => {
               if (hasErrnoCode(error, "ENOENT")) {
                 return [];
@@ -312,13 +354,14 @@ export async function swapStagedPackageInstall(params: {
         const destination = path.join(targetLayout.binDir, entry);
         const backup = (await (native
           ? pathEntryExists(destination)
-          : baseline.exists(destination)))
+          : launcherReader.exists(destination)))
           ? path.join(shimBackupDir, entry)
           : null;
-        const fingerprint = backup && !native ? await baseline.launcher(destination) : undefined;
+        const fingerprint =
+          backup && !native ? await launcherReader.launcher(destination) : undefined;
         if (backup) {
           await copyPathEntry(destination, backup);
-          if (!native && (await baseline.launcher(backup)) !== fingerprint) {
+          if (!native && (await launcherReader.launcher(backup)) !== fingerprint) {
             throw new Error(`Package rollback launcher backup changed: ${destination}`);
           }
         }
@@ -333,6 +376,9 @@ export async function swapStagedPackageInstall(params: {
   };
   try {
     await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
+    // The optional tree scan must not consume the launcher backup's deadline.
+    const launcherReader = createPackageIntegrityReader(params.timeoutMs);
+    await launcherReader.observe("baseline", () => readLaunchers(launcherReader));
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native
@@ -536,7 +582,10 @@ export async function swapStagedPackageInstall(params: {
       }
       activePackageRoot = null;
       packageBackedUp = true;
-      packageRollbackVerified = native !== undefined || previousRoot?.kind === "directory";
+      packageRollbackVerified =
+        native !== undefined ||
+        previousRoot?.kind === "directory" ||
+        previousIdentity !== undefined;
     }
     rollback.push(async (assertCurrent) => {
       if (!native && hadPackage) {
@@ -586,6 +635,7 @@ export async function swapStagedPackageInstall(params: {
         activePackageRoot = params.installTarget.packageRoot;
       }
     });
+    await replayLocalOverrides?.();
     await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
     activePackageRoot = targetPackageRoot;
     projectActivated = true;

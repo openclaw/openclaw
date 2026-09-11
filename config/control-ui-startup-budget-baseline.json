@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 352531,
-  "reason": "Plugin discovery shell adds the canonical /plugins workspace route and navigation metadata; measured 352531 B startup gzip on Linux-equivalent local build. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-09"
+  "startupJsGzipBytes": 353694,
+  "reason": "Main-area /terminal route adds eager route registration, the dynamic session-path bridge, and catalog navigation glue for native CLI sessions; measured 353694 B startup gzip in CI on the rebased tree. Fixed 358400 B cap retained.",
+  "updatedAt": "2026-09-11"
 }

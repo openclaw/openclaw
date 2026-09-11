@@ -90,7 +90,12 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return trimmed;
   }
 
-  const newline = options?.preserveArguments ? -1 : trimmed.indexOf("\n");
+  const commandAlias = trimmed.match(/^\/[^\s@:]+/u)?.[0]?.toLowerCase();
+  const preserveArguments =
+    options?.preserveArguments ||
+    (commandAlias !== undefined &&
+      getCommandRegistryLookup().aliases.get(commandAlias)?.command.key === "goal");
+  const newline = preserveArguments ? -1 : trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
   const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
 
@@ -100,7 +105,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     ? (() => {
         const [, command, rest] = colonMatch;
         const commandRest = expectDefined(rest, "commands registry normalize rest");
-        const normalizedRest = options?.preserveArguments ? commandRest : commandRest.trimStart();
+        const normalizedRest = preserveArguments ? commandRest : commandRest.trimStart();
         return normalizedRest
           ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
           : `/${command}`;
@@ -140,7 +145,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  const normalizedHead = options?.preserveArguments
+  const normalizedHead = preserveArguments
     ? `${tokenSpec.canonical}${commandBody.slice(tokenKey.length)}`
     : normalizedRest
       ? `${tokenSpec.canonical} ${normalizedRest}`

@@ -30,6 +30,7 @@ type ConnectionProps = {
   lastError: string | null;
   systemInfo: SystemInfoResult | null;
   systemInfoUnavailable: boolean;
+  systemInfoLoading: boolean;
   /** True when the draft differs from the live connection. */
   dirty: boolean;
   showGatewaySecret: boolean;

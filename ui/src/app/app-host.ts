@@ -95,6 +95,7 @@ i18n.setLocaleLoadRecovery({
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
   return (
     previous.routeId === next.routeId &&
+    previous.routeFailed === next.routeFailed &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash &&

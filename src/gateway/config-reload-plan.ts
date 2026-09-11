@@ -6,10 +6,7 @@ import {
   listChannelPlugins,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getActivePluginHttpRouteRegistry,
-  getActivePluginHttpRouteRegistryVersion,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isTranscriptTitleOnlyConfigChange } from "../transcripts/config-reload.js";
 import { isPlainObject } from "../utils.js";
@@ -281,7 +278,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
 
 let cachedCatalog:
   | {
-      registry: ReturnType<typeof getActivePluginHttpRouteRegistry>;
+      registry: ReturnType<typeof getActivePluginRegistry>;
       version: number;
       rules: ReloadRule[];
       refinementPrefixes: string[];
@@ -289,8 +286,8 @@ let cachedCatalog:
   | undefined;
 
 function getReloadPolicyCatalog() {
-  const registry = getActivePluginHttpRouteRegistry();
-  const version = getActivePluginHttpRouteRegistryVersion();
+  const registry = getActivePluginRegistry();
+  const version = getActivePluginRegistryVersion();
   // Only process-root registry publication changes plugin/channel policy.
   if (cachedCatalog?.registry === registry && cachedCatalog.version === version) {
     return cachedCatalog;

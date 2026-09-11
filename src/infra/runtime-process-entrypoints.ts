@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  sqliteStore: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-store.worker",
+    distWorkerPath: "infra/sqlite-store.worker.js",
+  },
   stateMigrationSnapshot: {
     currentModuleUrl,
     sourceWorkerName: "state-migrations.snapshot.worker",

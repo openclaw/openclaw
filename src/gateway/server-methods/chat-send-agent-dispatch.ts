@@ -567,7 +567,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
               session,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
-              runtimeOwnsTranscript: replyDispatchResult?.assistantTranscript !== undefined,
+              // Bound ACP writes its own transcript; the dashboard still needs its reply.
+              runtimeOwnsTranscript:
+                replyDispatchResult?.assistantTranscript?.agentId === agentId &&
+                replyDispatchResult.assistantTranscript.sessionKey === sessionKey &&
+                replyDispatchResult.assistantTranscript.sessionId ===
+                  activeRunAbort.entry?.sessionId,
               state: runtimeCancelled ? "aborted" : "final",
               stopReason: runtimeOutcome?.stopReason,
             });

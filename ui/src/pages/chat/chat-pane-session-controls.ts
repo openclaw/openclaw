@@ -147,7 +147,7 @@ export function renderChatPaneComposerControls(params: {
     composerControls: html`
       <div class="chat-composer-model-control">
         ${renderChatModelControls({
-          renderAccountControl: (accountModel) =>
+          renderAccountSection: (accountModel) =>
             renderChatModelAccountControl({
               owner: state,
               client,

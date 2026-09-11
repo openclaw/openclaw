@@ -102,6 +102,44 @@ afterEach(async () => {
 });
 
 describe("update candidate canary", () => {
+  it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
+    const now = Date.now.bind(Date);
+    let snapshotElapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + snapshotElapsed);
+    mocks.snapshot.mockImplementationOnce(async () => {
+      snapshotElapsed = 300_001;
+      return {
+        code: 0,
+        stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
+        stderr: Buffer.alloc(0),
+        termination: "exit",
+      };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "started", ready: true })),
+    );
+    try {
+      const result = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config: {},
+        env: {},
+      });
+      expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
+      expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+      );
+      expect(result.logTail.join("\n")).toContain("readyz: ready");
+      await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps verified readiness and records a warning when rehearsal cleanup fails", async () => {
     vi.stubGlobal(
       "fetch",

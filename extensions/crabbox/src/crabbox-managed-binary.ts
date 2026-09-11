@@ -10,7 +10,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.55.0";
+export const CRABBOX_MIN_VERSION = "0.56.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const VERSION_TIMEOUT_MS = 5_000;

@@ -16,8 +16,13 @@ function ftsTableMatchesSchema(params: {
   tokenizeClause: string;
 }): FtsTableSchemaStatus {
   const table = params.db
-    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ? COLLATE NOCASE")
-    .get(params.tableName) as { sql?: unknown } | undefined;
+    .prepare(
+      "SELECT type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
+    )
+    .get(params.tableName) as { type?: unknown; sql?: unknown } | undefined;
+  if (table?.type === "view") {
+    throw new Error(`cannot modify ${params.tableName} because it is a view`);
+  }
   if (typeof table?.sql !== "string") {
     return "missing";
   }

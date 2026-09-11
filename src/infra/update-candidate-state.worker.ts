@@ -1,4 +1,6 @@
+import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
 import {
+  readUpdateCandidateStateInventoryInProcess,
   readUpdateStateSchemaVersionsInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
@@ -13,18 +15,27 @@ async function snapshotCandidateState(): Promise<void> {
   // SAFETY: Only the updater's typed snapshot/versions launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
     | (Parameters<typeof snapshotUpdateCandidateState>[0] & { mode: "snapshot" })
-    | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" });
-  if (input.mode !== "snapshot" && input.mode !== "versions") {
+    | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & {
+        mode: "versions" | "inventory";
+      });
+  if (input.mode !== "snapshot" && input.mode !== "versions" && input.mode !== "inventory") {
     throw new Error("Unknown update state inspection mode");
   }
   const versions =
     input.mode === "snapshot"
       ? await snapshotUpdateCandidateState(input)
-      : await readUpdateStateSchemaVersionsInProcess(input);
+      : input.mode === "inventory"
+        ? [...(await readUpdateCandidateStateInventoryInProcess(input))]
+        : await readUpdateStateSchemaVersionsInProcess(input);
   process.stdout.write(JSON.stringify(versions));
 }
 
 void snapshotCandidateState().catch((error: unknown) => {
-  process.stderr.write(error instanceof Error ? error.message : String(error));
+  process.stderr.write(formatErrorMessageWithCode(error));
+  const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
+  if (causes.length > 1) {
+    // The update ledger retains the final diagnostic line within its existing bound.
+    process.stderr.write(`\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`);
+  }
   process.exitCode = 1;
 });

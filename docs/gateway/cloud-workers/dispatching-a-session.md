@@ -19,6 +19,8 @@ In the Control UI, open **New Session** and use the unified **Place** picker to 
 
 With a GitHub repository selected, **Remote checkout** lets you choose the source ref without cloning on the Gateway. With a Gateway folder selected, cloud selection enables its managed worktree. The Gateway creates the session, finishes dispatch, and only then sends the first turn. The server badge in the session sidebar shows the durable placement state. Startup recovery retains the repository URL and ref along with the destination and first message.
 
+If the Gateway restarts during provisioning, the pending first message waits for recovery and continues automatically when its worker is ready. Temporary startup or suspension errors do not cancel setup. The first message stays before later recovery notices in the chat, including after reconnecting.
+
 Choosing **Stop cloud worker…** while the new session is still provisioning pauses its initial message before requesting teardown. A late dispatch response cannot send that message. The draft stays visible for **Retry** and is not resubmitted automatically. Regular session drafts survive reconnects and page reloads; incognito drafts remain only in the current page. If the first message was already sent, uncertain delivery remains **Check delivery** rather than starting another turn.
 
 While a placement is active, OpenClaw automatically samples available space on the remote workspace volume. Low-space warnings appear in the selected chat and on the session's cloud badge. They are advisory, clear automatically after space recovers, and do not stop or reclaim the worker.

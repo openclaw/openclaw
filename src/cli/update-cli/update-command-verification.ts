@@ -61,6 +61,7 @@ export async function verifyUpdatedGateway(params: {
   opts: UpdateCommandOptions;
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
+  timeoutMs?: number;
   nodeRunner?: string;
   expectedVersion?: string;
   expectedBuildId?: string;
@@ -121,6 +122,7 @@ export async function verifyUpdatedGateway(params: {
     assertCurrent();
     const health = await waitForGatewayHealthyRestart({
       ...probeParams,
+      timeoutMs: params.timeoutMs,
       requireRunningService: params.requireRunningService,
       settle: { probes: 12 },
       supervisorKeepsAlive,

@@ -65,7 +65,10 @@ async function setup(
   };
   const directory =
     options.stateDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-scheduler-"));
-  const store = await createTeamReportsStore({ stateDir: directory });
+  const store = await createTeamReportsStore({
+    stateDir: directory,
+    workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+  });
   if (options.caughtUp !== false) {
     const yesterday = describePeriod("day", Date.now() - 86_400_000);
     await store.startRun({
@@ -116,9 +119,15 @@ async function setup(
     return { github, discord };
   };
   const complete = vi.fn<Complete>().mockRejectedValue(new Error("Unexpected model request"));
+  const completions: Array<ReturnType<typeof createDeferred<void>>> = [];
+  let published = 0;
+  let consumed = 0;
+  const completionAt = (index: number) => (completions[index] ??= createDeferred<void>());
+  const runSettled = () => completionAt(published++).resolve();
+  const nextRun = () => completionAt(consumed++).promise;
   const context = {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    serviceHealth: { reportFailure: vi.fn(), clearFailure: vi.fn() },
+    serviceHealth: { reportFailure: vi.fn(runSettled), clearFailure: vi.fn(runSettled) },
   };
   const scheduler = new TeamReportsScheduler({
     config,
@@ -129,7 +138,18 @@ async function setup(
     sources,
   });
   resources.push({ directory, store, scheduler });
-  return { scheduler, store, directory, config, github, discord, complete, context, runtimes };
+  return {
+    scheduler,
+    store,
+    directory,
+    config,
+    github,
+    discord,
+    complete,
+    context,
+    runtimes,
+    nextRun,
+  };
 }
 
 function modelResponse(): Awaited<ReturnType<Complete>> {
@@ -211,11 +231,12 @@ describe("Team Reports schedule boundaries", () => {
   it("does not schedule another closed-day run today when the next jitter sample is larger", async () => {
     vi.setSystemTime(new Date("2026-08-20T00:04:00Z"));
     vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValue(1);
-    const { scheduler, store } = await setup({
+    const { scheduler, store, nextRun } = await setup({
       schedule: { closedDayUtc: "00:05", jitterMinutes: 5 },
     });
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
     expect((await store.listRuns()).filter((run) => run.id !== "previous-closed-day")).toHaveLength(
       1,
     );
@@ -255,14 +276,14 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it("rejects failed admission without collecting and releases the run for another request", async () => {
-    const { scheduler, store, github } = await setup();
+    const { scheduler, nextRun, store, github } = await setup();
     await scheduler.start();
     vi.spyOn(store, "startRun").mockRejectedValueOnce(new Error("database unavailable"));
     await expect(scheduler.generate()).rejects.toThrow("database unavailable");
     expect(github.loadRoster).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     const id = await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
   });
 
@@ -290,7 +311,10 @@ describe("Team Reports scheduler lifecycle", () => {
       await stopped;
     }
     expect(close).toHaveBeenCalledOnce();
-    const reopened = await createTeamReportsStore({ stateDir: directory });
+    const reopened = await createTeamReportsStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    });
     try {
       expect((await reopened.getPeriod("day", "2026-08-19"))?.report.totals.github.total).toBe(1);
       expect((await reopened.listRuns()).find((run) => run.id === id)).toMatchObject({
@@ -337,7 +361,7 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it("reports the earliest due time and last completed run while another run is active", async () => {
-    const { scheduler, github } = await setup({
+    const { scheduler, github, nextRun } = await setup({
       caughtUp: false,
       schedule: { intradayEveryHours: 4 },
     });
@@ -348,8 +372,12 @@ describe("Team Reports scheduler lifecycle", () => {
       nextDueMs: Date.parse("2026-08-20T12:01:00Z"),
       warnings: 0,
     });
+    const firstCollection = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
+    github.collect.mockImplementationOnce(() => firstCollection.promise);
     await scheduler.generate();
     expect((await scheduler.health()).lastRun).toBeUndefined();
+    firstCollection.resolve({ items: [], status: healthy });
+    await nextRun();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(await scheduler.health()).toEqual({
       running: true,
@@ -367,19 +395,20 @@ describe("Team Reports scheduler lifecycle", () => {
       finishedAtMs: Date.parse("2026-08-20T12:00:00Z"),
     });
     blocked.resolve({ items: [], status: healthy });
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await scheduler.health()).lastRun?.finishedAtMs).toBe(
       Date.parse("2026-08-20T12:01:00Z"),
     );
   });
 
   it("catches up yesterday once after the startup delay and also publishes today's partial", async () => {
-    const { scheduler, store, github } = await setup({ caughtUp: false });
+    const { scheduler, store, github, nextRun } = await setup({ caughtUp: false });
     await scheduler.start();
     expect((await scheduler.status()).nextDue.catchUp).toBe(Date.now() + 60_000);
     await vi.advanceTimersByTimeAsync(59_999);
     expect(github.collect).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    await nextRun();
     expect(await store.listRuns()).toMatchObject([{ kind: "closed-day", status: "ok" }]);
     expect(await store.listPeriods()).toMatchObject([
       { period: "day", key: "2026-08-20", status: "partial" },
@@ -427,6 +456,7 @@ describe("Team Reports scheduler lifecycle", () => {
         await first.scheduler.generate({ intraday: true });
       }
       await vi.advanceTimersByTimeAsync(60_000);
+      await first.nextRun();
       expect((await first.store.listRuns())[0]).toMatchObject({
         kind,
         status: "ok",
@@ -440,6 +470,7 @@ describe("Team Reports scheduler lifecycle", () => {
       await restarted.scheduler.start();
       expect((await restarted.scheduler.status()).nextDue.catchUp).toBe(Date.now() + 60_000);
       await vi.advanceTimersByTimeAsync(60_000);
+      await restarted.nextRun();
       expect(restarted.github.collect).toHaveBeenCalledTimes(2);
       expect(restarted.github.collect.mock.calls[0]?.[1]).toEqual({
         sinceMs: Date.parse("2026-08-20T00:00:00Z"),
@@ -450,16 +481,21 @@ describe("Team Reports scheduler lifecycle", () => {
   );
 
   it("skips deferred catch-up after a manual run completes yesterday", async () => {
-    const { scheduler, store, github } = await setup({ caughtUp: false });
+    const { scheduler, nextRun, store, github } = await setup({ caughtUp: false });
     const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
-    github.collect.mockImplementationOnce(() => blocked.promise);
+    const collecting = createDeferred<void>();
+    github.collect.mockImplementationOnce(() => {
+      collecting.resolve();
+      return blocked.promise;
+    });
     await scheduler.start();
     const id = await scheduler.generate({ date: "2026-08-19" });
+    await collecting.promise;
     await vi.advanceTimersByTimeAsync(19 * 60_000);
     expect(github.collect).toHaveBeenCalledOnce();
     expect(await store.listRuns()).toMatchObject([{ id, kind: "manual", status: "running" }]);
     blocked.resolve({ items: [], status: healthy });
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect(await store.listRuns()).toMatchObject([{ id, kind: "manual", status: "ok" }]);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(github.collect).toHaveBeenCalledOnce();
@@ -468,20 +504,27 @@ describe("Team Reports scheduler lifecycle", () => {
 
   it("rejects a concurrent manual run and defers an intraday tick without overlapping collectors", async () => {
     vi.setSystemTime(new Date("2026-08-20T03:59:00Z"));
-    const { scheduler, store, github } = await setup({ schedule: { intradayEveryHours: 4 } });
+    const { scheduler, store, github, nextRun } = await setup({
+      schedule: { intradayEveryHours: 4 },
+    });
     const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
-    github.collect.mockImplementationOnce(() => blocked.promise);
+    const collecting = createDeferred<void>();
+    github.collect.mockImplementationOnce(() => {
+      collecting.resolve();
+      return blocked.promise;
+    });
     await scheduler.start();
     const id = await scheduler.generate({ intraday: true });
-    await vi.advanceTimersByTimeAsync(0);
     await expect(scheduler.generate()).rejects.toThrow("already in progress");
+    await collecting.promise;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(github.collect).toHaveBeenCalledOnce();
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("running");
     blocked.resolve({ items: [], status: healthy });
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
     await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
     expect(github.collect).toHaveBeenCalledTimes(2);
     expect(
       (await store.listRuns()).some((run) => run.kind === "intraday" && run.status === "ok"),
@@ -506,7 +549,10 @@ describe("Team Reports scheduler lifecycle", () => {
     blocked.resolve({ items: [], status: healthy });
     await stopped;
     expect(finished).toBe(true);
-    const reopened = await createTeamReportsStore({ stateDir: directory });
+    const reopened = await createTeamReportsStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    });
     try {
       expect((await reopened.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
       expect((await reopened.getPeriod("day", "2026-08-19"))?.report.status).toBe("closed");
@@ -530,7 +576,10 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(runtimes[0]?.signal?.aborted).toBe(true);
     blocked.resolve({ items: [], status: healthy });
     await vi.advanceTimersByTimeAsync(0);
-    const reopened = await createTeamReportsStore({ stateDir: directory });
+    const reopened = await createTeamReportsStore({
+      stateDir: directory,
+      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    });
     try {
       expect((await reopened.listRuns()).find((run) => run.id === id)).toMatchObject({
         status: "error",
@@ -543,7 +592,7 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it("passes the 45-minute deadline abort to sources and records a failed run without late writes", async () => {
-    const { scheduler, github, runtimes, store, context } = await setup();
+    const { scheduler, github, runtimes, store, context, nextRun } = await setup();
     const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
     github.collect.mockImplementationOnce(() => blocked.promise);
     await scheduler.start();
@@ -552,6 +601,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(runtimes[0]?.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(runtimes[0]?.signal?.aborted).toBe(true);
+    await nextRun();
     expect((await store.listRuns()).find((run) => run.id === id)).toMatchObject({
       status: "error",
       error: expect.stringContaining("45-minute"),
@@ -563,24 +613,30 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it("makes collected evidence readable while model summaries are still pending", async () => {
-    const { scheduler, store, complete } = await setup({ summaries: true });
+    const { scheduler, store, complete, nextRun } = await setup({ summaries: true });
     const blocked = createDeferred<Awaited<ReturnType<Complete>>>();
-    complete.mockImplementation(() => blocked.promise);
+    const summarizing = createDeferred<void>();
+    complete.mockImplementation(() => {
+      summarizing.resolve();
+      return blocked.promise;
+    });
     await scheduler.start();
     const id = await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await summarizing.promise;
     const before = await store.getPeriod("day", "2026-08-19");
     expect(before?.report.totals.github.total).toBe(1);
     expect(before?.summary?.source).toBe("fallback");
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("running");
     blocked.resolve(modelResponse());
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await store.getPeriod("day", "2026-08-19"))?.summary?.source).toBe("model");
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
   });
 
   it("surfaces the latest day's model fallback in status, storage, Markdown, and logs", async () => {
-    const { scheduler, store, context, complete, github } = await setup({ summaries: true });
+    const { scheduler, nextRun, store, context, complete, github } = await setup({
+      summaries: true,
+    });
     github.loadRoster.mockResolvedValue({
       people: [{ github: ["alex"] }],
       status: { ...healthy, warnings: ["Roster coverage warning"] },
@@ -588,7 +644,7 @@ describe("Team Reports scheduler lifecycle", () => {
     complete.mockRejectedValue(new Error("private-provider-error-marker"));
     await scheduler.start();
     await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     const reason = "Model summary unavailable: completion failed";
     const stored = await store.getPeriod("day", "2026-08-19");
     expect(stored?.summary?.warnings).toEqual([reason]);
@@ -598,17 +654,17 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(context.logger.warn.mock.calls).toEqual([[reason]]);
     complete.mockResolvedValue(modelResponse());
     await scheduler.generate({ intraday: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await scheduler.status()).sourceWarnings).toEqual(["Roster coverage warning"]);
     expect((await scheduler.health()).warnings).toBe(1);
   });
 
   it("reports source failures with redacted errors and clears health on the next successful run", async () => {
-    const { scheduler, store, github, context } = await setup();
+    const { scheduler, nextRun, store, github, context } = await setup();
     github.collect.mockRejectedValueOnce(new Error("Access failed for fixture-github-token"));
     await scheduler.start();
     const failed = await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await store.listRuns()).find((run) => run.id === failed)).toMatchObject({
       status: "error",
       error: "Access failed for [redacted]",
@@ -621,16 +677,16 @@ describe("Team Reports scheduler lifecycle", () => {
     });
     expect(JSON.stringify(context.logger.error.mock.calls)).not.toContain("fixture-github-token");
     const succeeded = await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect((await store.listRuns()).find((run) => run.id === succeeded)?.status).toBe("ok");
     expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("collects Discord only when configured (enabled: %s)", async (enabled) => {
-    const { scheduler, discord, store, complete } = await setup({ discord: enabled });
+    const { scheduler, nextRun, discord, store, complete } = await setup({ discord: enabled });
     await scheduler.start();
     await scheduler.generate();
-    await vi.advanceTimersByTimeAsync(0);
+    await nextRun();
     expect(discord.collect).toHaveBeenCalledTimes(enabled ? 1 : 0);
     const generated = await store.getPeriod("day", "2026-08-19");
     expect(generated?.report.totals.discord.messages).toBe(enabled ? 1 : 0);
@@ -640,12 +696,13 @@ describe("Team Reports scheduler lifecycle", () => {
 
   it("closes the prior week and month while opening the current periods at calendar rollover", async () => {
     vi.setSystemTime(new Date("2026-06-01T00:04:00Z"));
-    const { scheduler, store, github } = await setup({
+    const { scheduler, store, github, nextRun } = await setup({
       caughtUp: "manual",
       schedule: { closedDayUtc: "00:05", weekly: true, monthly: true },
     });
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
     expect(github.collect).toHaveBeenCalledTimes(2);
     expect(await store.listPeriods()).toEqual(
       expect.arrayContaining([

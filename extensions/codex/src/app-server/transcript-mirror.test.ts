@@ -17,6 +17,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -704,6 +705,9 @@ describe("projectBoundedCodexThreadHistory", () => {
               text: "Which environment should I use?",
               phase: "final_answer",
               delivery: "async",
+              questions: [
+                { title: "Which environment should I use?", options: ["Staging", "Local"] },
+              ],
             },
             {
               id: "final-history",
@@ -726,7 +730,10 @@ describe("projectBoundedCodexThreadHistory", () => {
     expect(projection.transcriptMessages[1]).toMatchObject({ phase: "commentary" });
     expect(projection.transcriptMessages[2]).toMatchObject({
       phase: "final_answer",
-      openclawAsyncDelivery: { itemId: "async-history" },
+      openclawAsyncDelivery: {
+        itemId: "async-history",
+        questions: [{ title: "Which environment should I use?", options: ["Staging", "Local"] }],
+      },
     });
     expect(JSON.stringify(projection.responseItems)).not.toContain(
       "Which environment should I use?",
@@ -1143,15 +1150,23 @@ describe("mirrorCodexAppServerTranscript", () => {
       createMockPluginRegistry([
         {
           hookName: "before_message_write",
-          handler: () => ({
-            message: castAgentMessage({
-              ...makeAgentAssistantMessage({
-                content: [{ type: "text", text: "[redacted async update]" }],
-                timestamp: Date.now(),
+          handler: (event) => {
+            const message = asOptionalRecord(asOptionalRecord(event)?.message);
+            expect(message).toHaveProperty("openclawAsyncDelivery.questions");
+            const firstBlock = asOptionalRecord(
+              Array.isArray(message?.content) ? message.content[0] : undefined,
+            );
+            if (!firstBlock) {
+              throw new Error("Expected the async question text block");
+            }
+            firstBlock.text = "[redacted async update]";
+            return {
+              message: castAgentMessage({
+                ...message,
+                phase: "final_answer",
               }),
-              phase: "final_answer",
-            }),
-          }),
+            };
+          },
         },
       ]),
     );
@@ -1161,7 +1176,10 @@ describe("mirrorCodexAppServerTranscript", () => {
         timestamp: Date.now(),
       }),
       phase: "final_answer",
-      openclawAsyncDelivery: { itemId: "async-update" },
+      openclawAsyncDelivery: {
+        itemId: "async-update",
+        questions: [{ title: "Sensitive question?", options: ["Sensitive choice"] }],
+      },
     });
     const onBlockReply = vi.fn();
     const runParams = {
@@ -1217,6 +1235,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:async:async-update",
       openclawAsyncDelivery: { itemId: "async-update" },
     });
+    expect(updates[0]?.update?.message).not.toHaveProperty("openclawAsyncDelivery.questions");
   });
 
   it("retries a durable async callback from the persisted row", async () => {

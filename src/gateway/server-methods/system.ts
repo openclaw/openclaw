@@ -43,7 +43,7 @@ import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionRow } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -214,10 +214,10 @@ export const systemHandlers: GatewayRequestHandlers = {
       }
       // A targeted wake starts a model run. Require a live persisted session
       // so malformed keys cannot create phantom work under agent defaults.
-      const targetSession = loadGatewaySessionRow(requestedSessionKey, {
+      const { entry: targetSession } = loadGatewaySessionEntryReadOnly(requestedSessionKey, {
         agentId: requestedAgentId,
       });
-      if (!targetSession || targetSession.archived) {
+      if (!targetSession || targetSession.archivedAt !== undefined) {
         respond(
           false,
           undefined,

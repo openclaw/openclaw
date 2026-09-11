@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
@@ -788,7 +789,12 @@ async function handleSlashCommandAsync(params: {
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const data = await buildPreparedModelsProviderData(cfg, route.agentId);
+    const sessionEntry = getSessionEntry({
+      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+      sessionKey: route.sessionKey,
+      readConsistency: "latest",
+    });
+    const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
     if (data.providers.length === 0) {
       await sendMessageMattermost(`channel:${channelId}`, "No models available.", {
         cfg,

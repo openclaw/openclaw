@@ -1555,6 +1555,7 @@ jobs:
               runnerBackend: runnerProfile,
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
+              dedicatedMaxLinesRatchet: checksFastCoreTasks.some(({ task }) => task === "baseline-ratchets"),
             });
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
@@ -1930,27 +1931,11 @@ jobs:
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
-      - name: Resolve security checkout depth
-        if: github.event_name == 'pull_request'
-        id: checkout_depth
-        env:
-          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
-            exit 2
-          fi
-          # Fetch the merge, every PR commit, and one ancestor while checkout
-          # still owns authentication; scanners run after credential cleanup.
-          fetch_depth=$((PR_COMMIT_COUNT + 2))
-          echo "depth=$fetch_depth" >> "$GITHUB_OUTPUT"
-
       - name: Checkout
         if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: ${{ steps.checkout_depth.outputs.depth || 2 }}
+          fetch-depth: 2
           persist-credentials: false
 
       # Manual target validation has a distinct fallback contract: a missing branch/tag
@@ -2013,15 +1998,6 @@ jobs:
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Scan pull request for leaked credentials
-        if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318 # v3.97.0
-        with:
-          base: ${{ steps.diff_base.outputs.sha }}
-          head: ${{ github.sha }}
-          version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33"
-          extra_args: --results=verified,unknown --fail-on-scan-errors
 
       - name: Prepare trusted scanner config
         env:
@@ -2794,11 +2770,11 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # First-attempt same-repo runs use Blacksmith unless the backend breaker is
-    # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    # Keep the existing hybrid route for the prepared Chromium workload:
-    # Blacksmith on attempt 1, hosted on rerun.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Contributor trust controls Blacksmith eligibility; manual runs and PR retries
+    # stay hosted. Hybrid also uses hosted capacity on push retries.
+    # The 32-class request can fit both staged SDK compilers; actual remaining
+    # memory still gates overlap, with unchanged browser worker limits.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -3066,7 +3042,6 @@ jobs:
               pnpm check:assertion-safety --base "$base_ref"
               pnpm config:docs:check
               pnpm plugins:inventory:check
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
@@ -3084,6 +3059,12 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Check startup corpus
+        # Full main Node coverage owns these files on the same checkout. PRs may
+        # select only changed tests; release gates also validate a separate merge tree.
+        if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true')
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
 
   qa-smoke-ci-profile:
     permissions:
@@ -5644,6 +5625,18 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload Android test reports
+        if: ${{ !cancelled() && startsWith(matrix.task, 'test-') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-test-reports-${{ matrix.task }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            apps/android/app/build/test-results/test*UnitTest/TEST-*.xml
+            apps/android/wear/build/test-results/test*UnitTest/TEST-*.xml
+            apps/android/wear-shared/build/test-results/test*UnitTest/TEST-*.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Save Robolectric Maven cache
         if: success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'

@@ -285,6 +285,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getOwner: (environmentId) => params.startup.store.getTransferOwner(environmentId),
   });
   await nodeWorkspaceTransfer.initialize();
+  // Permanent credential revocation fences every in-flight workspace transfer for the
+  // owner immediately. Rotation-style revocations (device reconcile re-mints) do not
+  // notify, so routine reconcile never tears down healthy transfer contexts.
+  params.startup.store.onCredentialRevoked((environmentId) => {
+    nodeWorkspaceTransfer.fenceEnvironment(environmentId);
+  });
   const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   const nodeWorkerGatewayNamespace = resolveNodeWorkerGatewayNamespace(gatewayDeviceId);
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({

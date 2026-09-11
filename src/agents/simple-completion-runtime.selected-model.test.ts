@@ -197,7 +197,7 @@ module.exports = {
                     content: [{ type: "text", text: `materialized:${expected}` }],
                   });
                 } finally {
-                  prepared.release();
+                  await prepared[Symbol.asyncDispose]();
                 }
               }
             }

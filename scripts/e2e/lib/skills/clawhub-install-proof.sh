@@ -79,6 +79,9 @@ const [searchPath, resolvePath, requestedSlug, preferredSlug] = process.argv.sli
 const payload = JSON.parse(fs.readFileSync(searchPath, "utf8"));
 const results = Array.isArray(payload) ? payload : Array.isArray(payload.results) ? payload.results : [];
 const slugs = results.map((entry) => String(entry.slug ?? "")).filter(Boolean);
+const hasExplicitRisk = (entry) =>
+  String(entry?.trust?.clawHubVerdict ?? "").toLowerCase() === "suspicious" ||
+  entry?.native?.skill?.isSuspicious === true;
 let chosen;
 if (requestedSlug) {
   chosen = results.find((entry) => entry.slug === requestedSlug);
@@ -86,24 +89,27 @@ if (requestedSlug) {
     throw new Error(`Requested skill slug ${requestedSlug} not found. Search returned: ${slugs.join(", ") || "(none)"}`);
   }
 } else {
+  const safeResults = results.filter((entry) => !hasExplicitRisk(entry));
   chosen =
-    results.find((entry) => entry.slug === preferredSlug) ??
-    results.find((entry) => String(entry.slug ?? "").includes("homeassistant")) ??
-    results[0];
+    safeResults.find((entry) => entry.slug === preferredSlug) ??
+    safeResults.find((entry) => String(entry.slug ?? "").includes("homeassistant")) ??
+    safeResults[0];
 }
 if (!chosen?.slug) {
-  throw new Error(`No installable skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);
+  throw new Error(`No non-suspicious skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);
 }
 fs.writeFileSync(resolvePath, `${JSON.stringify({
   slug: chosen.slug,
+  installRef: chosen.installRef ?? chosen.slug,
   version: chosen.version ?? null,
   displayName: chosen.displayName ?? chosen.name ?? chosen.slug,
 })}\n`);
 NODE
 
 slug="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).slug)' "$resolve_json")"
+install_ref="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).installRef)' "$resolve_json")"
 echo "Installing live ClawHub skill: $slug"
-if ! "${OPENCLAW_CMD[@]}" skills install "$slug" --force >"$install_log" 2>&1; then
+if ! "${OPENCLAW_CMD[@]}" skills install "$install_ref" --force >"$install_log" 2>&1; then
   echo "Skill install failed" >&2
   openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
   exit 1

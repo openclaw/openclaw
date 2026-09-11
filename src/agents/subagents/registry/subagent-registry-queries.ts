@@ -429,6 +429,24 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   );
 }
 
+export function listSwarmRunsForGroupFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  groupId: string,
+  requesterSessionKey?: string,
+  requesterAgentId?: string,
+): SubagentRunRecord[] {
+  const key = groupId.trim();
+  const requesterKey = requesterSessionKey?.trim();
+  return [...runs.values()].filter(
+    (entry) =>
+      entry.collect === true &&
+      entry.groupId === key &&
+      (!requesterKey ||
+        (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+      (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+  );
+}
+
 /** Counts active direct child runs plus completed children that still have pending descendants. */
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,

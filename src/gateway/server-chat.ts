@@ -75,6 +75,7 @@ import {
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import {
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionLifecycleSnapshot,
@@ -581,7 +582,14 @@ export function createAgentEventHandler({
     }
     let result: string | null = null;
     try {
-      result = loadGatewaySessionLifecycleSnapshotForEvent(sessionKey).row?.spawnedBy ?? null;
+      const { entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
+      if (entry) {
+        result =
+          projectGatewaySessionRunState({ key: canonicalKey, entry, now: Date.now() })
+            .subagentOwner ||
+          entry.spawnedBy ||
+          null;
+      }
     } catch {
       // result stays null
     }
@@ -1378,7 +1386,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+      const { cfg, entry } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1487,17 +1495,6 @@ export function createAgentEventHandler({
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     const suppressHeartbeatToolEvents =
       isToolEvent && shouldSuppressHeartbeatToolEvents(clientRunId, evt.runId);
-    // Channel/node subscribers respect verbose; authenticated Control UI
-    // recipients need tool result payloads to render live tool cards.
-    const channelToolPayload =
-      isToolEvent && toolVerbose !== "full"
-        ? (() => {
-            const data = evt.data ? { ...evt.data } : {};
-            delete data.result;
-            delete data.partialResult;
-            return { ...agentPayload, data };
-          })()
-        : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       broadcast(
@@ -1764,6 +1761,15 @@ export function createAgentEventHandler({
         !suppressHeartbeatToolEvents &&
         toolVerbose !== "off"
       ) {
+        // Channel/node subscribers respect verbose; authenticated Control UI
+        // recipients need tool result payloads to render live tool cards.
+        let channelToolPayload = agentPayload;
+        if (toolVerbose !== "full") {
+          const data = evt.data ? { ...evt.data } : {};
+          delete data.result;
+          delete data.partialResult;
+          channelToolPayload = { ...agentPayload, data };
+        }
         sendNodeSessionPayloadForAgent(
           sessionKey,
           "agent",

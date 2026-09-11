@@ -278,7 +278,7 @@ export async function offerLiveModelVerification(params: {
         (params.opts.nonInteractive ||
           !(await params.prompter.confirm({
             message: "Connection verified. Activate this saved sign-in?",
-            initialValue: false,
+            initialValue: true,
           })))
       ) {
         await params.prompter.note(

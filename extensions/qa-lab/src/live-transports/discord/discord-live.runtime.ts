@@ -152,23 +152,6 @@ type DiscordObservedMessage = {
   timestamp?: string;
 };
 
-type DiscordObservedMessageArtifact = {
-  messageId?: string;
-  channelId?: string;
-  guildId?: string;
-  senderId?: string;
-  senderIsBot: boolean;
-  senderUsername?: string;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  matchedScenario?: boolean;
-  text?: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
-  replyToMessageId?: string;
-  timestamp?: string;
-};
-
 type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
@@ -1406,49 +1389,6 @@ async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: 
   throw new Error(`discord account "${accountId}" did not become connected${details}`);
 }
 
-function buildObservedMessagesArtifact(params: {
-  observedMessages: DiscordObservedMessage[];
-  includeContent: boolean;
-  redactMetadata: boolean;
-}) {
-  return params.observedMessages.map<DiscordObservedMessageArtifact>((message) => {
-    const scenarioContext = {
-      ...(message.scenarioId ? { scenarioId: message.scenarioId } : {}),
-      ...(message.scenarioTitle ? { scenarioTitle: message.scenarioTitle } : {}),
-      ...(typeof message.matchedScenario === "boolean"
-        ? { matchedScenario: message.matchedScenario }
-        : {}),
-    };
-    const base = params.redactMetadata
-      ? {
-          ...scenarioContext,
-          senderIsBot: message.senderIsBot,
-          triggerTimestamp: message.triggerTimestamp,
-          timestamp: message.timestamp,
-        }
-      : {
-          ...scenarioContext,
-          messageId: message.messageId,
-          channelId: message.channelId,
-          guildId: message.guildId,
-          senderId: message.senderId,
-          senderIsBot: message.senderIsBot,
-          senderUsername: message.senderUsername,
-          triggerMessageId: message.triggerMessageId,
-          triggerTimestamp: message.triggerTimestamp,
-          replyToMessageId: message.replyToMessageId,
-          timestamp: message.timestamp,
-        };
-    if (!params.includeContent) {
-      return base;
-    }
-    return {
-      ...base,
-      text: message.text,
-    };
-  });
-}
-
 function matchesDiscordScenarioReply(params: {
   channelId: string;
   message: DiscordObservedMessage;
@@ -1501,7 +1441,6 @@ const testing = {
   assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
   buildDiscordWebMessageUrl,
-  buildObservedMessagesArtifact,
   computeDiscordRttMs,
   getCurrentDiscordUser,
   observeStatusReactionTimeline,

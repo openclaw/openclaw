@@ -40,11 +40,7 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
-import {
-  markMemoryVectorRebuildRequired,
-  memoryTableExists,
-  requiresMemoryVectorRebuild,
-} from "./manager-vector-rebuild-state.js";
+import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 import type { MemoryWatchSettleQueue } from "./watch-settle.js";
 
@@ -520,31 +516,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
-  }
-
-  protected deleteVectorRowsForSource(pathname: string, source: MemorySource): void {
-    if (!memoryTableExists(this.db, VECTOR_TABLE)) {
-      return;
-    }
-    if (!this.vector.enabled || this.vector.available !== true) {
-      this.markVectorRebuildRequired();
-      return;
-    }
-    try {
-      this.db
-        .prepare(
-          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (
-             SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-           )`,
-        )
-        .run(pathname, source);
-    } catch {
-      this.markVectorRebuildRequired();
-    }
-  }
-
-  protected markVectorRebuildRequired(): void {
-    markMemoryVectorRebuildRequired(this.db);
   }
 
   private hasVectorRebuildMarker(): boolean {
