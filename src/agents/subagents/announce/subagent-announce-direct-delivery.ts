@@ -502,6 +502,8 @@ export async function sendSubagentAnnounceDirectly(params: {
           requesterAgentId: params.requesterAgentId,
           result: directAnnounceResult,
           deliveryTarget,
+          signal: params.signal,
+          timeoutMs: announceTimeoutMs,
         })
       : { hasFinalMessagingToolDelivery: false, hasMessagingToolDelivery: false };
     const requiresAutomaticFinalReceipt =

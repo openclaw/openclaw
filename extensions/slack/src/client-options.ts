@@ -25,7 +25,10 @@ function loadSlackUndiciRuntime(): SlackUndiciRuntime {
 export type SlackLookupClientOptions = Pick<
   WebClientOptions,
   "fetch" | "slackApiUrl" | "teamId" | "timeout"
->;
+> & {
+  /** Caller-owned cancellation for a short-lived provider lookup. */
+  signal?: AbortSignal;
+};
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -192,8 +195,19 @@ export function resolveSlackLookupClientOptions(
   options: SlackLookupClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
+  const { signal, ...clientOptions } = options;
+  const resolved: WebClientOptions = Object.assign({}, clientOptions);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  if (signal) {
+    const fetchFn = resolved.fetch ?? (resolveFetch() as NonNullable<WebClientOptions["fetch"]>);
+    if (fetchFn) {
+      resolved.fetch = (input, init) =>
+        fetchFn(input, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+        });
+    }
+  }
   // Slack otherwise sleeps through the full Retry-After window after receiving 429,
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;

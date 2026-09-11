@@ -313,6 +313,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   currentSessionKey?: string | null;
+  signal?: AbortSignal;
 }) {
   const parsed = parseSlackTarget(params.target, { defaultKind: "channel" });
   if (!parsed) {
@@ -347,6 +348,7 @@ async function resolveSlackOutboundSessionRoute(params: {
       accountId: params.accountId,
       channelId: apiTargetId,
       teamId: parsed.teamId,
+      signal: params.signal,
     });
     if (conversation.type !== "dm" || !conversation.user) {
       return null;

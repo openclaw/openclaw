@@ -671,6 +671,8 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    /** Caller-owned cancellation for provider lookups performed by the resolver. */
+    signal?: AbortSignal;
     /** Identifies implicit operator delivery; other callers must supply their own destination. */
     deliveryPurpose?: "heartbeat-owner";
     currentSessionKey?: string;

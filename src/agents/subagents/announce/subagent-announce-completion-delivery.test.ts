@@ -114,4 +114,30 @@ describe("hasMessagingToolDeliveryToSource", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("passes caller cancellation to provider-native recipient resolution", async () => {
+    const controller = new AbortController();
+    const resolveEquivalentTarget = vi.fn(
+      async (_target: unknown, _deliveryTarget: unknown, signal?: AbortSignal) => {
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return undefined;
+      },
+    );
+    const pending = hasMessagingToolDeliveryToSource(result, deliveryTarget, {
+      requireFinalReply: true,
+      signal: controller.signal,
+      resolveEquivalentTarget,
+    });
+
+    controller.abort();
+
+    await expect(pending).resolves.toBe(false);
+    expect(resolveEquivalentTarget).toHaveBeenCalledWith(
+      result.messagingToolSentTargets[0],
+      deliveryTarget,
+      controller.signal,
+    );
+  });
 });
