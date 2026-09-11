@@ -1,9 +1,10 @@
 // Tests for planning Claw adds that adopt an existing workspace directory.
 import { createHash } from "node:crypto";
-import { link, mkdir, readFile, rmdir, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rmdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
@@ -367,7 +368,7 @@ describe("buildClawAddPlan workspace inspection", () => {
 });
 
 describe("planWorkspaceAdoptionTargets resume ownership", () => {
-  async function buildResumeManifestAndSource() {
+  async function buildResumeManifestAndSource(params: { withPlugin?: boolean } = {}) {
     const root = tempDirs.make("openclaw-claw-adopt-resume-");
     await mkdir(join(root, "content"), { recursive: true });
     await writeFile(join(root, "content", "SOUL.md"), "# Soul\n", "utf8");
@@ -384,6 +385,11 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
           "HEARTBEAT.md": { source: "content/HEARTBEAT.md" },
         },
       },
+      ...(params.withPlugin
+        ? {
+            packages: [{ kind: "plugin", source: "clawhub", ref: "@acme/audit", version: "1.0.0" }],
+          }
+        : {}),
     });
     if (!parsed.ok) {
       throw new Error(JSON.stringify(parsed.diagnostics));
@@ -632,5 +638,100 @@ describe("planWorkspaceAdoptionTargets resume ownership", () => {
     expect(resumedPlan.actions).toContainEqual(
       expect.objectContaining({ kind: "bootstrap", id: "BOOTSTRAP.md", blocked: true }),
     );
+  });
+
+  it("rejects a workspace reassigned to another agent during the package install before any file effect", async () => {
+    const { root, source, manifest, packageBootstrap, workspace } =
+      await buildResumeManifestAndSource({ withPlugin: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "# Soul\n", "utf8");
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      packageBootstrap,
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+      },
+    });
+    expect(plan.blockers).toEqual([]);
+    const env = stateEnv(root);
+
+    let config: OpenClawConfig = {};
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      loadConfig: () => config,
+      // The plan-time overlap check passed. While the shared package install is awaited, another
+      // add assigns the parent of this workspace to a different agent.
+      installPackages: async () => {
+        config = { agents: { entries: { other: { workspace: root } } } };
+        return [];
+      },
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    // Admission is decided after the await, at the file-effect boundary: nothing was seeded,
+    // written, or claimed inside what is now another agent's workspace.
+    expect(result).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "workspace_collision" },
+    });
+    expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
+    await expect(readFile(join(workspace, "BOOTSTRAP.md"))).rejects.toThrow();
+    await expect(readFile(join(workspace, "HEARTBEAT.md"))).rejects.toThrow();
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual([]);
+    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    expect(config.agents?.entries?.worker).toBeUndefined();
+  });
+
+  it("refuses an identical BOOTSTRAP.md that appears between consent and apply", async () => {
+    const { root, source, manifest, packageBootstrap, workspace, bootstrapContent } =
+      await buildResumeManifestAndSource();
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "# Soul\n", "utf8");
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      packageBootstrap,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+    expect(plan.blockers).toEqual([]);
+    // Consent was given with no bootstrap on disk; a byte-identical file lands before apply.
+    const bootstrapPath = join(workspace, "BOOTSTRAP.md");
+    await writeFile(bootstrapPath, bootstrapContent);
+    const before = await stat(bootstrapPath);
+    const env = stateEnv(root);
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+      error: { code: "bootstrap_conflict" },
+    });
+    expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
+    // The operator's file is untouched, nothing else was written, and the native seed state was
+    // not stamped for a file this install never wrote: the receipt stays false.
+    expect((await stat(bootstrapPath)).mtimeMs).toBe(before.mtimeMs);
+    await expect(readFile(join(workspace, "HEARTBEAT.md"))).rejects.toThrow();
+    expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
+    expect(readClawWorkspaceAdoption("worker", workspace, { env })).toMatchObject({
+      adopted: true,
+      bootstrapSeeded: false,
+    });
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual([]);
   });
 });

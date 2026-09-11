@@ -12,7 +12,7 @@ import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
-import { clawWorkspaceWasAdopted } from "./workspace-origin.js";
+import { readClawWorkspaceAdoption } from "./workspace-origin.js";
 import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   ClawWorkspaceWriteError,
@@ -645,8 +645,8 @@ describe("workspace files in the consented add lifecycle", () => {
       },
     ]);
     expect(
-      clawWorkspaceWasAdopted("workspace-agent", plan.agent.workspace, { env: stateEnv(root) }),
-    ).toBe(true);
+      readClawWorkspaceAdoption("workspace-agent", plan.agent.workspace, { env: stateEnv(root) }),
+    ).toMatchObject({ adopted: true, bootstrapSeeded: false });
   });
 
   it("marks the root install complete after every declared file is created", async () => {

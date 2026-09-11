@@ -46,7 +46,6 @@ import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
 import { filterReferencedCleanup, projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
-import { clawWorkspaceWasAdopted } from "./workspace-origin.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
 export {
@@ -170,15 +169,10 @@ export async function buildClawRemovePlan(
     );
     // An adopted directory predates the Claw. Once every declared file in it is managed it looks
     // indistinguishable from one this install created, so origin decides retention, not contents.
-    const workspaceWasAdopted = clawWorkspaceWasAdopted(
-      record.install.agentId,
-      record.install.workspace,
-      options,
-    );
     const workspaceRemoval = planClawWorkspaceRemoval({
       sharedWorkspace,
       sharedWith: effects.workspaceSharedWith,
-      adopted: workspaceWasAdopted,
+      adopted: record.workspaceOrigin.adopted,
       modified: workspaceHasModifiedFiles,
       untracked: workspaceHasUntrackedEntries,
     });
@@ -463,8 +457,7 @@ export async function applyClawRemovePlan(
   ) {
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
   }
-  // Read while the install record still exists; releaseClawRemoveRows drops the origin with it.
-  const workspaceWasAdopted = clawWorkspaceWasAdopted(agentId, record.install.workspace, options);
+  const workspaceWasAdopted = record.workspaceOrigin.adopted;
   const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
     ...options,
     deps: options.packageDeps,

@@ -231,11 +231,11 @@ export function recordClawBootstrapSeeded(
   }, options);
 }
 
-/** True when this agent's current workspace directory existed before the Claw adopted it. */
-export function clawWorkspaceWasAdopted(
-  agentId: string,
-  workspace: string,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return readClawWorkspaceAdoption(agentId, workspace, options).adopted;
+/**
+ * Whether BOOTSTRAP.md in this workspace may be treated as this install's own seed. A created
+ * workspace holds only this install's writes until its config commits; an adopted one holds only
+ * what the recorded receipt says this install seeded, whatever the file's bytes.
+ */
+export function clawBootstrapSeedOwned(origin: ClawWorkspaceAdoption): boolean {
+  return !origin.adopted || origin.bootstrapSeeded;
 }
