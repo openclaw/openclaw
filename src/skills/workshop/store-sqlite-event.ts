@@ -156,6 +156,22 @@ export function listStoredSkillProposalEvents(
   };
 }
 
+/** Reads apply provenance through the caller's existing connection without opening a writable store. */
+export function readAppliedSkillProposalEvents(database: DatabaseSync): SkillProposalEvent[] {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
+  return executeSqliteQuerySync(
+    database,
+    kysely
+      .selectFrom("skill_workshop_proposal_events")
+      .selectAll()
+      .where("event_type", "=", "applied")
+      .orderBy("sequence", "asc"),
+  ).rows.flatMap((row) => {
+    const event = parseStoredSkillProposalEventRow(row);
+    return event ? [event] : [];
+  });
+}
+
 function parseStoredSkillProposalEventRow(
   row: StoredSkillProposalEventRow,
 ): SkillProposalEvent | null {
