@@ -593,6 +593,9 @@ export async function migrateLegacyMediaPersistence(
             recoverableWarningCount += 1;
           } else {
             refusedAgentDatabasePaths.push(pathname);
+            refusedArchiveDirectories.add(
+              resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
+            );
           }
           continue;
         }

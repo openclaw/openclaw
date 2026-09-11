@@ -3,13 +3,75 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
-import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import {
+  createEvent,
+  createLegacyDatabaseFixture,
+  readDatabaseSnapshot,
+  writeArchive,
+} from "./state-migrations.media-persistence.test-support.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
+
+it("preserves refused archives when a healthy database shares their directory", async () => {
+  await withOpenClawTestState({ prefix: "openclaw shared archives " }, async (state) => {
+    const source = createLegacyDatabaseFixture({ env: state.env, eventsBySession: {} });
+    const healthy = createLegacyDatabaseFixture({
+      agentId: "healthy",
+      env: state.env,
+      eventsBySession: {},
+    });
+    const directory = state.statePath("custom stores");
+    const target = path.join(directory, "cleaner.sqlite");
+    const healthyPath = path.join(directory, "healthy.sqlite");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(healthy, healthyPath);
+    const database = new DatabaseSync(target);
+    try {
+      database.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
+    } finally {
+      database.close();
+    }
+    const original = fs.readFileSync(target);
+    const archivePath = path.join(directory, "history.jsonl.deleted.2026-09-10T01-02-03.000Z");
+    writeArchive(
+      archivePath,
+      [
+        createEvent({
+          id: "event-1",
+          parentId: null,
+          timestamp: 1,
+          message: { role: "user", MediaPath: "/media/fixture.png", MediaType: "image/png" },
+        }),
+      ],
+      false,
+    );
+    const archiveBytes = fs.readFileSync(archivePath);
+
+    const result = await migrateLegacyMediaPersistence({
+      env: state.env,
+      configuredAgentDatabaseTargets: [
+        { agentId: "healthy", path: healthyPath },
+        { agentId: "cleaner", path: target },
+      ],
+    });
+
+    expect(result.refusedAgentDatabasePaths).toEqual([target]);
+    expect(readDatabaseSnapshot(healthyPath).version.user_version).toBe(
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+    );
+    expect(fs.readFileSync(target)).toEqual(original);
+    expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
+  });
+});
 
 it("continues Doctor after an identical database copy has the wrong agent owner", async () => {
   await withOpenClawTestState({ prefix: "openclaw owner mismatch " }, async (state) => {
