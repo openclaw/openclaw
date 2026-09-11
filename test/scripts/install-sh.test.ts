@@ -21,7 +21,11 @@ import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
+import {
+  createInstallGitBranchFallbackFixtureScript,
+  createInstallGitCommitFixtureScript,
+  createInstallGitTagPreferenceFixtureScript,
+} from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
@@ -4387,42 +4391,16 @@ EOF
   });
 
   it("prefers a release tag over a same-named branch", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
+    const result = runInstallShell(
+      createInstallGitTagPreferenceFixtureScript(
+        SCRIPT_PATH,
+        `
       run_quiet_step() {
         shift
         "$@"
-      }
-      tmp="$(mktemp -d)"
-      trap 'rm -rf "$tmp"' EXIT
-      remote="$tmp/remote.git"
-      seed="$tmp/seed"
-      repo="$tmp/repo"
-      ref=v2026.5.12
-      git init --bare -q "$remote"
-      git init -q --initial-branch=main "$seed"
-      git -C "$seed" config user.email test@example.invalid
-      git -C "$seed" config user.name test
-      printf 'tag\n' > "$seed/state.txt"
-      git -C "$seed" add state.txt
-      git -C "$seed" commit -qm tag
-      tag_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" remote add origin "$remote"
-      git -C "$seed" push -q -u origin main
-      git -C "$seed" tag "$ref"
-      git -C "$seed" push -q origin "refs/tags/$ref"
-      git -C "$seed" checkout -qb "$ref"
-      printf 'branch\n' > "$seed/state.txt"
-      git -C "$seed" commit -qam branch
-      branch_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" push -q origin "refs/heads/$ref"
-      git clone -q "$remote" "$repo"
-      checkout_git_openclaw_ref "$repo" "$ref"
-      selected="$(git -C "$repo" rev-parse HEAD)"
-      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
-      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
-    `);
+      }`,
+      ),
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("kind=immutable");
@@ -4430,39 +4408,16 @@ EOF
   });
 
   it("falls back to a v-prefixed branch when no matching release tag exists", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
+    const result = runInstallShell(
+      createInstallGitBranchFallbackFixtureScript(
+        SCRIPT_PATH,
+        `
       run_quiet_step() {
         shift
         "$@"
-      }
-      tmp="$(mktemp -d)"
-      trap 'rm -rf "$tmp"' EXIT
-      remote="$tmp/remote.git"
-      seed="$tmp/seed"
-      repo="$tmp/repo"
-      ref=v2-hotfix
-      git init --bare -q "$remote"
-      git init -q --initial-branch=main "$seed"
-      git -C "$seed" config user.email test@example.invalid
-      git -C "$seed" config user.name test
-      printf 'base\\n' > "$seed/state.txt"
-      git -C "$seed" add state.txt
-      git -C "$seed" commit -qm base
-      git -C "$seed" remote add origin "$remote"
-      git -C "$seed" push -q -u origin main
-      git -C "$seed" checkout -qb "$ref"
-      printf 'branch\\n' > "$seed/state.txt"
-      git -C "$seed" commit -qam branch
-      branch_head="$(git -C "$seed" rev-parse HEAD)"
-      git -C "$seed" push -q origin "refs/heads/$ref"
-      git clone -q "$remote" "$repo"
-      checkout_git_openclaw_ref "$repo" "$ref"
-      selected="$(git -C "$repo" rev-parse HEAD)"
-      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
-      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
-    `);
+      }`,
+      ),
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("kind=moving");
