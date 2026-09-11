@@ -217,41 +217,48 @@ describe("createComputerTool v2 execution", () => {
     },
   );
 
-  it("rejects pixel input when the observation image is omitted but keeps element refs", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ computerUse: v2Descriptor(["get_window_state", "left_click"]) }),
-    ]);
-    callGatewayToolMock.mockResolvedValue({
-      payload: {
-        ok: true,
-        observation: {
-          kind: "window",
-          base64: "invalid!",
-          width: 1568,
-          height: 784,
-          observationId: "observation-1",
+  it.each(["invalid", "omitted"] as const)(
+    "rejects pixel input for an %s observation image but keeps element refs",
+    async (image) => {
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["get_window_state", "left_click"]) }),
+      ]);
+      callGatewayToolMock.mockResolvedValue({
+        payload: {
+          ok: true,
+          observation: {
+            kind: "window",
+            ...(image === "invalid" ? { base64: "invalid!" } : {}),
+            width: 1568,
+            height: 784,
+            observationId: "observation-1",
+          },
+          details: { coordinateSpace: "image-pixels" },
         },
-        details: { coordinateSpace: "image-pixels" },
-      },
-    });
-    const tool = createVisionComputerTool();
-    const refs = { windowRef: "window-1", observationId: "observation-1" };
-    const result = await tool.execute("observe", {
-      action: "get_window_state",
-      windowRef: refs.windowRef,
-    });
-    expect(result.content.some((block) => block.type === "image")).toBe(false);
-    callGatewayToolMock.mockClear();
-    await expect(
-      tool.execute("pixels", { action: "left_click", ...refs, coordinate: [600, 300] }),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-    await tool.execute("element", { action: "left_click", ...refs, elementRef: "element-1" });
-    expect(readLastComputerActParams()).toMatchObject({
-      action: "left_click",
-      elementRef: "element-1",
-    });
-  });
+      });
+      const tool = createVisionComputerTool();
+      const refs = { windowRef: "window-1", observationId: "observation-1" };
+      const result = await tool.execute("observe", {
+        action: "get_window_state",
+        windowRef: refs.windowRef,
+        ...(image === "omitted" ? { includeScreenshot: false } : {}),
+      });
+      if (image === "omitted") {
+        expect(readLastComputerActParams()).toMatchObject({ includeScreenshot: false });
+      }
+      expect(result.content.some((block) => block.type === "image")).toBe(false);
+      callGatewayToolMock.mockClear();
+      await expect(
+        tool.execute("pixels", { action: "left_click", ...refs, coordinate: [600, 300] }),
+      ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      await tool.execute("element", { action: "left_click", ...refs, elementRef: "element-1" });
+      expect(readLastComputerActParams()).toMatchObject({
+        action: "left_click",
+        elementRef: "element-1",
+      });
+    },
+  );
 
   it("rejects stale semantic references before dispatch", async () => {
     const actions: ComputerUseV2ActionName[] = ["get_window_state", "set_value"];
