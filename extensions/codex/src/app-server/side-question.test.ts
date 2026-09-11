@@ -2,6 +2,7 @@ import { Server } from "node:http";
 // Codex tests cover side question plugin behavior.
 import path from "node:path";
 import {
+  embeddedAgentLog,
   invokeNativeHookRelay,
   nativeHookRelayTesting,
   type NativeHookRelayRegistrationHandle,
@@ -2578,17 +2579,23 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("sends clearing native hook config when side-thread relay is disabled", async () => {
+    // The full kill-switch needs an effective approval policy of "never". The fork
+    // policy is resolved from the app-server runtime options, not from the bound
+    // thread's recorded policy, so pin it in plugin config.
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: false } }),
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { appServer: { mode: "yolo", approvalPolicy: "never" } },
+        nativeHookRelay: { enabled: false },
+      }),
     ).resolves.toEqual({ text: "Side answer." });
 
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
     const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(forkParams?.approvalPolicy).toBe("never");
     expect(config).toMatchObject({
-      "features.hooks": false,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.shell_tool": true,
@@ -2598,7 +2605,88 @@ describe("runCodexAppServerSideQuestion", () => {
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
     });
-    expect(config).not.toHaveProperty("hooks.state");
+    // The opt-out clears the relay's own hooks only. Disabling `features.hooks`
+    // would also suppress independent user, project, plugin, and managed Codex
+    // hooks, so the key stays untouched.
+    expect(Object.hasOwn(config ?? {}, "features.hooks")).toBe(false);
+    // Disabled state markers keep lower-precedence copies of the injected
+    // session-layer commands from being layered back in during discovery.
+    expect(config?.["hooks.state"]).toEqual({
+      "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+      "<session-flags>/config.toml:stop:0:0": { enabled: false },
+    });
+  });
+
+  it("retains the before-tool policy relay for a side thread under an explicit never", async () => {
+    // Same interlock on the fork path: approvals off, but a live before_tool_call
+    // hook still needs the relay that executes it.
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { appServer: { mode: "yolo", approvalPolicy: "never" } },
+        nativeHookRelay: { enabled: false },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(forkParams?.approvalPolicy).toBe("never");
+    expect(config?.["features.hooks"]).toBe(true);
+    expect(codexHookCommand(config, "hooks.PreToolUse")?.command).toContain("--event pre_tool_use");
+  });
+
+  it("narrows a disabled side-thread relay to the before-tool policy relay while approvals prompt", async () => {
+    // The side thread runs under a prompting policy, so the opt-out cannot remove
+    // the relay the app-server approval bridge and trusted-tool policy run on.
+    // Loop detection — not a `before_tool_call` hook — supplies the pre-tool local
+    // work, so the prompting policy is the only reason the guard can be narrowing on.
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await expect(
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
+          pluginConfig: { appServer: { mode: "yolo", approvalPolicy: "on-request" } },
+          nativeHookRelay: { enabled: false },
+        }),
+      ).resolves.toEqual({ text: "Side answer." });
+
+      const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+      const config = forkParams?.config as Record<string, unknown> | undefined;
+      expect(forkParams?.approvalPolicy).toBe("on-request");
+      expect(config?.["features.hooks"]).toBe(true);
+      expect(codexHookCommand(config, "hooks.PreToolUse")?.command).toContain(
+        "--event pre_tool_use",
+      );
+      expect(config?.["hooks.PostToolUse"]).toEqual([]);
+      expect(config?.["hooks.PermissionRequest"]).toEqual([]);
+      expect(config?.["hooks.Stop"]).toEqual([]);
+      const hookState = config?.["hooks.state"] as
+        | Record<string, { enabled?: unknown }>
+        | undefined;
+      expect(codexHookStateForEvent(hookState, "pre_tool_use")?.enabled).toBe(true);
+      expect(codexHookStateForEvent(hookState, "post_tool_use")).toEqual({ enabled: false });
+      expect(codexHookStateForEvent(hookState, "permission_request")).toEqual({ enabled: false });
+      expect(codexHookStateForEvent(hookState, "stop")).toEqual({ enabled: false });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("narrowed to events [pre_tool_use]"),
+        expect.objectContaining({ approvalPolicy: "on-request" }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("passes Codex code-mode-only opt-in to side-thread forks", async () => {

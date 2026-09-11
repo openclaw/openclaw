@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
+  type CodexNativeHookRelayOptions,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginDestructivePolicy,
   type CodexPluginMarketplaceName,
@@ -181,6 +182,7 @@ const codexPluginConfigSchema = z
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         loopDetectionPreToolUseRelay: z.boolean().optional(),
+        nativeHookRelay: z.object({ enabled: z.boolean().optional() }).strict().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -251,6 +253,23 @@ export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): b
     typeof sandbox.placementNodeId === "string" &&
     sandbox.placementNodeId.length > 0
   );
+}
+
+/**
+ * Reads the native hook relay options for Codex app-server attempts and side
+ * questions. Schema-level only: approval-policy guarding lives in
+ * `resolveCodexNativeHookRelayForApprovalPolicy`, which the run paths apply once
+ * the effective policy is known. Always returns an object: run-attempt and
+ * side-question paths gate on the presence of `nativeHookRelay` before checking
+ * `enabled`, so `undefined` would silently disable the relay instead of
+ * expressing the default. Without config (or with `events: []`) this is
+ * byte-identical to the historical `{ enabled: true }` literal.
+ */
+export function resolveCodexAppServerNativeHookRelay(
+  pluginConfig: unknown,
+): CodexNativeHookRelayOptions {
+  const relay = readCodexPluginConfig(pluginConfig).appServer?.nativeHookRelay;
+  return { enabled: relay?.enabled !== false };
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {

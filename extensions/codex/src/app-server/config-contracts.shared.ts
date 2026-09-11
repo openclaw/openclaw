@@ -1,3 +1,5 @@
+import type { NativeHookRelayEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
+
 export type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 export type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -12,6 +14,11 @@ export type OpenClawExecPolicyForCodexAppServer = {
   touched: boolean;
 };
 export type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
+
+export type CodexNativeHookRelayOptions = {
+  enabled: boolean;
+  events?: readonly NativeHookRelayEvent[];
+};
 
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";

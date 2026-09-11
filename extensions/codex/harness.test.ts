@@ -2,12 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexAppServerAttempt = vi.hoisted(() => vi.fn());
+const runCodexAppServerSideQuestion = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
   runHostPreparedIsolatedCompletion,
@@ -17,6 +19,9 @@ vi.mock("./src/app-server/isolated-completion.js", () => ({
 }));
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt,
+}));
+vi.mock("./src/app-server/side-question.js", () => ({
+  runCodexAppServerSideQuestion,
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -647,6 +652,103 @@ describe("Codex agent harness reset()", () => {
     expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-supervised",
     });
+  });
+});
+
+describe("Codex agent harness native hook relay", () => {
+  // The harness forwards the parse-layer shape untouched. Approval-policy
+  // guarding happens in the run paths, once the effective policy is resolved
+  // (see native-hook-relay-approval-policy.test.ts).
+  function createHarness(pluginConfig: unknown) {
+    return createCodexAppServerAgentHarness({
+      pluginConfig,
+      bindingStore: testCodexAppServerBindingStore,
+    });
+  }
+
+  async function runAttempt(pluginConfig: unknown): Promise<void> {
+    const harness = createHarness(pluginConfig);
+    runCodexAppServerAttempt.mockClear();
+    runCodexAppServerAttempt.mockResolvedValue({ terminal: { kind: "ok" as const } });
+    // No `config` on the params, so the attempt path's per-attempt plugin-config
+    // lookup falls back to the registration-time config these cases pin.
+    await harness.runAttempt({ prompt: "hello" } as never);
+  }
+
+  async function runSideQuestion(pluginConfig: unknown): Promise<void> {
+    const harness = createHarness(pluginConfig);
+    const sideQuestion = harness["runSideQuestion"];
+    if (!sideQuestion) {
+      throw new Error("Expected Codex harness to expose side questions");
+    }
+    runCodexAppServerSideQuestion.mockClear();
+    runCodexAppServerSideQuestion.mockResolvedValue({ text: "ok" });
+    await sideQuestion({ question: "btw" } as never);
+  }
+
+  const cases: { label: string; pluginConfig: unknown; nativeHookRelay: unknown }[] = [
+    { label: "no relay key", pluginConfig: { appServer: {} }, nativeHookRelay: { enabled: true } },
+    {
+      label: "opt-out",
+      pluginConfig: { appServer: { nativeHookRelay: { enabled: false } } },
+      nativeHookRelay: { enabled: false },
+    },
+    {
+      // The relay object is strict, so an unknown key rejects the codex config and
+      // the harness forwards the default relay shape (see config.test.ts).
+      label: "a rejected config carrying an unknown relay key",
+      pluginConfig: {
+        appServer: { nativeHookRelay: { enabled: false, events: ["post_tool_use"] } },
+      },
+      nativeHookRelay: { enabled: true },
+    },
+    {
+      label: "explicit enabled:true",
+      pluginConfig: { appServer: { nativeHookRelay: { enabled: true } } },
+      nativeHookRelay: { enabled: true },
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`forwards ${testCase.label} to the attempt path unchanged`, async () => {
+      await runAttempt(testCase.pluginConfig);
+
+      // `objectContaining`: the run paths also receive unrelated runtime plumbing
+      // (`runtime`, `runtimeModelId`) that this case is not pinning.
+      expect(runCodexAppServerAttempt).toHaveBeenCalledWith(
+        { prompt: "hello" },
+        expect.objectContaining({
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: testCase.pluginConfig,
+          nativeHookRelay: testCase.nativeHookRelay,
+        }),
+      );
+    });
+
+    it(`forwards ${testCase.label} to the side-question path unchanged`, async () => {
+      await runSideQuestion(testCase.pluginConfig);
+
+      expect(runCodexAppServerSideQuestion).toHaveBeenCalledWith(
+        { question: "btw" },
+        expect.objectContaining({
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: testCase.pluginConfig,
+          nativeHookRelay: testCase.nativeHookRelay,
+        }),
+      );
+    });
+  }
+
+  it("never warns at the harness layer", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    try {
+      await runAttempt({ appServer: { nativeHookRelay: { enabled: false } } });
+      await runSideQuestion({ appServer: { nativeHookRelay: { enabled: true } } });
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

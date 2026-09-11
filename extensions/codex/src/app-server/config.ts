@@ -23,6 +23,7 @@ export {
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
+  resolveCodexAppServerNativeHookRelay,
   resolveCodexPluginsPolicy,
 } from "./config-parsing.js";
 export {

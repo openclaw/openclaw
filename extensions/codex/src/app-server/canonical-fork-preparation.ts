@@ -17,13 +17,19 @@ import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-context.js";
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
-import { readCodexPluginConfig, resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerNativeHookRelay,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./config.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import {
   assertCodexNativeHookRelayAllowed,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayId,
+  buildCodexNativeHookRelayOptOutConfig,
   resolveCodexNativeHookRelayEvents,
+  resolveCodexNativeHookRelayForApprovalPolicy,
 } from "./native-hook-relay.js";
 import {
   applyCodexNativeSkillIsolation,
@@ -213,8 +219,28 @@ export async function prepareCanonicalCodexFork(params: {
     generation,
     preToolUseLoopDetection: appServer.loopDetectionPreToolUseRelay,
   });
-  const events = resolveCodexNativeHookRelayEvents({ appServer });
-  if (events.includes("pre_tool_use") && relay.shouldRelayEvent("pre_tool_use")) {
+  // `appServer` is the effective runtime policy for this fork: the supervision
+  // runtime resolution and any forced prompting override are already applied.
+  // Guard the operator's relay shape here — before any consumer reads it —
+  // rather than at plugin-config parse time, exactly as the run-attempt and
+  // side-question paths do.
+  const nativeHookRelay = resolveCodexNativeHookRelayForApprovalPolicy({
+    requested: resolveCodexAppServerNativeHookRelay(context.pluginConfig),
+    approvalPolicy: appServer.approvalPolicy,
+  });
+  // Only an *honored* opt-out reaches `enabled: false`: approvals off and no
+  // active OpenClaw before-tool policy. A narrowed opt-out arrives here as an
+  // enabled relay scoped to `pre_tool_use`, so attestation stays armed for it.
+  const nativeHookRelayOptedOut = nativeHookRelay?.enabled === false;
+  const events = resolveCodexNativeHookRelayEvents({
+    configuredEvents: nativeHookRelay?.events,
+    appServer,
+  });
+  if (
+    !nativeHookRelayOptedOut &&
+    events.includes("pre_tool_use") &&
+    relay.shouldRelayEvent("pre_tool_use")
+  ) {
     await assertCodexNativeHookRelayAllowed(context.client);
     assertCurrent();
   }
@@ -255,7 +281,9 @@ export async function prepareCanonicalCodexFork(params: {
       userMcp,
       apps?.configPatch,
       appServer.networkProxy?.configPatch,
-      buildCodexNativeHookRelayConfig({ relay, events, clearOmittedEvents: true }),
+      nativeHookRelayOptedOut
+        ? buildCodexNativeHookRelayOptOutConfig()
+        : buildCodexNativeHookRelayConfig({ relay, events, clearOmittedEvents: true }),
     ),
     nativeSkillIsolation,
   );
