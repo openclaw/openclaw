@@ -342,6 +342,17 @@ SQLite capabilities also fails closed rather than falling back to a direct file
 copy. Other workspace SQLite files outside configured agent roots remain raw
 workspace files and do not receive the SQLite snapshot or compaction guarantee.
 
+Hardlinks to a generic SQLite database share one captured image, stored as a
+separate regular archive entry for each name. Every hardlink must be an included
+`.sqlite` file under the state directory or a configured agent root. If exactly
+one name has a nonempty write-ahead log (WAL), that
+name supplies the committed data. Closed databases without a nonempty WAL remain
+supported. Multiple nonempty WALs, a nonempty rollback journal, or hardlinks
+outside the backup inventory cause an explicit refusal with no archive. Close
+the database writers cleanly and include every hardlink in those roots before retrying.
+Canonical OpenClaw database aliases retain their existing owner validation and
+sanitization.
+
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
 The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata.
