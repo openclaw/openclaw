@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -34,6 +33,7 @@ import {
   type ModelProviderConfigMutationResult,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
+import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -44,7 +44,6 @@ import {
 } from "./data.ts";
 import {
   EMPTY_MODEL_PROVIDERS_DATA,
-  loadModelProvidersData,
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
 } from "./load.ts";
@@ -57,8 +56,6 @@ import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, renderModelProvidersPageShell } from "./view.ts";
 
 type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
-type RefreshReason = "publication" | "replacement" | "forced";
-type RefreshRequest = [GatewayBrowserClient | null, string, RefreshReason];
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -83,34 +80,31 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private selectedAgentId = "";
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  // Null Task runs supersede stale work without counting as a real load.
-  private loadClient: GatewayBrowserClient | null = null;
   private routeDataObserved = false;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
-  private readonly refreshTask = new Task(this, {
-    autoRun: false,
-    task: ([client, agentId, reason]: RefreshRequest, { signal }) =>
-      client && agentId
-        ? loadModelProvidersData(client, {
-            agentId,
-            ...(reason === "forced" ? { refresh: true } : {}),
-            signal,
-          }).then((data) => ({ client, data, reason }))
-        : initialState,
+  private readonly core = new ModelProviderCoreLoader(this, {
+    onStart: (reason) => {
+      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+      this.supplemental.beginCoreRefresh(reason === "forced");
+      if (reason === "forced") {
+        this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach(
+          (account) => account.refreshUsage(),
+        );
+      }
+    },
     onComplete: ({ client, data, reason }) => {
-      this.loadClient = null;
       this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
       this.supplemental.adoptCoreData(client, data);
     },
-    onError: () => (this.loadClient = null),
+    refreshPublication: () => void this.refresh("publication"),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () =>
       this.loaderPending ||
       !this.routeDataObserved ||
-      this.loadClient !== null ||
+      this.core.loading ||
       this.supplemental.usageLoading,
     // Usage convergence must not restart the independent local-cost request.
     reload: () => this.supplemental.loadUsage(),
@@ -227,7 +221,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       (changed.has("routeData") || changed.has("loaderPending")) &&
       this.routeData !== undefined
     ) {
-      this.catalogDiscovery.reset();
+      this.cancelCoreRefresh();
       this.routeDataObserved = true;
       this.setSelectedAgent(this.resolveSelectedAgentId());
       if (
@@ -260,7 +254,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       !this.gateway.connected ||
       !client ||
       !this.selectedAgentId ||
-      this.loadClient !== null ||
+      this.core.loading ||
       (this.data !== null && this.data.updatedAt !== null && client === this.dataClient)
     ) {
       return;
@@ -270,8 +264,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   private cancelCoreRefresh() {
     this.catalogDiscovery.reset();
-    this.loadClient = null;
-    void this.refreshTask.run([null, this.selectedAgentId, "replacement"]);
+    this.core.invalidate();
   }
 
   private invalidateRequests() {
@@ -335,7 +328,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private refresh(reason: RefreshReason): Promise<void> {
+  private refresh(reason: ModelProviderRefreshReason): Promise<void> {
     if (!this.selectedAgentId) {
       return Promise.resolve();
     }
@@ -344,16 +337,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    // Publication replaces pending results but retains this owner's completed discovery.
-    this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
-    this.supplemental.beginCoreRefresh(reason === "forced");
-    if (reason === "forced") {
-      this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach((account) =>
-        account.refreshUsage(),
-      );
-    }
-    this.loadClient = client;
-    return this.refreshTask.run([client, this.selectedAgentId, reason]);
+    return this.core.refresh(client, this.selectedAgentId, reason);
   }
 
   private mutationBlockedReason(): string | null {
@@ -648,7 +632,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       usageAgentId: this.selectedAgentId,
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
-      refreshing: this.loadClient !== null,
+      refreshing: this.core.loading,
       error: rosterError ?? data.error,
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,

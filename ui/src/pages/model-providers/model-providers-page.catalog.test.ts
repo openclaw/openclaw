@@ -3,7 +3,7 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { ModelCatalogResult } from "../../api/types.ts";
+import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -94,6 +94,120 @@ function createCatalogHarness() {
 }
 
 describe("ModelProvidersPage catalog discovery", () => {
+  it("finishes explicit acquisition before reading publication queued during auth refresh", async () => {
+    const { context, request, publishEvent, readPublished, discover, catalogRequest } =
+      createCatalogHarness();
+    const authRefresh = deferred<ModelAuthStatusResult>();
+    const catalogRefresh = deferred<ModelCatalogResult>();
+    const originalAuth = createAuthStatus([{ status: "missing", profiles: [] }]);
+    let publishedAuth = originalAuth;
+    let authSignal: AbortSignal | undefined;
+    request.mockImplementation(
+      (method: string, params?: { refresh?: boolean }, options?: { signal?: AbortSignal }) => {
+        if (method === "models.authStatus") {
+          if (params?.refresh) {
+            authSignal = options?.signal;
+            return authRefresh.promise;
+          }
+          return Promise.resolve(publishedAuth);
+        }
+        return catalogRequest(method, params);
+      },
+    );
+    discover.mockReturnValue(catalogRefresh.promise);
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.textContent).toContain("Not configured"));
+    const editKey = [
+      ...page.querySelectorAll<HTMLButtonElement>(".model-providers__card-actions button"),
+    ].find((button) => button.textContent?.trim() === "Set API key");
+    expect(editKey).toBeDefined();
+    editKey!.click();
+    await page.updateComplete;
+    const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = "unsaved-key-draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await waitForFast(() => expect(authSignal).toBeDefined());
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    expect(authSignal!.aborted).toBe(false);
+    expect(discover).not.toHaveBeenCalled();
+    authRefresh.resolve(originalAuth);
+    await waitForFast(() => expect(discover).toHaveBeenCalledOnce());
+    const published = {
+      models: [{ id: "published", name: "Published model", provider: "openai", available: true }],
+    };
+    readPublished.mockReturnValue(published);
+    publishedAuth = createAuthStatus([
+      { status: "static", profiles: [], apiKey: { source: "config" } },
+    ]);
+    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    catalogRefresh.resolve(preparedCatalog);
+
+    await waitForFast(() => expect(page.data?.models).toEqual(published.models));
+    await drainPageUpdates(page);
+    expect(authSignal!.aborted).toBe(false);
+    expect(discover).toHaveBeenCalledOnce();
+    expect(readPublished).toHaveBeenCalledTimes(2);
+    expect(page.textContent).not.toContain("Not configured");
+    expect(page.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe(
+      "unsaved-key-draft",
+    );
+    expect(page.querySelector('[role="option"][data-value="openai/published"]')).not.toBeNull();
+  });
+
+  it("retires an old agent's queued publication when selection changes during auth refresh", async () => {
+    const {
+      context,
+      request,
+      publishEvent,
+      discover,
+      catalogRequest,
+      agentSelection,
+      notifySelection,
+    } = createCatalogHarness();
+    const authRefresh = deferred<ModelAuthStatusResult>();
+    let authSignal: AbortSignal | undefined;
+    const writerModels = [
+      { id: "writer", name: "Writer model", provider: "openai", available: true },
+    ];
+    request.mockImplementation(
+      (
+        method: string,
+        params?: { refresh?: boolean; agentId?: string },
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (method === "models.authStatus" && params?.refresh) {
+          authSignal = options?.signal;
+          return authRefresh.promise;
+        }
+        if (method === "models.list" && params?.agentId === "writer") {
+          return Promise.resolve({ models: writerModels });
+        }
+        return catalogRequest(method, params);
+      },
+    );
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await waitForFast(() => expect(authSignal).toBeDefined());
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+
+    agentSelection.state.selectedId = "writer";
+    agentSelection.state.scopeId = "writer";
+    notifySelection();
+    expect(authSignal!.aborted).toBe(true);
+    authRefresh.resolve(createAuthStatus());
+
+    await waitForFast(() => expect(page.data?.models).toEqual(writerModels));
+    await drainPageUpdates(page);
+    expect(discover).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+    expect(page.querySelector('[role="option"][data-value="openai/writer"]')).not.toBeNull();
+  });
+
   it.each(["config.changed", "chat.metadata.changed"])(
     "updates credential and catalog facts on %s without clearing a key draft",
     async (event) => {
