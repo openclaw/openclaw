@@ -7,7 +7,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import {
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_PREEMPTED,

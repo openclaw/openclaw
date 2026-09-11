@@ -100,6 +100,7 @@ export const forcedUnitFastTestFiles = [
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/flows/search-setup.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
+  "src/infra/heartbeat-runner-scheduler.lazy.test.ts",
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",

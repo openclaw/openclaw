@@ -73,7 +73,7 @@ import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing
 import {
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
-} from "../infra/heartbeat-runner-config.js";
+} from "../infra/heartbeat-config.js";
 import {
   requestHeartbeat,
   requestHeartbeatAndWait,
