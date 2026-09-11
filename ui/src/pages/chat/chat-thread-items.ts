@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
@@ -51,6 +52,55 @@ export function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
+}
+
+/** Remove a tool-owned display copy without rewriting other message content. */
+export function removeCanvasPreviewFromAssistantMessage(
+  message: unknown,
+  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+): unknown {
+  const raw = asRecord(message);
+  if (!raw || raw.role !== "assistant") {
+    return message;
+  }
+  const content = Array.isArray(raw.content)
+    ? raw.content
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  let changed = false;
+  const nextContent: unknown[] = [];
+  for (const value of content) {
+    const existing = readCanvasContentPreview(value);
+    if (existing && canvasPreviewsMatch(existing, preview)) {
+      changed = true;
+      continue;
+    }
+    const block = asRecord(value);
+    if (
+      !block ||
+      !["text", "input_text", "output_text"].includes(String(block.type)) ||
+      typeof block.text !== "string"
+    ) {
+      nextContent.push(value);
+      continue;
+    }
+    const extracted = extractCanvasShortcodes(block.text);
+    if (!extracted.previews.some((candidate) => canvasPreviewsMatch(candidate, preview))) {
+      nextContent.push(value);
+      continue;
+    }
+    changed = true;
+    nextContent.push({ ...block, text: extracted.text });
+    for (const candidate of extracted.previews) {
+      if (!canvasPreviewsMatch(candidate, preview)) {
+        nextContent.push({ type: "canvas", preview: candidate });
+      }
+    }
+  }
+  return changed ? { ...raw, content: nextContent } : message;
 }
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
@@ -205,33 +255,6 @@ export function findNearestAssistantMessage(
       : last;
   }
   return previous?.anchor ?? last;
-}
-
-export function findCanvasInsertionIndex(
-  items: ChatItem[],
-  toolTimestamp: number | null,
-  minimumIndex = 0,
-  maximumIndex = items.length,
-): number {
-  if (toolTimestamp == null) {
-    return maximumIndex;
-  }
-  for (let index = minimumIndex; index < maximumIndex; index += 1) {
-    const item = items[index];
-    if (item?.kind !== "message") {
-      continue;
-    }
-    const normalized = safeNormalizeMessage(item.message);
-    if (
-      normalized &&
-      normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
-      normalized.timestamp != null &&
-      normalized.timestamp > toolTimestamp
-    ) {
-      return index;
-    }
-  }
-  return maximumIndex;
 }
 
 function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
