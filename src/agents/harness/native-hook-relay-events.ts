@@ -128,6 +128,7 @@ async function runNativeHookRelayPreToolUse(params: {
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
   const policyRequest = {
+    policyPhase: "native-pre-tool-use" as const,
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),

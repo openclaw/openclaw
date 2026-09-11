@@ -33,6 +33,7 @@ import {
   closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
+import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
@@ -3193,6 +3194,64 @@ describe("native hook relay registry", () => {
         expect.objectContaining({ toolName: canonicalToolName }),
         expect.objectContaining({ toolName: canonicalToolName }),
       );
+    },
+  );
+
+  it.each([false, true])(
+    "distinguishes native preflight from execution-time policy (host callback: %s)",
+    async (useHostCallback) => {
+      const beforeToolCall = vi.fn(async (event: unknown, ctx: unknown) =>
+        requireRecord(ctx, "tool context").policyPhase === "native-pre-tool-use"
+          ? undefined
+          : {
+              params: {
+                ...requireRecord(requireRecord(event, "tool event").params, "tool params"),
+                value: "normalized",
+              },
+            },
+      );
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+      );
+      const fixture = useHostCallback
+        ? await createAdmittedHostCapabilityTestFixture({ runId: "run-preflight-phase" })
+        : undefined;
+      const relay = registerNativeHookRelay({
+        provider: "codex",
+        sessionId: "session-preflight-phase",
+        runId: "run-preflight-phase",
+        ...(fixture
+          ? {
+              runBeforeToolCall: fixture.hostCapabilities.runBeforeToolCall,
+              assertActive: fixture.hostCapabilities.assertActive,
+            }
+          : {}),
+      });
+      // A model-provided field cannot establish the host's policy phase.
+      const params = { value: "original", policyPhase: "native-pre-tool-use" };
+      try {
+        const response = await invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "pre_tool_use",
+          rawPayload: { tool_name: "phase_tool", tool_input: params },
+        });
+        expect(JSON.parse(response.stdout || "{}").hookSpecificOutput?.permissionDecision).not.toBe(
+          "deny",
+        );
+        expect(beforeToolCall).toHaveBeenCalledWith(
+          expect.objectContaining({ params }),
+          expect.objectContaining({ policyPhase: "native-pre-tool-use" }),
+        );
+        beforeToolCall.mockClear();
+        const outcome = await runBeforeToolCallHook({ toolName: "phase_tool", params });
+        expect(outcome).toMatchObject({ blocked: false, params: { value: "normalized" } });
+        expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("policyPhase");
+      } finally {
+        relay.unregister();
+        fixture?.closeHost();
+        fixture?.closeAdmission();
+      }
     },
   );
 
