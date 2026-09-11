@@ -80,6 +80,12 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    /** Operator override for every memory embedding request, in seconds. */
+    embeddingTimeoutSeconds?: number | undefined;
+    /**
+     * @deprecated Renamed to embeddingTimeoutSeconds; kept for SDK source-compat.
+     * ponytail: alias, remove on next major SDK version.
+     */
     embeddingBatchTimeoutSeconds: number | undefined;
     sessions: {
       deltaBytes: number;
@@ -198,7 +204,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
       },
     },
     experimental: { sessionMemory },
-    sync: resolveSyncConfig(),
+    sync: resolveSyncConfig(cfg, agentId),
   };
 }
 
@@ -327,14 +333,19 @@ export function resolveMemorySearchConfig(
   return resolved;
 }
 
-function resolveSyncConfig(): ResolvedMemorySearchSyncConfig {
+function resolveSyncConfig(cfg: OpenClawConfig, agentId: string): ResolvedMemorySearchSyncConfig {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const embeddingTimeoutSeconds =
+    overrides?.embeddingTimeoutSeconds ?? defaults?.embeddingTimeoutSeconds;
   return {
     onSessionStart: true,
     onSearch: true,
     watch: true,
     watchDebounceMs: DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: 0,
-    embeddingBatchTimeoutSeconds: undefined,
+    embeddingTimeoutSeconds,
+    embeddingBatchTimeoutSeconds: embeddingTimeoutSeconds,
     sessions: {
       deltaBytes: DEFAULT_SESSION_DELTA_BYTES,
       deltaMessages: DEFAULT_SESSION_DELTA_MESSAGES,
@@ -353,5 +364,5 @@ export function resolveMemorySearchSyncConfig(
   if (!enabled) {
     return null;
   }
-  return resolveSyncConfig();
+  return resolveSyncConfig(cfg, agentId);
 }

@@ -60,6 +60,50 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
   return manager;
 }
 
+type EmbeddingTimeoutHarness = {
+  provider: EmbeddingProvider;
+  settings: { sync: { embeddingTimeoutSeconds: number | undefined } };
+  providerRuntime: EmbeddingProviderRuntime | undefined;
+  resolveEmbeddingTimeout: (kind: "query" | "batch") => number;
+  embedBatchWithRetry: (inputs: Array<string | { text: string }>) => Promise<number[][]>;
+  markLocalEmbeddingProviderDegraded: ReturnType<typeof vi.fn>;
+  waitForEmbeddingRetry: ReturnType<typeof vi.fn>;
+};
+
+/** Exercise the real timeout resolution and watchdog path with a fake slow provider. */
+function createEmbeddingTimeoutHarness(params: {
+  embedBatch: EmbeddingProvider["embedBatch"];
+  embeddingTimeoutSeconds?: number;
+  providerRuntime?: EmbeddingProviderRuntime;
+}): EmbeddingTimeoutHarness {
+  const provider: EmbeddingProvider = {
+    id: "local",
+    model: "embeddinggemma-300m-qat-q8_0",
+    embed: async () => [],
+    embedBatch: params.embedBatch,
+  };
+  return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
+    provider,
+    settings: { sync: { embeddingTimeoutSeconds: params.embeddingTimeoutSeconds } },
+    providerRuntime: params.providerRuntime,
+    markLocalEmbeddingProviderDegraded: vi.fn(),
+    waitForEmbeddingRetry: vi.fn(async () => {}),
+    withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
+  }) as EmbeddingTimeoutHarness;
+}
+
+function stalledEmbeddingBatch(calls: Array<AbortSignal | undefined> = []) {
+  return async (
+    _inputs: Parameters<EmbeddingProvider["embedBatch"]>[0],
+    options?: Parameters<EmbeddingProvider["embedBatch"]>[1],
+  ) => {
+    calls.push(options?.signal);
+    // Stand in for a saturated single-core llama.cpp server: the request is
+    // healthy but needs far longer than the watchdog budget.
+    return await new Promise<number[][]>(() => {});
+  };
+}
+
 describe("memory embedding query retry cancellation", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -200,7 +244,8 @@ describe("memory embedding query retry cancellation", () => {
 
     await vi.runAllTimersAsync();
 
-    const timeoutMessage = "memory embeddings query timed out after 0s";
+    const timeoutMessage =
+      "memory embeddings query timed out after 0s (provider=test-provider, model=test-embedding-model)";
     await expect(pending).rejects.toMatchObject({
       code: "MEMORY_EMBEDDING_OPERATION_FAILED",
       operation: "query",
@@ -306,5 +351,92 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     expect(embedBatch).toHaveBeenCalledOnce();
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
     expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("memory embedding request timeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps provider-owned timeouts when no embedding timeout is configured", () => {
+    const manager = createEmbeddingTimeoutHarness({
+      embedBatch: async () => [],
+      providerRuntime: {
+        id: "local",
+        inlineQueryTimeoutMs: 300_000,
+        inlineBatchTimeoutMs: 600_000,
+      },
+    });
+
+    expect(manager.resolveEmbeddingTimeout("query")).toBe(300_000);
+    expect(manager.resolveEmbeddingTimeout("batch")).toBe(600_000);
+  });
+
+  it("overrides provider-owned query and batch timeouts with the configured value", () => {
+    const manager = createEmbeddingTimeoutHarness({
+      embedBatch: async () => [],
+      embeddingTimeoutSeconds: 45,
+      providerRuntime: {
+        id: "local",
+        inlineQueryTimeoutMs: 300_000,
+        inlineBatchTimeoutMs: 600_000,
+      },
+    });
+
+    expect(manager.resolveEmbeddingTimeout("query")).toBe(45_000);
+    expect(manager.resolveEmbeddingTimeout("batch")).toBe(45_000);
+  });
+
+  it("aborts a stalled embedding batch at the configured timeout and names the request", async () => {
+    vi.useFakeTimers();
+    const signals: Array<AbortSignal | undefined> = [];
+    const manager = createEmbeddingTimeoutHarness({
+      embedBatch: stalledEmbeddingBatch(signals),
+      embeddingTimeoutSeconds: 1,
+      providerRuntime: { id: "local", inlineBatchTimeoutMs: 600_000 },
+    });
+
+    const pending = manager.embedBatchWithRetry(["slow chunk"]);
+    const rejection = expect(pending).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "batch",
+      providerId: "local",
+      cause: {
+        message:
+          "memory embeddings batch timed out after 1s (provider=local, model=embeddinggemma-300m-qat-q8_0, items=1)",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
+  });
+
+  it("splits a timed-out batch instead of resending the oversized request", async () => {
+    vi.useFakeTimers();
+    const batchSizes: number[] = [];
+    const manager = createEmbeddingTimeoutHarness({
+      embedBatch: async (inputs) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        batchSizes.push(texts.length);
+        if (texts.length > 1) {
+          return await new Promise<number[][]>(() => {});
+        }
+        return texts.map((text) => [text.length]);
+      },
+      embeddingTimeoutSeconds: 1,
+      providerRuntime: { id: "local", inlineBatchTimeoutMs: 600_000 },
+    });
+
+    const pending = manager.embedBatchWithRetry(["first", "second"]);
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toEqual([[5], [6]]);
+    // One stalled oversized request, then two half-size requests that converge.
+    expect(batchSizes).toEqual([2, 1, 1]);
   });
 });

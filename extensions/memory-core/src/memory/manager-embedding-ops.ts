@@ -142,8 +142,16 @@ function resolveEmbeddingTimeoutMs(params: {
     MemoryEmbeddingProviderRuntime,
     "inlineQueryTimeoutMs" | "inlineBatchTimeoutMs"
   >;
-  configuredBatchTimeoutSeconds?: number;
+  /** Operator override for every memory embedding request, in seconds. */
+  configuredTimeoutSeconds?: number;
 }): number {
+  // An explicit operator budget wins over provider-owned defaults for both
+  // query and index requests: a slow-but-healthy local provider cannot raise
+  // its own ceiling, and the docs otherwise call timeouts provider-owned.
+  const configuredTimeoutSeconds = params.configuredTimeoutSeconds;
+  if (typeof configuredTimeoutSeconds === "number" && configuredTimeoutSeconds > 0) {
+    return resolveEmbeddingSecondsTimeoutMs(configuredTimeoutSeconds);
+  }
   if (params.kind === "query") {
     const runtimeTimeoutMs = params.providerRuntime?.inlineQueryTimeoutMs;
     if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
@@ -154,10 +162,6 @@ function resolveEmbeddingTimeoutMs(params: {
       : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
   }
 
-  const configuredTimeoutSeconds = params.configuredBatchTimeoutSeconds;
-  if (typeof configuredTimeoutSeconds === "number" && configuredTimeoutSeconds > 0) {
-    return resolveEmbeddingSecondsTimeoutMs(configuredTimeoutSeconds);
-  }
   const runtimeTimeoutMs = params.providerRuntime?.inlineBatchTimeoutMs;
   if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
     return resolveTimerTimeoutMs(runtimeTimeoutMs, EMBEDDING_BATCH_TIMEOUT_REMOTE_MS);
@@ -544,7 +548,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               });
               const result = await runEmbeddingOperationWithTimeout({
                 timeoutMs,
-                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+                message: `memory embeddings ${label} timed out after ${Math.round(timeoutMs / 1000)}s (provider=${provider.id}, model=${provider.model}, items=${batchItems.length})`,
                 run: async (signal) =>
                   await provider.embedBatch(batchItems, { signal, inputType: "document" }),
               });
@@ -604,7 +608,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       kind,
       providerId: provider?.id,
       providerRuntime,
-      configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
+      configuredTimeoutSeconds:
+        this.settings.sync.embeddingTimeoutSeconds ??
+        this.settings.sync.embeddingBatchTimeoutSeconds,
     });
   }
 
@@ -633,7 +639,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
               return await runEmbeddingOperationWithTimeout({
                 timeoutMs,
-                message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+                message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s (provider=${provider.id}, model=${provider.model})`,
                 signal,
                 deadlineControl,
                 run: async (opSignal) =>

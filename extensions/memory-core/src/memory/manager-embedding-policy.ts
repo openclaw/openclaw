@@ -63,6 +63,12 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b)/i;
 
+// Our own embedding watchdog, not a provider or transport failure. The same
+// oversized request cannot finish sooner on a resend, so the index path splits
+// it instead of spending the identical budget again and abandoning the index.
+const TIMED_OUT_MEMORY_EMBEDDING_BATCH_ERROR_RE =
+  /memory embeddings (?:structured )?batch timed out after \d+s/i;
+
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,
   baseDelayMs: 500,
@@ -90,7 +96,10 @@ type MemoryEmbeddingRetryBudget = {
 };
 
 export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
+  return (
+    SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message) ||
+    TIMED_OUT_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)
+  );
 }
 
 function readMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
@@ -120,6 +129,9 @@ function resolveMemoryEmbeddingRetryBudget(
   }
   if (status !== undefined) {
     return status >= 500 && status <= 599 ? profile.transient : undefined;
+  }
+  if (TIMED_OUT_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message)) {
+    return undefined;
   }
   if (RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message)) {
     return profile.transient;

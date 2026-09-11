@@ -47,6 +47,7 @@ export const MemorySearchSchema = z
     queryInputType: z.string().min(1).optional(),
     documentInputType: z.string().min(1).optional(),
     outputDimensionality: z.number().int().positive().optional(),
+    embeddingTimeoutSeconds: z.number().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),

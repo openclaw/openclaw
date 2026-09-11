@@ -234,6 +234,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "memory.search.remote.baseUrl":
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
+  "memory.search.embeddingTimeoutSeconds":
+    "Overrides the wall-clock budget, in seconds, for a single memory embedding request at index and query time. Leave unset to keep the embedding provider's own timeout (10 minutes for local batch requests, 5 minutes for local queries, shorter for remote providers); raise it for slow local providers such as a single-core llama.cpp server. A timed-out index batch is split into smaller requests instead of being retried unchanged.",
   "memory.search.remote.apiKey":
     "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
   "memory.search.remote.headers":

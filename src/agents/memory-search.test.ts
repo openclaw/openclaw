@@ -525,6 +525,7 @@ describe("memory search config", () => {
       watch: true,
       watchDebounceMs: 1500,
       intervalMinutes: 0,
+      embeddingTimeoutSeconds: undefined,
       embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 100_000,
@@ -532,6 +533,59 @@ describe("memory search config", () => {
         postCompactionForce: true,
       },
     });
+  });
+
+  it("carries the configured embedding timeout into sync settings", () => {
+    clearEmbeddingProviders();
+    const cfg = asConfig({
+      memory: {
+        search: {
+          provider: "openai",
+          embeddingTimeoutSeconds: 900,
+        },
+      },
+      agents: {
+        defaults: {},
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingTimeoutSeconds).toBe(900);
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(900);
+  });
+
+  it("keeps the legacy SDK timeout key present for released consumers", () => {
+    clearEmbeddingProviders();
+    const cfg = asConfig({
+      memory: { search: { provider: "openai" } },
+      agents: { defaults: {} },
+    });
+    const sync = resolveMemorySearchSyncConfig(cfg, "main")!;
+    // ponytail: v2026.9.3 SDK requires this key; `in` fails if the resolver ever drops it.
+    expect("embeddingBatchTimeoutSeconds" in sync).toBe(true);
+    const legacy: { embeddingBatchTimeoutSeconds: number | undefined } = sync;
+    expect(legacy.embeddingBatchTimeoutSeconds).toBeUndefined();
+  });
+
+  it("prefers the agent-scoped embedding timeout over the global one", () => {
+    clearEmbeddingProviders();
+    const cfg = asConfig({
+      memory: {
+        search: { provider: "openai", embeddingTimeoutSeconds: 900 },
+      },
+      agents: {
+        defaults: {},
+        list: [
+          {
+            id: "main",
+            default: true,
+            memory: { search: { embeddingTimeoutSeconds: 60 } },
+          },
+        ],
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingTimeoutSeconds).toBe(60);
   });
 
   it("keeps resolved defaults isolated across calls and sync-only consumers", () => {

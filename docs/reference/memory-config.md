@@ -371,7 +371,33 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
 Memory engines own synchronization, batching, watch, and post-compaction
 indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
-defaults rather than exposing per-install timing switches.
+defaults rather than exposing per-install timing switches, with one documented
+exception: `memory.search.embeddingTimeoutSeconds` raises the single-request
+embedding budget when a local provider is slower than its built-in timeout.
+
+### Embedding request timeout
+
+Index and query embeddings run under a wall-clock watchdog. Without a setting it
+uses the provider's own budget (10 minutes for local index batches, 5 minutes for
+local queries, shorter for remote providers). On a slow host — a single-core VM
+running llama.cpp at roughly 10 tokens/s, for example — a batch of a few
+500-token chunks can exceed that budget, and the run ends with the remaining
+files unindexed.
+
+```json
+{
+  "memory": { "search": { "embeddingTimeoutSeconds": 3600 } }
+}
+```
+
+Raise it when the provider is healthy but slow. It is not a retry count and does
+not change batching: when an index batch still times out, OpenClaw splits that
+batch into smaller requests and retries those instead of sending the same
+oversized request again, so a slow provider can still converge. The error names
+the operation, provider, model, and batch size, for example
+`memory embeddings batch timed out after 1s (provider=local, model=..., items=8)`.
+Embeddings that already completed stay in the embedding cache and are not
+re-embedded on the next run.
 
 ### File-watcher pressure
 
@@ -512,7 +538,7 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
+Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned; see [Embedding request timeout](#embedding-request-timeout) for the single per-request override.
 
 ---
 
