@@ -670,7 +670,7 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
-        task: "inspect issue",
+        task: expect.stringContaining("[Subagent Task]\n\ninspect issue"),
         timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
@@ -1671,7 +1671,7 @@ describe("sessions_spawn tool", () => {
         expect.objectContaining({
           parentSessionKey: childKey,
           spawnDepth: 2,
-          task: "inspect from the grandchild",
+          task: expect.stringContaining("[Subagent Task]\n\ninspect from the grandchild"),
         }),
       );
     });

@@ -4738,7 +4738,14 @@ describe("task-registry", () => {
 
         const result = await cancelTask(task.taskId);
 
-        expectRecordFields(result, { found: true, cancelled: status === "cancelled" });
+        expectRecordFields(result, {
+          found: true,
+          cancelled: status === "cancelled",
+          reason:
+            status === "cancelled"
+              ? undefined
+              : `Task became ${status} while cancellation was in progress.`,
+        });
         for (const record of [result.task, getTaskById(task.taskId)]) {
           expectRecordFields(record, {
             status,

@@ -14,7 +14,7 @@ export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = {
   loadSnapshot: () => TaskRegistryStoreSnapshot;
-  listTasksForOwnerKey?: (ownerKey: string) => TaskRecord[];
+  listTasksForOwnerKey?: (ownerKey: string) => Promise<TaskRecord[]>;
   upsertTaskWithDeliveryState: (params: {
     task: TaskRecord;
     deliveryState?: TaskDeliveryState;

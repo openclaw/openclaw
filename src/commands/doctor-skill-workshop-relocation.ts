@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
-import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveWorkspaceStateIdentity,
+} from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -186,6 +189,7 @@ type WorkshopRelocationPlan = {
   source: string;
   deferred: boolean;
   workspaceDir: string | undefined;
+  unavailableReason?: string;
   ownerAgentId?: string;
   unconfiguredOwnerAgentId?: string;
   relocation?: WorkshopRelocation;
@@ -276,6 +280,8 @@ export async function planWorkshopRelocation(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   deferredSources: ReadonlySet<string> = new Set(),
+  unavailableWorkspaceDirs: ReadonlyMap<string, string> = new Map(),
+  recoverableDeferredSources: ReadonlySet<string> = new Set(),
 ) {
   const { candidates, external } = classifyWorkshopRelocation(
     records,
@@ -284,9 +290,13 @@ export async function planWorkshopRelocation(
     deferredSources,
   );
   const warnings: string[] = [];
+  let recoverableWarningCount = 0;
   const deferredWorkspaces = new Set<string>();
   for (const workspaceDir of new Set(external.map((plan) => plan.workspaceDir))) {
-    if (!workspaceDir) {
+    if (
+      !workspaceDir ||
+      unavailableWorkspaceDirs.has(resolveWorkspaceStateIdentity(workspaceDir).workspacePath)
+    ) {
       continue;
     }
     try {
@@ -304,6 +314,9 @@ export async function planWorkshopRelocation(
   }
   const relocations = new Map<string, WorkshopRelocation>();
   for (const plan of external) {
+    plan.unavailableReason = plan.workspaceDir
+      ? unavailableWorkspaceDirs.get(resolveWorkspaceStateIdentity(plan.workspaceDir).workspacePath)
+      : undefined;
     plan.deferred ||= Boolean(plan.workspaceDir && deferredWorkspaces.has(plan.workspaceDir));
     if (!plan.ownerAgentId || (plan.record.status === "applied" && !plan.workspaceDir)) {
       continue;
@@ -328,6 +341,13 @@ export async function planWorkshopRelocation(
   const moves: WorkshopMove[] = [];
   for (const relocation of relocations.values()) {
     if (relocation.plans.some((plan) => plan.deferred)) {
+      continue;
+    }
+    const unavailableReason = relocation.plans.find(
+      (plan) => plan.unavailableReason,
+    )?.unavailableReason;
+    if (unavailableReason) {
+      relocation.rejection = unavailableReason;
       continue;
     }
     const plan = relocation.plans.find(
@@ -425,6 +445,7 @@ export async function planWorkshopRelocation(
     .map((plan) => ({
       source: resolveCanonicalWorkspacePath(plan.source),
       destination: plan.relocation?.target.skillDir,
+      recoverable: recoverableDeferredSources.has(resolveCanonicalWorkspacePath(plan.source)),
     }));
   const deferredMoves = new Set<WorkshopMove>();
   // Deferred sources still reserve their paths and destinations. Carry those
@@ -438,7 +459,14 @@ export async function planWorkshopRelocation(
           isPathInside(source, reservation.source))
       ) {
         deferredMoves.add(move);
-        deferredReservations.push({ source, destination: move.destination });
+        deferredReservations.push({
+          source,
+          destination: move.destination,
+          recoverable: reservation.recoverable,
+        });
+        if (reservation.recoverable) {
+          recoverableWarningCount += 1;
+        }
         warnings.push(
           `Skill Workshop left ${move.source} in place because a connected skill still needs migration or recovery.`,
         );
@@ -484,7 +512,8 @@ export async function planWorkshopRelocation(
       updates.push({
         record: staleWorkshopProposal(
           record,
-          conflictReason ??
+          plan.unavailableReason ??
+            conflictReason ??
             (ownerAgentId
               ? "Skill Workshop could not identify the legacy workspace; the path stays in place and the proposal is stale."
               : plan.unconfiguredOwnerAgentId
@@ -516,5 +545,6 @@ export async function planWorkshopRelocation(
     ),
     updates,
     warnings,
+    recoverableWarningCount,
   };
 }

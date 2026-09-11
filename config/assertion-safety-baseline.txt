@@ -1127,7 +1127,7 @@ extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	5
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	2
-extensions/slack/src/monitor/slash.ts	11
+extensions/slack/src/monitor/slash.ts	10
 extensions/slack/src/monitor/thread-resolution.ts	1
 extensions/slack/src/monitor/thread.ts	2
 extensions/slack/src/native-data-blocks.ts	1
@@ -1977,7 +1977,7 @@ src/agents/tools/dashboard-tool.ts	2
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
-src/agents/tools/goal-tools.ts	4
+src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2

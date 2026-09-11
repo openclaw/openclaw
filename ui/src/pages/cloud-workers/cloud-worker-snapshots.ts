@@ -308,6 +308,7 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
         // clearing the row is a local view decision that lasts until this page reloads.
         if (dismiss) {
           this.dismissed.add(environment.id);
+          this.failedBuilds = this.failedBuilds.filter((build) => build.id !== environment.id);
         }
         this.notice = t(
           `cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`,

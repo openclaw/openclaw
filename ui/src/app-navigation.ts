@@ -346,6 +346,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   devices: ["monitorSmartphone", "tabs.devices", "subtitles.devices"],
   "cloud-workers": ["server", "tabs.cloudWorkers", "subtitles.cloudWorkers"],
   chat: ["messageSquare", "tabs.chat", "subtitles.chat"],
+  terminal: ["terminal", "terminal.title", "terminal.open"],
   dashboard: ["layoutDashboard", "tabs.chat", "subtitles.chat"],
   dashboards: ["layoutDashboard", "tabs.dashboards", "subtitles.dashboards"],
   custodian: ["lobster", "tabs.custodian", "subtitles.custodian"],
