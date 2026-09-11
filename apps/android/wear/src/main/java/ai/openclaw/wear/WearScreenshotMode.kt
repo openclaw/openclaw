@@ -61,6 +61,7 @@ internal object WearScreenshotFixture {
           ),
         ),
       modelControlsSupported = true,
+      sessionModelCatalogSupported = true,
       messages =
         listOf(
           WearChatMessage(

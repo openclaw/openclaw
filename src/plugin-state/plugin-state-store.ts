@@ -512,6 +512,13 @@ export function importPluginStateEntriesForDoctor(
   flush();
 }
 
+/** Opens an async plugin-state namespace for a trusted core owner id. */
+export function createCorePluginStateKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+): Required<PluginStateKeyedStore<T>> {
+  return createKeyedStoreForPluginId<T>(options.ownerId, options);
+}
+
 /** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },

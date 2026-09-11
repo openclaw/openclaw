@@ -17,6 +17,7 @@ import {
 import {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
+  createCorePluginStateKeyedStore,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -605,14 +606,27 @@ describe("plugin state keyed store", () => {
 
   it("allows core owners and reserves core-prefixed plugin ids", async () => {
     await withPluginStateTestState(async () => {
-      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>({
-        ownerId: "core:channel-intent",
+      const options = {
+        ownerId: "core:channel-intent" as const,
         namespace: "stopped",
         maxEntries: 10,
-      });
+      };
+      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>(options);
+      const asyncStore = createCorePluginStateKeyedStore<{ stopped: boolean }>(options);
       expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
-      expect(store.lookup("telegram:personal")).toEqual({ stopped: true });
-      expect(store.deleteIf("telegram:personal", (current) => current.stopped)).toBe(true);
+      closePluginStateDatabase();
+      await expect(asyncStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      await expect(
+        asyncStore.update("telegram:personal", () => ({ stopped: false })),
+      ).resolves.toBe(true);
+      expect(store.lookup("telegram:personal")).toEqual({ stopped: false });
+      await expect(
+        asyncStore.deleteIf("telegram:personal", (current) => !current.stopped),
+      ).resolves.toBe(true);
+      await expect(asyncStore.lookup(" ")).rejects.toThrow(PluginStateStoreError);
+      expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
+        PluginStateStoreError,
+      );
       expect(() =>
         createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
       ).toThrow(PluginStateStoreError);

@@ -213,6 +213,15 @@ describe("mantis visual task runtime", () => {
     });
 
     expect(result.status).toBe("fail");
+    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
+      bin: "/tmp/crabbox",
+      createdLease: true,
+      id: "cbx_abc123",
+      provider: "hetzner",
+      slug: "brisk-mantis",
+      state: "active",
+      vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+    });
     expect(result.videoPath).toBeUndefined();
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],

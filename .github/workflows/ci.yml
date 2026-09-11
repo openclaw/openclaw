@@ -2854,6 +2854,7 @@ jobs:
             ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
             ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
+            ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
             ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \

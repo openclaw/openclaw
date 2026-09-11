@@ -320,7 +320,7 @@ class ChatControllerOutboxTest {
           """{"sessionId":"session-1","sessionInfo":$sessionInfo,"messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
 
-        "chat.metadata" -> {
+        "models.list" -> {
           """{"commands":[],"models":$metadataModelsJson}"""
         }
 
@@ -359,6 +359,7 @@ class ChatControllerOutboxTest {
       scope = scope,
       json = json,
       requestGateway = gateway::request,
+      gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
       captureRequestLease = gateway::captureRequestLease,
       cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
       currentDefaultAgentId = { "main" },
@@ -382,6 +383,7 @@ class ChatControllerOutboxTest {
         scope = scope,
         json = json,
         requestGateway = gateway::request,
+        gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
         captureRequestLease = gateway::captureRequestLease,
         cacheScope = cacheScope,
         currentDefaultAgentId = currentDefaultAgentId,
@@ -643,11 +645,11 @@ class ChatControllerOutboxTest {
   fun reconnectGatesActiveSessionThinkingAndFailsOpenForOtherSessions() =
     outboxTest {
       val now = System.currentTimeMillis()
-      // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata,
+      // Gating reads the session catalog published by models.list,
       // so hydrate first (empty queue) and seed the rows afterwards; the flush loop re-reads
       // the outbox on each health transition.
       gateway.metadataModelsJson =
-        """[{"id":"plain","name":"Plain","provider":"openai","available":true,"input":["text"],"reasoning":false}]"""
+        """[{"id":"plain","name":"Plain","provider":"openai","available":true,"input":["text"],"reasoning":false,"thinkingLevels":[]}]"""
       val chat = controller()
       gateway.online = true
       chat.load("main")

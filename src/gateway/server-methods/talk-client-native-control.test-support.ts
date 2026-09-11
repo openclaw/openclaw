@@ -499,6 +499,7 @@ export async function withParkedNativeTask(
               sandboxSessionKey: SESSION_KEY,
               builtinToolNames: new Set(),
               replaySafeToolNames: new Set(),
+              trustedLocalMediaToolNames: new Set(),
             });
           }
           const handle =

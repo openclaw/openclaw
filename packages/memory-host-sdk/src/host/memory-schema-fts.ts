@@ -175,16 +175,19 @@ export function ensureMemoryChunkFtsSchema(params: {
         `  end_line UNINDEXED\n` +
         `${params.tokenizeClause});`,
     );
-    // Empty derived tables are rebuilt from canonical chunks; populated,
-    // matching indexes stay untouched on ordinary schema ensures.
-    params.db.exec(`
-      INSERT INTO ${params.ftsTable} (
-        text, id, path, source, model, start_line, end_line
+    const rowCounts = params.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM ${MEMORY_INDEX_CHUNKS_TABLE}) AS canonical_count,
+           (SELECT COUNT(*) FROM ${params.ftsTable}) AS derived_count`,
       )
-      SELECT text, id, path, source, model, start_line, end_line
-      FROM ${MEMORY_INDEX_CHUNKS_TABLE}
-      WHERE NOT EXISTS (SELECT 1 FROM ${params.ftsTable} LIMIT 1);
-    `);
+      // SAFETY: both scalar aggregate subqueries always return their named numeric columns.
+      .get() as { canonical_count: number; derived_count: number };
+    // FTS is fully derived. A cardinality mismatch proves that an ordinary
+    // schema ensure cannot leave the populated index untouched.
+    if (rowCounts.canonical_count !== rowCounts.derived_count) {
+      rebuildMemoryChunkFts(params.db, params.ftsTable);
+    }
     params.db.exec("RELEASE ensure_memory_index_chunks_fts");
   } catch (err) {
     params.db.exec("ROLLBACK TO ensure_memory_index_chunks_fts");

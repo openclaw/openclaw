@@ -46,6 +46,7 @@ let defaultFixture: ReturnType<typeof buildFixtureRepo> | undefined;
 const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
