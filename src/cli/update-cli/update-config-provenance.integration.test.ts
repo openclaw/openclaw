@@ -180,6 +180,9 @@ describe("update config provenance", () => {
             json: true,
             deferCompletionCache: true,
           });
+          // Finalization restores its caller environment; rotate that caller after it returns.
+          expect(process.env.UPDATE_PROVENANCE_TOKEN).toBe("synthetic-before");
+          vi.stubEnv("UPDATE_PROVENANCE_TOKEN", "synthetic-after");
         }
         const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
         expect(saved.gateway?.auth?.token).toBe("${UPDATE_PROVENANCE_TOKEN}");

@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 export type LeaseScenario = {
+  installRoot: string;
   lane: "resume" | "fresh-process" | "current-process" | "repair";
   pluginUpdate?: PostCorePluginUpdateResult;
   preDoctorChannel?: string;
@@ -94,12 +95,43 @@ export async function runUpdateLeaseChild(): Promise<void> {
   }
   if (command === "doctor") {
     const phase = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
-    assert.deepEqual(process.argv.slice(3), [
+    const doctorArgs = [
       "--repair",
       "--non-interactive",
       ...(scenario.lane === "repair" && phase === "pre" ? [] : ["--no-workspace-suggestions"]),
       "--yes",
-    ]);
+    ];
+    if (scenario.lane === "repair") {
+      const prefix = "--update-recovery-backup=";
+      const encoded = process.argv.at(-1);
+      assert.ok(
+        typeof encoded === "string" && encoded.startsWith(prefix),
+        "Repair Doctor requires its parent's capture",
+      );
+      const { readUpdateRecoveryBackupRef, verifyUpdateRecoveryBackup } =
+        await import("../../infra/update-recovery-backup.js");
+      const ref = readUpdateRecoveryBackupRef(encoded.slice(prefix.length));
+      assert.deepEqual(process.argv.slice(3), [
+        ...doctorArgs,
+        "--update-recovery-owner=driver",
+        `${prefix}${JSON.stringify(ref)}`,
+      ]);
+      const manifest = await verifyUpdateRecoveryBackup(ref);
+      const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
+      assert.ok(runId, "Repair Doctor requires its admitted parent run");
+      assert.equal(manifest.runId, runId);
+      assert.equal(manifest.installRoot, scenario.installRoot);
+      assert.equal(manifest.stateDir, await fs.realpath(stateDir));
+      assert.equal(manifest.configPath, await fs.realpath(configPath));
+      assert.equal(ref.directory, path.join(`${manifest.stateDir}.update-captures`, runId));
+      const { getUpdateRun } = await import("../../infra/update-run-ledger.js");
+      const run = getUpdateRun(runId);
+      assert.equal(run?.status, "running");
+      assert.equal(run?.origin.updateRecoveryCapture?.manifestSha256, ref.manifestSha256);
+      assert.deepEqual(run?.origin.driver, manifest.creator);
+    } else {
+      assert.deepEqual(process.argv.slice(3), doctorArgs);
+    }
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR, "1");
     assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE, "1");

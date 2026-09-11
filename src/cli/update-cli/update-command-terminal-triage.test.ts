@@ -288,7 +288,7 @@ it.each([
       );
     }
     expect(exit).toBeInstanceOf(ExitError);
-    expect(observation.exitCode).toBe(trial.revoked ? 1 : 7);
+    expect(observation.exitCode).toBe(trial.revoked ? 79 : 7);
     expect(statusAtPublication).toBe("running");
     expect(pendingAtPublication).toBe(trial.revoked);
     expect(output).toHaveBeenCalledOnce();
@@ -303,6 +303,9 @@ it.each([
       lease: { owner: trial.revoked ? "replacement-owner" : owner },
     });
     if (trial.revoked) {
+      expect(output.mock.calls[0]?.[0]).toMatchObject({
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
       expect(artifactOpens).toBe(0);
       expect(artifactRenames).toBe(0);
       expect(after).toBe(trial.existing ? previous : null);

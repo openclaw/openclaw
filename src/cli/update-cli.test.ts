@@ -31,7 +31,7 @@ import {
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
@@ -56,13 +56,7 @@ import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-err
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  captureEnv,
-  createPathResolutionEnv,
-  deleteTestEnvValue,
-  setTestEnvValue,
-  withEnvAsync,
-} from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
@@ -1665,19 +1659,6 @@ describe("update-cli", () => {
     config: OpenClawConfig = baseConfig,
     configPath = resolveConfigPath(),
   ): Promise<ConfigFileSnapshot> => {
-    const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      return undefined;
-    });
-    onTestFinished(async () => {
-      if (previous === undefined) {
-        await fs.rm(configPath, { force: true });
-      } else {
-        await fs.writeFile(configPath, previous);
-      }
-    });
     const raw = `${JSON.stringify(config)}\n`;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, raw, { mode: 0o600 });

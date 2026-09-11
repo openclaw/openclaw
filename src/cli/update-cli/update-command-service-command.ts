@@ -132,10 +132,8 @@ export async function runUpdatedInstallGatewayCommand(
     params.assertCurrent?.();
   };
   assertCurrent();
-  if (action !== "stop") {
-    await retireCommandProcessJobForHandoff();
-    assertCurrent();
-  }
+  await retireCommandProcessJobForHandoff();
+  assertCurrent();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   assertCurrent();
