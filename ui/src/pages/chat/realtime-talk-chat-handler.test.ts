@@ -95,25 +95,46 @@ describe("chat handler buffering and bounds", () => {
     expect(dispositions[3]).toEqual({ type: "terminal", text: "event-4" });
   });
 
-  it("evicts buffered events when exceeding MAX_BUFFERED_BYTES", () => {
+  it("rejects an oversized terminal event rather than buffering it", () => {
     const handler = createChatHandler({
       runId: "run-1",
       emitTalkEvent: undefined,
       extractTextFromMessage: (m: unknown) => (m as { text?: string })?.text ?? "",
     });
 
-    // Create a large payload that exceeds MAX_BUFFERED_BYTES (64 KiB)
-    const largeText = "x".repeat(70_000);
-    handler.handleEvent(makeFrame("run-2", "final", largeText));
+    // A single event exceeding MAX_BUFFERED_BYTES (64 KiB) is dropped on its
+    // own — it must never be retained as a lone exception in the buffer.
+    const oversizedText = "x".repeat(70_000);
+    expect(handler.handleEvent(makeFrame("run-2", "final", oversizedText))).toEqual({
+      type: "buffer",
+    });
 
-    // A second large event should evict the first
-    handler.handleEvent(makeFrame("run-2", "aborted", largeText));
+    handler.setAcceptedFollowupRunId("run-2");
+    expect(handler.replayBufferedFollowupEvents()).toEqual([]);
+  });
+
+  it("evicts oldest buffered events when exceeding MAX_BUFFERED_BYTES", () => {
+    const handler = createChatHandler({
+      runId: "run-1",
+      emitTalkEvent: undefined,
+      extractTextFromMessage: (m: unknown) => (m as { text?: string })?.text ?? "",
+    });
+
+    // Each payload is individually admissible under the byte ceiling, but the
+    // aggregate exceeds it, so the oldest entries are evicted first. Chunks
+    // are large enough that evicting a single oldest entry still leaves the
+    // remaining pair over the ceiling, forcing continued eviction.
+    const chunk = "y".repeat(40_000);
+    handler.handleEvent(makeFrame("run-2", "final", `${chunk}-1`));
+    handler.handleEvent(makeFrame("run-2", "aborted", `${chunk}-2`));
+    handler.handleEvent(makeFrame("run-2", "error", `${chunk}-3`));
 
     handler.setAcceptedFollowupRunId("run-2");
     const dispositions = handler.replayBufferedFollowupEvents();
 
-    // Only the most recent event should remain
+    // Only the most recent event should remain after aggregate eviction.
     expect(dispositions).toHaveLength(1);
+    expect(dispositions[0]).toEqual({ type: "errored", errorMessage: undefined });
   });
 
   it("clears buffer when a matching event from the active run arrives", () => {

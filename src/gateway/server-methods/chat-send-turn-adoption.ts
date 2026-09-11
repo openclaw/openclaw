@@ -62,7 +62,14 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       ? { originatingLeafEntryId: params.originatingLeafEntryId }
       : {}),
     ownerKey: params.ownerKey,
-    onAdopted: async () => {},
+    onAdopted: async () => {
+      // Fresh admission (including immediate runs) must invalidate any stale
+      // retired follow-up correlation for this runId. onDeferred only covers
+      // queued admission; if dedupe expiry or capacity eviction permits runId
+      // reuse before the separate retired mapping expires, waitForTurn could
+      // attach a previous follow-up association to the new run's response.
+      params.retiredFollowupRunIds.delete(params.runId);
+    },
     onDeferred: () => {
       if (params.hasCronCreatorAuthority) {
         lifecycle.cronCreatorAuthorityUnavailable = "queued-local-operator";

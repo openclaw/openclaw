@@ -310,8 +310,25 @@ function waitForChatResult(params: {
      * results (final, aborted, error) that would otherwise be lost. */
     const onFollowupRunIdDiscovered = (followupRunId: string) => {
       chatHandler.setAcceptedFollowupRunId(followupRunId);
-      for (const d of chatHandler.replayBufferedFollowupEvents()) {
+      const replayed = chatHandler.replayBufferedFollowupEvents();
+      for (const d of replayed) {
         applyDisposition(d);
+      }
+      // If the buffer was evicted before discovery (oversized terminal event
+      // dropped, or older events evicted by aggregate pressure), replaying
+      // finds nothing and the consultation would otherwise wait until its
+      // 120-second timeout. Issue one recovery poll against the Gateway so a
+      // follow-up that has already settled can still deliver its answer.
+      if (replayed.length === 0 && !settled) {
+        observePendingFollowupRunIdAbort = observePendingFollowupRunId({
+          client: params.client,
+          runId: params.runId,
+          timeoutMs: params.timeoutMs,
+          isSettled: () => settled,
+          isFollowupObserved: () => chatHandler.getAcceptedFollowupRunId() !== undefined,
+          onFollowupObserved: onFollowupRunIdDiscovered,
+          onError: settleReject,
+        });
       }
     };
 
@@ -357,6 +374,14 @@ function waitForChatResult(params: {
               onFollowupObserved: onFollowupRunIdDiscovered,
               onError: settleReject,
             });
+            return;
+          }
+          // A terminal (ok) response may carry a follow-up runId when the
+          // follow-up has already settled before this first wait resolved.
+          // Consume it so buffered events for the follow-up can be replayed
+          // instead of discarding the answer behind the empty fallback.
+          if (result?.followupRunId) {
+            onFollowupRunIdDiscovered(result.followupRunId);
             return;
           }
           emptyFinalFallbackTimer = window.setTimeout(() => {
