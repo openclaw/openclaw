@@ -40,31 +40,30 @@ const claudeLimitSchema = z
 
 // Normalize fields independently: malformed optional data must not discard
 // valid sibling windows or billing in either OAuth or web usage responses.
-const claudeUsageSchema = z.object({
-  five_hour: claudeWindowSchema,
-  seven_day: claudeWindowSchema,
-  seven_day_sonnet: claudeWindowSchema,
-  seven_day_opus: claudeWindowSchema,
-  limits: z.array(claudeLimitSchema).catch([]),
-  extra_usage: z
-    .object({
-      is_enabled: z
-        .unknown()
-        .optional()
-        .transform((value) => value === true),
-      monthly_limit: optionalNumber,
-      used_credits: optionalNumber,
-      utilization: optionalNumber,
-      currency: optionalString,
-    })
-    .optional()
-    .catch(undefined),
-});
+const claudeUsageSchema = z.preprocess(
+  (value) => (isRecord(value) ? value : {}),
+  z.object({
+    five_hour: claudeWindowSchema,
+    seven_day: claudeWindowSchema,
+    seven_day_sonnet: claudeWindowSchema,
+    seven_day_opus: claudeWindowSchema,
+    limits: z.array(claudeLimitSchema).catch([]),
+    extra_usage: z
+      .object({
+        is_enabled: z
+          .unknown()
+          .optional()
+          .transform((value) => value === true),
+        monthly_limit: optionalNumber,
+        used_credits: optionalNumber,
+        utilization: optionalNumber,
+        currency: optionalString,
+      })
+      .optional()
+      .catch(undefined),
+  }),
+);
 type NormalizedClaudeUsage = z.infer<typeof claudeUsageSchema>;
-
-function normalizeClaudeUsage(value: unknown): NormalizedClaudeUsage {
-  return claudeUsageSchema.parse(isRecord(value) ? value : {});
-}
 
 function readClaudeWindow(
   window: z.infer<typeof claudeWindowSchema>,
@@ -202,7 +201,7 @@ async function fetchClaudeWebUsage(
   if (!parsedUsage.ok) {
     return null;
   }
-  const usage = normalizeClaudeUsage(parsedUsage.data);
+  const usage = claudeUsageSchema.parse(parsedUsage.data);
   const windows = buildClaudeUsageWindows(usage);
 
   if (windows.length === 0) {
@@ -273,7 +272,7 @@ export async function fetchClaudeUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const usage = normalizeClaudeUsage(parsed.data);
+  const usage = claudeUsageSchema.parse(parsed.data);
   const extra = usage.extra_usage;
   const unit = extra?.currency?.toUpperCase() || "USD";
   const billing =
