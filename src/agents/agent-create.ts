@@ -474,11 +474,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             });
           }
           // The receipt owns compensation until the config transform publishes this result.
+          // Capture it inside the scope: a failing scope close must still reach rollback.
           params.beforePersistentApply?.();
-          const preparedReceipt = await withCreationClaim(
-            async () => await params.prepareConfigCommit?.(),
-          );
-          configCommitReceipt = preparedReceipt ? preparedReceipt : undefined;
+          await withCreationClaim(async () => {
+            configCommitReceipt = (await params.prepareConfigCommit?.()) ?? undefined;
+          });
 
           return {
             nextConfig,

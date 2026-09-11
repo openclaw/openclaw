@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   recordAgentProvenance: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
+  afterCreationClaim: vi.fn(),
   migrateLegacyMainSessionKeys: vi.fn(),
   resolveSharedAuthStoreOwnership: vi.fn(),
 }));
@@ -48,7 +49,12 @@ vi.mock("./agent-lifecycle-registry.js", () => ({
 }));
 
 vi.mock("../state/agent-creation-claim.js", () => ({
-  runWithAgentCreationClaim: async <T>(_target: unknown, run: () => Promise<T>) => await run(),
+  // The real scope closes admitted handles after `run`; that close can fail.
+  runWithAgentCreationClaim: async <T>(_target: unknown, run: () => Promise<T>) => {
+    const value = await run();
+    mocks.afterCreationClaim();
+    return value;
+  },
 }));
 
 vi.mock("../state/agent-deletion-journal.js", () => ({
@@ -695,6 +701,24 @@ describe("createAgent", () => {
     expect(prepareConfigCommit).toHaveBeenCalledOnce();
     expect(commit).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("rolls staged config effects back when the creation scope fails to close after staging", async () => {
+    const rollback = vi.fn();
+    const commit = vi.fn();
+    const prepareConfigCommit = vi.fn(async () => ({ commit, rollback }));
+    mocks.afterCreationClaim.mockImplementationOnce(() => {
+      throw new Error("injected creation scope close failure");
+    });
+
+    await expect(createAgent({ name: "researcher", prepareConfigCommit })).rejects.toThrow(
+      "injected creation scope close failure",
+    );
+
+    expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(mocks.persisted).not.toHaveProperty("agents");
   });
 
   it("does not roll staged config effects back after config publication", async () => {
