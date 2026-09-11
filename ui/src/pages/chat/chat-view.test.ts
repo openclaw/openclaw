@@ -7230,6 +7230,44 @@ describe("chat model controls", () => {
     },
   );
 
+  it.each([
+    { selected: "google:key", expected: "API" },
+    { selected: undefined, expected: "Gemini Pro" },
+  ])("merges alias auth records into one heading ($selected)", ({ selected, expected }) => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gemini", name: "Gemini", provider: "google" }],
+    });
+    const container = renderModelControls(state, {
+      accountSelection: selected
+        ? { kind: "personal", label: "Key", authProfileId: selected }
+        : { kind: "automatic", label: "Automatic" },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "google",
+            displayName: "Google",
+            status: "static",
+            profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
+            apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+          },
+          {
+            provider: "google-gemini-cli",
+            displayName: "Gemini CLI",
+            status: "ok",
+            profiles: [{ profileId: "google:oauth", type: "oauth", status: "ok" }],
+            usage: { providerId: "google", windows: [], plan: "Gemini Pro" },
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="google"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe(expected);
+  });
+
   it.each([false, true])("does not duplicate a row sign-in warning (%s)", (rowWarning) => {
     const { state } = createChatHeaderState({
       models: [

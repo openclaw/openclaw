@@ -20,7 +20,10 @@ import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
-import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../../lib/model-auth.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import type {
@@ -212,7 +215,17 @@ function resolveCatalogTriggerStatus(
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalog = prepareChatModelCatalog(props.modelCatalog);
   const providerAuth = new Map<string, ChatModelProviderAuth>();
-  for (const provider of props.modelAuthStatusResult?.providers ?? []) {
+  const headingKey = (id: string) =>
+    normalizeChatModelProviderGroupId(
+      canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),
+    );
+  // Alias records (e.g. google and google-gemini-cli) share one heading, so merge
+  // them under that key first; iterating raw records let the later one overwrite it.
+  for (const provider of listEffectiveModelAuthProviders(
+    (props.modelAuthStatusResult?.providers ?? []).map((record) =>
+      Object.assign({}, record, { provider: headingKey(record.provider) }),
+    ),
+  )) {
     const subscriptions = provider.profiles.filter((p) => p.type === "oauth" || p.type === "token");
     const selectedId =
       props.accountSelection?.kind === "automatic"
@@ -238,12 +251,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           ? { kind: "api", label: t("chat.modelControls.api") }
           : undefined;
     if (auth) {
-      providerAuth.set(
-        normalizeChatModelProviderGroupId(
-          canonicalModelAuthProviderId(normalizeChatModelProviderId(provider.provider)),
-        ),
-        auth,
-      );
+      providerAuth.set(headingKey(provider.provider), auth);
     }
   }
   const {
