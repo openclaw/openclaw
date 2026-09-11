@@ -96,9 +96,9 @@ describe("heartbeat payload execution", () => {
     {
       label: "disabled skip",
       child: { status: "skipped", reason: "disabled" } as HeartbeatRunResult,
-      expectedStatus: "ok",
-      expectedCompletion: "succeeded",
-      expectedError: undefined,
+      expectedStatus: "skipped",
+      expectedCompletion: "failed",
+      expectedError: "heartbeat skipped: disabled",
       expectedConsecutiveErrors: 0,
     },
     {
