@@ -14,25 +14,6 @@ function noteRunner() {
 }
 
 describe("WizardSession", () => {
-  test("returns the recovery message without the error class name", async () => {
-    const session = new WizardSession(async () => {
-      throw Object.assign(
-        new Error("Connection settings changed. Open Model Setup to try again."),
-        {
-          name: "SetupInferenceOwnerDriftError",
-        },
-      );
-    });
-
-    await session.whenSettled();
-
-    expect(await session.next()).toEqual({
-      done: true,
-      status: "error",
-      error: "Connection settings changed. Open Model Setup to try again.",
-    });
-  });
-
   test.each([true, false, "true", "false", 1, {}, null, undefined])(
     "only literal true confirms a wire answer (%j)",
     async (answer) => {

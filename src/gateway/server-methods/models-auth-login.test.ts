@@ -163,6 +163,25 @@ describe("models.authLogin ownership", () => {
     }
   });
 
+  it("returns the recovery message without the error class name through wizard.next", async () => {
+    hooks.login.mockRejectedValueOnce(
+      Object.assign(new Error("Connection settings changed. Open Model Setup to try again."), {
+        name: "SetupInferenceOwnerDriftError",
+      }),
+    );
+    const h = harness();
+    await h.start();
+    expect(await h.invoke("wizard.next", { sessionId: "login" })).toHaveBeenCalledWith(
+      true,
+      {
+        done: true,
+        status: "error",
+        error: "Connection settings changed. Open Model Setup to try again.",
+      },
+      undefined,
+    );
+  });
+
   it("reports saved credentials with unconfirmed refresh through wizard.next", async () => {
     hooks.login.mockResolvedValueOnce({ ...result, authRefresh: "gateway-rejected" });
     const h = harness();

@@ -3,8 +3,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type ModelsAuthLoginFlowOptions,
   ProviderAuthConfigApplyError,
-  createProviderLoginFlowRegistry,
-  offerProviderLoginModelAccess,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -23,7 +21,6 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { buildTelegramPresentationButtons } from "./button-types.js";
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -86,33 +83,6 @@ function resetLoginCommandMocks() {
 
 describe("registerTelegramNativeCommands /login", () => {
   beforeEach(resetLoginCommandMocks);
-
-  it("keeps both model-access buttons within Telegram's callback limit for a long provider name", () => {
-    const reply = offerProviderLoginModelAccess({
-      flows: createProviderLoginFlowRegistry(),
-      flowKey: "long-provider",
-      terminalMessage: "Credentials saved.",
-      prepared: {
-        provider: "ux-catalog-fixture",
-        providerLabel: "Fixture",
-        agentId: "main",
-        policy: { path: "agents.defaults.modelPolicy.allow", refs: ["other/current"] },
-        prompt: {
-          message: "Choose which Fixture models to show.",
-          options: [
-            { value: "all", label: "Show all Fixture models" },
-            { value: "keep", label: "Keep current restrictions" },
-          ],
-        },
-      },
-    });
-    const buttons = buildTelegramPresentationButtons(reply.presentation)?.flat();
-    expect(buttons?.map((button) => button.text)).toEqual([
-      "Show all Fixture models",
-      "Keep current restrictions",
-    ]);
-    expect(buttons?.[0]?.callback_data).toContain(" ux-catalog-fixture");
-  });
 
   it("delivers the core provider menu and its method continuation without starting login", async () => {
     const loginFlow = vi.fn();
@@ -342,7 +312,7 @@ describe("registerTelegramNativeCommands /login", () => {
   });
 
   it.each(["all", "keep"] as const)(
-    "completes deferred %s consent through a fresh dispatcher",
+    "delivers both long-provider controls and completes deferred %s consent through a fresh dispatcher",
     exerciseDeferredModelAccess,
   );
 

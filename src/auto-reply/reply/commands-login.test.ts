@@ -1,3 +1,5 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -18,7 +20,13 @@ import {
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
 
+const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
+vi.mock("../../gateway/model-auth-refresh.js", () => ({
+  refreshModelAuthStateAfterMutation: refreshAuthRuntime,
+}));
+
 const { handleLoginCommand } = await import("./commands-login.js");
+const { handleCommands } = await import("./commands-core.js");
 
 function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
@@ -37,6 +45,94 @@ function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refr
 
 describe("handleLoginCommand", () => {
   setupLoginCommandTests();
+
+  it.each([
+    {
+      name: "denied owner",
+      senderIsOwner: false,
+      chatType: "direct",
+      message:
+        "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
+      refreshCount: 0,
+    },
+    {
+      name: "public chat",
+      senderIsOwner: true,
+      chatType: "group",
+      message:
+        "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+      refreshCount: 0,
+    },
+    {
+      name: "authorized private chat",
+      senderIsOwner: true,
+      chatType: "direct",
+      message: "Sign-in status refreshed. Send /models to see available models.",
+      refreshCount: 1,
+    },
+  ])("handles registered /login refresh for $name without signing in again", async (scenario) => {
+    const params = buildLoginParams("/login refresh", {
+      command: { senderIsOwner: scenario.senderIsOwner },
+      ctx: { ChatType: scenario.chatType },
+    });
+    const result = await handleCommands({
+      ...params,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: params.resolvedThinkLevel,
+        resolvedReasoningLevel: params.resolvedReasoningLevel,
+      }),
+    });
+
+    expect(result).toMatchObject({ shouldContinue: false, reply: { text: scenario.message } });
+    expect(refreshAuthRuntime).toHaveBeenCalledTimes(scenario.refreshCount);
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps registered login pending until saved credentials finish refreshing", async () => {
+    const refreshing = createDeferredCore();
+    const applied = createDeferredCore();
+    refreshAuthRuntime.mockImplementationOnce(async () => {
+      refreshing.resolve();
+      await applied.promise;
+    });
+    runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
+      await expectDefined(opts.refreshAfterLogin, "registered login refresh callback")("main");
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        authRefresh: "refreshed",
+        profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
+      };
+    });
+    const params = buildLoginParams("/login openai", { opts: blockReplyOpts() });
+    const login = handleCommands({
+      ...params,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: params.resolvedThinkLevel,
+        resolvedReasoningLevel: params.resolvedReasoningLevel,
+      }),
+    });
+    try {
+      expect(
+        await Promise.race([
+          refreshing.promise.then(() => "refreshing"),
+          login.then(() => "completed"),
+        ]),
+      ).toBe("refreshing");
+      expect(
+        await Promise.race([login.then(() => "completed"), nextEventLoopTurn("pending")]),
+      ).toBe("pending");
+    } finally {
+      applied.resolve();
+      await login;
+      refreshAuthRuntime.mockReset();
+    }
+    expect(await login).toMatchObject({
+      shouldContinue: false,
+      reply: { text: "OpenAI login complete. Try your request again now." },
+    });
+    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
+  });
 
   it.each(["host", "runtime"])(
     "rejects an owner revoked before flow entry using the %s config reader",

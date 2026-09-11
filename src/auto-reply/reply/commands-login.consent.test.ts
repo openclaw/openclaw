@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
+import type { RuntimeConfigWriteApplicationClaim } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
@@ -11,6 +14,7 @@ import {
 } from "./commands-login.harness-test-support.js";
 
 const { handleLoginCommand } = await import("./commands-login.js");
+const { handleCommands } = await import("./commands-core.js");
 const { prepareProviderModelAccess } = await import("../../commands/models/auth-model-policy.js");
 const {
   getRuntimeConfigSnapshot,
@@ -56,12 +60,12 @@ function mockSuccessfulLoginWithRestrictions(config: OpenClawConfig): void {
 describe("handleLoginCommand model consent", () => {
   setupLoginCommandTests();
 
-  it.each(["failed", "restart-pending"] as const)(
-    "reports saved model access when application is %s",
+  it.each(["applied", "failed", "restart-pending"] as const)(
+    "waits for registered model-access application and reports %s",
     async (status) => {
       await withOpenClawTestState({ label: "login-access-application" }, async (state) => {
         const config: OpenClawConfig = {
-          ...buildLoginParams("/login codex").cfg,
+          ...buildLoginParams("/login openai").cfg,
           agents: {
             defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
             entries: { main: { workspace: state.workspaceDir } },
@@ -74,23 +78,51 @@ describe("handleLoginCommand model consent", () => {
             opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
           });
           params.cfg = config;
-          return handleLoginCommand(params, true);
+          return handleCommands({
+            ...params,
+            resolveModelLevels: async () => ({
+              resolvedThinkLevel: params.resolvedThinkLevel,
+              resolvedReasoningLevel: params.resolvedReasoningLevel,
+            }),
+          });
         };
-        const initial = await command("/login codex");
+        const initial = await command("/login openai");
+        const claimReady = createDeferredCore<RuntimeConfigWriteApplicationClaim>();
+        let pendingClaim: RuntimeConfigWriteApplicationClaim | undefined;
         const stop = registerRuntimeConfigWriteListener((event) => {
-          getRuntimeConfigWriteApplication(event)?.claim()?.settle(status);
+          const claim = getRuntimeConfigWriteApplication(event)?.claim();
+          if (claim) {
+            pendingClaim = claim;
+            claimReady.resolve(claim);
+          }
         });
+        const response = command(modelAccessCommand(initial.reply));
         try {
-          const result = await command(modelAccessCommand(initial?.reply));
+          const claim = await Promise.race([
+            claimReady.promise,
+            response.then(() => {
+              throw new Error("Model-access command completed without an application receipt.");
+            }),
+          ]);
+          expect(
+            await Promise.race([response.then(() => "completed"), nextEventLoopTurn("pending")]),
+          ).toBe("pending");
+          claim.settle(status);
+          const result = await response;
           const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
           expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current", "openai/*"]);
-          expect(result?.reply?.text).toContain(
-            "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.",
+          expect(saved.agents?.defaults?.model).toBe("other/current");
+          expect(result.reply?.text).toContain(
+            status === "applied"
+              ? "All OpenAI models are now visible."
+              : "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.",
           );
-          expect(result?.reply?.presentation).toBeUndefined();
+          expect(result.reply?.presentation).toBeUndefined();
           expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
         } finally {
+          pendingClaim?.settle("failed");
           stop();
+          await response;
         }
       });
     },
