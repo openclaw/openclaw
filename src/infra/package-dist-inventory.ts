@@ -12,6 +12,7 @@ import {
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { escapeRegExp } from "../shared/regexp.js";
+import { isMissingPathError } from "./errno.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists } from "./json-files.js";
 export {
@@ -368,9 +369,6 @@ export async function readPackageDistInventoryIfPresent(
 }
 
 type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
-function isMissingPackageDistPathError(error: unknown): boolean {
-  return ["ENOENT", "ENOTDIR", "not-found"].includes((error as NodeJS.ErrnoException).code ?? "");
-}
 
 async function openPackageDistFsRootIfPresent(
   packageRoot: string,
@@ -384,7 +382,7 @@ async function openPackageDistFsRootIfPresent(
   try {
     distStats = await fs.lstat(path.join(packageFs.rootReal, "dist"));
   } catch (error) {
-    if (isMissingPackageDistPathError(error)) {
+    if (isMissingPathError(error)) {
       return null;
     }
     throw error;
@@ -411,7 +409,7 @@ async function readPackageDistJsonIfExists<T>(
       symlinks: "reject",
     });
   } catch (error) {
-    if (isMissingPackageDistPathError(error)) {
+    if (isMissingPathError(error)) {
       return undefined;
     }
     throw error;

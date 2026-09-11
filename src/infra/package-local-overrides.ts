@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.js";
@@ -15,7 +15,6 @@ import {
   buildLocalOverrideInventoryEntry,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
-  isMissingPathError,
   isSameLocalOverridePackageRoot,
   mergeLocalOverrideFileMode,
   normalizeDistPath,
@@ -36,36 +35,73 @@ export type {
   LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
-const execFileAsync = promisify(execFile);
-// Native replay policy is isolated; the operator's process-global fs-safe defaults stay intact.
+// Keep required native policy isolated from the operator's process-global defaults.
+// Root.move in fs-safe 0.8.5 is a check+rename fallback, even in required mode.
 const REQUIRED_FS_SAFE_OPERATION_SCRIPT = `
-const [configUrl, rootUrl, rootDir, sourcePath, relativePath] = process.argv.slice(1);
+const [configUrl, rootUrl, durabilityUrl, errorsUrl, rootDir, sourcePath, relativePath] = process.argv.slice(1);
 const { configureFsSafeNative } = await import(configUrl);
 configureFsSafeNative({ mode: "require" });
 const { root } = await import(rootUrl);
+const { publishFileExclusive } = await import(durabilityUrl);
+const { FsSafeError } = await import(errorsUrl);
 const packageFs = await root(rootDir, { hardlinks: "reject", symlinks: "reject" });
-await packageFs.move(sourcePath, relativePath, { overwrite: false });
+const source = await packageFs.open(sourcePath);
+try {
+  await publishFileExclusive({
+    sourcePath: source.realPath,
+    targetPath: await packageFs.resolve(relativePath),
+    expectedSourceIdentity: source.stat,
+    strategy: "rename-noreplace",
+  });
+  process.stdout.write("moved");
+} catch (error) {
+  // A post-rename verification/sync failure must still enter caller rollback.
+  if (error instanceof FsSafeError && error.details?.targetCreated === true) {
+    process.stdout.write("moved");
+  }
+  throw error;
+} finally {
+  await source.handle.close();
+}
 `;
 
 async function runRequiredFsSafeMove(params: {
   packageFs: LocalOverridePackageRoot;
   sourcePath: string;
   relativePath: string;
+  onMoved?: () => void;
 }): Promise<void> {
-  await execFileAsync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      REQUIRED_FS_SAFE_OPERATION_SCRIPT,
-      import.meta.resolve("@openclaw/fs-safe/config"),
-      import.meta.resolve("@openclaw/fs-safe/root"),
-      params.packageFs.rootReal,
-      params.sourcePath,
-      params.relativePath,
-    ],
-    { timeout: 30_000, windowsHide: true },
-  );
+  const { error, stdout } = await new Promise<{
+    error: ExecFileException | null;
+    stdout: string;
+  }>((resolve) => {
+    execFile(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        REQUIRED_FS_SAFE_OPERATION_SCRIPT,
+        import.meta.resolve("@openclaw/fs-safe/config"),
+        import.meta.resolve("@openclaw/fs-safe/root"),
+        import.meta.resolve("@openclaw/fs-safe/durability"),
+        import.meta.resolve("@openclaw/fs-safe/errors"),
+        params.packageFs.rootReal,
+        params.sourcePath,
+        params.relativePath,
+      ],
+      { timeout: 30_000, windowsHide: true },
+      (failure, output) => resolve({ error: failure, stdout: output }),
+    );
+  });
+  if (stdout === "moved") {
+    params.onMoved?.();
+  }
+  if (error) {
+    throw new Error("Native local override publication failed", { cause: error });
+  }
+  if (stdout !== "moved") {
+    throw new Error("Local override move completed without a publication receipt");
+  }
 }
 
 class LocalOverrideRollbackError extends Error {
@@ -93,6 +129,7 @@ async function moveLocalOverrideTargetNoReplace(params: {
   packageFs: LocalOverridePackageRoot;
   sourcePath: string;
   relativePath: string;
+  onMoved?: () => void;
 }): Promise<void> {
   await runRequiredFsSafeMove(params);
 }
@@ -125,8 +162,7 @@ async function publishLocalOverrideTarget(params: {
     realPackageRoot: params.packageFs.rootReal,
     relativePath: params.relativePath,
   });
-  await moveLocalOverrideTargetNoReplace(params);
-  params.onPublished?.();
+  await moveLocalOverrideTargetNoReplace({ ...params, onMoved: params.onPublished });
   await assertLocalOverrideMutationTopology({
     packageRoot: params.packageFs.rootDir,
     realPackageRoot: params.packageFs.rootReal,
@@ -197,8 +233,10 @@ async function moveExpectedLocalOverrideTarget(params: {
       packageFs: params.packageFs,
       sourcePath: params.relativePath,
       relativePath: movedPath,
+      onMoved: () => {
+        targetMoved = true;
+      },
     });
-    targetMoved = true;
     const moved = await params.packageFs.read(movedPath, {
       hardlinks: "reject",
       maxBytes: Number.POSITIVE_INFINITY,

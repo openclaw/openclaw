@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode, isMissingPathError } from "./errno.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.js";
 
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
-export type LocalPackageOverrideKind = "added" | "modified" | "deleted";
+type LocalPackageOverrideKind = "added" | "modified" | "deleted";
 export type LocalPackageOverrideConflictReason =
   | "target-changed"
   | "target-exists"
@@ -66,7 +67,7 @@ export async function packageRootExists(packageRoot: string): Promise<boolean> {
     await fs.lstat(packageRoot);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -99,10 +100,6 @@ export function isSameLocalOverridePackageRoot(
   );
 }
 
-export function isMissingPathError(error: unknown): boolean {
-  return ["ENOENT", "ENOTDIR", "not-found"].includes((error as NodeJS.ErrnoException).code ?? "");
-}
-
 export type LocalPackageOverrideTargetProbe =
   | { status: "missing" }
   | { status: "blocked" }
@@ -126,11 +123,10 @@ export async function probeLocalOverrideTarget(
       safeFile: stats.isFile() && !stats.isSymbolicLink(),
     };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return { status: "missing" };
     }
-    if (code === "ENOTDIR") {
+    if (hasErrnoCode(error, "ENOTDIR")) {
       return { status: "blocked" };
     }
     return { status: "error" };
@@ -171,7 +167,7 @@ export async function resolveLocalOverrideTopologyPath(
   throw new Error(`could not resolve local override topology for ${relativePath}`);
 }
 
-export async function resolvePathTopology(targetPath: string): Promise<string> {
+async function resolvePathTopology(targetPath: string): Promise<string> {
   const missingSegments: string[] = [];
   let currentPath = path.resolve(targetPath);
   while (true) {
@@ -215,12 +211,12 @@ export function countChanges(changes: LocalPackageOverrideChange[]) {
   };
 }
 
-export function normalizeRelativePath(relativePath: string): string {
+export function normalizeLocalOverridePathSeparators(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
 
 export function normalizeDistPath(relativePath: string): string {
-  return normalizeRelativePath(path.posix.normalize(relativePath));
+  return normalizeLocalOverridePathSeparators(path.posix.normalize(relativePath));
 }
 
 export function resolveSafePackagePath(packageRoot: string, relativePath: string): string {

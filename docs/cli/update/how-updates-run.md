@@ -497,14 +497,17 @@ executable status. Replay requires the new package's corresponding baseline and
 actual bytes to match; upstream changes, unsafe paths, and hardlinked targets
 prevent replay. A conflict leaves the whole override set in the recovery bundle.
 Unreferenced content-hashed additions also require manual recovery. Replay runs
-against the private candidate before it replaces the live package. It does not
-establish that local code remains compatible with the new release.
+against the private candidate before it replaces the live package. Publication
+and restoration refuse to overwrite a destination created concurrently. Replay
+does not establish that local code remains compatible with the new release.
 
 Older packages without content inventories cannot distinguish local edits from
 vendor files. Their regular `dist` files are preserved for manual inspection,
-with no automatic replay, even when the flag is set. Dependency trees and inventory
-metadata are not local override payloads. Symlinks and other unsupported entries
-stop the update before service drain. Normal package-manager permission changes,
+with no automatic replay, even when the flag is set. Keep enough free space for
+that copy; recovery bundles are not automatically pruned. Dependency trees and
+inventory metadata are not local override payloads. Symlinks and other unsupported
+entries can refuse the update, including entries in otherwise excluded `dist`
+subtrees; repair those entries before retrying. Normal package-manager permission changes,
 such as applying the installer's umask, are not treated as local edits.
 
 Preserved overrides are separate from automatic package rollback. A failed update

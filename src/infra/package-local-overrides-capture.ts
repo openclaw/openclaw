@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { isMissingPathError } from "./errno.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import {
   collectPackageDistInventory,
@@ -13,10 +14,9 @@ import {
   countChanges,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
-  isMissingPathError,
   normalizeDistPath,
   normalizeFileMode,
-  normalizeRelativePath,
+  normalizeLocalOverridePathSeparators,
   packageRootExists,
   resolveSafePackagePath,
   writeFileWithMode,
@@ -40,7 +40,7 @@ async function copyOverridePayload(params: {
   const savedPath = path.join(
     params.recoveryDir,
     "files",
-    normalizeRelativePath(params.relativePath),
+    normalizeLocalOverridePathSeparators(params.relativePath),
   );
   await writeFileWithMode(source.buffer, savedPath, mode);
   return { savedPath, mode };
@@ -99,13 +99,11 @@ async function collectReferencedAddedOverridePaths(params: {
     | { path: string; rootPath: string; sourcePath: string }
     | { path: string; rootPath: string; packageRelativePath: string }
   > = [
-    ...params.changes
-      .filter((change) => change.kind === "modified" && change.savedPath)
-      .map((change) => ({
-        path: change.path,
-        rootPath: change.path,
-        sourcePath: change.savedPath as string,
-      })),
+    ...params.changes.flatMap((change) =>
+      change.kind === "modified" && change.savedPath
+        ? [{ path: change.path, rootPath: change.path, sourcePath: change.savedPath }]
+        : [],
+    ),
     ...params.standaloneAddedPaths.map((relativePath) => ({
       path: relativePath,
       rootPath: relativePath,
@@ -118,8 +116,8 @@ async function collectReferencedAddedOverridePaths(params: {
     if (!current) {
       continue;
     }
-    // Shared added files must be rescanned per override root so partial-conflict
-    // reapply keeps each clean importer with its full dependency closure.
+    // Shared added files are rescanned per override root to retain each
+    // importer's complete dependency closure in the recovery manifest.
     const scanKey = `${current.rootPath}\0${current.path}`;
     if (scannedPathsByRoot.has(scanKey)) {
       continue;
