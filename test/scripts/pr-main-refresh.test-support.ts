@@ -397,6 +397,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
     } else if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
       value = { data: { repository: { pullRequest: {
         headRefOid: control.metadata.headRefOid,
+        author: { ...control.metadata.author, __typename: 'User' },
         isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
         viewerMergeBodyText: 'Reviewed fixture body',
       } } } };
@@ -411,6 +412,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
     }
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
+  } else if (endpoint === 'repos/fixture/repo/commits/' + control.metadata.headRefOid) {
+    value = {
+      commit: { author: {
+        name: runGit(['-C', origin, 'show', '-s', '--format=%an', control.metadata.headRefOid]),
+        email: runGit(['-C', origin, 'show', '-s', '--format=%ae', control.metadata.headRefOid]),
+      } },
+      author: null,
+    };
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
