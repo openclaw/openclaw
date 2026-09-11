@@ -34,13 +34,7 @@ export const legacyConfigRules = [
   },
 ];
 
-export function normalizeCompatibilityConfig({
-  cfg,
-  authProfileIdMap,
-}: {
-  cfg: OpenClawConfig;
-  authProfileIdMap?: ReadonlyMap<string, string>;
-}): {
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -52,10 +46,6 @@ export function normalizeCompatibilityConfig({
   }
 
   const pluginConfig = asObjectRecord(entry.config) ?? {};
-  const profileId = pluginConfig.defaultAuthProfileId;
-  const renamedProfileId =
-    typeof profileId === "string" ? authProfileIdMap?.get(profileId) : undefined;
-  const profileChanged = renamedProfileId !== undefined && renamedProfileId !== profileId;
   const hadLegacyAllowedModels = Object.hasOwn(pluginConfig, "allowedModels");
   const legacyAllowedModelsValue = pluginConfig.allowedModels;
   const legacyAllowedModels = Array.isArray(legacyAllowedModelsValue)
@@ -79,16 +69,12 @@ export function normalizeCompatibilityConfig({
   };
   const policyChanged =
     llm.allowModelOverride === undefined || llm.allowAuthProfileOverride === undefined;
-  if (!hadLegacyAllowedModels && !policyChanged && !profileChanged) {
+  if (!hadLegacyAllowedModels && !policyChanged) {
     return { config: cfg, changes: [] };
   }
 
   const { allowedModels: _legacyAllowedModels, ...nextPluginConfig } = pluginConfig;
   const changes: string[] = [];
-  if (profileChanged) {
-    nextPluginConfig.defaultAuthProfileId = renamedProfileId;
-    changes.push(`Updated ${ENTRY_PATH}.config.defaultAuthProfileId to the renamed account.`);
-  }
   if (hadLegacyAllowedModels) {
     changes.push(
       llm.allowedCompletionModels !== undefined

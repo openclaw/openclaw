@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -60,202 +61,243 @@ describe("doctor auth-profile consumers", () => {
   it.each([
     { name: "unoccupied destination", occupied: false, renamed: "anthropic:work" },
     { name: "occupied destination", occupied: true, renamed: "anthropic:cli-work" },
-  ])("preserves selected accounts with an $name and on repeat", async ({ occupied, renamed }) => {
-    await withOpenClawTestState(
-      {
-        prefix: "openclaw-doctor-auth-consumers-",
-        scenario: "external-service",
-        env: {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions", import.meta.url)),
+  ])(
+    "preserves selected accounts with an $name, an older installed plugin, and on repeat",
+    async ({ occupied, renamed }) => {
+      await withOpenClawTestState(
+        {
+          prefix: "openclaw-doctor-auth-consumers-",
+          scenario: "external-service",
+          env: {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
+              new URL("../../extensions", import.meta.url),
+            ),
+          },
         },
-      },
-      async (state) => {
-        const config: OpenClawConfig = {
-          gateway: {
-            mode: "local",
-            port: 1,
-            auth: { mode: "token", token: "synthetic-doctor-token" },
-            controlUi: { enabled: false, sessionObserver: false },
-          },
-          agents: {
-            defaults: {
-              workspace: state.workspaceDir,
-              model: {
-                primary: "anthropic/test-model",
-                fallbacks: ["anthropic/test-model@20260101@claude-cli:work"],
+        async (state) => {
+          const manifest = await state.writeJson("old-llm-task/openclaw.plugin.json", {
+            id: "llm-task",
+            doctorContract: { configRepair: true },
+            configSchema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                authProfileId: { type: "string" },
+                defaultAuthProfileId: { type: "string" },
+                selectedContract: { type: "string" },
               },
-              utilityModel: "anthropic/test-model@claude-cli:work",
-              modelPolicy: { allow: ["anthropic/*"] },
-              models: { "anthropic/test-model@claude-cli:work": { alias: "work-model" } },
             },
-            entries: { main: { default: true } },
-          },
-          auth: {
-            profiles: {
-              "claude-cli:work": { provider: "anthropic", mode: "api_key" },
-              ...(occupied
-                ? { "anthropic:work": { provider: "anthropic", mode: "api_key" as const } }
-                : {}),
+          });
+          await state.writeText(
+            "old-llm-task/index.ts",
+            'export default { id: "llm-task", register() {} };',
+          );
+          await state.writeText(
+            "old-llm-task/doctor-contract-api.ts",
+            `
+          export function normalizeCompatibilityConfig({ cfg }) {
+            if (cfg.plugins.entries["llm-task"].config.selectedContract === "installed") {
+              return { config: cfg, changes: [] };
+            }
+            const config = structuredClone(cfg);
+            config.plugins.entries["llm-task"].config.selectedContract = "installed";
+            return { config, changes: ["Selected the older installed contract."] };
+          }
+        `,
+          );
+          const config: OpenClawConfig = {
+            gateway: {
+              mode: "local",
+              port: 1,
+              auth: { mode: "token", token: "synthetic-doctor-token" },
+              controlUi: { enabled: false, sessionObserver: false },
             },
-            order: { anthropic: ["claude-cli:work"] },
-          },
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "http://127.0.0.1:1",
-                api: "anthropic-messages",
-                apiKey: "claude-cli:work",
+            agents: {
+              defaults: {
+                workspace: state.workspaceDir,
+                model: {
+                  primary: "anthropic/test-model",
+                  fallbacks: ["anthropic/test-model@20260101@claude-cli:work"],
+                },
+                utilityModel: "anthropic/test-model@claude-cli:work",
+                modelPolicy: { allow: ["anthropic/*"] },
+                models: { "anthropic/test-model@claude-cli:work": { alias: "work-model" } },
+              },
+              entries: { main: { default: true } },
+            },
+            auth: {
+              profiles: {
+                "claude-cli:work": { provider: "anthropic", mode: "api_key" },
+                ...(occupied
+                  ? { "anthropic:work": { provider: "anthropic", mode: "api_key" as const } }
+                  : {}),
+              },
+              order: { anthropic: ["claude-cli:work"] },
+            },
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "http://127.0.0.1:1",
+                  api: "anthropic-messages",
+                  apiKey: "claude-cli:work",
+                  models: [
+                    {
+                      id: "test-model",
+                      name: "Fixture model",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 8192,
+                      maxTokens: 1024,
+                    },
+                  ],
+                },
+                "literal-fixture": {
+                  baseUrl: "http://127.0.0.1:1",
+                  api: "openai-completions",
+                  apiKey: "literal-claude-cli:work",
+                  models: [],
+                },
+              },
+            },
+            tools: {
+              media: {
                 models: [
                   {
-                    id: "test-model",
-                    name: "Fixture model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 1024,
+                    provider: "anthropic",
+                    model: "test-model",
+                    capabilities: ["image"],
+                    profile: "claude-cli:work",
+                    preferredProfile: "claude-cli:work",
                   },
                 ],
               },
-              "literal-fixture": {
-                baseUrl: "http://127.0.0.1:1",
-                api: "openai-completions",
-                apiKey: "literal-claude-cli:work",
-                models: [],
-              },
             },
-          },
-          tools: {
-            media: {
-              models: [
-                {
-                  provider: "anthropic",
-                  model: "test-model",
-                  capabilities: ["image"],
-                  profile: "claude-cli:work",
-                  preferredProfile: "claude-cli:work",
+            mcp: {
+              servers: {
+                fixture: {
+                  enabled: false,
+                  transport: "streamable-http",
+                  url: "http://127.0.0.1:1/mcp",
+                  auth: "oauth",
+                  oauth: { authProfileId: "claude-cli:work" },
                 },
-              ],
-            },
-          },
-          mcp: {
-            servers: {
-              fixture: {
-                enabled: false,
-                transport: "streamable-http",
-                url: "http://127.0.0.1:1/mcp",
-                auth: "oauth",
-                oauth: { authProfileId: "claude-cli:work" },
               },
             },
-          },
-          plugins: {
-            allow: ["anthropic", "llm-task"],
-            slots: { memory: "none" },
-            entries: {
-              "llm-task": {
-                enabled: true,
-                llm: { allowModelOverride: true, allowAuthProfileOverride: true },
-                config: { defaultAuthProfileId: "claude-cli:work" },
-              },
-            },
-          },
-          messages: { responsePrefix: "literal anthropic/test-model@claude-cli:work" },
-        };
-        await state.writeConfig(config);
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) =>
-            writePersistedAuthProfileStoreRaw(
-              {
-                version: 1,
-                profiles: {
-                  "claude-cli:work": {
-                    type: "api_key",
-                    provider: "anthropic",
-                    key: "synthetic-work-key",
+            plugins: {
+              allow: ["anthropic", "llm-task"],
+              load: { paths: [path.dirname(manifest)] },
+              slots: { memory: "none" },
+              entries: {
+                "llm-task": {
+                  enabled: true,
+                  llm: { allowModelOverride: true, allowAuthProfileOverride: true },
+                  config: {
+                    defaultAuthProfileId: "claude-cli:work",
+                    authProfileId: "claude-cli:work",
                   },
-                  ...(occupied
-                    ? {
-                        "anthropic:work": {
-                          type: "api_key",
-                          provider: "anthropic",
-                          key: "synthetic-other-key",
-                        },
-                      }
-                    : {}),
                 },
               },
-              undefined,
-              database,
-            ),
-          { env: state.env },
-        );
-        const person = ensureProfileForEmail("account-owner@example.test");
-        setUserProfileAuthLink({
-          profileId: person.id,
-          provider: "anthropic",
-          authProfileId: "claude-cli:work",
-        });
-        clearUserProfileAuthLink({ profileId: person.id, provider: "openai" });
-        const linkedAt = listUserProfileAuthLinks(person.id)[0]!.updatedAt;
-        runDoctor(state.env);
+            },
+            messages: { responsePrefix: "literal anthropic/test-model@claude-cli:work" },
+          };
+          await state.writeConfig(config);
+          runAuthProfileWriteTransaction(
+            undefined,
+            (database) =>
+              writePersistedAuthProfileStoreRaw(
+                {
+                  version: 1,
+                  profiles: {
+                    "claude-cli:work": {
+                      type: "api_key",
+                      provider: "anthropic",
+                      key: "synthetic-work-key",
+                    },
+                    ...(occupied
+                      ? {
+                          "anthropic:work": {
+                            type: "api_key",
+                            provider: "anthropic",
+                            key: "synthetic-other-key",
+                          },
+                        }
+                      : {}),
+                  },
+                },
+                undefined,
+                database,
+              ),
+            { env: state.env },
+          );
+          const person = ensureProfileForEmail("account-owner@example.test");
+          setUserProfileAuthLink({
+            profileId: person.id,
+            provider: "anthropic",
+            authProfileId: "claude-cli:work",
+          });
+          clearUserProfileAuthLink({ profileId: person.id, provider: "openai" });
+          const linkedAt = listUserProfileAuthLinks(person.id)[0]!.updatedAt;
+          runDoctor(state.env);
 
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-        const repaired = snapshot.sourceConfig ?? snapshot.config;
-        const profiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles;
-        expect(profiles?.[renamed]).toMatchObject({
-          provider: "anthropic",
-          key: "synthetic-work-key",
-        });
-        expect(profiles).not.toHaveProperty("claude-cli:work");
-        if (occupied) {
-          expect(profiles?.["anthropic:work"]).toMatchObject({ key: "synthetic-other-key" });
-        }
-        expect(repaired.auth?.order?.anthropic).toEqual([renamed]);
-        expect(repaired.models?.providers?.anthropic?.apiKey).toBe(renamed);
-        expect(repaired.models?.providers?.["literal-fixture"]?.apiKey).toBe(
-          "literal-claude-cli:work",
-        );
-        expect(repaired.agents?.defaults?.utilityModel).toBe(`anthropic/test-model@${renamed}`);
-        expect(repaired.agents?.defaults?.model).toEqual({
-          primary: "anthropic/test-model",
-          fallbacks: [`anthropic/test-model@20260101@${renamed}`],
-        });
-        expect(
-          repaired.agents?.defaults?.models?.[`anthropic/test-model@${renamed}`],
-        ).toMatchObject({ alias: "work-model" });
-        expect(repaired.tools?.media?.models?.[0]).toMatchObject({
-          profile: renamed,
-          preferredProfile: renamed,
-        });
-        expect(repaired.mcp?.servers?.fixture?.oauth?.authProfileId).toBe(renamed);
-        expect(repaired.plugins?.entries?.["llm-task"]?.config).toMatchObject({
-          defaultAuthProfileId: renamed,
-        });
-        expect(repaired.messages?.responsePrefix).toBe(
-          "literal anthropic/test-model@claude-cli:work",
-        );
-        expect(resolveUserProfileAuthLink({ profileId: person.id, providers: ["anthropic"] })).toBe(
-          renamed,
-        );
-        const links = readStoredLinks(person.id);
-        expect(links).toEqual({
-          version: 1,
-          links: { anthropic: { authProfileId: renamed, updatedAt: linkedAt }, openai: null },
-        });
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
+          const repaired = snapshot.sourceConfig ?? snapshot.config;
+          const profiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles;
+          expect(profiles?.[renamed]).toMatchObject({
+            provider: "anthropic",
+            key: "synthetic-work-key",
+          });
+          expect(profiles).not.toHaveProperty("claude-cli:work");
+          if (occupied) {
+            expect(profiles?.["anthropic:work"]).toMatchObject({ key: "synthetic-other-key" });
+          }
+          expect(repaired.auth?.order?.anthropic).toEqual([renamed]);
+          expect(repaired.models?.providers?.anthropic?.apiKey).toBe(renamed);
+          expect(repaired.models?.providers?.["literal-fixture"]?.apiKey).toBe(
+            "literal-claude-cli:work",
+          );
+          expect(repaired.agents?.defaults?.utilityModel).toBe(`anthropic/test-model@${renamed}`);
+          expect(repaired.agents?.defaults?.model).toEqual({
+            primary: "anthropic/test-model",
+            fallbacks: [`anthropic/test-model@20260101@${renamed}`],
+          });
+          expect(
+            repaired.agents?.defaults?.models?.[`anthropic/test-model@${renamed}`],
+          ).toMatchObject({ alias: "work-model" });
+          expect(repaired.tools?.media?.models?.[0]).toMatchObject({
+            profile: renamed,
+            preferredProfile: renamed,
+          });
+          expect(repaired.mcp?.servers?.fixture?.oauth?.authProfileId).toBe(renamed);
+          expect(repaired.plugins?.entries?.["llm-task"]?.config).toMatchObject({
+            defaultAuthProfileId: renamed,
+            authProfileId: renamed,
+            selectedContract: "installed",
+          });
+          expect(repaired.messages?.responsePrefix).toBe(
+            "literal anthropic/test-model@claude-cli:work",
+          );
+          expect(
+            resolveUserProfileAuthLink({ profileId: person.id, providers: ["anthropic"] }),
+          ).toBe(renamed);
+          const links = readStoredLinks(person.id);
+          expect(links).toEqual({
+            version: 1,
+            links: { anthropic: { authProfileId: renamed, updatedAt: linkedAt }, openai: null },
+          });
 
-        runDoctor(state.env);
+          runDoctor(state.env);
 
-        expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual(profiles);
-        expect(readStoredLinks(person.id)).toEqual(links);
-        const repeated = (await readConfigFileSnapshot()).config;
-        expect(repeated.agents?.defaults?.utilityModel).toEqual(
-          repaired.agents?.defaults?.utilityModel,
-        );
-        expect(repeated.models?.providers?.anthropic?.apiKey).toBe(renamed);
-      },
-    );
-  });
+          expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual(profiles);
+          expect(readStoredLinks(person.id)).toEqual(links);
+          const repeated = (await readConfigFileSnapshot()).config;
+          expect(repeated.agents?.defaults?.utilityModel).toEqual(
+            repaired.agents?.defaults?.utilityModel,
+          );
+          expect(repeated.models?.providers?.anthropic?.apiKey).toBe(renamed);
+        },
+      );
+    },
+  );
 });

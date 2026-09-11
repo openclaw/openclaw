@@ -27,13 +27,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   reefStrayEntryConfigMigration.legacyConfigRule,
 ];
 
-export function normalizeCompatibilityConfig({
-  cfg,
-  authProfileIdMap,
-}: {
-  cfg: OpenClawConfig;
-  authProfileIdMap?: ReadonlyMap<string, string>;
-}): {
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -54,20 +48,5 @@ export function normalizeCompatibilityConfig({
     }
   }
   const stray = reefStrayEntryConfigMigration.normalizeConfig({ cfg: config });
-  config = stray.config;
-  changes.push(...stray.changes);
-  const guard = isRecord(config.channels?.reef) ? config.channels.reef.guard : undefined;
-  const renamed =
-    isRecord(guard) && typeof guard.authProfileId === "string"
-      ? authProfileIdMap?.get(guard.authProfileId)
-      : undefined;
-  if (renamed && isRecord(guard) && renamed !== guard.authProfileId) {
-    config = structuredClone(config);
-    const nextReef = config.channels?.reef;
-    if (isRecord(nextReef) && isRecord(nextReef.guard)) {
-      nextReef.guard.authProfileId = renamed;
-      changes.push("Updated Reef guard to the renamed auth profile.");
-    }
-  }
-  return { config, changes };
+  return { config: stray.config, changes: [...changes, ...stray.changes] };
 }

@@ -35,10 +35,12 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
-When Doctor renames saved credentials, it passes an optional
-`authProfileIdMap: ReadonlyMap<string, string>` to `normalizeCompatibilityConfig`
-alongside `cfg`. Use this verified map to update plugin-owned account references.
-Preserve unmapped values and literal credentials; do not infer renames from names.
+When Doctor renames saved credentials, it updates exact `authProfileId` and
+`defaultAuthProfileId` references inside plugin config and channel config. This
+preserves the shipped `authProfileId` migration and also covers defaults such as
+LLM Task's `defaultAuthProfileId`, including older installed plugins. Unmapped
+values and literal strings elsewhere remain unchanged. Plugins do not need to
+implement the host's credential rename in their compatibility callbacks.
 
 Bundled plugins declare each state migration in execution order so Doctor can
 plan its owner and receipt without loading plugin code:

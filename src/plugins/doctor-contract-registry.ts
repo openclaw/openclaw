@@ -704,7 +704,6 @@ export function applyPluginDoctorCompatibilityMigrations(
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     pluginIds?: readonly string[];
-    authProfileIdMap?: ReadonlyMap<string, string>;
   },
 ): {
   config: OpenClawConfig;
@@ -717,10 +716,7 @@ export function applyPluginDoctorCompatibilityMigrations(
     config: params?.config ?? cfg,
     surface: "configRepair",
   })) {
-    const mutation = entry.normalizeCompatibilityConfig?.({
-      cfg: nextCfg,
-      ...(params?.authProfileIdMap ? { authProfileIdMap: params.authProfileIdMap } : {}),
-    });
+    const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;
     }

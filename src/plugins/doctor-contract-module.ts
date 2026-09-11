@@ -142,10 +142,7 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-type PluginDoctorCompatibilityNormalizer = (params: {
-  cfg: OpenClawConfig;
-  authProfileIdMap?: ReadonlyMap<string, string>;
-}) => {
+type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
 };

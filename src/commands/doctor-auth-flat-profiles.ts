@@ -66,7 +66,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
-import { applyPluginDoctorCompatibilityMigrations } from "../plugins/doctor-contract-registry.js";
+import { rewritePluginAuthProfileRefs } from "../plugins/auth-profile-config-refs.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { renameUserProfileAuthLinks } from "../state/user-model-accounts.js";
 import { shortenHomePath } from "../utils.js";
@@ -1792,11 +1792,8 @@ export function maybeRepairOpenAICodexAuthConfig(
     );
     config = models.config;
     changed ||= models.changes.length > 0;
-    const plugins = applyPluginDoctorCompatibilityMigrations(config, {
-      authProfileIdMap: profileIdMap,
-    });
-    config = plugins.config;
-    changed ||= plugins.changes.length > 0;
+    const pluginsChanged = rewritePluginAuthProfileRefs(config, profileIdMap);
+    changed ||= pluginsChanged;
   }
   if (!changed) {
     return { config, changes: [], warnings: [] };
