@@ -89,6 +89,7 @@ export function renderSessionGroupOptions(params: {
 
 export function renderSessionColorOptions(params: {
   color: string | null;
+  allowDefault?: boolean;
   disabled: boolean;
   disabledReason?: string;
   onSelect: (event: MouseEvent, color: string | null) => void;
@@ -99,24 +100,27 @@ export function renderSessionColorOptions(params: {
     role="group"
     aria-label=${t("sessionsView.setColorMenu")}
   >
-    ${[null, ...SESSION_COLOR_IDS].map((color) => {
-      const label = color ? t(`sessionsView.colors.${color}`) : t("common.default");
-      return html`<button
-        type="button"
-        class="session-menu__color-choice"
-        aria-label=${label}
-        aria-pressed=${String(current === color)}
-        ?disabled=${params.disabled}
-        title=${params.disabledReason ?? label}
-        @click=${(event: MouseEvent) => params.onSelect(event, color)}
-      >
-        <span
-          class="session-menu__color-swatch"
-          style=${color ? `background: var(--session-color-${color})` : nothing}
-          aria-hidden="true"
-          >${current === color ? icons.check : nothing}</span
+    ${(params.allowDefault === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]).map(
+      (color) => {
+        const label = color ? t(`sessionsView.colors.${color}`) : t("sessionsView.noColor");
+        const selected = current === color && (color !== null || !params.color);
+        return html`<button
+          type="button"
+          class="session-menu__color-choice"
+          aria-label=${label}
+          aria-pressed=${String(selected)}
+          ?disabled=${params.disabled}
+          title=${params.disabledReason ?? label}
+          @click=${(event: MouseEvent) => params.onSelect(event, color)}
         >
-      </button>`;
-    })}
+          <span
+            class=${`session-menu__color-swatch${color === null ? " session-menu__color-swatch--none" : ""}`}
+            style=${color ? `background: var(--session-color-${color})` : nothing}
+            aria-hidden="true"
+            >${color === null ? icons.circleX : selected ? icons.check : nothing}</span
+          >
+        </button>`;
+      },
+    )}
   </div>`;
 }

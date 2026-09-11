@@ -2854,16 +2854,17 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .session-menu__colors {
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(6, 28px);
+  gap: 3px;
   margin: 4px 0 10px;
 }
 
 .session-menu__color-choice {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
   padding: 2px;
   border: 0;
   border-radius: var(--radius-full);
@@ -2888,6 +2889,16 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-radius: var(--radius-full);
   background: var(--muted);
   color: var(--bg);
+}
+
+.session-menu__color-swatch--none {
+  background: transparent;
+  color: var(--muted);
+}
+
+.session-menu__color-choice[aria-pressed="true"]:has(.session-menu__color-swatch--none) {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .session-menu__color-swatch svg {
@@ -2927,6 +2938,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .session-menu__icon-choice {
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2991,8 +3003,26 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   background: var(--bg-hover);
 }
 
+.session-menu__icon-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Keep both views in the same track so More and Back preserve menu geometry. */
+.session-menu__icon-panel > .session-menu__icon-options,
+.session-menu__icon-panel > .session-menu__icon-custom-entry {
+  grid-area: 1 / 1;
+  align-self: start;
+}
+
+.session-menu__icon-panel[data-mode="custom"] > .session-menu__icon-options,
+.session-menu__icon-panel[data-mode="grid"] > .session-menu__icon-custom-entry {
+  visibility: hidden;
+}
+
 .session-menu__icon-custom-entry {
-  width: 180px;
+  width: 100%;
+  min-width: 0;
 }
 
 .session-menu__icon-custom-header {

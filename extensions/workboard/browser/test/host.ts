@@ -92,6 +92,18 @@ export function createWorkboardTestHost() {
       mountAgentPicker: () => {
         throw new Error("This test did not install DOM components");
       },
+      mountSelectPicker: () => {
+        throw new Error("This test did not install DOM components");
+      },
+      mountAgentAvatar: () => {
+        throw new Error("This test did not install DOM components");
+      },
+      mountAppearancePicker: () => {
+        throw new Error("This test did not install DOM components");
+      },
+      mountAppearanceGlyph: () => {
+        throw new Error("This test did not install DOM components");
+      },
       mountDashboard: () => {
         throw new Error("This test did not install DOM components");
       },

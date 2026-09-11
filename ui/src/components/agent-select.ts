@@ -65,7 +65,10 @@ export function renderAgentSelectAvatar(
 export function renderAgentSelectCopy(option: AgentSelectOption) {
   return html`
     <span class="agent-select__option-copy">
-      <span class="agent-select__option-label">${option.label}</span>
+      <span class="agent-select__option-heading">
+        <span class="agent-select__option-label">${option.label}</span>
+        ${option.badge ? html`<span class="agent-select__badge">${option.badge}</span>` : nothing}
+      </span>
       ${
         option.description
           ? html`<span class="agent-select__option-description">${option.description}</span>`
@@ -83,6 +86,7 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) menuLabel = "";
   @property({ attribute: false }) identityById: Record<string, AgentIdentityResult> = {};
   @property({ attribute: false }) disabled = false;
+  @property({ attribute: false }) variant: "default" | "compact" = "default";
   @property({ attribute: false }) onSelect: (value: string) => void = () => {};
   @property({ attribute: false }) onCreateAgent: (() => void) | null = null;
 
@@ -172,7 +176,7 @@ export class AgentSelect extends OpenClawLightDomElement {
 
     return html`
       <wa-dropdown
-        class="agent-select"
+        class="agent-select ${this.variant === "compact" ? "agent-select--compact" : ""}"
         placement="bottom-start"
         aria-label=${this.accessibleLabel || triggerLabel}
         @wa-select=${this.handleSelect}
@@ -196,7 +200,9 @@ export class AgentSelect extends OpenClawLightDomElement {
               ? html`<span class="agent-select__badge">${selectedBadge}</span>`
               : nothing
           }
-          <span class="agent-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
+          <span class="agent-select__chevron" aria-hidden="true"
+            >${this.variant === "compact" ? icons.chevronsUpDown : icons.chevronDown}</span
+          >
         </button>
         ${
           this.menuLabel
@@ -221,11 +227,6 @@ export class AgentSelect extends OpenClawLightDomElement {
               <span slot="icon">${this.renderAvatar(option)}</span>
               ${renderAgentSelectCopy(option)}
               <span slot="details" class="agent-select__option-state" aria-hidden="true">
-                ${
-                  option.badge
-                    ? html`<span class="agent-select__badge">${option.badge}</span>`
-                    : nothing
-                }
                 ${
                   selected
                     ? html`<span class="agent-select__option-check">${icons.check}</span>`

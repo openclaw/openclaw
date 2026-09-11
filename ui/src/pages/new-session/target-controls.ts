@@ -31,7 +31,7 @@ export function renderAgentSelect(params: {
   return html`
     <span class="new-session-page__select new-session-page__select--agent">
       <openclaw-agent-select
-        class="agent-select--compact"
+        .variant=${"compact"}
         .options=${params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
           label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),

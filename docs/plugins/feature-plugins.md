@@ -213,10 +213,13 @@ when the roster changes, and actions check the current row again when invoked.
 Actions can inspect `session.hasActiveRun`; an absent value means activity is
 not yet known.
 `host.components`
-mounts host-owned dialogs, agent pickers, and session dashboards from plain
-props and DOM content. Each component returns `update` and `dispose` methods;
+mounts host-owned dialogs, agent pickers, searchable select pickers, and session
+dashboards from plain props and DOM content. Each component returns `update` and `dispose` methods;
 the host retains permission checks, focus handling, and dashboard provider
-ownership.
+ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }`
+options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
+With `searchable: true`, lists longer than eight options show a search field.
+The picker matches option labels, values, and descriptions.
 
 ## Build and reload
 
