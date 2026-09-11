@@ -556,13 +556,16 @@ struct QuickChatPowerFeaturesTests {
         var reads = 0
         var sends = 0
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in sends += 1; return "ok" },
+            sendProvider: { _, _, _, _, _, _ in sends += 1
+                return "ok"
+            },
             controlsProvider: { _ in
                 reads += 1
                 return QuickChatModelControlSnapshot(
                     models: [choice], currentModelSelectionID: choice.selectionID, currentThinkingLevel: nil,
                     thinkingOptions: reads == 1 ? [.init(id: "high", label: "Thorough")] : [],
-                    defaultProvider: "fixture", catalogMessage: reads == 1 ? nil : "Update the Gateway for model choices.",
+                    defaultProvider: "fixture",
+                    catalogMessage: reads == 1 ? nil : "Update the Gateway for model choices.",
                     speed: .resolve(session: nil, model: choice))
             },
             patchProvider: { _, _ in nil })

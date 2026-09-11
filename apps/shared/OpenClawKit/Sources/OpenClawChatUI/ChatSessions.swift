@@ -133,7 +133,7 @@ public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
 
 public struct OpenClawChatFastModeProfile: Sendable, Equatable {
     public let supportsFastMode: Bool
-    public let `override`: OpenClawChatFastMode?
+    public let override: OpenClawChatFastMode?
     public let effective: OpenClawChatFastMode?
 
     public var isEnabled: Bool {

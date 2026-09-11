@@ -171,14 +171,23 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
         try XCTUnwrap(image.representation(using: .png, properties: [:]))
             .write(to: output.appendingPathComponent("\(name)-window.png"))
         if CGPreflightScreenCaptureAccess(),
-           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], 0) as? [[String: Any]]
+           let windows = CGWindowListCopyWindowInfo(
+               [.optionOnScreenOnly, .excludeDesktopElements],
+               0) as? [[String: Any]]
         {
-            for window in windows where window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier {
+            for window in windows
+                where window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier
+            {
                 guard window[kCGWindowLayer as String] as? Int == NSWindow.Level.popUpMenu.rawValue,
                       let number = window[kCGWindowNumber as String] as? UInt32 else { continue }
                 let capture = Process()
                 capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                capture.arguments = ["-x", "-l", String(number), output.appendingPathComponent("\(name)-menu-\(number).png").path]
+                capture.arguments = [
+                    "-x",
+                    "-l",
+                    String(number),
+                    output.appendingPathComponent("\(name)-menu-\(number).png").path,
+                ]
                 try capture.run()
                 capture.waitUntilExit()
                 XCTAssertEqual(capture.terminationStatus, 0)
@@ -197,7 +206,7 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
                 case let .string(text): Data(text.utf8)
                 @unknown default: throw URLError(.badServerResponse)
                 }
-                socket.emitReceiveSuccess(.data(try await fixture.response(to: data)))
+                try await socket.emitReceiveSuccess(.data(fixture.response(to: data)))
             }, receiveHook: { socket, receiveIndex in
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 return .data(GatewayWebSocketTestSupport.connectOkData(

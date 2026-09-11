@@ -128,7 +128,10 @@ enum QuickChatModelMenuPresenter {
                 (String(localized: "Fast"), true),
                 (String(localized: "Normal"), false),
             ] {
-                let item = NSMenuItem(title: title, action: #selector(QuickChatModelMenuTarget.selectSpeed(_:)), keyEquivalent: "")
+                let item = NSMenuItem(
+                    title: title,
+                    action: #selector(QuickChatModelMenuTarget.selectSpeed(_:)),
+                    keyEquivalent: "")
                 item.target = target
                 item.representedObject = value
                 item.isEnabled = value == nil || model.speed.supportsFastMode

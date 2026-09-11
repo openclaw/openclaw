@@ -238,7 +238,8 @@ final class QuickChatModel {
     @ObservationIgnored private var modelControlsTask: Task<Void, Never>?
     @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
     @ObservationIgnored private var modelControlsRequestID = UUID()
-    @ObservationIgnored private var controlPatchSettlementsByTarget: [QuickChatRoutingTarget: ControlPatchSettlement] = [:]
+    @ObservationIgnored private var controlPatchSettlementsByTarget: [QuickChatRoutingTarget: ControlPatchSettlement] =
+        [:]
     @ObservationIgnored private var appliedModelSelections: [QuickChatRoutingTarget: String] = [:]
 
     init(
