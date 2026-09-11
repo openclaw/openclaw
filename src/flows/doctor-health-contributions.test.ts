@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
+  noteCopilotAmbientToken: vi.fn(),
   noteLegacyCodexProviderOverride: vi.fn(),
   noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
@@ -381,6 +382,7 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
 vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
+  noteCopilotAmbientToken: mocks.noteCopilotAmbientToken,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
   noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
@@ -748,6 +750,7 @@ describe("doctor health contributions", () => {
     mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
     mocks.collectAuthProfileHealthFindings.mockClear().mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear().mockResolvedValue(undefined);
+    mocks.noteCopilotAmbientToken.mockClear();
     mocks.noteLegacyCodexProviderOverride.mockClear();
     mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear().mockResolvedValue(undefined);

@@ -3,6 +3,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
+import { removeLegacyCopilotDiscovery } from "../commands/doctor/shared/legacy-copilot-discovery.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -136,7 +137,8 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
+  const copilotConfig = removeLegacyCopilotDiscovery(raw);
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
     homedir: params?.homedir,
@@ -164,8 +166,7 @@ function validateConfigObjectWithPluginMode(
     params?.env,
     manifestRegistry?.plugins,
   );
-  const config = materialized.config;
-  return { ...result, config };
+  return { ...result, config: materialized.config };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(

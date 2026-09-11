@@ -13,6 +13,7 @@ import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
 function repairAgentRoster(
@@ -125,10 +126,14 @@ export function normalizeCompatibilityConfigValues(
   warnings?: string[];
 } {
   const changes: string[] = [];
-  let contextBudgetConfig = cfg;
+  const copilotConfig = removeLegacyCopilotDiscovery(cfg);
+  if (copilotConfig !== cfg) {
+    changes.push("Removed retired GitHub Copilot discovery setting.");
+  }
+  let contextBudgetConfig = copilotConfig;
   let contextBudgetWarnings: string[];
   if (options.sourceConfigBeforeMigrations === undefined) {
-    const migration = migrateLegacyContextBudgetConfig(cfg);
+    const migration = migrateLegacyContextBudgetConfig(copilotConfig);
     contextBudgetConfig = migration.config;
     changes.push(...migration.changes.map(({ message }) => message));
     contextBudgetWarnings = migration.warnings.map(({ message }) => message);
