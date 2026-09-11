@@ -147,6 +147,11 @@ describe("resolveSubagentCompletionOrigin", () => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "slack", source: "test", plugin: slackPlugin },
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "discord" }),
+        },
         { pluginId: "folded-chat", source: "test", plugin: foldedChatPlugin },
         {
           pluginId: "matrix",
