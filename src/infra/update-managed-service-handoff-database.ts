@@ -37,6 +37,37 @@ function assertPath(stat: Stats, kind: "directory" | "file") {
   }
 }
 
+/**
+ * The store chmods the file to 0600 after every write, so excess read bits on a
+ * path we own are its own interrupted work: `open` creates the file under the
+ * caller's umask, and a crash before that chmod leaves it readable. Restore the
+ * invariant instead of refusing, which would otherwise lock the product out of its
+ * own state for every install root until an operator deleted the file by hand.
+ *
+ * Excess bits here are defense in depth rather than a live exposure: assertPath
+ * enforces a 0700 owned directory on every read and every write, and a single
+ * link, so no other user could traverse to this inode or hold a descriptor on it
+ * whatever the file's own mode said. Write bits are still refused rather than
+ * repaired, because chmod cannot revoke a descriptor and integrity is the one
+ * thing the directory guarantee would not restore. Ownership, type and link count
+ * are likewise not ours to repair; all of those still refuse in assertPath.
+ */
+function repairPrivateFileMode(databasePath: string, stat: Stats): Stats {
+  if (
+    process.platform === "win32" ||
+    (stat.mode & 0o077) === 0 ||
+    (stat.mode & 0o022) !== 0 ||
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    (typeof process.getuid === "function" && stat.uid !== process.getuid())
+  ) {
+    return stat;
+  }
+  fs.chmodSync(databasePath, 0o600);
+  return fs.lstatSync(databasePath);
+}
+
 /** Capture only an already-admitted database, never provision one during recovery. */
 export function captureManagedUpdateLeaseDatabaseIdentity(
   databasePath: string,
@@ -115,12 +146,15 @@ export function createManagedHandoffLeaseDatabase(
     }
     assertPath(fs.lstatSync(dir), "directory");
     if (!write || fs.existsSync(databasePath)) {
-      assertPath(fs.lstatSync(databasePath), "file");
+      assertPath(repairPrivateFileMode(databasePath, fs.lstatSync(databasePath)), "file");
     }
     const db = openNodeSqliteDatabase(databasePath, { readOnly: !write });
     try {
       setSqliteBusyTimeout(db, 5000);
       if (write) {
+        // Narrow the window the repair above exists for: `open` may have just
+        // created the file, and creating the table writes to disk before this.
+        fs.chmodSync(databasePath, 0o600);
         executeSqliteQuerySync(
           db,
           leaseQueries(db)
@@ -132,7 +166,6 @@ export function createManagedHandoffLeaseDatabase(
             .addColumn("updated_at", "integer", (column) => column.notNull())
             .modifyEnd(sql`STRICT`),
         );
-        fs.chmodSync(databasePath, 0o600);
       }
       return operation(db);
     } finally {

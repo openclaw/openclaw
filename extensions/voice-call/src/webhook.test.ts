@@ -131,13 +131,19 @@ const createCall = (startedAt: number): CallRecord => ({
 });
 
 const automaticReplyManagerStub = {
+  updateCallMetadata: async (
+    call: CallRecord,
+    update: (metadata: CallRecord["metadata"]) => CallRecord["metadata"],
+  ) => {
+    call.metadata = update(call.metadata);
+  },
   createAutoResponseGuard: () => ({ isCurrent: () => true, release: () => {} }),
   invalidateAutoResponse: () => {},
 };
 
 const createManager = (calls: CallRecord[]) => {
   const endCall = vi.fn(async () => ({ success: true }));
-  const processEvent = vi.fn<CallManager["processEvent"]>(() => ({ kind: "processed" }));
+  const processEvent = vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" }));
   const manager = {
     ...automaticReplyManagerStub,
     getActiveCalls: () => calls,
@@ -1012,7 +1018,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
   it("keeps retryable provider errors replayable through the actual webhook owner", async () => {
     const mockProvider = new MockProvider();
     const { manager, processEvent } = createManager([]);
-    processEvent.mockReturnValue({ kind: "processed", replayable: true });
+    processEvent.mockResolvedValue({ kind: "processed", replayable: true });
     const server = new VoiceCallWebhookServer(
       createConfig({ provider: "mock" }),
       manager,
@@ -1047,7 +1053,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
     const registeredCalls: CallRecord[] = [];
     const { manager, processEvent } = createManager(registeredCalls);
-    processEvent.mockImplementation((event) =>
+    processEvent.mockImplementation(async (event) =>
       registeredCalls.some((call) => call.providerCallId === event.providerCallId)
         ? { kind: "processed" }
         : { kind: "ignored", replayable: true },
@@ -1079,13 +1085,45 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
+  it("holds a signed webhook response until event persistence finishes", async () => {
+    const authToken = "signed-delayed-store-token";
+    const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
+    const { manager, processEvent } = createManager([]);
+    const persistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    processEvent.mockReturnValueOnce(persistence.promise);
+    const server = new VoiceCallWebhookServer(
+      createConfig({ provider: "twilio", twilio: { accountSid: "AC123", authToken } }),
+      manager,
+      twilioProvider,
+    );
+    try {
+      const baseUrl = await server.start();
+      twilioProvider.setPublicUrl(requireBoundRequestUrl(server, baseUrl).toString());
+      let answered = false;
+      const response = postSignedTwilioWebhook({
+        server,
+        baseUrl,
+        authToken,
+        body: "CallSid=CA-delayed-store&CallStatus=in-progress&Direction=outbound-api",
+      }).then((result) => {
+        answered = true;
+        return result;
+      });
+      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+      expect(answered).toBe(false);
+      persistence.resolve({ kind: "processed" });
+      expect((await response).status).toBe(200);
+    } finally {
+      persistence.resolve({ kind: "processed" });
+      await server.stop();
+    }
+  });
+
   it("retries an identical signed Twilio callback after event processing fails", async () => {
     const authToken = "signed-retry-auth-token";
     const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
     const { manager, processEvent } = createManager([]);
-    processEvent.mockImplementationOnce(() => {
-      throw new Error("synthetic SQLite persistence failure");
-    });
+    processEvent.mockRejectedValueOnce(new Error("synthetic SQLite persistence failure"));
     const config = createConfig({
       provider: "twilio",
       twilio: { accountSid: "AC123", authToken },
@@ -1201,9 +1239,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       { skipVerification: true },
     );
     const { manager, processEvent } = createManager([]);
-    processEvent.mockImplementationOnce(() => {
-      throw new Error("synthetic SQLite persistence failure");
-    });
+    processEvent.mockRejectedValueOnce(new Error("synthetic SQLite persistence failure"));
     const config = createConfig({
       provider: "plivo",
       skipSignatureVerification: true,
@@ -2224,6 +2260,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     expect(params).toHaveProperty("senderIsOwner", undefined);
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
+      isCurrent: expect.any(Function),
     });
   });
 
@@ -2259,7 +2296,11 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     ).handleInboundResponse(call.callId, "hello");
 
     expect(speak.mock.calls).toEqual([
-      [call.callId, "Spoken before compaction. Final detail.", { listenAfterPlayback: true }],
+      [
+        call.callId,
+        "Spoken before compaction. Final detail.",
+        { listenAfterPlayback: true, isCurrent: expect.any(Function) },
+      ],
     ]);
     expect(mocks.generateVoiceResponse.mock.calls[0]?.[0]).toHaveProperty("senderIsOwner", false);
   });
@@ -2579,7 +2620,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     };
 
     const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
-    const processEvent = vi.fn<CallManager["processEvent"]>((event) => {
+    const processEvent = vi.fn<CallManager["processEvent"]>(async (event) => {
       if (event.type === "call.speech") {
         // Mirrors manager behavior: call.speech transitions to listening.
         call.state = "listening";
@@ -2646,7 +2687,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onSpeechStart?.("CA-barge", "MZ-barge");
       media.config.onTranscript?.("CA-barge", "hello after greeting", "MZ-barge");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
-      expect(handleInboundResponse).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(handleInboundResponse).toHaveBeenCalledTimes(1));
       expect(processEvent).toHaveBeenCalledTimes(1);
       const [calledCallId, calledTranscript] = expectDefined<unknown[]>(
         handleInboundResponse.mock.calls.at(0),
@@ -2669,7 +2710,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     };
 
     const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
-    const processEvent = vi.fn<CallManager["processEvent"]>((event) =>
+    const processEvent = vi.fn<CallManager["processEvent"]>(async (event) =>
       event.type === "call.speech"
         ? {
             kind: "final-speech",
@@ -2728,7 +2769,9 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(event.providerCallId).toBe("CA-inbound");
       expect(event.transcript).toBe("hello");
       expect(event.isFinal).toBe(true);
-      expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
+      await vi.waitFor(() =>
+        expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello"),
+      );
     } finally {
       await server.stop();
     }
@@ -2768,9 +2811,12 @@ describe("VoiceCallWebhookServer webhook event path auto-response (#79118)", () 
     parseWebhookEvent: () => ({ events: [event], statusCode: 200 }),
   });
 
-  const buildManagerWith = (call: CallRecord, result?: ReturnType<CallManager["processEvent"]>) => {
+  const buildManagerWith = (
+    call: CallRecord,
+    result?: Awaited<ReturnType<CallManager["processEvent"]>>,
+  ) => {
     const managerResult = createManager([call]);
-    managerResult.processEvent.mockReturnValue(
+    managerResult.processEvent.mockResolvedValue(
       result ?? {
         kind: "final-speech",
         call,

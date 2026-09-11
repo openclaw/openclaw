@@ -27,7 +27,7 @@ import { assertValidParams, type Validator } from "./validation.js";
 function transcriptReadMethod<T>(
   method: string,
   validate: Validator<T>,
-  read: (store: TranscriptsStore, params: T, cfg: OpenClawConfig) => unknown,
+  read: (store: TranscriptsStore, params: T, cfg: OpenClawConfig) => Promise<unknown>,
 ): GatewayRequestHandler {
   return async ({ params, context, client, respond }) => {
     if (!assertValidParams(params, validate, method, respond)) {

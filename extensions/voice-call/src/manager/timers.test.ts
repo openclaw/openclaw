@@ -23,6 +23,8 @@ describe("voice-call manager timers", () => {
   it("delegates max-duration termination and logs typed failure", async () => {
     const call = { id: "call-1", state: "active" };
     const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
@@ -58,6 +60,8 @@ describe("voice-call manager timers", () => {
 
   it("does not time out terminal calls", async () => {
     const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
@@ -78,6 +82,8 @@ describe("voice-call manager timers", () => {
   it("caps oversized max duration and transcript timers", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
       activeCalls: new Map([["call-1", { id: "call-1", state: "active" }]]),
       maxDurationTimers: new Map(),
       transcriptWaiters: new Map(),
@@ -108,6 +114,8 @@ describe("voice-call manager timers", () => {
 
   it("waits for transcripts, resolves matching tokens, rejects mismatches and timeouts", async () => {
     const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
       transcriptWaiters: new Map(),
       config: { transcriptTimeoutMs: 1_000 },
     };
@@ -139,6 +147,8 @@ describe("voice-call manager timers", () => {
 
   it("rejects duplicate transcript waiters for the same call", async () => {
     const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
       transcriptWaiters: new Map(),
       config: { transcriptTimeoutMs: 1_000 },
     };

@@ -118,7 +118,9 @@ suite.define(() => {
       await whereTrigger.click();
       await device.waitFor();
       expect(await device.isDisabled()).toBe(true);
-      expect(await device.textContent()).toContain("No worker slots are available");
+      expect(await tooltipTitleText(device)).toBe(
+        "No worker slots are available. Wait for a slot or pick another device.",
+      );
       expect(await restrictedDevice.isEnabled()).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
       await page.keyboard.press("Escape");
@@ -151,9 +153,9 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
-      await expect
-        .poll(() => device.locator(".session-menu__description").textContent())
-        .toBe("This runtime does not support paired devices");
+      expect(await device.locator(".session-menu__description").textContent()).toContain(
+        "This runtime does not support paired devices",
+      );
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
@@ -267,22 +269,40 @@ suite.define(() => {
       expect(await row("alpha-device").isEnabled()).toBe(true);
       await expect
         .poll(() => row("alpha-device").locator(".session-menu__description").textContent())
-        .toBe("alpha-de · macOS · Camera · Screen capture");
+        .toBe(" · alpha-de · macOS");
       await expect
         .poll(() => row("alpha-device").locator(".capacity-meter-pips").getAttribute("aria-label"))
         .toBe("2 of 4 slots busy");
       expect(await row("beta-device").locator(".session-menu__description").textContent()).toBe(
-        "beta-dev",
+        " · beta-dev",
       );
       expect(await row("saturated").isDisabled()).toBe(true);
       await expect
-        .poll(() => row("saturated").locator(".session-menu__description").textContent())
+        .poll(() => tooltipTitleText(row("saturated")))
         .toBe("No worker slots are available. Wait for a slot or pick another device.");
       await expect
         .poll(() => row("saturated").locator(".capacity-meter-pips").getAttribute("aria-label"))
         .toBe("Slot utilization unavailable");
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
+      expect(await row("offline").locator(".session-menu__description").textContent()).toMatch(
+        /^ · Offline for .+ · Device unavailable\. Reconnect it and try again\.$/,
+      );
+      expect(await tooltipTitleText(row("offline"))).toBe(
+        "Device unavailable. Reconnect it and try again.",
+      );
+      expect(await row("offline").locator(".session-menu__description").isVisible()).toBe(true);
+      expect(
+        await row("offline").evaluate((element) => element.getBoundingClientRect().height),
+      ).toBe(32);
+      expect(
+        await row("offline")
+          .locator(".session-menu__text")
+          .evaluate((element) => ({
+            truncated: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+          })),
+      ).toEqual({ truncated: true, overflow: "ellipsis" });
       expect(await row("disabled").isDisabled()).toBe(true);
       expect(await row("outdated").isDisabled()).toBe(true);
 

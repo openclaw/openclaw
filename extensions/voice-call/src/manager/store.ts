@@ -1,7 +1,7 @@
 // Voice Call plugin module implements store behavior.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 import {
@@ -52,8 +52,8 @@ type PersistedCallRecord = {
 
 /** Pair of plugin state stores used for call record events. */
 type CallRecordStateStores = {
-  events: PluginStateSyncKeyedStore<CallRecordEventMeta>;
-  chunks: PluginStateSyncKeyedStore<CallRecordEventChunk>;
+  events: PluginStateKeyedStore<CallRecordEventMeta>;
+  chunks: PluginStateKeyedStore<CallRecordEventChunk>;
 };
 
 /** Return the pre-SQLite JSONL call log path for migration/compat checks. */
@@ -74,12 +74,12 @@ function createCallRecordStateStores(storePath: string): CallRecordStateStores {
   }
   const env = resolvePluginStateEnv(storePath);
   return {
-    events: runtime.state.openSyncKeyedStore<CallRecordEventMeta>({
+    events: runtime.state.openKeyedStore<CallRecordEventMeta>({
       namespace: CALL_RECORD_EVENTS_NAMESPACE,
       maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
       env,
     }),
-    chunks: runtime.state.openSyncKeyedStore<CallRecordEventChunk>({
+    chunks: runtime.state.openKeyedStore<CallRecordEventChunk>({
       namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
       maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
       env,
@@ -220,12 +220,13 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
 }
 
 /** Register a serialized call record event and its chunks, then prune old events. */
-function registerCallRecordEvent(
+async function registerCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
   call: CallRecord,
-  order?: { persistedAt: number; sequence: number },
-): void {
+  order: { persistedAt: number; sequence: number },
+): Promise<void> {
+  // Capture the snapshot before chunk writes yield to later call mutations.
   const serialized = JSON.stringify(prepareVoiceCallRecordForStorage(call));
   const buffer = Buffer.from(serialized, "utf8");
   const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CALL_RECORD_CHUNK_BYTES));
@@ -239,50 +240,53 @@ function registerCallRecordEvent(
       index * RAW_CALL_RECORD_CHUNK_BYTES,
       (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
     );
-    stores.chunks.register(buildChunkKey(eventKey, index), {
+    await stores.chunks.register(buildChunkKey(eventKey, index), {
       index,
       dataBase64: chunk.toString("base64"),
     });
   }
-  stores.events.register(eventKey, {
+  await stores.events.register(eventKey, {
     chunkCount,
     byteLength: buffer.byteLength,
-    persistedAt: order?.persistedAt,
-    sequence: order?.sequence,
+    persistedAt: order.persistedAt,
+    sequence: order.sequence,
   });
-  pruneCallRecordEvents(stores);
+  await pruneCallRecordEvents(stores);
 }
 
 /** Delete metadata and all chunk rows for one call record event. */
-function deleteCallRecordEventRows(stores: CallRecordStateStores, eventKey: string): void {
-  const meta = stores.events.lookup(eventKey);
-  stores.events.delete(eventKey);
+async function deleteCallRecordEventRows(
+  stores: CallRecordStateStores,
+  eventKey: string,
+): Promise<void> {
+  const meta = await stores.events.lookup(eventKey);
+  await stores.events.delete(eventKey);
   if (!meta) {
     return;
   }
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    stores.chunks.delete(buildChunkKey(eventKey, index));
+    await stores.chunks.delete(buildChunkKey(eventKey, index));
   }
 }
 
 /** Keep only the newest bounded call record events. */
-function pruneCallRecordEvents(stores: CallRecordStateStores): void {
-  const rows = stores.events.entries();
+async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<void> {
+  const rows = await stores.events.entries();
   if (rows.length <= MAX_CALL_RECORD_EVENTS) {
     return;
   }
   const sorted = rows.toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
   for (const row of sorted.slice(0, rows.length - MAX_CALL_RECORD_EVENTS)) {
-    deleteCallRecordEventRows(stores, row.key);
+    await deleteCallRecordEventRows(stores, row.key);
   }
 }
 
 /** Read and reassemble one chunked call record event. */
-function readCallRecordEvent(
+async function readCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
   meta: CallRecordEventMeta,
-): CallRecord | null {
+): Promise<CallRecord | null> {
   if (
     !Number.isSafeInteger(meta.chunkCount) ||
     meta.chunkCount < 1 ||
@@ -291,7 +295,7 @@ function readCallRecordEvent(
     return null;
   }
   // Preserve compatibility with published hosts exposing point reads only.
-  const records = stores.chunks.lookupMany?.(
+  const records = await stores.chunks.lookupMany?.(
     Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(eventKey, index)),
   );
   const chunks: Buffer[] = [];
@@ -300,7 +304,9 @@ function readCallRecordEvent(
     if (result && !result.ok) {
       throw result.error;
     }
-    const chunk = records ? result?.value : stores.chunks.lookup(buildChunkKey(eventKey, index));
+    const chunk = records
+      ? result?.value
+      : await stores.chunks.lookup(buildChunkKey(eventKey, index));
     if (!chunk || chunk.index !== index) {
       return null;
     }
@@ -311,22 +317,22 @@ function readCallRecordEvent(
 }
 
 /** Read all persisted call records in stable persisted order. */
-function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
-  const sqliteCalls: PersistedCallRecord[] = stores.events
-    .entries()
-    .toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key))
-    .map((entry) => {
-      const call = readCallRecordEvent(stores, entry.key, entry.value);
-      return call
-        ? {
-            call,
-            persistedAt: entry.value.persistedAt ?? entry.createdAt,
-            sequence: entry.value.sequence ?? parseEventKeySequence(entry.key),
-            orderKey: entry.key,
-          }
-        : null;
-    })
-    .filter((entry): entry is PersistedCallRecord => entry !== null);
+async function readCallRecordEvents(stores: CallRecordStateStores): Promise<CallRecord[]> {
+  const entries = (await stores.events.entries()).toSorted(
+    (a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key),
+  );
+  const sqliteCalls: PersistedCallRecord[] = [];
+  for (const entry of entries) {
+    const call = await readCallRecordEvent(stores, entry.key, entry.value);
+    if (call) {
+      sqliteCalls.push({
+        call,
+        persistedAt: entry.value.persistedAt ?? entry.createdAt,
+        sequence: entry.value.sequence ?? parseEventKeySequence(entry.key),
+        orderKey: entry.key,
+      });
+    }
+  }
   return sqliteCalls
     .toSorted(
       (a, b) =>
@@ -338,11 +344,11 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
 }
 
 /** Persist one call record event to plugin state. */
-export function persistCallRecord(storePath: string, call: CallRecord): void {
+export async function persistCallRecord(storePath: string, call: CallRecord): Promise<void> {
   try {
     const stores = createCallRecordStateStores(storePath);
     const order = nextCallRecordOrder();
-    registerCallRecordEvent(stores, buildNewEventKey(order), call, order);
+    await registerCallRecordEvent(stores, buildNewEventKey(order), call, order);
   } catch (err) {
     console.error("[voice-call] Failed to persist call record:", err);
     throw err;
@@ -350,15 +356,15 @@ export function persistCallRecord(storePath: string, call: CallRecord): void {
 }
 
 /** Restore nonterminal active calls and provider/event indexes from persisted records. */
-export function loadActiveCallsFromStore(storePath: string): {
+export async function loadActiveCallsFromStore(storePath: string): Promise<{
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
-} {
+}> {
   const stores = tryCreateCallRecordStateStores(storePath);
   let calls: CallRecord[] = [];
   try {
-    calls = stores ? readCallRecordEvents(stores) : [];
+    calls = stores ? await readCallRecordEvents(stores) : [];
   } catch (err) {
     console.error("[voice-call] Failed to read SQLite call records:", err);
   }
@@ -397,11 +403,11 @@ export function loadActiveCallsFromStore(storePath: string): {
   return { activeCalls, providerCallIdMap, processedEventIds };
 }
 
-function readCallHistoryFromStore(storePath: string): CallRecord[] {
+async function readCallHistoryFromStore(storePath: string): Promise<CallRecord[]> {
   const stores = tryCreateCallRecordStateStores(storePath);
   if (stores) {
     try {
-      return readCallRecordEvents(stores);
+      return await readCallRecordEvents(stores);
     } catch (err) {
       console.error("[voice-call] Failed to read SQLite call history:", err);
     }
@@ -410,9 +416,12 @@ function readCallHistoryFromStore(storePath: string): CallRecord[] {
 }
 
 /** Resolve an internal ID or retained provider alias to its newest logical call snapshot. */
-export function findCallInStore(storePath: string, callId: string): CallRecord | undefined {
+export async function findCallInStore(
+  storePath: string,
+  callId: string,
+): Promise<CallRecord | undefined> {
   // Admission and status must distinguish unavailable history from an absent call.
-  const calls = readCallRecordEvents(createCallRecordStateStores(storePath));
+  const calls = await readCallRecordEvents(createCallRecordStateStores(storePath));
   const match =
     calls.findLast((call) => call.callId === callId) ??
     calls.findLast((call) => call.providerCallId === callId);
@@ -427,5 +436,5 @@ export async function getCallHistoryFromStore(
   if (limit <= 0) {
     return [];
   }
-  return readCallHistoryFromStore(storePath).slice(-limit);
+  return (await readCallHistoryFromStore(storePath)).slice(-limit);
 }
