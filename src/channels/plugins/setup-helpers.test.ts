@@ -281,6 +281,35 @@ describe("patchScopedAccountConfig credential clearing", () => {
     expect(channel.accounts && Object.keys(channel.accounts)).toEqual(["Default"]);
   });
 
+  it("clears the exact default record when a case-colliding key sorts first", () => {
+    // Account maps may carry both `Default` and `default`; resolvers
+    // (resolveAccountEntry) prefer the exact key, so clearing must target the
+    // same record or the active credential survives the rotation.
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: true,
+            accounts: {
+              Default: { token: "legacy-variant-token" },
+              default: { token: "stale-promoted-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token"],
+      patch: { token: "new-token" },
+      ensureChannelEnabled: false,
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.token).toBe("new-token");
+    expect(accountRecord(channel, "default")).toEqual({});
+    expect(accountRecord(channel, "Default")).toEqual({ token: "legacy-variant-token" });
+  });
+
   it("clears only selected named-account credentials and preserves disabled siblings", () => {
     const next = patchScopedAccountConfig({
       cfg: asConfig({

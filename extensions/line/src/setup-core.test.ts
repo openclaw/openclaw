@@ -268,4 +268,29 @@ describe("LINE rotation after single-account promotion", () => {
     expect(channel.channelAccessToken).toBe("ROOT_TOKEN_C");
     expect(channel.accounts?.work).toEqual({ name: "Work", channelAccessToken: "WORK_TOKEN" });
   });
+
+  it("retires the exact default record when a case-colliding key sorts first", () => {
+    // resolveAccountEntry prefers the exact `default` key over a case variant,
+    // so the rotation must clear that same record; clearing `Default` instead
+    // would leave the active stale credential in place.
+    const colliding = {
+      channels: {
+        line: {
+          enabled: true,
+          accounts: {
+            Default: { channelAccessToken: "LEGACY_VARIANT_TOKEN" },
+            default: { channelAccessToken: "STALE_PROMOTED_TOKEN" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = applyLineSetup({ channelAccessToken: "ROTATED_TOKEN" }, colliding);
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(promotedAccount(rotated)?.default?.channelAccessToken).toBeUndefined();
+    expect(promotedAccount(rotated)?.Default?.channelAccessToken).toBe("LEGACY_VARIANT_TOKEN");
+    expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
+    expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
+  });
 });

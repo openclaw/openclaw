@@ -338,6 +338,13 @@ function resolveExistingAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
 ): string {
+  // Exact keys win, matching resolver precedence (resolveAccountEntry): when a
+  // config carries both `Default` and `default`, resolvers read the exact
+  // record, so writers must select it too. Fall back to a normalized match to
+  // preserve authored casing like `accounts.Ops`.
+  if (Object.hasOwn(accounts, targetAccountId)) {
+    return targetAccountId;
+  }
   return (
     Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
     targetAccountId
