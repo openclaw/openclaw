@@ -941,9 +941,7 @@ describe("prepared model runtime scoped refresh", () => {
         },
       },
     };
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
-      createEmptyPluginRegistry(),
-    );
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(createEmptyPluginRegistry);
     await refreshModelRuntimeAfterHotReload({
       config: retiredConfig,
       agentIds: undefined,

@@ -3196,10 +3196,7 @@ function createCompactNodeTestShardBundles(
       // File ownership and timing identities are rebuilt before normal admission.
       const tailBudgets = new Map<string, number>();
       for (const group of packedBins.slice(COMPACT_NODE_TEST_JOB_CAP).flat()) {
-        if (
-          !isHostedToolingGroup(group) ||
-          (group.includePatterns?.length ?? 0) < 2
-        ) {
+        if (!isHostedToolingGroup(group) || (group.includePatterns?.length ?? 0) < 2) {
           continue;
         }
         const available = Math.max(
