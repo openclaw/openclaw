@@ -508,11 +508,15 @@ describe("Team Reports scheduler lifecycle", () => {
       schedule: { intradayEveryHours: 4 },
     });
     const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
-    github.collect.mockImplementationOnce(() => blocked.promise);
+    const collecting = createDeferred<void>();
+    github.collect.mockImplementationOnce(() => {
+      collecting.resolve();
+      return blocked.promise;
+    });
     await scheduler.start();
     const id = await scheduler.generate({ intraday: true });
-    await vi.advanceTimersByTimeAsync(0);
     await expect(scheduler.generate()).rejects.toThrow("already in progress");
+    await collecting.promise;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(github.collect).toHaveBeenCalledOnce();
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("running");
