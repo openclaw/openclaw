@@ -285,7 +285,7 @@ it.each([
   }),
 );
 
-it.runIf(process.platform === "linux" || process.platform === "darwin").each([
+const servingAncestorMaintenanceCases = [
   { platform: "linux", identity: "current updater", phase: "inspect", authorized: true },
   { platform: "linux", identity: "current updater", phase: "prepare", authorized: true },
   { platform: "darwin", identity: "current updater", phase: "inspect", authorized: true },
@@ -298,7 +298,15 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each([
   { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
   { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
   { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
-] as const)(
+] as const;
+
+it.runIf(process.platform === "linux" || process.platform === "darwin").each(
+  servingAncestorMaintenanceCases.filter(
+    // Binding a foreign PID reads native process identity, so only exercise that
+    // fixture where the simulated Linux policy matches the actual host.
+    ({ identity }) => identity !== "parent lease" || process.platform === "linux",
+  ),
+)(
   "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase",
   ({ platform, identity, phase, authorized }) =>
     withServiceHome(async (home) => {
