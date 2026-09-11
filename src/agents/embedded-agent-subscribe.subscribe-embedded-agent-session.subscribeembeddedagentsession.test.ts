@@ -1597,29 +1597,36 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("extracts correct reasoning delta for incremental stream updates", () => {
-    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
-    const { emit } = createSubscribedSessionHarness({
+    const emitted = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       reasoningMode: "stream",
       onReasoningStream: vi.fn(),
     });
+    const unlisten = agentEvents.onAgentEventForRun("run", emitted);
+    try {
+      emitThinkingEvent(emit, "Step 1", { type: "thinking_delta", delta: "Step 1" });
+      emitThinkingEvent(emit, "Step 1 and Step 2", {
+        type: "thinking_delta",
+        delta: " and Step 2",
+      });
 
-    emitThinkingEvent(emit, "Step 1", { type: "thinking_delta", delta: "Step 1" });
-    emitThinkingEvent(emit, "Step 1 and Step 2", { type: "thinking_delta", delta: " and Step 2" });
+      const thinkingEvents = emitted.mock.calls
+        .map((call) => call[0])
+        .filter((evt) => evt?.stream === "thinking");
 
-    const thinkingEvents = emitAgentEventSpy.mock.calls
-      .map((call) => call[0])
-      .filter((evt) => evt?.stream === "thinking");
-
-    expect(thinkingEvents.length).toBe(2);
-    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
-    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
-    emitAgentEventSpy.mockRestore();
+      expect(thinkingEvents.length).toBe(2);
+      expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
+      expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
+    } finally {
+      subscription.unsubscribe();
+      unlisten();
+    }
   });
 
   it("emits live edit diff progress while tool arguments stream", () => {
-    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
-    const { emit } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
+    const emitted = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
     const partialJson =
       '{"path":"notes.md","edits":[{"oldText":"old\\nline","newText":"new\\nline\\n';
     const message = {
@@ -1635,32 +1642,37 @@ describe("subscribeEmbeddedAgentSession", () => {
       ],
     };
 
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: {
-        type: "toolcall_delta",
-        contentIndex: 0,
-        delta: partialJson,
-        partial: message,
-      },
-    });
+    const unlisten = agentEvents.onAgentEventForRun("run-live-edit-diff", emitted);
+    try {
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: partialJson,
+          partial: message,
+        },
+      });
 
-    expect(
-      emitAgentEventSpy.mock.calls
-        .map(([event]) => event)
-        .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
-    ).toMatchObject({
-      runId: "run-live-edit-diff",
-      stream: "tool",
-      data: {
-        phase: "input_delta",
-        toolCallId: "tool-live-edit",
-        name: "edit",
-        diff: { added: 2, removed: 1 },
-      },
-    });
-    emitAgentEventSpy.mockRestore();
+      expect(
+        emitted.mock.calls
+          .map(([event]) => event)
+          .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
+      ).toMatchObject({
+        runId: "run-live-edit-diff",
+        stream: "tool",
+        data: {
+          phase: "input_delta",
+          toolCallId: "tool-live-edit",
+          name: "edit",
+          diff: { added: 2, removed: 1 },
+        },
+      });
+    } finally {
+      subscription.unsubscribe();
+      unlisten();
+    }
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {

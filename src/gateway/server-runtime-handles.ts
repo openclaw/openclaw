@@ -15,6 +15,7 @@ import {
 import { createNoopHeartbeatRunner } from "./server-runtime-service-shared.js";
 import type { GatewayMaintenanceHandles } from "./server-runtime-services.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { SessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
 // cleanup hooks that shutdown/reload code must stop exactly once.
@@ -46,6 +47,7 @@ export type GatewayServerMutableState = {
   channelHealthMonitor: ChannelHealthMonitor | null;
   configReloader: GatewayConfigReloaderHandle;
   agentUnsub: (() => Promise<void> | void) | null;
+  sessionLifecyclePersistence?: SessionLifecyclePersistenceOwner;
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;

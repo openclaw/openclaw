@@ -199,6 +199,9 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // A queued turn owns fresh admission, not the original chat registration.
+    onAdmittedRunContext: undefined,
+    onSessionPrepared: undefined,
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
     toolsAllow: turn.queued.toolsAllow,

@@ -52,6 +52,7 @@ private actor NativeSubmissionTransport: OpenClawChatTransport {
     let ackStatus: String
     let ackRunID: String?
     let ackSummary: String?
+    let onAcceptedRun: (@MainActor @Sendable (String?) -> Void)?
     let validationGateCall: Int
     private var responseError: GatewayResponseError?
     private var generation = 0
@@ -67,6 +68,7 @@ private actor NativeSubmissionTransport: OpenClawChatTransport {
         ackStatus: String = "started",
         ackRunID: String? = nil,
         ackSummary: String? = nil,
+        onAcceptedRun: (@MainActor @Sendable (String?) -> Void)? = nil,
         sendGate: NativeSubmissionGate? = nil,
         historyGate: NativeSubmissionGate? = nil,
         validationGate: NativeSubmissionGate? = nil,
@@ -79,6 +81,7 @@ private actor NativeSubmissionTransport: OpenClawChatTransport {
         self.ackStatus = ackStatus
         self.ackRunID = ackRunID
         self.ackSummary = ackSummary
+        self.onAcceptedRun = onAcceptedRun
         self.sendGate = sendGate
         self.historyGate = historyGate
         self.validationGate = validationGate
@@ -141,9 +144,10 @@ private actor NativeSubmissionTransport: OpenClawChatTransport {
             return OpenClawChatSendResponse(
                 runId: self.ackRunID ?? "remote-\(message.id)",
                 status: self.ackStatus,
-                summary: self.ackSummary)
+                summary: self.ackSummary,
+                onAcceptedRun: self.onAcceptedRun)
         case .rejected:
-            return OpenClawChatSendResponse(runId: message.id, status: "error")
+            return OpenClawChatSendResponse(runId: message.id, status: "error", onAcceptedRun: self.onAcceptedRun)
         case .uncertain:
             throw URLError(.networkConnectionLost)
         }
@@ -326,8 +330,11 @@ private struct ChatExternalSubmissionTests {
 
     @Test func `route loss after dispatch preserves a decoded acknowledgement`() async throws {
         let gate = NativeSubmissionGate()
-        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(sendGate: gate))
+        var observedSessions: [String?] = []
+        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
+            onAcceptedRun: { observedSessions.append($0) }, sendGate: gate))
         await fixture.prepare()
+        fixture.vm.sessionId = "session-a"
         let invocation = fixture.request()
         let route = await fixture.transport.route(fixture.target)
         let pending = Task { await fixture.vm.submit(invocation, using: route) }
@@ -341,6 +348,7 @@ private struct ChatExternalSubmissionTests {
             #expect(fixture.vm.errorText == "Selected account lost.")
             #expect(!fixture.vm.healthOK)
             #expect(await fixture.transport.sent.count == 1)
+            #expect(observedSessions == ["session-a"])
         } catch {
             await gate.open()
             _ = await pending.value
@@ -482,10 +490,13 @@ private struct ChatExternalSubmissionTests {
         .Response) async throws
     {
         let gate = NativeSubmissionGate()
+        var observedSessions: [String?] = []
         let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
             response: response,
+            onAcceptedRun: { observedSessions.append($0) },
             sendGate: gate))
         await fixture.prepare()
+        fixture.vm.sessionId = "session-a"
         let request = fixture.request()
         let route = await fixture.transport.route(fixture.target)
         let replacement = NativeSubmissionTransport()
@@ -494,6 +505,7 @@ private struct ChatExternalSubmissionTests {
         var duplicate: Task<OpenClawChatSubmissionOutcome, Never>?
         do {
             try await waitUntil("native send entered") { await gate.entered }
+            #expect(observedSessions.isEmpty)
             let validations = await fixture.transport.validationCalls
             let waiter = Task { await fixture.vm.submit(request, using: replacementRoute) }
             duplicate = waiter
@@ -514,6 +526,7 @@ private struct ChatExternalSubmissionTests {
             #expect(await fixture.vm.submit(request, using: replacementRoute) == expected)
             #expect(await fixture.transport.sent.count == 1)
             #expect(await replacement.sent.isEmpty)
+            #expect(observedSessions == (response == .accepted ? ["session-a"] : []))
         } catch {
             await fixture.close()
             _ = await first.value
@@ -542,9 +555,12 @@ private struct ChatExternalSubmissionTests {
         scenario: String) async throws
     {
         let emptyRunID = scenario == "empty-run"
+        var observedSessions: [String?] = []
         let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
-            ackStatus: "timeout", ackRunID: emptyRunID ? "" : "admitted-run", ackSummary: "aborted"))
+            ackStatus: "timeout", ackRunID: emptyRunID ? "" : "admitted-run", ackSummary: "aborted",
+            onAcceptedRun: { observedSessions.append($0) }))
         await fixture.prepare()
+        fixture.vm.sessionId = "session-a"
         let messages = scenario == "committed"
             ? #"[{"role":"user","content":[{"type":"text","text":"external text"}],"idempotencyKey":"admitted-run:user"}]"#
             : "[]"
@@ -571,6 +587,7 @@ private struct ChatExternalSubmissionTests {
         }
         #expect(await fixture.vm.submit(invocation, using: route) == result)
         #expect(await fixture.transport.sent.count == 1)
+        #expect(observedSessions == (emptyRunID ? [] : ["session-a"]))
         await fixture.close()
     }
 
@@ -924,7 +941,9 @@ private struct ChatExternalSubmissionTests {
 
     @Test(arguments: ["started", "in_flight", "ok", "pending", "unexpected", ""])
     func `acceptance requires known gateway status`(status: String) async throws {
-        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(ackStatus: status))
+        var observedSessions: [String?] = []
+        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
+            ackStatus: status, onAcceptedRun: { observedSessions.append($0) }))
         await fixture.prepare()
         let request = fixture.request()
         let route = await fixture.transport.route(fixture.target)
@@ -935,6 +954,64 @@ private struct ChatExternalSubmissionTests {
             #expect(fixture.vm.pendingRunCount == 0)
         } else {
             Issue.record("An unknown ACK status cannot establish acceptance")
+        }
+        #expect(observedSessions == (["started", "in_flight", "ok"].contains(status) ? [nil] : []))
+        await fixture.close()
+    }
+
+    @Test
+    func `accepted observer precedes presentation validation and retains the send session`() async throws {
+        let send = NativeSubmissionGate()
+        let presentation = NativeSubmissionGate()
+        var observedSessions: [String?] = []
+        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
+            onAcceptedRun: { observedSessions.append($0) },
+            sendGate: send, validationGate: presentation, validationGateCall: 3))
+        await fixture.prepare()
+        fixture.vm.sessionId = "session-a"
+        let invocation = fixture.request()
+        let route = await fixture.transport.route(fixture.target)
+        let pending = Task { await fixture.vm.submit(invocation, using: route) }
+        do {
+            try await waitUntil("send suspended before ACK") { await send.entered }
+            #expect(observedSessions.isEmpty)
+            fixture.vm.sessionId = "session-successor"
+            await send.open()
+            try await waitUntil("presentation validation suspended") { await presentation.entered }
+            #expect(observedSessions == ["session-a"])
+            await presentation.open()
+            #expect(await pending.value == .accepted(runID: "remote-\(invocation.operationID.uuidString)"))
+            #expect(observedSessions == ["session-a"])
+        } catch {
+            await fixture.close()
+            _ = await pending.value
+            throw error
+        }
+        await fixture.close()
+    }
+
+    @Test(arguments: ["started", "in_flight", "ok", "aborted", "timeout", "error", "pending", "blank-run"])
+    func `composer observes only confirmed run acknowledgements`(scenario: String) async throws {
+        var observedSessions: [String?] = []
+        let fixture = try NativeSubmissionFixture(transport: NativeSubmissionTransport(
+            ackStatus: scenario == "aborted" ? "timeout" : scenario == "blank-run" ? "started" : scenario,
+            ackRunID: scenario == "blank-run" ? " \n\t " : "remote-run",
+            ackSummary: scenario == "aborted" ? "aborted" : nil,
+            onAcceptedRun: { observedSessions.append($0) }))
+        await fixture.prepare()
+        fixture.vm.sessionId = "session-a"
+        fixture.vm.input = "composer text"
+        fixture.vm.send()
+        do {
+            try await waitUntil("composer ACK handled") {
+                let count = await fixture.transport.sent.count
+                return await MainActor.run { count == 1 && !fixture.vm.isSubmittingDraft }
+            }
+            #expect(observedSessions == (
+                ["started", "in_flight", "ok", "aborted"].contains(scenario) ? ["session-a"] : []))
+        } catch {
+            await fixture.close()
+            throw error
         }
         await fixture.close()
     }

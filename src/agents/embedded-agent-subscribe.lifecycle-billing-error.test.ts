@@ -14,7 +14,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import {
@@ -122,7 +122,9 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     const sessionKey = "agent:main:prepared-lifecycle-owner";
     const unlisten = onAgentEventForRun(runId, emitted);
     const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ runId, sessionId, sessionKey });
+    const admission = prepareSystemAgentRunAdmission(config, runId, "main", "billing-error-test");
     try {
+      const admittedRunContext = await admission.admit("embedded");
       await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
         // Runtime preparation can select an endpoint owner that differs from the route label.
         const runtimeHandle = resolveProviderRuntimePluginHandle({
@@ -158,7 +160,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             prompt: "exercise terminal provider failure",
             timeoutMs: 30_000,
             thinkLevel: "off",
-            admittedRunContext: createTestAdmittedRunContext(runId),
+            admittedRunContext,
             authStorage: modelRegistry.authStorage,
             modelRegistry,
             authProfileStore: { version: 1, profiles: {} },
@@ -220,6 +222,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
         }
       });
     } finally {
+      admission.close();
       unlisten();
       closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
     }

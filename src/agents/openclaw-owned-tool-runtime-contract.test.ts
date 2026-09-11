@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
@@ -35,20 +36,24 @@ type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
 
 function createToolHandlerCtx(): ToolHandlerContext {
   // Minimal embedded-agent tool handler context used to drive start/end events.
+  const state = {
+    ...createBaseToolHandlerState(),
+    toolMetaById: new Map<string, ToolCallSummary>(),
+    pendingMessagingTargets: new Map<string, MessagingToolSend>(),
+    messagingToolSentTargets: [] as MessagingToolSend[],
+    successfulCronAdds: 0,
+    unsubscribed: false,
+  };
   return {
+    emitEvent: emitAgentEvent,
+    isCurrent: () => !state.unsubscribed,
     params: {
       runId: "run-contract",
       agentId: "agent-1",
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
     },
-    state: {
-      ...createBaseToolHandlerState(),
-      toolMetaById: new Map<string, ToolCallSummary>(),
-      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
-      messagingToolSentTargets: [] as MessagingToolSend[],
-      successfulCronAdds: 0,
-    },
+    state,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,

@@ -27,18 +27,22 @@ import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onGatewaySuspendAdmissionChange } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
-import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
-  type ChatAbortControllerEntry,
+  markChatAbortTerminalPersistenceError,
   removeChatAbortControllerEntry,
-  type RestartRecoveryCandidate,
-} from "./chat-abort.js";
+} from "./chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
+import type { LiveActivityCoordinator } from "./live-activity-coordinator.js";
+import { readLiveActivitySource, type LiveActivitySource } from "./live-activity-source.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
@@ -50,7 +54,7 @@ import { resolveVisibleActiveSessionRunState } from "./server-methods/session-ac
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
-import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
+import type { SessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -105,6 +109,8 @@ export function startGatewayEventSubscriptions(params: {
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
   refreshConnectedUserProfiles: () => void;
+  liveActivityCoordinator?: LiveActivityCoordinator;
+  sessionLifecyclePersistence: SessionLifecyclePersistenceOwner;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -153,16 +159,33 @@ export function startGatewayEventSubscriptions(params: {
     auditEnabled && auditMessageMode !== "off"
       ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
       : undefined;
-  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
+  const sessionLifecyclePersistence = params.sessionLifecyclePersistence;
+  const unsubscribeActivityIdentity = params.liveActivityCoordinator
+    ? onSessionIdentityMutation(params.liveActivityCoordinator.retireSession)
+    : undefined;
   const agentEventDispatches = new Set<Promise<void>>();
   const trackedRunIds = (runId: string, clientRunId: string) =>
     runId === clientRunId ? [runId] : [runId, clientRunId];
-  const clearTrackedActiveRun = (run: { runId: string; clientRunId: string }) => {
-    for (const candidateRunId of trackedRunIds(run.runId, run.clientRunId)) {
-      const entry = params.chatAbortControllers.get(candidateRunId);
-      if (!entry) {
-        continue;
-      }
+  const trackedEntries = (run: {
+    runId: string;
+    clientRunId: string;
+    source?: LiveActivitySource;
+  }) =>
+    run.source
+      ? params.chatAbortControllers.get(run.source.publicRunId) === run.source.entry &&
+        run.source.entry.liveActivityFact?.source === run.source
+        ? [[run.source.publicRunId, run.source.entry] as const]
+        : []
+      : trackedRunIds(run.runId, run.clientRunId).flatMap((id) => {
+          const entry = params.chatAbortControllers.get(id);
+          return entry ? [[id, entry] as const] : [];
+        });
+  const clearTrackedActiveRun = (run: {
+    runId: string;
+    clientRunId: string;
+    source?: LiveActivitySource;
+  }) => {
+    for (const [candidateRunId, entry] of trackedEntries(run)) {
       entry.projectSessionActive = false;
       entry.projectSessionTerminalPersisted = false;
       markChatAbortTerminalPersistenceError(entry, undefined);
@@ -182,11 +205,12 @@ export function startGatewayEventSubscriptions(params: {
     runId: string;
     clientRunId: string;
     persisted?: boolean;
+    persistence?: Promise<void>;
+    source?: LiveActivitySource;
   }) => {
     const persisted = run.persisted ?? true;
-    for (const candidateRunId of trackedRunIds(run.runId, run.clientRunId)) {
-      const entry = params.chatAbortControllers.get(candidateRunId);
-      if (!entry) {
+    for (const [candidateRunId, entry] of trackedEntries(run)) {
+      if (run.persistence && entry.projectSessionTerminalPersistence !== run.persistence) {
         continue;
       }
       if (persisted) {
@@ -206,17 +230,16 @@ export function startGatewayEventSubscriptions(params: {
     clientRunId: string;
     sessionId?: string;
     persistence: Promise<void>;
+    source?: LiveActivitySource;
   }) => {
     let tracked = false;
-    for (const candidateRunId of trackedRunIds(run.runId, run.clientRunId)) {
-      const entry = params.chatAbortControllers.get(candidateRunId);
-      if (!entry) {
-        continue;
-      }
+    for (const [candidateRunId, entry] of trackedEntries(run)) {
       tracked = true;
       entry.projectSessionTerminalPersistence = run.persistence;
       void run.persistence.catch((error: unknown) => {
-        markChatAbortTerminalPersistenceError(entry, error);
+        if (entry.projectSessionTerminalPersistence === run.persistence) {
+          markChatAbortTerminalPersistenceError(entry, error);
+        }
       });
       const lifecycleGeneration = entry.lifecycleGeneration?.trim();
       const sessionKey = entry.sessionKey.trim();
@@ -225,6 +248,9 @@ export function startGatewayEventSubscriptions(params: {
       const observedAt = entry.projectSessionTerminalObservedAt;
       if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
         void run.persistence.catch(() => {
+          if (params.chatAbortControllers.get(candidateRunId) !== entry) {
+            return;
+          }
           params.restartRecoveryCandidates.set(candidateRunId, {
             runId: candidateRunId,
             lifecycleGeneration,
@@ -328,6 +354,14 @@ export function startGatewayEventSubscriptions(params: {
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
+    // Abort listeners can replace the public registration before its terminal
+    // event reaches us. Bind the captured predecessor before any owner lookup.
+    void sessionLifecyclePersistence.attachLocalAbortSource(evt);
+    try {
+      params.liveActivityCoordinator?.observeRuntimeEvent(evt);
+    } catch {
+      params.log.warn("Live Activity source observation failed");
+    }
     sessionObserver.handleEvent(evt);
     if (auditEnabled) {
       auditRecorder.record(evt);
@@ -336,136 +370,127 @@ export function startGatewayEventSubscriptions(params: {
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
         : undefined;
-    if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = evt.contextClaimId
-        ? undefined
-        : params.chatRunState.registry.peek(evt.runId);
-      const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
+    if (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error") {
+      const source = readLiveActivitySource(evt);
+      const chatLink =
+        source || evt.contextClaimId ? undefined : params.chatRunState.registry.peek(evt.runId);
+      const clientRunId = source?.publicRunId ?? chatLink?.clientRunId ?? evt.runId;
+      const entries = trackedEntries({ runId: evt.runId, clientRunId, source });
+      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
       const observedAt =
         typeof evt.data.endedAt === "number" && Number.isFinite(evt.data.endedAt)
           ? evt.data.endedAt
           : evt.ts;
-      for (const candidateRunId of candidateRunIds) {
-        const entry = params.chatAbortControllers.get(candidateRunId);
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
+      for (const [, entry] of entries) {
         if (
-          entry &&
-          (!eventLifecycleGeneration ||
-            !entry.lifecycleGeneration ||
-            entry.lifecycleGeneration === eventLifecycleGeneration)
+          !eventLifecycleGeneration ||
+          !entry.lifecycleGeneration ||
+          entry.lifecycleGeneration === eventLifecycleGeneration
         ) {
-          entry.projectSessionTerminalPending = true;
-          entry.projectSessionTerminalObservedAt = observedAt;
+          entry.projectSessionTerminalPending = lifecyclePhase !== "start";
+          entry.projectSessionTerminalObservedAt =
+            lifecyclePhase === "start" ? undefined : observedAt;
         }
       }
-      const trackedEntry = candidateRunIds
-        .map((candidateRunId) => params.chatAbortControllers.get(candidateRunId))
-        .find((entry) => entry !== undefined);
-      const runContext = getAgentRunContext(evt.runId);
-      const sessionAgentId = trackedEntry?.agentId ?? evt.agentId ?? runContext?.agentId;
-      const knownSessionKey =
-        evt.deliverySessionKey ??
-        evt.sessionKey ??
-        trackedEntry?.sessionKey ??
-        runContext?.sessionKey;
-      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
-      const terminalAuthority =
-        evt.contextClaimId && eventLifecycleGeneration
-          ? {
-              claimId: evt.contextClaimId,
-              lifecycleGeneration: eventLifecycleGeneration,
-              runId: evt.runId,
-            }
-          : undefined;
-      const trackedOwnerIsCurrent =
-        !trackedEntry ||
-        !eventLifecycleGeneration ||
-        !trackedEntry.lifecycleGeneration ||
-        trackedEntry.lifecycleGeneration === eventLifecycleGeneration;
-      const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
-      const canPersistTerminal =
-        isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data }) &&
-        evt.projectSessionLifecycle !== false &&
-        trackedOwnerIsCurrent &&
-        claimIsComplete;
-      const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
-      const prepareTerminalPersistence = (sessionKey: string) => {
-        const persistence = sessionLifecyclePersistence.observe({
-          sessionKey,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          event: evt,
-          ...(terminalAuthority ? { authority: terminalAuthority } : {}),
-          ...(writeContext ? { writeContext } : {}),
-          ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-        });
-        if (terminalAuthority) {
-          // A failed lazy handler cannot consume the prepared write and release
-          // its claim. Persistence settlement becomes that cleanup boundary.
-          const clearTerminalAuthority = () =>
-            clearAgentRunContext(
-              terminalAuthority.runId,
-              terminalAuthority.lifecycleGeneration,
-              terminalAuthority.claimId,
-            );
-          failedDispatchCleanup = () => {
-            void persistence.then(clearTerminalAuthority, clearTerminalAuthority);
-          };
-        }
-        clearTrackedActiveRun({ runId: evt.runId, clientRunId });
-        const tracked = trackTrackedRunTerminalPersistence({
-          runId: evt.runId,
-          clientRunId,
-          sessionId: evt.sessionId,
-          persistence,
-        });
-        if (!tracked) {
-          void persistence.catch((error: unknown) => {
-            params.log.warn("Terminal session persistence failed", { runId: evt.runId, error });
+      if (lifecyclePhase !== "start") {
+        const trackedEntry = source?.entry ?? entries[0]?.[1];
+        const runContext = getAgentRunContext(evt.runId);
+        const sessionAgentId =
+          source?.agentId ?? trackedEntry?.agentId ?? evt.agentId ?? runContext?.agentId;
+        const knownSessionKey =
+          source?.sessionKey ??
+          evt.deliverySessionKey ??
+          evt.sessionKey ??
+          trackedEntry?.sessionKey ??
+          runContext?.sessionKey;
+        const terminalAuthority =
+          evt.contextClaimId && eventLifecycleGeneration
+            ? {
+                claimId: evt.contextClaimId,
+                lifecycleGeneration: eventLifecycleGeneration,
+                runId: evt.runId,
+              }
+            : undefined;
+        const trackedOwnerIsCurrent =
+          !trackedEntry ||
+          !eventLifecycleGeneration ||
+          !trackedEntry.lifecycleGeneration ||
+          trackedEntry.lifecycleGeneration === eventLifecycleGeneration;
+        const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
+        const canPersistTerminal =
+          isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data }) &&
+          evt.projectSessionLifecycle !== false &&
+          trackedOwnerIsCurrent &&
+          claimIsComplete;
+        const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
+        const prepareTerminalPersistence = (sessionKey: string) => {
+          const persistence = sessionLifecyclePersistence.observe({
+            sessionKey,
+            ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+            event: evt,
+            ...(terminalAuthority ? { authority: terminalAuthority } : {}),
+            ...(writeContext ? { writeContext } : {}),
+            ...(clientRunId !== evt.runId ? { clientRunId } : {}),
           });
-        }
-        void persistence.then(
-          () => settleTrackedTerminal({ runId: evt.runId, clientRunId }),
-          () => settleTrackedTerminal({ runId: evt.runId, clientRunId, persisted: false }),
-        );
-        return persistence;
-      };
-      if (canPersistTerminal) {
-        if (knownSessionKey) {
-          const persistence = prepareTerminalPersistence(knownSessionKey);
-          writeContext?.track(persistence);
-        } else {
-          // Context cleanup can precede a terminal event. Resolve its persisted
-          // run mapping before the lazy chat handler consumes the same event.
-          terminalPreparation = getSessionKeyModule().then(async ({ resolveSessionKeyForRun }) => {
-            const sessionKey = resolveSessionKeyForRun(
-              evt.runId,
-              sessionAgentId ? { agentId: sessionAgentId } : undefined,
-            );
-            if (sessionKey) {
-              await prepareTerminalPersistence(sessionKey);
-            }
+          if (terminalAuthority) {
+            // A failed lazy handler cannot consume the prepared write and release
+            // its claim. Persistence settlement becomes that cleanup boundary.
+            const clearTerminalAuthority = () =>
+              clearAgentRunContext(
+                terminalAuthority.runId,
+                terminalAuthority.lifecycleGeneration,
+                terminalAuthority.claimId,
+              );
+            failedDispatchCleanup = () => {
+              void persistence.then(clearTerminalAuthority, clearTerminalAuthority);
+            };
+          }
+          clearTrackedActiveRun({ runId: evt.runId, clientRunId, source });
+          const tracked = trackTrackedRunTerminalPersistence({
+            runId: evt.runId,
+            clientRunId,
+            sessionId: evt.sessionId,
+            persistence,
+            source,
           });
-          writeContext?.track(terminalPreparation);
-        }
-      }
-    } else if (lifecyclePhase === "start") {
-      const chatLink = evt.contextClaimId
-        ? undefined
-        : params.chatRunState.registry.peek(evt.runId);
-      const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
-      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
-      for (const candidateRunId of candidateRunIds) {
-        const entry = params.chatAbortControllers.get(candidateRunId);
-        if (
-          entry &&
-          (!eventLifecycleGeneration ||
-            !entry.lifecycleGeneration ||
-            entry.lifecycleGeneration === eventLifecycleGeneration)
-        ) {
-          entry.projectSessionTerminalPending = false;
-          entry.projectSessionTerminalObservedAt = undefined;
+          if (!tracked) {
+            void persistence.catch((error: unknown) => {
+              params.log.warn("Terminal session persistence failed", { runId: evt.runId, error });
+            });
+          }
+          void persistence.then(
+            () => settleTrackedTerminal({ runId: evt.runId, clientRunId, persistence, source }),
+            () =>
+              settleTrackedTerminal({
+                runId: evt.runId,
+                clientRunId,
+                persistence,
+                source,
+                persisted: false,
+              }),
+          );
+          return persistence;
+        };
+        if (canPersistTerminal) {
+          if (knownSessionKey) {
+            const persistence = prepareTerminalPersistence(knownSessionKey);
+            writeContext?.track(persistence);
+          } else {
+            // Context cleanup can precede a terminal event. Resolve its persisted
+            // run mapping before the lazy chat handler consumes the same event.
+            terminalPreparation = getSessionKeyModule().then(
+              async ({ resolveSessionKeyForRun }) => {
+                const sessionKey = resolveSessionKeyForRun(
+                  evt.runId,
+                  sessionAgentId ? { agentId: sessionAgentId } : undefined,
+                );
+                if (sessionKey) {
+                  await prepareTerminalPersistence(sessionKey);
+                }
+              },
+            );
+            writeContext?.track(terminalPreparation);
+          }
         }
       }
     }
@@ -484,6 +509,7 @@ export function startGatewayEventSubscriptions(params: {
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
   const agentUnsub = async () => {
+    params.liveActivityCoordinator?.beginClose();
     unsubscribeAgentEvents();
     sessionCompanion.dispose();
     sessionObserver.dispose();
@@ -504,6 +530,8 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    unsubscribeActivityIdentity?.();
+    await params.liveActivityCoordinator?.stop();
     await auditRecorder.stop();
   };
 

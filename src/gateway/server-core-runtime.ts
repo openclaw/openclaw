@@ -4,12 +4,14 @@ import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import { restartRunningChannelAccounts, type ThawRestartTarget } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createLiveActivityCoordinator } from "./live-activity-coordinator.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
@@ -40,6 +42,7 @@ import {
 } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -209,6 +212,7 @@ export async function startGatewayCoreRuntime(input: {
             logHealth,
             dedupe,
             chatAbortControllers,
+            sessionLifecyclePersistence,
             chatQueuedTurns,
             restartRecoveryCandidates,
             chatRunState,
@@ -237,8 +241,32 @@ export async function startGatewayCoreRuntime(input: {
         import("./server-runtime-startup-services.js"),
       ]),
     );
-  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
-    await startupTrace.measure("runtime.subscriptions", () =>
+  const liveActivityCoordinator = createLiveActivityCoordinator({
+    gatewayIdentity: loadOrCreateProcessDeviceIdentity(),
+    chatAbortControllers,
+    getRuntimeConfig,
+    log,
+  });
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner({
+    onCommitted: liveActivityCoordinator.observe,
+    onTerminalTransition: liveActivityCoordinator.holdTerminal,
+  });
+  runtimeState.sessionLifecyclePersistence = sessionLifecyclePersistence;
+  const activityLifetime = runtime.connectionWork.signal;
+  activityLifetime.addEventListener("abort", liveActivityCoordinator.beginClose, { once: true });
+  if (activityLifetime.aborted) {
+    liveActivityCoordinator.beginClose();
+  }
+  // General sidecars stop before the agent persistence drain. Only fence here;
+  // agentUnsub owns the final join and store close after committed terminals.
+  kernel.addGatewayLifetimeSidecar({
+    stop: () => {
+      liveActivityCoordinator.beginClose();
+      activityLifetime.removeEventListener("abort", liveActivityCoordinator.beginClose);
+    },
+  });
+  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } = await startupTrace
+    .measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
         log,
         broadcast,
@@ -254,8 +282,15 @@ export async function startGatewayCoreRuntime(input: {
         terminalSessions,
         refreshConnectedUserProfiles: () =>
           resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
+        liveActivityCoordinator,
+        sessionLifecyclePersistence,
       }),
-    );
+    )
+    .catch(async (error: unknown) => {
+      activityLifetime.removeEventListener("abort", liveActivityCoordinator.beginClose);
+      await liveActivityCoordinator.stop();
+      throw error;
+    });
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   await startupTrace.measure("runtime.services", () =>
@@ -640,6 +675,8 @@ export async function startGatewayCoreRuntime(input: {
     startEarlyRuntime,
     sessionCompanion,
     sessionObserver,
+    liveActivityCoordinator,
+    sessionLifecyclePersistence,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

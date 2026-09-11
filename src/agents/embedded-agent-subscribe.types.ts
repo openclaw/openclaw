@@ -11,6 +11,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AdmittedRunContext } from "./admitted-run-context.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
@@ -39,6 +40,8 @@ type ReasoningStreamPayload = Pick<
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Capture the exact admitted owner once; retries create a separate subscription. */
+  admittedRunContext?: AdmittedRunContext;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */

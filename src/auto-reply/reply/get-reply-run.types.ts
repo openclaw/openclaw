@@ -28,11 +28,6 @@ export type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
    * can differ from abortSignal when dispatch temporarily borrows an active lane.
    */
   queuedFollowupAbortSignal?: AbortSignal;
-  onSessionPrepared?: (binding: {
-    sessionKey?: string;
-    sessionId: string;
-    storePath?: string;
-  }) => void;
   extractedFileImages?: ExtractedFileImage[];
 };
 

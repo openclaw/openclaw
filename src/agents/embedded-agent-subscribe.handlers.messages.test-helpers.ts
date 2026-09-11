@@ -1,5 +1,6 @@
 import { vi, type Mock } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
@@ -93,6 +94,8 @@ export function createMessageUpdateContext(
     shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
     ...params.state,
   };
+  ctx.emitEvent = emitAgentEvent;
+  ctx.isCurrent = () => !ctx.state.unsubscribed;
   return ctx;
 }
 
@@ -135,6 +138,8 @@ export function createMessageEndContext(
     deltaBuffer: "Need send.",
     ...params.state,
   };
+  ctx.emitEvent = emitAgentEvent;
+  ctx.isCurrent = () => !ctx.state.unsubscribed;
   ctx.blockChunker.append(params.bufferedText ?? "");
   const delivery = createReplyDelivery(ctx);
   ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;

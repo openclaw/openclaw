@@ -17,8 +17,8 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { readResponseWithLimit } from "./http-body.js";
 import { normalizeHostname } from "./net/hostname.js";
+import type { ApnsLiveActivityPayload } from "./push-live-activity-payload.js";
 
-type ApnsRelayPushType = "alert" | "background";
 type ApnsRelayEnvironment = "production" | "sandbox";
 
 /** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
@@ -45,21 +45,36 @@ export type ApnsRelayPushResponse = {
   tokenSuffix?: string;
 };
 
-/** Test/integration seam for sending a signed APNs relay request. */
-export type ApnsRelayRequestSender = (params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  gatewayDeviceId: string;
-  signature: string;
-  signedAtMs: number;
-  bodyJson: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}) => Promise<ApnsRelayPushResponse>;
+/** Injected senders own the same final cancellation/currentness boundary as fetch. */
+export type ApnsRelayRequestSender = (
+  params: {
+    relayConfig: ApnsRelayConfig;
+    sendGrant: string;
+    relayHandle: string;
+    gatewayDeviceId: string;
+    signature: string;
+    signedAtMs: number;
+    bodyJson: string;
+    priority: "10" | "5";
+    payload: object;
+    isCurrent?: () => Promise<boolean>;
+  } & (
+    | {
+        pushType: "alert" | "background";
+        signal?: AbortSignal;
+        assertCurrent?: () => undefined;
+        purpose?: never;
+        revision?: never;
+      }
+    | {
+        pushType: "liveactivity";
+        signal: AbortSignal;
+        assertCurrent: () => undefined;
+        purpose: "liveActivity";
+        revision: number;
+      }
+  ),
+) => Promise<ApnsRelayPushResponse>;
 
 /** Hosted APNs relay origin used only when registrations prove they were minted there. */
 const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
@@ -288,23 +303,15 @@ class ApnsRelayResponseTooLargeError extends Error {
   }
 }
 
-async function sendApnsRelayRequest(params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  gatewayDeviceId: string;
-  signature: string;
-  signedAtMs: number;
-  bodyJson: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRelayPushResponse> {
+async function sendApnsRelayRequest(
+  params: Parameters<ApnsRelayRequestSender>[0],
+): Promise<ApnsRelayPushResponse> {
   await requireCurrentApnsRelaySend(params);
   const timeoutSignal = AbortSignal.timeout(params.relayConfig.timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
+  throwIfApnsRelaySendAborted(signal);
+  // The assertion may consume authority; only the actual network boundary owns it.
+  params.assertCurrent?.();
   const response = await fetch(`${params.relayConfig.baseUrl}/v1/push/send`, {
     method: "POST",
     redirect: "manual",
@@ -369,27 +376,56 @@ async function sendApnsRelayRequest(params: {
 }
 
 /** Sign and send an APNs relay push using the gateway device identity. */
-export async function sendApnsRelayPush(params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  requestSender?: ApnsRelayRequestSender;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRelayPushResponse> {
+export async function sendApnsRelayPush(
+  params: {
+    relayConfig: ApnsRelayConfig;
+    sendGrant: string;
+    relayHandle: string;
+    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
+    requestSender?: ApnsRelayRequestSender;
+    isCurrent?: () => Promise<boolean>;
+  } & (
+    | {
+        pushType: "alert" | "background";
+        priority: "10" | "5";
+        payload: object;
+        purpose?: never;
+        revision?: never;
+        signal?: AbortSignal;
+        assertCurrent?: () => undefined;
+      }
+    | {
+        pushType: "liveactivity";
+        purpose: "liveActivity";
+        revision: number;
+        payload: ApnsLiveActivityPayload;
+        signal: AbortSignal;
+        assertCurrent: () => undefined;
+      }
+  ),
+): Promise<ApnsRelayPushResponse> {
+  if (
+    params.pushType === "liveactivity" &&
+    (params.purpose !== "liveActivity" ||
+      !Number.isSafeInteger(params.revision) ||
+      params.revision < 1)
+  ) {
+    throw new Error("Invalid Live Activity relay revision");
+  }
+  const payload = params.pushType === "liveactivity" ? params.payload.value : params.payload;
+  const priority = params.pushType === "liveactivity" ? params.payload.priority : params.priority;
   await requireCurrentApnsRelaySend(params);
   const sender = params.requestSender ?? sendApnsRelayRequest;
   const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
   const signedAtMs = Date.now();
   const bodyJson = JSON.stringify({
     relayHandle: params.relayHandle,
+    ...(params.pushType === "liveactivity"
+      ? { purpose: params.purpose, revision: params.revision }
+      : {}),
     pushType: params.pushType,
-    priority: Number(params.priority),
-    payload: params.payload,
+    priority: Number(priority),
+    payload,
   });
   const signature = signDevicePayload(
     gatewayIdentity.privateKeyPem,
@@ -399,7 +435,7 @@ export async function sendApnsRelayPush(params: {
       bodyJson,
     }),
   );
-  return await sender({
+  const request = {
     relayConfig: params.relayConfig,
     sendGrant: params.sendGrant,
     relayHandle: params.relayHandle,
@@ -408,9 +444,22 @@ export async function sendApnsRelayPush(params: {
     signedAtMs,
     bodyJson,
     pushType: params.pushType,
-    priority: params.priority,
-    payload: params.payload,
+    priority,
+    payload,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
-  });
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+  };
+  return await sender(
+    params.pushType === "liveactivity"
+      ? {
+          ...request,
+          pushType: params.pushType,
+          signal: params.signal,
+          assertCurrent: params.assertCurrent,
+          purpose: params.purpose,
+          revision: params.revision,
+        }
+      : { ...request, pushType: params.pushType },
+  );
 }

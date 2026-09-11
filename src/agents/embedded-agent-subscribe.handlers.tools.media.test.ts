@@ -1,6 +1,7 @@
 // Tool media handler tests cover media extraction from tool results, trusted
 // local media flags, and quiet/verbose tool-output emission paths.
 import { describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import {
   handleToolExecutionEnd,
@@ -20,7 +21,7 @@ function createMockContext(overrides?: {
   // Minimal mock context factory. Only the fields needed for the media emission
   // path are modeled; everything else is a no-op handler dependency.
   const onToolResult = overrides?.onToolResult ?? vi.fn();
-  return {
+  const ctx = {
     params: {
       runId: "test-run",
       onToolResult,
@@ -29,6 +30,7 @@ function createMockContext(overrides?: {
       coreBuiltinToolNames: overrides?.coreBuiltinToolNames,
     },
     state: {
+      unsubscribed: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       toolMetaById: new Map(),
       toolMetas: [],
@@ -88,6 +90,9 @@ function createMockContext(overrides?: {
     getLastAssistantUsage: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
   } as unknown as EmbeddedAgentSubscribeContext;
+  ctx.emitEvent = emitAgentEvent;
+  ctx.isCurrent = () => !ctx.state.unsubscribed;
+  return ctx;
 }
 
 function firstEmitToolOutputCall(ctx: EmbeddedAgentSubscribeContext) {

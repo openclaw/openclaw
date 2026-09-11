@@ -3,10 +3,10 @@ import path from "node:path";
 import {
   awaitAgentEndSideEffects,
   embeddedAgentLog,
-  emitAgentEvent as emitGlobalAgentEvent,
   runAgentEndSideEffects,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
@@ -64,21 +64,14 @@ export async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise
 }
 
 export async function emitCodexAppServerEvent(
-  params: EmbeddedRunAttemptParams,
+  binding: CodexAgentEventBinding,
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
 ): Promise<void> {
-  try {
-    emitGlobalAgentEvent({
-      runId: params.runId,
-      stream: event.stream,
-      data: event.data,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+  if (!binding.publish(event)) {
+    return;
   }
   try {
-    await params.onAgentEvent?.(event);
+    await binding.onAgentEvent?.(event);
   } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.

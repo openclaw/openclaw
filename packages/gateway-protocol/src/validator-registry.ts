@@ -221,6 +221,22 @@ export const validateNodeHostStatsPayload = compile(S.NodeHostStatsPayloadSchema
 export const validateNodePendingDrainParams = compile(S.NodePendingDrainParamsSchema);
 export const validateNodePendingEnqueueParams = compile(S.NodePendingEnqueueParamsSchema);
 export const validatePushTestParams = compile(S.PushTestParamsSchema);
+export const validatePushLiveActivityDiscoverParams = compile(
+  S.PushLiveActivityDiscoverParamsSchema,
+);
+export const validatePushLiveActivityDiscoverResult = compile(
+  S.PushLiveActivityDiscoverResultSchema,
+);
+export const validatePushLiveActivityPrepareParams = compile(S.PushLiveActivityPrepareParamsSchema);
+export const validatePushLiveActivityPrepareResult = compile(S.PushLiveActivityPrepareResultSchema);
+export const validatePushLiveActivityRegisterParams = compile(
+  S.PushLiveActivityRegisterParamsSchema,
+);
+export const validatePushLiveActivityRotateParams = compile(S.PushLiveActivityRotateParamsSchema);
+export const validatePushLiveActivityRevokeParams = compile(S.PushLiveActivityRevokeParamsSchema);
+export const validatePushLiveActivityRegistrationResult = compile(
+  S.PushLiveActivityRegistrationResultSchema,
+);
 export const validateWebPushVapidPublicKeyParams = compile<WebPushVapidPublicKeyParams>(
   S.WebPushVapidPublicKeyParamsSchema,
 );
@@ -257,6 +273,8 @@ export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSchema);
+export const validateSessionsStatusParams = compile(S.SessionsStatusParamsSchema);
+export const validateSessionsStatusResult = compile(S.SessionsStatusResultSchema);
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);

@@ -123,17 +123,51 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @MainActor
+    private final class AcceptedRunRecorder {
+        private(set) var values: [(binding: IOSNativeActionBinding, runID: String, sessionID: String?)] = []
+
+        func record(binding: IOSNativeActionBinding, runID: String, sessionID: String?) {
+            self.values.append((binding, runID, sessionID))
+        }
+    }
+
+    private func observingRunActivity(
+        _ transport: IOSGatewayChatTransport,
+        recorder: AcceptedRunRecorder) -> IOSGatewayChatTransport
+    {
+        IOSGatewayChatTransport(
+            gateway: transport.gateway,
+            globalAgentId: transport.globalAgentId,
+            outboxGatewayID: transport.outboxGatewayID,
+            nativeBinding: transport.nativeBinding,
+            captureRunActivity: { target, route in
+                guard let binding = try await IOSGatewayChatTransport.captureRunActivityBinding(
+                    gateway: transport.gateway,
+                    route: route,
+                    target: target,
+                    nativeBinding: transport.nativeBinding)
+                else { return nil }
+                return (binding, { runID, sessionID in
+                    recorder.record(binding: binding, runID: runID, sessionID: sessionID)
+                })
+            })
+    }
+
     private func withSessionTransport(
+        gateway: GatewayNodeSession = GatewayNodeSession(),
         unreadAckAdvertisement: Bool? = true,
         gatewayID: String? = nil,
         capabilities: [String] = [],
         nativeProfileID: String? = nil,
         sendPayload: String = #"{"runId":"submitted-run","status":"started"}"#,
-        retireOnSend: Bool = false,
+        activityOwner: String? = nil,
+        retireOnRequest: String? = nil,
         _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
-        let gateway = GatewayNodeSession()
+        let ownerData = try JSONEncoder().encode(["profile": ["id": activityOwner ?? ""]])
+        let ownerPayload = try #require(String(bytes: ownerData, encoding: .utf8))
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -153,10 +187,11 @@ struct IOSGatewayChatTransportTests {
                      "sessionInfo":{"key":"agent:reviewer:main","agentId":"reviewer"}}
                     """
                 case "chat.send": sendPayload
+                case "users.self": ownerPayload
                 case "sessions.messages.subscribe": #"{"subscribed":true,"key":"agent:reviewer:main"}"#
                 default: #"{"entry":{}}"#
                 }
-                if retireOnSend, request.method == "chat.send" {
+                if request.method == retireOnRequest {
                     await gateway._test_handleChannelDisconnected("retired admission", socketGeneration: 1)
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -165,7 +200,8 @@ struct IOSGatewayChatTransportTests {
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 let hello = GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
-                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.create"],
+                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.create"] +
+                        (activityOwner == nil ? [] : ["users.self", "push.liveActivity.prepare"]),
                     capabilities: capabilities +
                         (unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : []))
                 guard unreadAckAdvertisement == nil else { return .data(hello) }
@@ -1092,33 +1128,201 @@ extension IOSGatewayChatTransportTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `native send receipt crosses retired postresponse fences but malformed data does not`(
-        malformed: Bool) async throws
+    @Test(.serialized, arguments: [false, true])
+    @MainActor func `app transport gates activity owner lookup on consent and push eligibility`(
+        consent: Bool) async throws
     {
+        try await withUserDefaults([PushEnrollmentConsent.disclosureAcceptedKey: consent]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let operationsAvailable = await PushRegistrationManager().activityOperationsAvailable()
+            let eligible = consent && operationsAvailable
+            try await self.withSessionTransport(
+                gateway: appModel.operatorSession,
+                gatewayID: "gateway-a",
+                capabilities: ["profile-binding-v1"],
+                activityOwner: "profile-a")
+            { _, recorder in
+                let transport = await appModel.makeChatTransport(outboxGatewayID: "gateway-a")
+                let response = try await transport.sendMessage(
+                    sessionKey: "agent:reviewer:main",
+                    message: "one invocation",
+                    thinking: "",
+                    idempotencyKey: "app-send",
+                    attachments: [])
+                #expect(response.runId == "submitted-run")
+                #expect((response.onAcceptedRun != nil) == eligible)
+                let requests = await recorder.all()
+                #expect(requests.map(\.method) == (eligible ? ["users.self", "chat.send"] : ["chat.send"]))
+                #expect(try #require(requests.last).expectedProfileId == (eligible ? "profile-a" : nil))
+            }
+        }
+    }
+
+    @Test(arguments: [false, true], [nil, "committed-session"] as [String?])
+    func `activity callback uses the actual ACK and immutable dispatch owner`(
+        native: Bool, sessionID: String?) async throws
+    {
+        let accepted = await AcceptedRunRecorder()
+        let profileID = "profile-e\u{301}"
         try await self.withSessionTransport(
             gatewayID: "gateway-a",
             capabilities: ["profile-binding-v1"],
-            nativeProfileID: "profile-a",
-            sendPayload: malformed ? #"{"status":"started"}"# : #"{"runId":"original-run","status":"started"}"#,
-            retireOnSend: true)
-        { transport, recorder in
-            let binding = try #require(transport.nativeBinding)
-            do {
-                let response = try await transport.sendMessage(
-                    sessionKey: binding.session.sessionKey,
+            nativeProfileID: native ? profileID : nil,
+            sendPayload: #"{"runId":"server-accepted-run","status":"started"}"#,
+            activityOwner: profileID)
+        { base, recorder in
+            let transport = self.observingRunActivity(base, recorder: accepted)
+            let route = try #require(await transport.gateway.currentRoute(ifGatewayID: "gateway-a"))
+            let response = try await transport.sendMessage(
+                sessionKey: "agent:reviewer:main",
+                message: "one invocation",
+                thinking: nil,
+                idempotencyKey: "client-invocation",
+                attachments: [],
+                ifCurrentRoute: route)
+            #expect(response.runId == "server-accepted-run")
+            #expect(await accepted.values.isEmpty)
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == ["users.self", "chat.send"])
+            let ownerRequest = try #require(requests.first)
+            #expect(ownerRequest.expectedProfileId.map { Array($0.utf8) } ==
+                (native ? Array(profileID.utf8) : nil))
+            let send = try #require(requests.last)
+            #expect(send.expectedProfileId.map { Array($0.utf8) } == Array(profileID.utf8))
+            #expect(send.params["expectedProfileId"] == nil)
+            #expect(send.params["idempotencyKey"]?.value as? String == "client-invocation")
+
+            await transport.gateway.disconnect()
+            let callback = try #require(response.onAcceptedRun)
+            await callback(sessionID)
+            let values = await accepted.values
+            #expect(values.count == 1)
+            let observed = try #require(values.first)
+            #expect(observed.runID == "server-accepted-run")
+            #expect(observed.sessionID == sessionID)
+            #expect(observed.binding.session == .init(
+                owner: .init(gatewayID: "gateway-a", profileID: profileID),
+                agentID: "reviewer",
+                sessionKey: "agent:reviewer:main"))
+            #expect(observed.binding.gateway === transport.gateway)
+            #expect(observed.binding.route == route)
+            #expect(await observed.binding.isCurrent() == false)
+            #expect(await recorder.all().count == 2)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `capture cancellation and failure are not dispatched`(cancelled: Bool) async throws {
+        try await self.withSessionTransport(gatewayID: "gateway-a") { base, recorder in
+            let transport = IOSGatewayChatTransport(
+                gateway: base.gateway,
+                outboxGatewayID: base.outboxGatewayID,
+                captureRunActivity: { _, _ in
+                    if cancelled { throw CancellationError() }
+                    throw URLError(.notConnectedToInternet)
+                })
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await transport.sendMessage(
+                    sessionKey: "agent:reviewer:main",
                     message: "one invocation",
-                    thinking: nil,
-                    idempotencyKey: "original-invocation",
-                    attachments: [],
-                    ifCurrentRoute: binding.route)
-                #expect(!malformed)
-                #expect(response.runId == "original-run")
-            } catch is CancellationError {
-                #expect(malformed)
+                    thinking: "",
+                    idempotencyKey: "not-dispatched",
+                    attachments: [])
             }
-            #expect(await binding.isCurrent() == false)
-            #expect(await recorder.all().filter { $0.method == "chat.send" }.count == 1)
+            #expect(await recorder.all().isEmpty)
+        }
+    }
+
+    @Test(arguments: [
+        ("", nil),
+        ("profile-\u{E9}", nil),
+        ("profile-e\u{301}", "users.self"),
+    ] as [(String, String?)])
+    func `activity capture rejects missing mismatched or retired authoritative owner`(
+        profileID: String, retireOnRequest: String?) async throws
+    {
+        let accepted = await AcceptedRunRecorder()
+        try await self.withSessionTransport(
+            gatewayID: "gateway-a",
+            capabilities: ["profile-binding-v1"],
+            nativeProfileID: "profile-e\u{301}",
+            activityOwner: profileID,
+            retireOnRequest: retireOnRequest)
+        { base, recorder in
+            let transport = self.observingRunActivity(base, recorder: accepted)
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await transport.sendMessage(
+                    sessionKey: "agent:reviewer:main",
+                    message: "one invocation",
+                    thinking: "",
+                    idempotencyKey: "not-dispatched",
+                    attachments: [])
+            }
+            #expect(await recorder.all().map(\.method) == ["users.self"])
+            #expect(await accepted.values.isEmpty)
+        }
+    }
+
+    @Test(arguments: [(false, true), (true, false)])
+    func `unsupported activity capture preserves ordinary send without an observer`(
+        profileSupported: Bool, activitySupported: Bool) async throws
+    {
+        let accepted = await AcceptedRunRecorder()
+        try await self.withSessionTransport(
+            gatewayID: "gateway-a",
+            capabilities: profileSupported ? ["profile-binding-v1"] : [],
+            activityOwner: activitySupported ? "profile-a" : nil)
+        { base, recorder in
+            let response = try await self.observingRunActivity(base, recorder: accepted).sendMessage(
+                sessionKey: "agent:reviewer:main",
+                message: "one invocation",
+                thinking: "",
+                idempotencyKey: "unsupported-activity",
+                attachments: [])
+            #expect(response.runId == "submitted-run")
+            #expect(response.onAcceptedRun == nil)
+            #expect(await accepted.values.isEmpty)
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == ["chat.send"])
+            #expect(try #require(requests.first).expectedProfileId == nil)
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `send completion policies survive activity capture and retired postresponse fences`(
+        native: Bool, malformed: Bool) async throws
+    {
+        for observeActivity in [false, true] {
+            let accepted = await AcceptedRunRecorder()
+            try await self.withSessionTransport(
+                gatewayID: "gateway-a",
+                capabilities: ["profile-binding-v1"],
+                nativeProfileID: native ? "profile-a" : nil,
+                sendPayload: malformed ? #"{"status":"started"}"# : #"{"runId":"original-run","status":"started"}"#,
+                activityOwner: "profile-a",
+                retireOnRequest: "chat.send")
+            { base, recorder in
+                let transport = observeActivity ? self.observingRunActivity(base, recorder: accepted) : base
+                let route = try #require(await transport.gateway.currentRoute(ifGatewayID: "gateway-a"))
+                do {
+                    let response = try await transport.sendMessage(
+                        sessionKey: "agent:reviewer:main",
+                        message: "one invocation",
+                        thinking: nil,
+                        idempotencyKey: "original-invocation",
+                        attachments: [],
+                        ifCurrentRoute: route)
+                    #expect(native && !malformed)
+                    #expect(response.runId == "original-run")
+                    #expect((response.onAcceptedRun != nil) == observeActivity)
+                } catch is CancellationError {
+                    #expect(!native || malformed)
+                }
+                #expect(await transport.gateway.currentRoute(ifGatewayID: "gateway-a") != route)
+                #expect(await recorder.all().filter { $0.method == "chat.send" }.count == 1)
+                #expect(await accepted.values.isEmpty)
+            }
         }
     }
 

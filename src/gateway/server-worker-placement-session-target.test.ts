@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions.js";
+import { type InternalSessionEntry, resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
@@ -47,7 +47,8 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
         const resolved = resolveWorkerPlacementSessionTarget({
           sessionRuntime: {
             resolveGatewaySessionStoreTargetWithStore,
-            resolveCanonicalSessionEntryFromStoreKeys,
+            resolveCanonicalSessionEntryFromStoreKeys:
+              resolveCanonicalSessionEntryFromStoreKeys<InternalSessionEntry>,
             managedWorktrees: {
               findLiveByOwner: (_kind, ownerId) => ({
                 id: ownerId,

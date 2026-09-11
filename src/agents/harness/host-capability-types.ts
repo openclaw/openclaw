@@ -1,3 +1,4 @@
+import type { EmbeddedAgentEvent } from "../embedded-agent-subscribe.shared-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -35,6 +36,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Publishes under this exact admitted owner; throws on rejection and never calls the observer. */
+  publishAgentEvent?: (event: Pick<EmbeddedAgentEvent, "stream" | "data">) => void;
   /** Reports one completed model call's output tokens to this admitted run's live total. */
   reportOutputTokens?: (outputTokens: number) => void;
   /** Adds native provenance only to this host's exact current admitted prompt. */

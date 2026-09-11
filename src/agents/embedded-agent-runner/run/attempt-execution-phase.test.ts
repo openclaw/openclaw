@@ -2,6 +2,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { emitAgentEventIfCurrent } from "../../../infra/agent-events.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -10,6 +11,7 @@ import {
   applyAgentCompactionSettingsFromConfig,
 } from "../../agent-settings.js";
 import { createEmbeddedModelState } from "../../embedded-agent-subscribe.model-state.js";
+import { createEmbeddedAgentSubscribeState } from "../../embedded-agent-subscribe.run-state.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -372,13 +374,19 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           sessionId: fixture.input.attempt.sessionId,
         }),
       });
+      const modelParams = {
+        session: runtime.agentSession.activeSession,
+        runId: "async-fragment",
+        onModelUsage: guards.onModelUsage,
+      };
+      const subscriptionState = createEmbeddedAgentSubscribeState(modelParams);
       const modelState = createEmbeddedModelState(
-        {
-          session: runtime.agentSession.activeSession,
-          runId: "async-fragment",
-          onModelUsage: guards.onModelUsage,
-        },
+        modelParams,
         { warn: vi.fn() },
+        {
+          emitEvent: emitAgentEventIfCurrent,
+          isCurrent: () => !subscriptionState.unsubscribed,
+        },
       );
       const fragments: number[] = [];
       const observed = () => recordStage.mock.calls.filter(([stage]) => stage === "cache:result");

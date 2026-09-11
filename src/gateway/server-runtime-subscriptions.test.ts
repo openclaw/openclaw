@@ -50,6 +50,7 @@ import {
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { lifecycleState, readLifecycleState } from "./server-runtime-subscriptions.test-support.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -199,6 +200,7 @@ const sessionTaskDefaults = {
 function createParams(): SubscriptionParams {
   const chatRunState = createChatRunState();
   return {
+    sessionLifecyclePersistence: createSessionLifecyclePersistenceOwner(),
     log: mockLog,
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
@@ -583,6 +585,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(
       abortChatRunById(
         {
+          sessionLifecyclePersistence: params.sessionLifecyclePersistence,
           chatAbortControllers: params.chatAbortControllers,
           chatRunState: params.chatRunState,
           removeChatRun: vi.fn(() => undefined),

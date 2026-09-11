@@ -47,6 +47,7 @@ import {
   appendChatCanvasBlocksToMessage,
   extractChatToolResultCanvasPreview,
 } from "./chat-display-projection.canvas.js";
+import { readLiveActivitySource, type LiveActivitySource } from "./live-activity-source.js";
 import {
   capLiveAssistantText,
   projectLiveAssistantBufferedText,
@@ -345,12 +346,15 @@ export type AgentEventHandlerOptions = {
     runId: string;
     clientRunId: string;
     sessionKey: string;
+    source?: LiveActivitySource;
   }) => void;
   settleTrackedTerminal?: (params: {
     runId: string;
     clientRunId: string;
     sessionKey: string;
     persisted?: boolean;
+    persistence?: Promise<void>;
+    source?: LiveActivitySource;
   }) => void;
   trackTrackedRunTerminalPersistence?: (params: {
     runId: string;
@@ -358,6 +362,7 @@ export type AgentEventHandlerOptions = {
     sessionKey: string;
     sessionId?: string;
     persistence: Promise<void>;
+    source?: LiveActivitySource;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
   updateRunToolErrorSummary?: (params: {
@@ -820,11 +825,18 @@ export function createAgentEventHandler({
     }
 
     if (sessionKey) {
-      clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
+      const source = readLiveActivitySource(evt);
+      clearTrackedActiveRun?.({
+        runId: evt.runId,
+        clientRunId,
+        sessionKey,
+        ...(source ? { source } : {}),
+      });
       if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
         const persistence = persistGatewaySessionLifecycleEventForEvent({
           sessionKey,
           agentId: sessionAgentId,
+          liveActivitySource: readLiveActivitySource(evt),
           event: {
             ...evt,
             ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
@@ -842,6 +854,7 @@ export function createAgentEventHandler({
           sessionKey,
           sessionId: evt.sessionId,
           persistence,
+          ...(source ? { source } : {}),
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
           if (parseCronRunScopeSuffix(sessionKey).runId) {
@@ -874,6 +887,7 @@ export function createAgentEventHandler({
               runId: evt.runId,
               clientRunId,
               sessionKey,
+              ...(source ? { persistence, source } : {}),
             });
             broadcastSessionChange();
           })
@@ -888,6 +902,7 @@ export function createAgentEventHandler({
               clientRunId,
               sessionKey,
               persisted: false,
+              ...(source ? { persistence, source } : {}),
             });
             broadcastSessionChange(evt);
           });
@@ -897,6 +912,7 @@ export function createAgentEventHandler({
           clientRunId,
           sessionKey,
           persisted: false,
+          ...(source ? { source } : {}),
         });
       }
     }
@@ -1831,8 +1847,12 @@ export function createAgentEventHandler({
       void persistGatewaySessionLifecycleEventForEvent({
         sessionKey,
         agentId: sessionAgentId,
+        liveActivitySource: readLiveActivitySource(evt),
         event: {
           ...evt,
+          // Private producer identity is non-enumerable; retain the exact commit fence.
+          ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
+          ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
           ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
         },
       }).catch((err: unknown) => {

@@ -370,6 +370,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     : {}),
                 resumeRequestedSession: reconnectResumeRequested,
                 onSessionPrepared: admission.onSessionPrepared,
+                onAdmittedRunContext: admission.onAdmittedRunContext,
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.

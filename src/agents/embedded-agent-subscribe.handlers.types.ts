@@ -10,6 +10,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { emitAgentEvent } from "../infra/agent-events.js";
 import type { ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
@@ -234,6 +235,8 @@ export type EmbeddedAgentSubscribeState = {
 
 /** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
+  emitEvent: typeof emitAgentEvent;
+  isCurrent: (purpose?: "compaction-settlement") => boolean;
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
   log: EmbeddedSubscribeLogger;
@@ -391,6 +394,8 @@ type ToolHandlerState = Pick<
 >;
 
 export type ToolHandlerContext = {
+  emitEvent: typeof emitAgentEvent;
+  isCurrent: () => boolean;
   params: ToolHandlerParams;
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;

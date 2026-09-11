@@ -13,12 +13,14 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
+import type { LiveActivityObservation } from "../infra/push-live-activity-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
+import type { CommittedLiveActivityFact, LiveActivitySource } from "./live-activity-source.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -28,6 +30,7 @@ type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
   contextClaimId?: string;
+  seq?: number;
   runId?: string;
   clientRunId?: string;
   lifecycleGeneration?: string;
@@ -332,6 +335,9 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   agentId?: string;
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
+  expectedSession?: Readonly<{ sessionId: string; lifecycleRevision: string | null }>;
+  liveActivitySource?: LiveActivitySource;
+  onCommitted?: (fact: CommittedLiveActivityFact) => void;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
@@ -351,6 +357,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       : undefined;
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
+  // Runtime identity is non-enumerable. Capture it and the producer time before
+  // the asynchronous session write can outlive its public chat registration.
+  const source = params.liveActivitySource;
+  const expectedSession = params.expectedSession ?? source?.preparedSession;
+  const sequence = params.event.seq;
+  const observedAtMs = params.event.ts;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
   let failedRun: { runId: string; error: unknown } | undefined;
   const persisted = await patchSessionEntryCore(
@@ -362,6 +374,24 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       terminalRecovery = undefined;
       failedRun = undefined;
       const entry = storedEntry as SessionEntry;
+      if (
+        (expectedSession &&
+          (entry.sessionId !== expectedSession.sessionId ||
+            (entry.lifecycleRevision ?? null) !== expectedSession.lifecycleRevision)) ||
+        (source &&
+          (source.agentId !== sessionEntry.agentId ||
+            source.sessionKey !== sessionEntry.canonicalKey ||
+            source.internalRunId !== params.event.runId)) ||
+        (source &&
+          phase !== "start" &&
+          ((entry.lifecycleRunId && entry.lifecycleRunId !== params.event.runId) ||
+            (!entry.lifecycleRunId &&
+              entry.lastRunId &&
+              entry.lastRunId !==
+                (params.event.clientRunId ?? source?.publicRunId ?? params.event.runId))))
+      ) {
+        return null;
+      }
       if (
         exactCronRun &&
         !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
@@ -432,6 +462,64 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      ...(params.onCommitted && source
+        ? {
+            onCommitted: (entry: SessionEntry) => {
+              if (
+                source.internalRunId !== params.event.runId ||
+                source.agentId !== sessionEntry.agentId ||
+                source.sessionKey !== sessionEntry.canonicalKey ||
+                source.preparedSession.sessionId !== entry.sessionId ||
+                source.preparedSession.lifecycleRevision !== (entry.lifecycleRevision ?? null)
+              ) {
+                return;
+              }
+              const status = entry.status;
+              if (
+                status !== "running" &&
+                status !== "done" &&
+                status !== "failed" &&
+                status !== "killed" &&
+                status !== "timeout"
+              ) {
+                return;
+              }
+              if (status === "running" && sequence === undefined) {
+                return;
+              }
+              const common = {
+                sourceIncarnation: source.sourceIncarnation,
+                observedAtMs,
+                ...(entry.startedAt !== undefined ? { startedAtMs: entry.startedAt } : {}),
+              };
+              const snapshot: LiveActivityObservation =
+                status === "running"
+                  ? { ...common, status, sequence: sequence! }
+                  : {
+                      ...common,
+                      status,
+                      ...(entry.endedAt !== undefined ? { endedAtMs: entry.endedAt } : {}),
+                    };
+              try {
+                params.onCommitted?.(
+                  Object.freeze({
+                    source,
+                    publicRunId: source.publicRunId,
+                    agentId: sessionEntry.agentId,
+                    sessionKey: sessionEntry.canonicalKey,
+                    sessionId: entry.sessionId,
+                    lifecycleRevision: entry.lifecycleRevision ?? null,
+                    snapshot: Object.freeze(snapshot),
+                  }),
+                );
+              } catch {
+                // A projection sink cannot turn an accepted canonical commit
+                // into a failed write, nor expose source errors in its warning.
+                restartRecoveryLog.warn("Live Activity committed-fact delivery failed");
+              }
+            },
+          }
+        : {}),
       ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     },
   );

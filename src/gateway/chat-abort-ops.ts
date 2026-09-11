@@ -8,6 +8,7 @@ export function createChatAbortOps(
 ): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
+    sessionLifecyclePersistence: context.sessionLifecyclePersistence,
     chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,

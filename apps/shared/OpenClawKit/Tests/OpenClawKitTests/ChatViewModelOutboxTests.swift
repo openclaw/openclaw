@@ -86,6 +86,7 @@ actor OutboxTransportState {
     var sendFailsAfterRecording = false
     var sendRejects = false
     var sendResponseErrors = false
+    var sendResponse: OpenClawChatSendResponse?
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
@@ -401,7 +402,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         if await self.state.sendFailsAfterRecording {
             throw OutboxSendError()
         }
-        return OpenClawChatSendResponse(runId: idempotencyKey, status: "accepted")
+        return await self.state.sendResponse ?? OpenClawChatSendResponse(runId: idempotencyKey, status: "accepted")
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
@@ -568,6 +569,8 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     private let forwarding: Forwarding
     private var loadDelayNanoseconds: UInt64 = 0
     private var enqueueRelease: DeleteGate?
+    private var confirmationRelease: DeleteGate?
+    private(set) var confirmationCalls = 0
     private var recoveryAvailable = true
     private var terminalWriteResult: OpenClawChatOutboxUpdateResult = .updated
     private var parkingAvailable = true
@@ -624,6 +627,15 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     func releaseEnqueue() async {
         await self.enqueueRelease?.open()
         self.enqueueRelease = nil
+    }
+
+    func holdConfirmation() {
+        self.confirmationRelease = DeleteGate()
+    }
+
+    func releaseConfirmation() async {
+        await self.confirmationRelease?.open()
+        self.confirmationRelease = nil
     }
 
     func holdLoadAfterFailure() {
@@ -714,7 +726,9 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     }
 
     func markCommandAwaitingConfirmation(id: String, attemptVersion: Int) async -> OpenClawChatOutboxUpdateResult {
-        await self.base.markCommandAwaitingConfirmation(id: id, attemptVersion: attemptVersion)
+        self.confirmationCalls += 1
+        await self.confirmationRelease?.wait()
+        return await self.base.markCommandAwaitingConfirmation(id: id, attemptVersion: attemptVersion)
     }
 
     func markCommandFailedIfPresent(
@@ -845,6 +859,59 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
 }
 
 struct ChatViewModelOutboxTests {
+    @Test(arguments: ["started", "in_flight", "ok", "pending", "blank-run", "error", "timeout", "aborted"])
+    @MainActor
+    func `outbox observes only eligible ACKs before persistence without borrowing visible session`(
+        scenario: String) async throws
+    {
+        let (store, _, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outbox = ScriptedOutbox(base: store)
+        await outbox.holdConfirmation()
+        let transport = OutboxTestTransport(healthy: false)
+        var observedSessions: [String?] = []
+        let response = OpenClawChatSendResponse(
+            runId: scenario == "blank-run" ? " \n\t " : "remote-run",
+            status: scenario == "aborted" ? "timeout" : scenario == "blank-run" ? "started" : scenario,
+            summary: scenario == "aborted" ? "aborted" : nil,
+            onAcceptedRun: { observedSessions.append($0) })
+        await transport.state.update {
+            $0.sendResponse = response
+            $0.staleHistoryRows = []
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        defer { vm.detachTransport() }
+        vm.load()
+        do {
+            try await sendWhileOffline(vm, text: "queued command")
+            #expect(observedSessions.isEmpty)
+            vm.sessionId = "unrelated-visible-session"
+            await transport.goOnline()
+            if ["error", "timeout", "aborted"].contains(scenario) {
+                try await waitUntil("rejected outbox ACK exhausts existing retry budget") {
+                    await store.loadCommands().map(\.status) == [.failed]
+                }
+                #expect(await outbox.confirmationCalls == 0)
+                #expect(observedSessions.isEmpty)
+            } else {
+                try await waitUntil("outbox confirmation write entered") { await outbox.confirmationCalls == 1 }
+                #expect(observedSessions == (["started", "in_flight", "ok"].contains(scenario) ? [nil] : []))
+                #expect(await store.loadCommands().map(\.status) == [.sending])
+                await outbox.releaseConfirmation()
+                try await waitUntil("outbox ACK awaits canonical history") {
+                    await store.loadCommands().map(\.status) == [.awaitingConfirmation]
+                }
+            }
+            try await waitUntil("outbox ACK flush settled") { await MainActor.run { !vm.isFlushingOutbox } }
+            #expect(observedSessions == (["started", "in_flight", "ok"].contains(scenario) ? [nil] : []))
+        } catch {
+            await outbox.releaseConfirmation()
+            vm.detachTransport()
+            try await waitUntil("outbox test flush stopped") { await MainActor.run { !vm.isFlushingOutbox } }
+            throw error
+        }
+    }
+
     @Test func `offline send queues durably and renders queued row`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

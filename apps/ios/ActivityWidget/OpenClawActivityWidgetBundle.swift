@@ -5,5 +5,6 @@ import WidgetKit
 struct OpenClawActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
         OpenClawLiveActivity()
+        OpenClawRunLiveActivity()
     }
 }

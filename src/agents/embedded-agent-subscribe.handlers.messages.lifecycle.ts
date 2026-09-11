@@ -334,6 +334,9 @@ export function handleMessageEnd(
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
         .then(() => {
+          if (!ctx.isCurrent()) {
+            return undefined;
+          }
           const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
             reason: "message_end",
           });
@@ -346,7 +349,9 @@ export function handleMessageEnd(
           finalizeMessageEnd();
         });
     }
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush({ reason: "message_end" });
+    const onBlockReplyFlushResult = ctx.isCurrent()
+      ? ctx.params.onBlockReplyFlush({ reason: "message_end" })
+      : undefined;
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.finally(() => {
         finalizeMessageEnd();

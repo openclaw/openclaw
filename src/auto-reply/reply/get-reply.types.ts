@@ -1,4 +1,5 @@
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
@@ -47,6 +48,8 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Private admission handoff; run-start notifications never establish authority. */
+  onAdmittedRunContext?: (context: AdmittedRunContext) => undefined;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */

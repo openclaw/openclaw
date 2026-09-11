@@ -80,7 +80,12 @@ beforeAll(globalBeforeAll0);
 describe("prepared harness source delivery", () => {
   let state: OpenClawTestState;
   let restoreSynthesis: (() => void) | undefined;
+  let restoreAgentEvents: (() => void) | undefined;
   async function loadSourceDeliveryHarness() {
+    const agentEventsFixture = await import("../../infra/agent-events.js");
+    restoreAgentEvents = () => vi.doMock("../../infra/agent-events.js", () => agentEventsFixture);
+    // Import real event authority with the runner's reset admission modules.
+    vi.doUnmock("../../infra/agent-events.js");
     // The runner resets modules; keep its private payload metadata shared with dispatch.
     vi.doMock("../../auto-reply/reply-payload.js", () => replyPayloadRuntime);
     const loaded = await loadRunOverflowCompactionHarness();
@@ -89,9 +94,16 @@ describe("prepared harness source delivery", () => {
     return loaded;
   }
   afterEach(async () => {
-    restoreSynthesis?.();
-    restoreSynthesis = undefined;
-    await state?.cleanup();
+    try {
+      restoreSynthesis?.();
+      restoreSynthesis = undefined;
+      await state?.cleanup();
+    } finally {
+      restoreAgentEvents?.();
+      restoreAgentEvents = undefined;
+      // Restoring the mock alone leaves cached consumers bound to real event authority.
+      vi.resetModules();
+    }
   });
   beforeEach(describe2BeforeEach0);
 

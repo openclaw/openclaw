@@ -11420,6 +11420,182 @@ public struct ProjectsSearchRemoteResult: Codable, Sendable {
     }
 }
 
+public struct PushLiveActivityDiscoverParams: Codable, Sendable {
+    public let activityid: String
+    public let selectors: [String: AnyCodable]
+
+    public init(
+        activityid: String,
+        selectors: [String: AnyCodable])
+    {
+        self.activityid = activityid
+        self.selectors = selectors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case activityid = "activityId"
+        case selectors
+    }
+}
+
+public struct PushLiveActivityPrepareParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let sessionid: String
+    public let publicrunid: String
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        sessionid: String,
+        publicrunid: String)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.publicrunid = publicrunid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case publicrunid = "publicRunId"
+    }
+}
+
+public struct PushLiveActivityPrepareResult: Codable, Sendable {
+    public let binding: [String: AnyCodable]
+    public let sourceincarnation: String
+    public let snapshot: AnyCodable
+
+    public init(
+        binding: [String: AnyCodable],
+        sourceincarnation: String,
+        snapshot: AnyCodable)
+    {
+        self.binding = binding
+        self.sourceincarnation = sourceincarnation
+        self.snapshot = snapshot
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case binding
+        case sourceincarnation = "sourceIncarnation"
+        case snapshot
+    }
+}
+
+public struct PushLiveActivityRegisterParams: Codable, Sendable {
+    public let activityid: String
+    public let expected: [String: AnyCodable]
+    public let destination: AnyCodable
+
+    public init(
+        activityid: String,
+        expected: [String: AnyCodable],
+        destination: AnyCodable)
+    {
+        self.activityid = activityid
+        self.expected = expected
+        self.destination = destination
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case activityid = "activityId"
+        case expected
+        case destination
+    }
+}
+
+public struct PushLiveActivityRegistrationResult: Codable, Sendable {
+    public let registrationid: String
+    public let activityid: String
+    public let binding: [String: AnyCodable]
+    public let sourceincarnation: String
+    public let state: AnyCodable
+    public let rotationrevision: Int
+    public let leaseexpiresatms: Double
+
+    public init(
+        registrationid: String,
+        activityid: String,
+        binding: [String: AnyCodable],
+        sourceincarnation: String,
+        state: AnyCodable,
+        rotationrevision: Int,
+        leaseexpiresatms: Double)
+    {
+        self.registrationid = registrationid
+        self.activityid = activityid
+        self.binding = binding
+        self.sourceincarnation = sourceincarnation
+        self.state = state
+        self.rotationrevision = rotationrevision
+        self.leaseexpiresatms = leaseexpiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case registrationid = "registrationId"
+        case activityid = "activityId"
+        case binding
+        case sourceincarnation = "sourceIncarnation"
+        case state
+        case rotationrevision = "rotationRevision"
+        case leaseexpiresatms = "leaseExpiresAtMs"
+    }
+}
+
+public struct PushLiveActivityRevokeParams: Codable, Sendable {
+    public let registrationid: String
+    public let expectedrevision: Int
+
+    public init(
+        registrationid: String,
+        expectedrevision: Int)
+    {
+        self.registrationid = registrationid
+        self.expectedrevision = expectedrevision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case registrationid = "registrationId"
+        case expectedrevision = "expectedRevision"
+    }
+}
+
+public struct PushLiveActivityRevokeResult: Codable, Sendable {
+    public let removed: Bool
+
+    public init(
+        removed: Bool)
+    {
+        self.removed = removed
+    }
+}
+
+public struct PushLiveActivityRotateParams: Codable, Sendable {
+    public let registrationid: String
+    public let expectedrevision: Int
+    public let destination: AnyCodable
+
+    public init(
+        registrationid: String,
+        expectedrevision: Int,
+        destination: AnyCodable)
+    {
+        self.registrationid = registrationid
+        self.expectedrevision = expectedrevision
+        self.destination = destination
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case registrationid = "registrationId"
+        case expectedrevision = "expectedRevision"
+        case destination
+    }
+}
+
 public struct PushTestParams: Codable, Sendable {
     public let nodeid: String
     public let title: String?
@@ -14276,6 +14452,66 @@ public struct SessionSharingIdentity: Codable, Sendable {
     }
 }
 
+public struct SessionStatusMatchedRun: Codable, Sendable {
+    public let runid: String
+    public let status: AnyCodable
+    public let endedat: Double?
+
+    public init(
+        runid: String,
+        status: AnyCodable,
+        endedat: Double? = nil)
+    {
+        self.runid = runid
+        self.status = status
+        self.endedat = endedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case status
+        case endedat = "endedAt"
+    }
+}
+
+public struct SessionStatus: Codable, Sendable {
+    public let key: String
+    public let agentid: String
+    public let sessionid: String
+    public let status: AnyCodable?
+    public let hasactiverun: Bool
+    public let updatedat: Double?
+    public let matchedrun: AnyCodable
+
+    public init(
+        key: String,
+        agentid: String,
+        sessionid: String,
+        status: AnyCodable? = nil,
+        hasactiverun: Bool,
+        updatedat: Double? = nil,
+        matchedrun: AnyCodable)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.status = status
+        self.hasactiverun = hasactiverun
+        self.updatedat = updatedat
+        self.matchedrun = matchedrun
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case status
+        case hasactiverun = "hasActiveRun"
+        case updatedat = "updatedAt"
+        case matchedrun = "matchedRun"
+    }
+}
+
 public struct SessionSuggestionEvent: Codable, Sendable {
     public let action: SessionSuggestionAction
     public let suggestion: SessionSuggestion
@@ -16956,6 +17192,50 @@ public struct SessionsSendParams: Codable, Sendable {
         case attachments
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SessionsStatusParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let sessionid: String?
+    public let expectedrunid: String?
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        sessionid: String? = nil,
+        expectedrunid: String? = nil)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.expectedrunid = expectedrunid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case expectedrunid = "expectedRunId"
+    }
+}
+
+public struct SessionsStatusResult: Codable, Sendable {
+    public let observedat: Double
+    public let session: AnyCodable
+
+    public init(
+        observedat: Double,
+        session: AnyCodable)
+    {
+        self.observedat = observedat
+        self.session = session
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case observedat = "observedAt"
+        case session
     }
 }
 
@@ -26283,6 +26563,130 @@ public enum ProjectRecent: Codable, Sendable {
         case .project(let value): try value.encode(to: encoder)
         case .folder(let value): try value.encode(to: encoder)
         case .repository(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct PushLiveActivityDiscoverResultUnknown: Codable, Sendable {
+    public let status: String
+
+    public init()
+    {
+        self.status = "unknown"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for PushLiveActivityDiscoverResultUnknown: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "unknown" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal unknown"
+            )
+        }
+        self.status = "unknown"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("unknown", forKey: .status)
+    }
+}
+
+public struct PushLiveActivityDiscoverResultFound: Codable, Sendable {
+    public let status: String
+    public let registration: PushLiveActivityRegistrationResult
+
+    public init(
+        registration: PushLiveActivityRegistrationResult
+    )
+    {
+        self.status = "found"
+        self.registration = registration
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case registration
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "registration"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for PushLiveActivityDiscoverResultFound: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "found" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal found"
+            )
+        }
+        self.status = "found"
+        self.registration = try container.decode(PushLiveActivityRegistrationResult.self, forKey: .registration)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("found", forKey: .status)
+        try container.encode(registration, forKey: .registration)
+    }
+}
+
+public enum PushLiveActivityDiscoverResult: Codable, Sendable {
+    case unknown(PushLiveActivityDiscoverResultUnknown)
+    case found(PushLiveActivityDiscoverResultFound)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "unknown": self = try .unknown(PushLiveActivityDiscoverResultUnknown(from: decoder))
+        case "found": self = try .found(PushLiveActivityDiscoverResultFound(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown PushLiveActivityDiscoverResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .unknown(let value): try value.encode(to: encoder)
+        case .found(let value): try value.encode(to: encoder)
         }
     }
 }

@@ -41,6 +41,7 @@ import {
 } from "../../infra/push-web.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { liveActivityHandlers } from "./push-live-activity.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -96,6 +97,7 @@ function authorizeWebPushSubscription(
 }
 
 export const pushHandlers: GatewayRequestHandlers = {
+  ...liveActivityHandlers,
   "push.test": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePushTestParams, "push.test", respond)) {
       return;

@@ -367,7 +367,7 @@ struct NativeActionGatewayWireTests {
             path: "/__openclaw__/canvas/documents/native.html", replacing: resource)
         if allowed {
             let value = try #require(resolved)
-            // Canvas advertises the backend HTTP authority, not the WebSocket proxy's port.
+            // Compare against the canvas authority advertised by this connection's hello.
             try #require(value.url.scheme == canvasOrigin.scheme)
             try #require(value.url.host == canvasOrigin.host)
             try #require(value.url.port == canvasOrigin.port)

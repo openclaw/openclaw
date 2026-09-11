@@ -7,6 +7,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildEmptyToolTelemetry,
@@ -55,6 +56,7 @@ it.each([undefined, "transport-user-key"])(
     };
     const host = await createAdmittedHostCapabilityTestFixture(attempt);
     const params = { ...attempt, hostCapabilities: host.hostCapabilities };
+    const agentEvents = captureCodexAgentEventBinding(params);
     try {
       const mirror = {
         params,
@@ -69,9 +71,15 @@ it.each([undefined, "transport-user-key"])(
         ...mirror,
         upstreamUserText: "Check the monitor.",
       });
-      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1", {
-        upstreamUserText: "Check the monitor.",
-      });
+      const projector = new CodexAppServerEventProjector(
+        params,
+        "thread-1",
+        "turn-1",
+        agentEvents,
+        {
+          upstreamUserText: "Check the monitor.",
+        },
+      );
       projector.recordDynamicToolCall({
         callId: "result",
         tool: "heartbeat_respond",

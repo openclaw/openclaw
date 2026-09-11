@@ -11,6 +11,7 @@ import {
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
@@ -64,6 +65,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = runtime;
   const {
     params,
+    agentEvents,
     preDynamicStartupStages,
     mutable,
     resolvedWorkspace,
@@ -135,12 +137,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }
     : undefined;
   const compactionPlanState = new CodexCompactionPlanState();
+  const dynamicToolAgentEvents: CodexAgentEventBinding = Object.freeze({
+    ...agentEvents,
+    onAgentEvent: (event) => {
+      compactionPlanState.record(event);
+      return agentEvents.onAgentEvent?.(event);
+    },
+  });
   const dynamicToolParams = {
     ...runtimeParams,
-    onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
-      compactionPlanState.record(event);
-      return runtimeParams.onAgentEvent?.(event);
-    },
+    onAgentEvent: dynamicToolAgentEvents.onAgentEvent,
     ...(allocateCodexToolOutcomeOrdinal
       ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
       : {}),
@@ -241,7 +247,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     },
     claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
-      void emitCodexAppServerEvent(params, event);
+      void emitCodexAppServerEvent(agentEvents, event);
     },
     computerContextEpoch,
     ...(canResolveAnyScheduledCreatorAuthority
@@ -648,6 +654,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       captureCronCreatorToolAllowlist,
       scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      dynamicToolAgentEvents,
       compactionPlanState,
       computerContextEpoch,
       runCleanups,

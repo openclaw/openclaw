@@ -4,8 +4,9 @@ export function emitModelFallbackStepLifecycle(params: {
   runId: string;
   sessionKey?: string;
   step: Record<string, unknown>;
+  emitEvent?: typeof emitAgentEvent;
 }) {
-  emitAgentEvent({
+  (params.emitEvent ?? emitAgentEvent)({
     runId: params.runId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     stream: "lifecycle",

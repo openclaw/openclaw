@@ -72,6 +72,7 @@ export async function runCliFallbackCandidate(
       : undefined;
   const cliLifecycleStartedAt = Date.now();
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+    emitEvent: params.emitEvent,
     runId: params.runId,
     sessionKey: turn.sessionKey,
     startedAt: cliLifecycleStartedAt,
@@ -165,6 +166,7 @@ export async function runCliFallbackCandidate(
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
         const candidateResult = await runCliAgentWithLifecycle({
+          emitEvent: params.emitEvent,
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,

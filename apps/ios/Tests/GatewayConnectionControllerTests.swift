@@ -2355,27 +2355,136 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `forget connected gateway waits for disconnect before device auth cleanup`() async throws {
+    @Test(arguments: [false, true])
+    @MainActor func `forget commits credential and state cleanup only after registry removal`(
+        registryRefusesRemoval: Bool) async throws
+    {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
-        let connectedID = "manual|connected.example.com|443"
+        let instanceID = "forget-commit-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let stableID = "manual|forget-commit.example.com|443"
+        try #require(saveActiveManualGateway(
+            host: "forget-commit.example.com", port: 443, useTLS: true, stableID: stableID))
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        var remoteForgetCalls: [String] = []
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            remoteActivityForget: { remoteForgetCalls.append($0) })
+        try #require(GatewaySettingsStore.saveGatewayCredentials(
+            token: "retained-token",
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID))
+        let cache = try #require(appModel.makeChatOfflineStore())
+        let routing = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main"))
+        await cache.storeSessionRoutingIdentity(routing)
+        let databases = try OpenClawClientDatabases(
+            directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
+        defer { try? databases.close() }
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: stableID) == routing)
+
+        let service = GatewaySettingsStore._testGatewayService
+        var registry = GatewaySettingsStore.loadGatewayRegistry()
+        if registryRefusesRemoval { registry.version = 3 }
+        let registryData = try JSONEncoder().encode(registry)
+        let registryJSON = try #require(String(bytes: registryData, encoding: .utf8))
+        try #require(KeychainStore.saveString(registryJSON, service: service, account: "gateway-registry"))
+
+        #expect(await controller.forgetGateway(stableID: stableID) == !registryRefusesRemoval)
+        #expect(remoteForgetCalls == (registryRefusesRemoval ? [] : [stableID]))
+        #expect(!databases.hasPendingGatewayRemoval(gatewayID: stableID))
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID, gatewayStableID: stableID)
+        #expect(credentials.token == (registryRefusesRemoval ? "retained-token" : nil))
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: stableID) ==
+            (registryRefusesRemoval ? routing : nil))
+        if registryRefusesRemoval {
+            #expect(KeychainStore.loadString(service: service, account: "gateway-registry") == registryJSON)
+        } else {
+            #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == stableID })
+        }
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func `forget erases locally before held remote cleanup despite caller cancellation`(
+        cancelCaller: Bool) async throws
+    {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let instanceID = "forget-wait-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let fixture = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [])
+        defer { fixture.stop() }
+        let connectedID = "manual|127.0.0.1|\(fixture.port)"
         let selectedID = "manual|selected.example.com|443"
         saveActiveManualGateway(host: "selected.example.com", port: 443, useTLS: true, stableID: selectedID)
         #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
             stableID: connectedID,
             kind: .manual,
-            name: "connected.example.com:443",
-            host: "connected.example.com",
-            port: 443,
-            useTLS: true,
+            name: "Forgotten gateway",
+            host: "127.0.0.1",
+            port: Int(fixture.port),
+            useTLS: false,
             lastConnectedAtMs: nil)))
+        try #require(GatewaySettingsStore.setGatewayConnectionEnabled(stableID: connectedID, enabled: true))
         let appModel = NodeAppModel()
-        try appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://connected.example.com")),
-            stableID: connectedID))
+        appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(stableID: connectedID))
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let remoteRelease = AsyncStream<Void>.makeStream()
+        defer { remoteRelease.continuation.finish() }
+        var remoteForgetCalls: [String] = []
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            remoteActivityForget: { gatewayID in
+                remoteForgetCalls.append(gatewayID)
+                #expect(!Task.isCancelled)
+                for await _ in remoteRelease.stream {
+                    break
+                }
+                #expect(!Task.isCancelled)
+            })
+        defer { controller.setScenePhase(.background) }
         let identity = DeviceIdentityStore.loadOrCreate()
+        try #require(GatewaySettingsStore.saveGatewayCredentials(
+            token: "forgotten-token",
+            bootstrapToken: nil,
+            password: "forgotten-password",
+            gatewayStableID: connectedID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID))
+        try #require(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Test-Credential": "forgotten-header"], gatewayStableID: connectedID))
+        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: connectedID, clientId: "openclaw-ios")
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: connectedID, agentId: "reviewer")
+        ShareGatewayRelaySettings.saveConfig(.init(
+            gatewayURLString: fixture.url().absoluteString,
+            gatewayStableID: connectedID,
+            token: "forgotten-share-token",
+            password: nil,
+            sessionKey: "main"))
+        defer {
+            _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: connectedID)
+            _ = GatewayTLSStore.clearFingerprint(stableID: connectedID)
+            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: connectedID, clientId: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: connectedID, agentId: nil)
+        }
+        let cache = try #require(appModel.makeChatOfflineStore())
+        let routing = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender", mainSessionKey: "main", defaultAgentID: "main"))
+        await cache.storeSessionRoutingIdentity(routing)
+        let databases = try OpenClawClientDatabases(
+            directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
+        defer { try? databases.close() }
+        try #require(databases.loadSessionRoutingIdentity(gatewayID: connectedID) == routing)
         let resetRelease = AsyncStream<Void>.makeStream()
         let existingReset = Task {
             for await _ in resetRelease.stream {
@@ -2389,21 +2498,71 @@ private func waitUntil(
             DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID)
         }
 
+        var forgetReturned = false
         let forgetTask = Task { @MainActor in
-            await controller.forgetGateway(stableID: connectedID)
+            let result = await controller.forgetGateway(stableID: connectedID)
+            forgetReturned = true
+            return result
         }
         await waitUntil { appModel.activeGatewayConnectConfig == nil }
         #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == connectedID })
+        if cancelCaller { forgetTask.cancel() }
 
+        // Recreate the fleet during the disconnect await: the post-commit stop
+        // must fence this runtime before remote retirement can block.
+        controller.setScenePhase(.active)
+        await waitUntil { fixture.capturedAuth(at: 0) != nil }
+        #expect(fixture.capturedAuth(at: 0) != nil)
+        #expect(fixture.activeConnectionCount == 1)
+        #expect(GatewayTLSStore.replaceFingerprint("abc", stableID: connectedID))
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "node",
             token: "late-handshake-token",
             gatewayID: connectedID)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId, role: "node", gatewayID: connectedID)?.token == "late-handshake-token")
         resetRelease.continuation.yield()
         resetRelease.continuation.finish()
 
+        await waitUntil { !remoteForgetCalls.isEmpty }
+        #expect(remoteForgetCalls == [connectedID])
+        #expect(!forgetReturned)
+        #expect(!controller._test_hasOperatorFleetReconcileTask())
+        #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == connectedID })
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID, gatewayStableID: connectedID)
+        #expect(credentials.token == nil)
+        #expect(credentials.password == nil)
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: connectedID).isEmpty)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: connectedID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: connectedID) == nil)
+        #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: connectedID) == nil)
+        #expect(ShareGatewayRelaySettings.loadConfig() == nil)
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: connectedID) == nil)
+        #expect(!databases.hasPendingGatewayRemoval(gatewayID: connectedID))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId, role: "node", gatewayID: connectedID) == nil)
+        await waitUntil { fixture.activeConnectionCount == 0 }
+        #expect(fixture.activeConnectionCount == 0)
+        var joined = false
+        var joinedReturned = false
+        let joinedForget = Task { @MainActor in
+            joined = true
+            let result = await controller.forgetGateway(stableID: connectedID)
+            joinedReturned = true
+            return result
+        }
+        await waitUntil { joined }
+        #expect(joined)
+        #expect(!joinedReturned)
+        #expect(remoteForgetCalls == [connectedID])
+        remoteRelease.continuation.yield()
+        remoteRelease.continuation.finish()
         #expect(await forgetTask.value)
+        #expect(await joinedForget.value)
+        #expect(remoteForgetCalls == [connectedID])
         #expect(appModel.activeGatewayConnectConfig == nil)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == selectedID)
         #expect(DeviceAuthStore.loadToken(

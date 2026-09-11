@@ -240,7 +240,7 @@ test.each(["research", "ops"] as const)(
   },
 );
 
-test("sessions.describe and sessions.get hide foreign drafts at operator role boundaries", async () => {
+test("by-key session reads hide foreign drafts at operator role boundaries", async () => {
   const sessionKey = "agent:main:foreign-draft-describe";
   const sessionId = "session-foreign-draft-describe";
   const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;
@@ -340,6 +340,17 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
     } else {
       expect(described.payload?.session?.participants, name).toHaveLength(4);
       expect(described.payload?.session?.expandedParticipants, name).toHaveLength(5);
+    }
+    const status = await directSessionReq<{ session: { sessionId: string } | null }>(
+      "sessions.status",
+      { key: sessionKey },
+      { client, context: { getRuntimeConfig: () => cfg } },
+    );
+    expect(status.ok, name).toBe(true);
+    if (hidden) {
+      expect(status.payload?.session, name).toBeNull();
+    } else {
+      expect(status.payload?.session?.sessionId, name).toBe(sessionId);
     }
     const transcript = await directSessionReq<{ messages: Array<{ content?: unknown }> }>(
       "sessions.get",

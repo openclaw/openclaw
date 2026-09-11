@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { onAgentEventForRun } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 
 const logger = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -32,10 +32,13 @@ import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subsc
 function createDelivery(params: Omit<SubscribeEmbeddedAgentSessionParams, "session">) {
   const { session } = createStubSessionHarness();
   const options = { ...params, session };
+  const state = createEmbeddedAgentSubscribeState(options);
   return createReplyDelivery({
     params: options,
-    state: createEmbeddedAgentSubscribeState(options),
+    state,
     log: logger,
+    emitEvent: emitAgentEvent,
+    isCurrent: () => !state.unsubscribed,
   });
 }
 

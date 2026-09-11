@@ -22,6 +22,7 @@ import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
@@ -624,7 +625,7 @@ it.each(["missing", "local"] as const)(
     const sessionRuntime = {
       managedWorktrees: { findLiveByOwner: () => undefined },
       resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      resolveCanonicalSessionEntryFromStoreKeys,
     };
     const context = createWorkerStopChatContext();
     const cancelApprovals = vi.fn();

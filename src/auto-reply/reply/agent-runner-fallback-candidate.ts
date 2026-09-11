@@ -201,7 +201,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
-        emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
+        emitModelFallbackStepLifecycle({
+          runId: params.runId,
+          sessionKey: turn.sessionKey,
+          step,
+          emitEvent: params.state.emitEvent,
+        });
       },
       runCandidate: async (provider, model, runOptions) => {
         clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
@@ -259,6 +264,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.signalExecutionPhaseForTyping(info);
           };
         const common = {
+          emitEvent: params.state.emitEvent,
           preparedRunAdmission: params.preparedRunAdmission,
           turn,
           candidateRun,

@@ -4,9 +4,16 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { emitAgentEventIfCurrent, emitAgentEventForAdmittedRun } from "../infra/agent-events.js";
+import {
+  getAgentRunContext,
+  getAgentRunContextOwnerStatus,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { getAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
@@ -48,13 +55,50 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  const admissionBound = params.admittedRunContext !== undefined;
+  const root = params.admittedRunContext
+    ? getAdmittedRunDelegatedAuthority(params.admittedRunContext)
+    : undefined;
+  const isCurrent: EmbeddedAgentSubscribeContext["isCurrent"] = (purpose) => {
+    // Accepted unbound compaction completion still settles after teardown.
+    // An admitted subscription never borrows that standalone settlement path.
+    if (state.unsubscribed && (admissionBound || purpose !== "compaction-settlement")) {
+      return false;
+    }
+    if (!admissionBound) {
+      return true;
+    }
+    // Validation can call back into the owner. Reread both root and teardown
+    // state afterwards; a retained subscription must never adopt a replacement.
+    return Boolean(
+      root &&
+      root.operationalRunInstance.runId === params.runId &&
+      (params.lifecycleGeneration === undefined ||
+        params.lifecycleGeneration === root.lifecycleGeneration) &&
+      validateAgentRunDelegatedAuthority(root) &&
+      !state.unsubscribed &&
+      getAgentRunContext(params.runId)?.delegatedAuthority === root &&
+      getAgentRunContextOwnerStatus(params.runId, root.claimId, root.lifecycleGeneration) ===
+        "active",
+    );
+  };
+  const emitEvent: typeof emitAgentEventIfCurrent = (event) => {
+    if (admissionBound) {
+      return root ? emitAgentEventForAdmittedRun(event, root, () => !state.unsubscribed) : false;
+    }
+    const purpose =
+      event.stream === "compaction" && event.data.phase === "end"
+        ? "compaction-settlement"
+        : undefined;
+    return isCurrent(purpose) && emitAgentEventIfCurrent(event);
+  };
   const {
     captureModelEvent,
     recordAuxiliaryUsage,
     getUsageTotals,
     getLastAssistantUsage,
     getCurrentAttemptAssistant,
-  } = createEmbeddedModelState(params, log);
+  } = createEmbeddedModelState(params, log, { emitEvent, isCurrent });
   let compactionCount = 0;
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
@@ -67,7 +111,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
-  const replyDelivery = createReplyDelivery({ params, state, log });
+  const replyDelivery = createReplyDelivery({ params, state, log, emitEvent, isCurrent });
   const {
     clearAssistantStream,
     clearDeferredBlockReplies,
@@ -198,7 +242,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     message: string,
     result?: unknown,
   ) => {
-    if (!params.onToolResult) {
+    if (!params.onToolResult || !isCurrent()) {
       return;
     }
     const parsed = parseInlineDirectives(message, {
@@ -231,11 +275,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       label: "tool result",
       log,
       callback: () =>
-        params.onToolResult?.({
-          text: parsed.text,
-          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-        }),
+        isCurrent()
+          ? params.onToolResult?.({
+              text: parsed.text,
+              mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+              ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+            })
+          : undefined,
     });
   };
   const emitToolSummary = (
@@ -261,6 +307,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const streamRendering = createStreamRendering({
+    emitEvent,
+    isCurrent,
     params,
     state,
     log,
@@ -376,6 +424,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const ctx: EmbeddedAgentSubscribeContext = {
+    emitEvent,
+    isCurrent,
     params,
     state,
     log,

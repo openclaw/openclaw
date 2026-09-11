@@ -2,12 +2,15 @@
 import { generateKeyPairSync } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
+import { sendApnsLiveActivity } from "./push-apns.js";
 import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
+import { createApnsLiveActivityPayload } from "./push-live-activity-payload.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -214,16 +217,140 @@ describe("push-apns.relay", () => {
   });
 
   describe("sendApnsRelayPush", () => {
+    it.each(["running", "done"] as const)(
+      "signs activity purpose/revision and preserves %s retry bytes alongside ordinary pushes",
+      async (status) => {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(123_456_789);
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("", { status: 202 }));
+        vi.stubGlobal("fetch", fetchMock);
+        const snapshot = {
+          sourceIncarnation: "source-owner",
+          sequence: 1,
+          status,
+          observedAtMs: 978_307_201_250,
+        };
+        const payload = createApnsLiveActivityPayload({ snapshot, timestamp: 978_307_210 });
+        const ordinary = createRelayPushParams();
+        const expectedBody = JSON.stringify({
+          relayHandle: "activity-handle",
+          purpose: "liveActivity",
+          revision: 7,
+          pushType: "liveactivity",
+          priority: status === "done" ? 10 : 5,
+          payload: payload.value,
+        });
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const controller = new AbortController();
+          const assertCurrent = vi.fn(() => undefined);
+          const sending = sendApnsLiveActivity({
+            registration: {
+              purpose: "liveActivity",
+              transport: "relay",
+              bundleId: "ai.openclaw.ios",
+              environment: "sandbox",
+              relayHandle: "activity-handle",
+              sendGrant: "activity-grant",
+              relayRevision: 7,
+            },
+            relayConfig: ordinary.relayConfig,
+            relayGatewayIdentity,
+            payload,
+            signal: controller.signal,
+            assertCurrent,
+          });
+          snapshot.observedAtMs += 100_000;
+          await expect(sending).resolves.toMatchObject({
+            ok: true,
+            topic: "ai.openclaw.ios.push-type.liveactivity",
+            transport: "relay",
+          });
+          expect(assertCurrent).toHaveBeenCalledTimes(1);
+          const [url, request] = fetchMock.mock.calls[attempt] ?? [];
+          expect(url).toBe("https://relay.example.com/v1/push/send");
+          expect(request?.body).toBe(expectedBody);
+          const body = request?.body;
+          if (typeof body !== "string") {
+            throw new Error("Activity request requires a string body");
+          }
+          expect(request?.redirect).toBe("manual");
+          expect(request?.signal?.aborted).toBe(false);
+          controller.abort(new Error("attempt deadline reached"));
+          expect(request?.signal?.aborted).toBe(true);
+          const headers = new Headers(request?.headers);
+          expect(headers.get("authorization")).toBe("Bearer activity-grant");
+          expect(
+            verifyDeviceSignature(
+              relayGatewayIdentity.publicKey,
+              [
+                "openclaw-relay-send-v1",
+                headers.get("x-openclaw-gateway-device-id"),
+                headers.get("x-openclaw-gateway-signed-at-ms"),
+                body,
+              ].join("\n"),
+              headers.get("x-openclaw-gateway-signature") ?? "",
+            ),
+          ).toBe(true);
+          clock.mockReturnValue(123_466_789);
+        }
+
+        await sendApnsRelayPush(ordinary);
+        expect(fetchMock.mock.calls[2]?.[1]?.body).toBe(
+          '{"relayHandle":"relay-handle-123","pushType":"background","priority":5,"payload":{"aps":{"content-available":1}}}',
+        );
+      },
+    );
+
+    it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects activity relay revision %s before authority consumption",
+      async (revision) => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+        const assertCurrent = vi.fn(() => undefined);
+        const ordinary = createRelayPushParams();
+        await expect(
+          sendApnsLiveActivity({
+            registration: {
+              purpose: "liveActivity",
+              transport: "relay",
+              bundleId: "ai.openclaw.ios",
+              environment: "sandbox",
+              relayHandle: "activity-handle",
+              sendGrant: "activity-grant",
+              relayRevision: revision,
+            },
+            relayConfig: ordinary.relayConfig,
+            relayGatewayIdentity,
+            payload: createApnsLiveActivityPayload({
+              snapshot: {
+                status: "running",
+                observedAtMs: 1_000,
+              },
+              timestamp: 1,
+            }),
+            signal: new AbortController().signal,
+            assertCurrent,
+          }),
+        ).rejects.toThrow("Invalid Live Activity relay revision");
+        expect(assertCurrent).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
+
     it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
       const controller = new AbortController();
       const isCurrent = vi.fn().mockResolvedValue(true);
-      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+      const assertCurrent = vi.fn(() => undefined);
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        expect(assertCurrent).toHaveBeenCalledTimes(1);
+        return new Response("", { status: 202 });
+      });
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await sendApnsRelayPush({
         ...createRelayPushParams(),
         signal: controller.signal,
         isCurrent,
+        assertCurrent,
       });
 
       expect(isCurrent).toHaveBeenCalledTimes(2);
@@ -232,6 +359,54 @@ describe("push-apns.relay", () => {
       controller.abort(new Error("pairing removed"));
       expect(fetchOptions?.signal?.aborted).toBe(true);
     });
+
+    it.each(["revoked", "aborted"] as const)(
+      "does not fetch when authority is %s during async preparation",
+      async (outcome) => {
+        const checking = createDeferred();
+        const currentness = createDeferred<boolean>();
+        const controller = new AbortController();
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+        let current = true;
+        const assertCurrent = vi.fn(() => {
+          if (!current) {
+            throw new Error("revoked");
+          }
+          return undefined;
+        });
+        const sending = sendApnsRelayPush({
+          ...createRelayPushParams(),
+          signal: controller.signal,
+          assertCurrent,
+          isCurrent: vi
+            .fn<() => Promise<boolean>>()
+            .mockResolvedValueOnce(true)
+            .mockImplementationOnce(() => {
+              checking.resolve();
+              return currentness.promise;
+            }),
+        });
+        try {
+          await withTestTimeout(checking.promise, 1_000, "relay currentness check did not start");
+          expect(assertCurrent).not.toHaveBeenCalled();
+          expect(fetchMock).not.toHaveBeenCalled();
+          const rejected = expect(sending).rejects.toThrow(outcome);
+          if (outcome === "revoked") {
+            current = false;
+          } else {
+            controller.abort(new Error(outcome));
+          }
+          currentness.resolve(true);
+          await rejected;
+          expect(fetchMock).not.toHaveBeenCalled();
+          expect(assertCurrent).toHaveBeenCalledTimes(outcome === "revoked" ? 1 : 0);
+        } finally {
+          currentness.resolve(false);
+          await sending.catch(() => undefined);
+        }
+      },
+    );
 
     it("does not start relay transport when persistent ownership changed", async () => {
       const fetchMock = vi.fn();

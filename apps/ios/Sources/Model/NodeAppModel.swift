@@ -586,6 +586,9 @@ final class NodeAppModel {
     private var apnsLastRegisteredTokenHex: String?
     private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
+    @ObservationIgnored private var remoteActivityResumeTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteActivityContext: (binding: IOSNativeActionBinding, resumed: Bool)?
+    private var remoteActivityForeground = false
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
@@ -635,7 +638,10 @@ final class NodeAppModel {
                 outboxGatewayID: nativeBinding.session.owner.gatewayID,
                 mediaArtifactLoader: IOSMediaArtifactLoader(
                     connectionProvider: { nativeBinding.mediaConnection }),
-                nativeBinding: nativeBinding)
+                nativeBinding: nativeBinding,
+                captureRunActivity: self.makeRunActivityCapture(
+                    gateway: nativeBinding.gateway,
+                    nativeBinding: nativeBinding))
         }
         if self.isScreenshotFixtureModeEnabled {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
@@ -656,7 +662,114 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
-            mediaArtifactLoader: mediaArtifactLoader)
+            mediaArtifactLoader: mediaArtifactLoader,
+            captureRunActivity: self.makeRunActivityCapture(gateway: self.operatorSession))
+    }
+
+    private func makeRunActivityCapture(
+        gateway: GatewayNodeSession,
+        nativeBinding: IOSNativeActionBinding? = nil) -> IOSGatewayChatTransport.RunActivityCapture
+    {
+        { [weak self] target, route in
+            guard let self else { throw CancellationError() }
+            let generation = self.operatorAuthorityGeneration
+            guard try await self.remoteActivitiesEligible(generation: generation) else { return nil }
+            let binding = try await IOSGatewayChatTransport.captureRunActivityBinding(
+                gateway: gateway, route: route, target: target, nativeBinding: nativeBinding)
+            try Task.checkCancellation()
+            guard generation == self.operatorAuthorityGeneration, !self.isLocalGatewayFixtureEnabled else {
+                throw CancellationError()
+            }
+            guard let binding else { return nil }
+            self.remoteActivityResumeTask?.cancel()
+            self.remoteActivityResumeTask = nil
+            try await self.resumeRemoteActivities(binding: binding, generation: generation)
+            let pushRegistrationManager = self.pushRegistrationManager
+            return (binding, { runID, sessionID in
+                LiveActivityManager.shared.observeAcceptedRun(
+                    .init(session: binding.session, runID: runID),
+                    sessionID: sessionID,
+                    binding: binding,
+                    pushRegistrationManager: pushRegistrationManager)
+            })
+        }
+    }
+
+    private func remoteActivitiesEligible(generation: UInt64) async throws -> Bool {
+        try Task.checkCancellation()
+        guard !self.isLocalGatewayFixtureEnabled, PushEnrollmentConsent.disclosureAccepted else { return false }
+        let available = await self.pushRegistrationManager.activityOperationsAvailable()
+        try Task.checkCancellation()
+        guard generation == self.operatorAuthorityGeneration, !self.isLocalGatewayFixtureEnabled else {
+            throw CancellationError()
+        }
+        return available && PushEnrollmentConsent.disclosureAccepted
+    }
+
+    private func resumeRemoteActivities(binding: IOSNativeActionBinding, generation: UInt64) async throws {
+        let initiallyCurrent = await binding.isCurrent()
+        try Task.checkCancellation()
+        guard initiallyCurrent, generation == self.operatorAuthorityGeneration,
+              !self.isLocalGatewayFixtureEnabled
+        else { throw CancellationError() }
+        if let previous = self.remoteActivityContext?.binding.session.owner,
+           previous.gatewayID.utf8.elementsEqual(binding.session.owner.gatewayID.utf8),
+           previous != binding.session.owner
+        {
+            // Only a successful users.self read proves an account replacement.
+            // A disconnect or failed read merely suspends the existing activity.
+            LiveActivityManager.shared.suspendRemoteActivities()
+            self.remoteActivityContext?.resumed = false
+            await LiveActivityManager.shared.retireRemoteActivities(owner: previous)
+        }
+        let current = await binding.isCurrent()
+        try Task.checkCancellation()
+        guard current, generation == self.operatorAuthorityGeneration,
+              !self.isLocalGatewayFixtureEnabled
+        else { throw CancellationError() }
+        guard self.remoteActivityForeground else { return }
+        let canResume = PushEnrollmentConsent.disclosureAccepted
+        if let context = self.remoteActivityContext, context.resumed, canResume,
+           context.binding.session.owner == binding.session.owner,
+           context.binding.gateway === binding.gateway, context.binding.route == binding.route
+        {
+            return
+        }
+        self.remoteActivityContext = (binding, canResume)
+        LiveActivityManager.shared.resumeRemoteActivities(
+            binding: binding, pushRegistrationManager: self.pushRegistrationManager)
+    }
+
+    private func scheduleRemoteActivityResume() {
+        self.remoteActivityResumeTask?.cancel()
+        self.remoteActivityResumeTask = nil
+        guard self.remoteActivityForeground, self.operatorConnected, !self.isLocalGatewayFixtureEnabled else { return }
+        let generation = self.operatorAuthorityGeneration
+        let gateway = self.operatorSession
+        let target = IOSGatewayChatTransport.sessionTarget(
+            for: self.mainSessionKey, selectedAgentID: self.chatDeliveryAgentId)
+        self.remoteActivityResumeTask = Task { [weak self] in
+            do {
+                guard let self, try await self.remoteActivitiesEligible(generation: generation) else { return }
+                guard let route = await gateway.currentRoute(),
+                      let binding = try await IOSGatewayChatTransport.captureRunActivityBinding(
+                          gateway: gateway, route: route, target: target)
+                else { return }
+                try Task.checkCancellation()
+                try await self.resumeRemoteActivities(binding: binding, generation: generation)
+            } catch {
+                // Failed readback is unknown ownership, not logout or permission
+                // to rediscover a replacement route for the captured operation.
+                GatewayDiagnostics.log("remote activity resume unavailable")
+            }
+        }
+    }
+
+    private func suspendRemoteActivities() {
+        self.remoteActivityResumeTask?.cancel()
+        self.remoteActivityResumeTask = nil
+        self.remoteActivityContext?.resumed = false
+        LiveActivityManager.shared.suspendRemoteActivities()
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -1126,6 +1239,10 @@ final class NodeAppModel {
     }
 
     func setScenePhase(_ phase: ScenePhase) {
+        self.remoteActivityForeground = phase == .active
+        if !self.remoteActivityForeground {
+            self.suspendRemoteActivities()
+        }
         let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
         GatewayDiagnostics.log("node app model: scene phase=\(String(describing: phase))")
         if phase != .active {
@@ -1243,6 +1360,7 @@ final class NodeAppModel {
             if shouldStartGatewayHealthMonitor {
                 self.startGatewayHealthMonitor()
             }
+            self.scheduleRemoteActivityResume()
         @unknown default:
             self.isBackgrounded = false
             self.endBackgroundConnectionGracePeriod(reason: "scene_unknown")
@@ -3881,6 +3999,7 @@ extension NodeAppModel {
 
     @discardableResult
     private func beginGatewaySessionReset(chainingAfterExisting: Bool = false) -> Task<Void, Never> {
+        self.suspendRemoteActivities()
         let previousResetTask = self.gatewaySessionResetTask
         if let previousResetTask, !chainingAfterExisting {
             return previousResetTask
@@ -4592,6 +4711,7 @@ extension NodeAppModel {
         guard shouldContinue() else { return }
         await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
+        self.scheduleRemoteActivityResume()
         await self.talkMode.reloadConfig(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         self.requestTalkPermissionUpgradeIfNeeded()
@@ -4657,6 +4777,7 @@ extension NodeAppModel {
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.scheduleRemoteActivityResume()
         ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
             gatewayURLString: url.absoluteString,
             gatewayStableID: nodeOptions.deviceAuthGatewayID,
@@ -5356,6 +5477,7 @@ extension NodeAppModel {
         let changed = self.operatorConnected != connected
         self.operatorConnected = connected
         if !connected {
+            self.suspendRemoteActivities()
             self.isDesktopObserveAvailable = false
         }
         self.operatorStatusText = connected ? "Connected" : "Offline"

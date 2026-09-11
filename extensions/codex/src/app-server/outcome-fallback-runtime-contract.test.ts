@@ -11,9 +11,11 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-outcome-contract";
@@ -41,11 +43,18 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
+    hostCapabilities: createCodexTestHostCapabilities(),
   } as EmbeddedRunAttemptParams;
 }
 
 async function createProjector(): Promise<CodexAppServerEventProjector> {
-  return new CodexAppServerEventProjector(await createParams(), THREAD_ID, TURN_ID);
+  const params = await createParams();
+  return new CodexAppServerEventProjector(
+    params,
+    THREAD_ID,
+    TURN_ID,
+    captureCodexAgentEventBinding(params),
+  );
 }
 
 function buildToolTelemetry(

@@ -30,6 +30,7 @@ import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
+  type ChatAbortOps,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
@@ -93,6 +94,7 @@ export function startGatewayMaintenanceTimers(params: {
   resetEventLoopHealth: () => void;
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  sessionLifecyclePersistence?: ChatAbortOps["sessionLifecyclePersistence"];
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;

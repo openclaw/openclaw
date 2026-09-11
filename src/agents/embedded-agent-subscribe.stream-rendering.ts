@@ -8,7 +8,6 @@ import {
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
@@ -95,6 +94,8 @@ function splitTrailingFenceFragment(
 }
 
 type StreamRenderingParams = {
+  emitEvent: EmbeddedAgentSubscribeContext["emitEvent"];
+  isCurrent: EmbeddedAgentSubscribeContext["isCurrent"];
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeContext["state"];
   log: EmbeddedAgentSubscribeContext["log"];
@@ -107,6 +108,8 @@ type StreamRenderingParams = {
 };
 
 export function createStreamRendering({
+  emitEvent,
+  isCurrent,
   params,
   state,
   log,
@@ -367,6 +370,7 @@ export function createStreamRendering({
     },
   ) => {
     if (
+      !isCurrent() ||
       state.suppressBlockChunks ||
       params.silentExpected ||
       shouldSuppressDeterministicApprovalOutput(state)
@@ -583,7 +587,7 @@ export function createStreamRendering({
     input,
     fallback,
   ) => {
-    if (params.silentExpected) {
+    if (params.silentExpected || !isCurrent()) {
       return;
     }
     const text = typeof input === "string" ? input : input.thinking;
@@ -620,7 +624,7 @@ export function createStreamRendering({
     // archive. /reasoning (streamReasoning) gates only the rendering hook
     // below; display surfaces (TUI showThinking, webchat isReasoning drops)
     // gate presentation on their side.
-    emitAgentEvent({
+    emitEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
@@ -639,10 +643,14 @@ export function createStreamRendering({
         label: "reasoning stream",
         log,
         callback: () =>
-          params.onReasoningStream?.({
-            text: trimmed,
-            ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
-          }),
+          isCurrent()
+            ? params.onReasoningStream?.({
+                text: trimmed,
+                ...(state.reasoningMode === "stream"
+                  ? {}
+                  : { requiresReasoningProgressOptIn: true }),
+              })
+            : undefined,
       });
     }
   };

@@ -9,7 +9,9 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-delivery-contract";
@@ -34,6 +36,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
+    hostCapabilities: createCodexTestHostCapabilities(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -60,7 +63,13 @@ describe("Delivery/NO_REPLY runtime contract - Codex app-server adapter", () => 
     `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  `,
     DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText,
   ])("preserves silent terminal text %s for shared delivery suppression", async (text) => {
-    const projector = new CodexAppServerEventProjector(await createParams(), THREAD_ID, TURN_ID);
+    const params = await createParams();
+    const projector = new CodexAppServerEventProjector(
+      params,
+      THREAD_ID,
+      TURN_ID,
+      captureCodexAgentEventBinding(params),
+    );
     await projector.handleNotification(
       forCurrentTurn("item/agentMessage/delta", {
         itemId: "msg-1",

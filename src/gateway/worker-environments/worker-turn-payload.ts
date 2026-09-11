@@ -100,6 +100,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
 export async function prepareWorkerAgentRuntimeIdentity(
   params: PrepareWorkerAgentRuntimeIdentityParams,
 ) {
+  const abortSignal = params.turn.abortSignal;
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.turn.runId,
     runtimeKind: "worker",
@@ -107,10 +108,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const assertActive = resolveAdmittedRunActiveAssertion(
-    admittedRunContext,
-    params.turn.abortSignal,
-  );
+  const assertActive = resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal);
   if (!assertActive) {
     throw new Error("Worker turn has no active admitted execution authority");
   }
@@ -123,7 +121,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.turnClaim,
     runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
-    { agentId: params.agentId, sessionKey: params.sessionKey },
+    { agentId: params.agentId, sessionKey: params.sessionKey, abortSignal },
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
   );

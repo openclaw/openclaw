@@ -40,6 +40,7 @@ function createTerminalReleaseHarness() {
           runtime: {
             connection: {
               params: {},
+              agentEvents: { publish: vi.fn(() => true), onAgentEvent: undefined },
               attemptStartedAt: 0,
               runAbortController: new AbortController(),
               fastModeAutoProgressState: {},
@@ -152,6 +153,7 @@ describe("Codex terminal dynamic-tool release", () => {
           runtime: {
             connection: {
               params: { timeoutMs: 60_000 },
+              agentEvents: { publish: vi.fn(() => true), onAgentEvent: undefined },
               options: {},
               attemptStartedAt: Date.now(),
               runAbortController: new AbortController(),

@@ -44,6 +44,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="secrets-config-update-and-wizard" />[Secrets, config, update, and wizard](/gateway/protocol/rpc-talk-config-and-agents#secrets-config-update-and-wizard)
 - <a id="agent-and-workspace-helpers" />[Agent and workspace helpers](/gateway/protocol/rpc-talk-config-and-agents#agent-and-workspace-helpers)
 - <a id="session-control" />[Session control](/gateway/protocol/rpc-session-control#session-control)
+- <a id="session-status-facts" />[Session status facts](/gateway/protocol/rpc-session-control#session-status-facts)
 - <a id="device-pairing-and-device-tokens" />[Device pairing and device tokens](/gateway/protocol/rpc-devices-nodes-and-approvals#device-pairing-and-device-tokens)
 - <a id="node-pairing%2C-invoke%2C-and-pending-work" />[Node pairing, invoke, and pending work](/gateway/protocol/rpc-devices-nodes-and-approvals#node-pairing%2C-invoke%2C-and-pending-work)
 - <a id="node-pairing-invoke-and-pending-work" />[Node pairing, invoke, and pending work](/gateway/protocol/rpc-devices-nodes-and-approvals#node-pairing-invoke-and-pending-work)

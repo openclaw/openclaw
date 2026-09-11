@@ -18,6 +18,7 @@ import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
@@ -66,7 +67,7 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
     loadSessionRuntime: async () => ({
       managedWorktrees: { findLiveByOwner: () => undefined },
       resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      resolveCanonicalSessionEntryFromStoreKeys,
     }),
     cancelSessionWork: cancel,
     revokeSessionAuthority: vi.fn(),
@@ -305,7 +306,7 @@ async function cancellationLoadFixture(
       }),
     },
     resolveGatewaySessionStoreTargetWithStore: () => target,
-    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+    resolveCanonicalSessionEntryFromStoreKeys,
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
   const context = createWorkerStopChatContext();

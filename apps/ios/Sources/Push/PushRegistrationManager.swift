@@ -21,7 +21,7 @@ private struct RelayGatewayPushRegistrationPayload: Encodable {
     var tokenDebugSuffix: String?
 }
 
-struct PushRelayGatewayIdentity: Codable {
+struct PushRelayGatewayIdentity: Codable, Sendable {
     var deviceId: String
     var publicKey: String
 }
@@ -37,6 +37,46 @@ actor PushRegistrationManager {
     init(buildConfig: PushBuildConfig = .current) {
         self.buildConfig = buildConfig
         self.relayClient = buildConfig.relayBaseURL.map { PushRelayClient(baseURL: $0) }
+    }
+
+    func performActivityOperation(
+        _ operation: PushRelayActivityOperation,
+        owner: PushRelayActivityOwner) async throws -> PushRelayActivityOutcome
+    {
+        let relayClient = try self.activityRelayClient()
+        let (bundleId, installationId) = try Self.registrationIdentity()
+        // Activity credentials belong to one ActivityKit incarnation, never the app-token cache.
+        return try await relayClient.performActivityOperation(operation, input: PushRelayActivityInput(
+            owner: owner,
+            installationId: installationId,
+            bundleId: bundleId,
+            environment: self.buildConfig.apnsEnvironment,
+            relayProfile: self.buildConfig.relayProfile,
+            proofPolicy: self.buildConfig.proofPolicy))
+    }
+
+    func activityOperationsAvailable() -> Bool {
+        do {
+            _ = try self.activityRelayClient()
+            _ = try Self.registrationIdentity()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func activityRelayClient() throws -> PushRelayClient {
+        guard self.buildConfig.transport == .relay, self.buildConfig.distribution == .official,
+              self.buildConfig.relayProfile != .simulatorSandbox,
+              let relayClient = self.relayClient
+        else {
+            throw PushRelayError.relayMisconfigured("Activity relay requires an official device push build")
+        }
+        try Self.validateRelayContract(
+            relayProfile: self.buildConfig.relayProfile,
+            apnsEnvironment: self.buildConfig.apnsEnvironment,
+            proofPolicy: self.buildConfig.proofPolicy)
+        return relayClient
     }
 
     func makeGatewayRegistrationPayload(
@@ -82,17 +122,7 @@ actor PushRegistrationManager {
         guard let relayClient = self.relayClient else {
             throw PushRelayError.relayBaseURLMissing
         }
-        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !bundleId.isEmpty
-        else {
-            throw PushRelayError.relayMisconfigured("Missing bundle identifier for relay registration")
-        }
-        guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !installationId.isEmpty
-        else {
-            throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
-        }
+        let (bundleId, installationId) = try Self.registrationIdentity()
 
         let tokenHashHex = Self.sha256Hex(apnsTokenHex)
         let relayOrigin = relayClient.normalizedBaseURLString
@@ -157,6 +187,21 @@ actor PushRegistrationManager {
                 distribution: self.buildConfig.distribution.rawValue,
                 relayOrigin: relayOrigin,
                 tokenDebugSuffix: registrationState.tokenDebugSuffix))
+    }
+
+    private static func registrationIdentity() throws -> (bundleId: String, installationId: String) {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            throw PushRelayError.relayMisconfigured("Missing bundle identifier for relay registration")
+        }
+        guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !installationId.isEmpty
+        else {
+            throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
+        }
+        return (bundleId, installationId)
     }
 
     private static func isExpired(_ expiresAtMs: Int64?) -> Bool {

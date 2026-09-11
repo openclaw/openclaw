@@ -666,6 +666,12 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.9",
     { startup: true, controlPlaneWrite: true },
   ],
+  ["sessions.status", "sessions-read", "operator.read", "2026.9"],
+  ["push.liveActivity.prepare", "push", "operator.write", "2026.9"],
+  ["push.liveActivity.discover", "push", "operator.read", "2026.9"],
+  ["push.liveActivity.register", "push", "operator.write", "2026.9"],
+  ["push.liveActivity.rotate", "push", "operator.write", "2026.9"],
+  ["push.liveActivity.revoke", "push", "operator.write", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

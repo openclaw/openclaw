@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
@@ -61,7 +62,13 @@ export function activateCodexAttemptTurn(
     contextSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
+  const {
+    dynamicToolParams,
+    dynamicToolAgentEvents,
+    compactionPlanState,
+    computerContextEpoch,
+    toolBridge,
+  } = attemptTools;
   const {
     state,
     completion,
@@ -103,6 +110,16 @@ export function activateCodexAttemptTurn(
     attempt: dynamicToolParams,
   });
   const streamState = { eventEmitted: false, needsTerminalSnapshot: false };
+  const projectorAgentEvents: CodexAgentEventBinding = Object.freeze({
+    ...dynamicToolAgentEvents,
+    onAgentEvent: (event) => {
+      if (event.stream === "assistant" && typeof event.data.delta === "string") {
+        streamState.eventEmitted = true;
+        streamState.needsTerminalSnapshot ||= event.data.replaceable === true;
+      }
+      return dynamicToolAgentEvents.onAgentEvent?.(event);
+    },
+  });
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
@@ -117,18 +134,10 @@ export function activateCodexAttemptTurn(
     imagesCount: params.images?.length ?? 0,
   });
   projectorRef.current = new CodexAppServerEventProjector(
-    {
-      ...projectionParams,
-      onAgentEvent: (event) => {
-        if (event.stream === "assistant" && typeof event.data.delta === "string") {
-          streamState.eventEmitted = true;
-          streamState.needsTerminalSnapshot ||= event.data.replaceable === true;
-        }
-        return dynamicToolParams.onAgentEvent?.(event);
-      },
-    },
+    { ...projectionParams, onAgentEvent: projectorAgentEvents.onAgentEvent },
     resourceState.thread.threadId,
     activeTurnId,
+    projectorAgentEvents,
     {
       agentHookContext: hookContext,
       initialContextTokens: connection.mutable.startupContextTokens,

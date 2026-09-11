@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
  * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)
  */
 import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -34,7 +35,13 @@ function createToolHandlerCtx(params: {
   agentId?: string;
   onBlockReplyFlush?: unknown;
 }) {
+  const state = {
+    ...createBaseToolHandlerState(),
+    unsubscribed: false,
+  };
   return {
+    emitEvent: emitAgentEvent,
+    isCurrent: () => !state.unsubscribed,
     params: {
       runId: params.runId,
       session: { messages: [] },
@@ -44,9 +51,7 @@ function createToolHandlerCtx(params: {
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
     hookRunner: hookMocks.runner,
-    state: {
-      ...createBaseToolHandlerState(),
-    },
+    state,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,

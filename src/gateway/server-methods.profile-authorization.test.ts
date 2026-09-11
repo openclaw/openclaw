@@ -338,7 +338,7 @@ describe("Gateway pending-profile authorization", () => {
     },
   );
 
-  it.each(["chat.send", "models.list"])(
+  it.each(["chat.send", "models.list", "sessions.status"])(
     "waits for immutable profile attachment before %s dispatch",
     async (method) => {
       const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
@@ -427,6 +427,7 @@ describe("Gateway pending-profile authorization", () => {
       "secrets.store.set",
       "send",
       "sessions.list",
+      "sessions.status",
       "skills.library.list",
       "skills.library.read",
       "skills.library.save",

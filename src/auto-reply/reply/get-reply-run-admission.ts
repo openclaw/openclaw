@@ -343,7 +343,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     rebindProvidedReplyOperation(latestSessionId);
-    opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
+    opts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      lifecycleRevision: latestSessionEntry?.lifecycleRevision,
+      storePath,
+    });
     const sessionFile = storePath
       ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
       : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions);

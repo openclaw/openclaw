@@ -4,8 +4,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -251,6 +250,9 @@ export function buildPatchItemTitle(meta?: string): string {
 }
 
 export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventData): void {
+  if (!ctx.isCurrent()) {
+    return;
+  }
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
@@ -258,7 +260,7 @@ export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentIte
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  emitAgentActivityEvent({
+  ctx.emitEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     stream: "item",
@@ -277,7 +279,7 @@ function emitExecutionPhaseBestEffort(
   runBestEffortCallback({
     label: "tool execution phase",
     log: ctx.log,
-    callback: () => ctx.params.onExecutionPhase?.(info),
+    callback: () => (ctx.isCurrent() ? ctx.params.onExecutionPhase?.(info) : undefined),
   });
 }
 
@@ -288,7 +290,7 @@ export function emitAgentEventCallbackBestEffort(
   runBestEffortCallback({
     label: "tool agent event",
     log: ctx.log,
-    callback: () => ctx.params.onAgentEvent?.(event),
+    callback: () => (ctx.isCurrent() ? ctx.params.onAgentEvent?.(event) : undefined),
   });
 }
 
@@ -327,6 +329,9 @@ export function handleToolExecutionStart(
     lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
+  if (!ctx.isCurrent()) {
+    return;
+  }
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const isQuestionTool =
@@ -361,6 +366,10 @@ export function handleToolExecutionStart(
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
+    if (!ctx.isCurrent()) {
+      cancelQuestionPromptReservation();
+      return;
+    }
     let onBlockReplyFlushResult: void | Promise<void>;
     try {
       onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
@@ -384,6 +393,10 @@ export function handleToolExecutionStart(
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
+    if (!ctx.isCurrent()) {
+      cancelQuestionPromptReservation();
+      return;
+    }
     const rawToolName = evt.toolName;
     const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -397,6 +410,10 @@ export function handleToolExecutionStart(
       toolCallId,
       source: "embedded-agent",
     });
+    if (!ctx.isCurrent()) {
+      cancelQuestionPromptReservation();
+      return;
+    }
 
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
@@ -487,7 +504,7 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
-    emitAgentEvent({
+    ctx.emitEvent({
       runId: ctx.params.runId,
       stream: "tool",
       data: {
@@ -605,7 +622,8 @@ export function handleToolExecutionStart(
       const questionId = questionPromptReservation.questionId;
       void waitForAskUserPromptReady(questionId)
         .then(async (questions) => {
-          if (!questions) {
+          if (!questions || !ctx.isCurrent()) {
+            cancelQuestionPromptReservation();
             return;
           }
           await sendQuestionToolPrompt({
@@ -613,7 +631,12 @@ export function handleToolExecutionStart(
             questionId,
             questions,
             config: ctx.params.config,
-            send: publishPrompt,
+            send: (payload) => {
+              if (!ctx.isCurrent()) {
+                throw new Error("Question prompt owner is no longer active");
+              }
+              return publishPrompt(payload);
+            },
           });
         })
         .then(

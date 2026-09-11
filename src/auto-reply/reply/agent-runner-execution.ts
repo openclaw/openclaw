@@ -5,10 +5,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
-import type {
-  AdmittedRunContext,
-  PreparedAgentRunAdmission,
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
@@ -16,7 +16,6 @@ import {
   classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
-import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -33,11 +32,17 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
+  emitAgentEventForAdmittedRun,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import {
+  bindAgentRunTerminalWrites,
+  drainAgentRunTerminalWrites,
+} from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -53,6 +58,7 @@ import {
 } from "./agent-runner-auto-fallback.js";
 import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
 import { recordAgentTurnExecutionOutcome } from "./agent-runner-execution-outcome.js";
+import { resolveRunStartupPhase } from "./agent-runner-execution-status.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -91,38 +97,13 @@ type InternalFollowupRun = FollowupRun & {
   mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
 };
 
-function resolveRunStartupPhase(
-  phase: EmbeddedAgentExecutionPhase,
-): ChatRunStartupPhase | undefined {
-  switch (phase) {
-    case "runner_entered":
-    case "workspace":
-    case "runtime_plugins":
-      return "preparing_workspace";
-    case "before_agent_reply":
-    case "model_resolution":
-    case "auth":
-    case "context_engine":
-    case "attempt_dispatch":
-    case "context_assembled":
-      return "preparing_context";
-    case "turn_accepted":
-    case "process_spawned":
-    case "model_call_started":
-      return "starting_model";
-    case "tool_execution_started":
-    case "assistant_output_started":
-      return undefined;
-  }
-  return undefined;
-}
-
 async function executeAgentTurnInternalLoop(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
   commitMcpAppModelContext: () => void,
   preparedRunAdmission: PreparedAgentRunAdmission,
   admittedRunContext: { current?: AdmittedRunContext },
+  emitEvent: typeof emitAgentEvent,
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
   compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
@@ -310,6 +291,7 @@ async function executeAgentTurnInternalLoop(
   });
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
+    emitEvent,
     deferredLifecycle,
     lifecycleGeneration,
     turnStartedAtMs: Date.now(),
@@ -535,6 +517,16 @@ async function executeAgentTurnInternal(
 ): Promise<AgentTurnInternalResult> {
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const admittedRunContext: { current?: AdmittedRunContext } = {};
+  let admittedRoot: AgentRunDelegatedAuthority | undefined;
+  // Created before admission for preparation errors; once admitted, never fall
+  // back to an unowned event or discover a successor root by run ID.
+  const emitEvent: typeof emitAgentEvent = (event) => {
+    if (!admittedRunContext.current) {
+      emitAgentEvent(event);
+    } else if (admittedRoot) {
+      emitAgentEventForAdmittedRun(event, admittedRoot);
+    }
+  };
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
@@ -546,8 +538,20 @@ async function executeAgentTurnInternal(
     boundary: "auto-reply.agent-runner",
     evidence: params.followupRun.channelAdmissionEvidence,
     onAdmitted: (context) => {
+      const previous = admittedRunContext.current;
+      if (previous && previous !== context) {
+        throw new Error("Admitted run cannot replace its event publication owner");
+      }
+      // Latch before validation can reenter; an admitted failure stays owned.
+      admittedRunContext.current ??= context;
+      const root = getAdmittedRunDelegatedAuthority(context);
+      if (!root || (previous && admittedRoot !== root)) {
+        throw new Error("Admitted run no longer owns its event publication");
+      }
+      admittedRoot ??= root;
       bindGatewayContextResolver(context, gatewayContextResolver);
-      admittedRunContext.current = context;
+      bindAgentRunTerminalWrites(admittedRoot);
+      params.opts?.onAdmittedRunContext?.(context);
       params.followupRun.run.skillLibraryAuthoring?.bind(context);
     },
   });
@@ -566,6 +570,7 @@ async function executeAgentTurnInternal(
       commitMcpAppModelContext,
       preparedRunAdmission,
       admittedRunContext,
+      emitEvent,
       deferredLifecycle,
       compaction,
     );

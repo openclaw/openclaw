@@ -3,12 +3,10 @@ import {
   asOptionalRecord as readRecordField,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import {
-  emitAgentActivityEvent,
-  type AgentCommandOutputEventData,
-  type AgentItemEventData,
+import type {
+  AgentCommandOutputEventData,
+  AgentItemEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
   buildCommandItemId,
@@ -87,7 +85,7 @@ export function handleToolExecutionUpdate(
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
-    emitAgentEvent({
+    ctx.emitEvent({
       runId: ctx.params.runId,
       stream: "tool",
       data: {
@@ -152,7 +150,7 @@ export function handleToolExecutionUpdate(
         output,
         status: "running",
       };
-      emitAgentActivityEvent({
+      ctx.emitEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         stream: "command_output",

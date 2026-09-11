@@ -511,6 +511,36 @@ Expected operator flow:
 4. The app publishes `push.apns.register` once it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+### Remote run Live Activities
+
+Remote run Live Activities require a supported official relay-backed device
+build and a relay with Live Activity support. Complete the app's existing
+notification permission and relay disclosure flow, and allow Live Activities in
+iOS. Local/direct-push and simulator builds do not start these remote run activities.
+
+An activity starts in the foreground only after the Gateway accepts a send and
+confirms the captured run binding. Queued, rejected, or uncertain sends do not
+start one. Preparation is bounded and best effort: an unavailable activity does
+not resend an accepted message. Registration reuses the existing relay and App
+Attest enrollment; after registration, APNs can update the activity while the app
+is in the background.
+
+The display contains OpenClaw branding, known update/end times, and generic
+statuses: Running, Using a tool, Approval needed, Completed, Failed, Cancelled,
+or Timed out. It does not include prompts, tool names, session labels, or error
+details. This is separate from the higher-priority local attention, tool, voice,
+and connection activity.
+
+Backgrounding or disconnecting stops new registration work, not the Gateway
+run. A stale activity shows **Update delayed**, not cancellation, and can
+receive updates again. **Forget** requests immediate dismissal of that Gateway's run
+activities from this device, including completed tiles and activities left by a
+previous app session; it does not cancel the run. For activities tracked by the
+current session, the app also attempts registration revocation, including relay
+revocation when the Gateway is unavailable. After a cold start, local removal
+does not confirm remote revocation: the saved activity selectors alone cannot
+reconstruct the authenticated relay owner.
+
 ## Background alive beacons
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.

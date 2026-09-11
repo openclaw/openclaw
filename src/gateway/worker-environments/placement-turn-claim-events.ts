@@ -1,6 +1,7 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { emitAgentEventForAdmittedRun } from "../../infra/agent-events.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -58,6 +59,10 @@ type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
+  publishEvent: (
+    event: Parameters<typeof emitAgentEventForAdmittedRun>[0],
+    isCurrent: () => boolean,
+  ) => boolean;
   runtime: {
     delegatedAuthority: AgentRunDelegatedAuthority;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
@@ -101,10 +106,11 @@ export function bindWorkerTurnOwner(
   claim: WorkerSessionTurnClaim,
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: { agentId: string; sessionKey: string },
+  source: { agentId: string; sessionKey: string; abortSignal?: AbortSignal },
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
 ): void {
+  const abortSignal = source.abortSignal;
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
@@ -113,13 +119,16 @@ export function bindWorkerTurnOwner(
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
   const owners = workerTurnOwners.get(path) ?? new Map();
+  // Check cancellation last: reentrant checks can abort while both owners remain valid.
+  const isBoundOwner = () =>
+    workerTurnOwners.get(path) === owners &&
+    owners.get(claim.sessionId) === owner &&
+    store.validateTurnClaim(claim) &&
+    !abortSignal?.aborted;
   const assertActive = () => {
     assertRunActive();
-    if (
-      owners.get(claim.sessionId) !== owner ||
-      !store.validateTurnClaim(claim) ||
-      !validateAgentRunDelegatedAuthority(delegatedAuthority)
-    ) {
+    // Source assertions may replace or release the placement binding synchronously.
+    if (!validateAgentRunDelegatedAuthority(delegatedAuthority) || !isBoundOwner()) {
       throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
     }
   };
@@ -148,6 +157,16 @@ export function bindWorkerTurnOwner(
     capability,
     claim,
     claimKey: currentClaimKey,
+    publishEvent: (event, isCurrent) =>
+      emitAgentEventForAdmittedRun(event, delegatedAuthority, () => {
+        assertActive();
+        switch (isCurrent()) {
+          case true:
+            return isBoundOwner();
+          default:
+            return false;
+        }
+      }),
     runtime: {
       delegatedAuthority,
       prepareAssistantTranscriptMessage,
@@ -170,9 +189,9 @@ export function getWorkerTurnExecutionIdentityCapability(
     : undefined;
 }
 
-function resolveWorkerTurnRuntime(
+function resolveWorkerTurnOwner(
   identity: WorkerConnectionIdentity,
-): BoundWorkerTurnOwner["runtime"] | undefined {
+): BoundWorkerTurnOwner | undefined {
   const claim = identity.turnClaim;
   if (
     !claim ||
@@ -196,6 +215,18 @@ function resolveWorkerTurnRuntime(
     }
     owner = candidate;
   }
+  return owner;
+}
+
+/** Capture before buffering; a rejected bound publisher never becomes an unowned event. */
+export function captureWorkerTurnAgentEventPublisher(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnOwner(identity)?.publishEvent;
+}
+
+function resolveWorkerTurnRuntime(
+  identity: WorkerConnectionIdentity,
+): BoundWorkerTurnOwner["runtime"] | undefined {
+  const owner = resolveWorkerTurnOwner(identity);
   const runtime = owner?.runtime;
   if (
     !owner ||

@@ -59,6 +59,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
   sessionKey?: string;
   startedAt?: number;
   getLifecycleGeneration: () => string;
+  emitEvent?: typeof emitAgentEvent;
   onTerminalEvent?: (event: Parameters<typeof emitAgentEvent>[0]) => void;
   resolveTerminationFields: (error?: unknown) => {
     aborted?: true;
@@ -177,7 +178,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     // Captured candidates can still be replaced by retries. Only publication
     // settles execution; delivery and yielded-parent continuation remain separate.
     const settled = { ...event, data: { ...event.data, executionSettled: true } };
-    emitAgentEvent(settled);
+    (params.emitEvent ?? emitAgentEvent)(settled);
     params.onTerminalEvent?.(settled);
   };
 

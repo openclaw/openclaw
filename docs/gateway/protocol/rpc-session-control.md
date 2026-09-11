@@ -18,6 +18,7 @@ The session control RPC family: session listing and filtering, message send and 
 - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
 - `sessions.preview` returns bounded transcript previews for specific session keys.
 - `sessions.describe` returns one gateway session row for an exact session key.
+- `sessions.status` (`operator.read`) returns bounded status facts without reading transcripts. See [Session status facts](/gateway/protocol/rpc-session-control#session-status-facts).
 - `sessions.github.options`, `sessions.github.publish`, `sessions.github.status`, and `sessions.github.confirm` accept optional `agentId` alongside `sessionKey`. Carry the selected session's agent through all four calls, especially for the shared key `global`, which does not identify its owner. An explicit agent must be configured and match any agent-qualified session key; malformed, unknown, or conflicting owners return `INVALID_REQUEST` before publication. Tool-originated publication remains bound to the tool caller's session and agent.
 - `sessions.resolve` resolves or canonicalizes a session target by key, raw session ID, label, Control UI short ID, or `reference: { key, slug? }`. A reference searches visible active and archived sessions: its exact canonical key wins, then an optional display-name slug is matched against UUID-backed sessions. Reference discovery retains session-list visibility rules; the separate `key` selector retains exact-key read semantics. Ambiguous references and short IDs return at most ten candidates as a successful RPC result. Set `allowMissing: true` to receive `{ ok: false }` when no session matches.
 - `sessions.create` creates a new session entry. When sandbox containment applies, local `cwd` and project paths are checked against the selected agent's canonical workspace: aliases inside it are accepted, and symlinks resolving outside it are rejected. Optional `model`, `contextWindow`, and `thinkingLevel` values persist the initial model, advertised context-window choice, and reasoning overrides atomically; optional `category` assigns the session to a custom group and registers that group when first used. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
@@ -43,3 +44,47 @@ The session control RPC family: session listing and filtering, message send and 
 - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
 - `sessions.title.prepare` (`{ agentId, message, model?, catalogId?, incognito? }`, `operator.write`, rate-limited as a control-plane write) returns `{ title }` from the selected agent's utility model only, without creating or renaming a session; it returns `title: null` for incognito, empty, slash-command, or unavailable-utility input and never falls back to the primary model. A client passes a ready result as `sessions.create.displayName`: a presentation title stored like a generated first-message title, so it is not unique, never claims `label`, and is ignored when adopting an existing key.
 - `sessions.create.titleSource` optionally supplies up to 1,000 characters of the submitted topic when the first turn will be sent separately, such as after cloud dispatch. On a new interactive session without an initial turn, it starts ordinary background title generation without delaying creation or starting a task. Existing names keep precedence; incognito sessions and adoption of an existing session ignore this input. Completion emits `sessions.changed` with reason `chat.title`.
+
+### Session status facts
+
+Call `sessions.status` with `{ key, agentId?, sessionId?, expectedRunId? }`.
+Use the canonical key and agent returned by session discovery. `sessionId` is an
+optional expected-generation guard; `expectedRunId` requires it.
+
+A successful response is `{ observedAt, session }`. `session` is `null` when the
+current row is missing, hidden by the final visibility check, or has a different
+session ID. Normal scope, profile, and protected-target authorization still
+applies before the handler and can reject the request instead.
+
+A visible `session` contains only:
+
+| Field                         | Meaning                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `key`, `agentId`, `sessionId` | Canonical session identity; never a substituted or truncated selection.                                        |
+| `status?`                     | Aggregate session status: `queued`, `running`, `done`, `failed`, `killed`, or `timeout`. Omitted when unknown. |
+| `hasActiveRun`                | Advisory aggregate liveness, not proof about the selected run.                                                 |
+| `updatedAt?`                  | Recorded row update time, not a progress heartbeat.                                                            |
+| `matchedRun`                  | The selected stored terminal fact, or `null`.                                                                  |
+
+`matchedRun` is populated only when the row's public `lastRunId` exactly equals
+`expectedRunId` and its stored status is `done`, `failed`, `killed`, or `timeout`.
+It contains `{ runId, status, endedAt? }`. Optional `endedAt` is the recorded
+terminal settlement time, not a guaranteed provider finish time. No selection, a running
+or replaced run, or unavailable identity yields `null`; this method does not
+search run history. A session may have an active successor while `matchedRun`
+describes the selected terminal run.
+Provider-internal lifecycle IDs are never exposed or used as fallback matches.
+
+All timestamps are Unix epoch milliseconds. `observedAt` is query time, not a
+new run fact. Polling, reconnecting, or copying this response into a widget cache
+must not renew progress freshness. Missing timestamps remain unknown; loss of
+live ownership or connectivity does not establish completion or cancellation.
+
+Requests reject extra fields and blank identifiers. Keys, session IDs, and run
+IDs are bounded to 512, 128, and 256 Unicode code points respectively, including
+combining marks and trailing newlines. Agent IDs are at most 64 ASCII characters,
+start with an alphanumeric character, and otherwise contain only alphanumeric
+characters, underscores, or hyphens.
+Unrepresentable stored results return `UNAVAILABLE` without truncating identity.
+The response includes no titles, messages, errors, participants, model metadata,
+or credentials. Reading status does not create a missing session or store.

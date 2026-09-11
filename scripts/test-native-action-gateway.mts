@@ -212,6 +212,12 @@ export async function withNativeActionGateway(
       const { instance, provider, admin, alice, bob, aliceId, bobId } = fixture;
       const controlToken = randomUUID();
       const mediaPaths = new Set<string>();
+      const proxyHeaders: Record<string, string> = {
+        "x-forwarded-user": SKILL_LIBRARY_ALICE,
+        "x-forwarded-for": "198.51.100.40",
+        "x-forwarded-proto": "http",
+        "x-openclaw-scopes": SKILL_LIBRARY_WRITER_SCOPES.join(","),
+      };
       const proxy = await startQaGatewayRpcProxy({
         backendPort: instance.port,
         repoRoot: process.cwd(),
@@ -224,14 +230,10 @@ export async function withNativeActionGateway(
           "talk.mode",
         ],
         mediaPaths,
-        upstreamHeaders: {
-          "x-forwarded-user": SKILL_LIBRARY_ALICE,
-          "x-forwarded-for": "198.51.100.40",
-          "x-forwarded-proto": "http",
-          "x-forwarded-host": `127.0.0.1:${instance.port}`,
-          "x-openclaw-scopes": SKILL_LIBRARY_WRITER_SCOPES.join(","),
-        },
+        upstreamHeaders: proxyHeaders,
       });
+      // Advertise the proxy listener before native connections; reconnects reuse these headers.
+      proxyHeaders["x-forwarded-host"] = new URL(proxy.url).host;
       const verified = new Map<CaseID, string | undefined>();
       const completed = new Set<CaseID>();
       const mediaCompleted = new Set<MediaCaseID>();
@@ -512,19 +514,15 @@ export async function withNativeActionGateway(
               "overlapping or repeated widget case",
             );
             const before = proxy.snapshot();
-            if (platform === "ios") {
-              const admission = before.events.findLast(
-                (event: { kind: string }) => event.kind === "connect-success",
-              );
-              assert(
-                typeof admission?.canvasOrigin === "string",
-                "native hello omitted canvas authority",
-              );
-              widgetAttempt = { id, before };
-              return { started: id, canvasOrigin: admission.canvasOrigin };
-            }
+            const admission = before.events.findLast(
+              (event: { kind: string }) => event.kind === "connect-success",
+            );
+            assert(
+              typeof admission?.canvasOrigin === "string",
+              "native hello omitted canvas authority",
+            );
             widgetAttempt = { id, before };
-            return { started: id, canvasOrigin: `http://127.0.0.1:${instance.port}` };
+            return { started: id, canvasOrigin: admission.canvasOrigin };
           }
           case "widget-complete": {
             assert(widgetAttempt && widgetAttempt.id === input.case, "widget case was not started");
@@ -1001,6 +999,12 @@ export async function withNativeActionGateway(
             media.sessions[session] = { sessionKey, artifactID: artifact.id };
           }
           if (platform === "macos") {
+            const approvalHeaders: Record<string, string> = {
+              "x-forwarded-user": SKILL_LIBRARY_ALICE,
+              "x-forwarded-for": "198.51.100.40",
+              "x-forwarded-proto": "http",
+              "x-openclaw-scopes": [...SKILL_LIBRARY_WRITER_SCOPES, "operator.approvals"].join(","),
+            };
             approvalProxy = await startQaGatewayRpcProxy({
               backendPort: instance.port,
               repoRoot: process.cwd(),
@@ -1011,16 +1015,9 @@ export async function withNativeActionGateway(
                 "exec.approval.waitDecision",
                 "exec.approval.resolve",
               ],
-              upstreamHeaders: {
-                "x-forwarded-user": SKILL_LIBRARY_ALICE,
-                "x-forwarded-for": "198.51.100.40",
-                "x-forwarded-proto": "http",
-                "x-forwarded-host": `127.0.0.1:${instance.port}`,
-                "x-openclaw-scopes": [...SKILL_LIBRARY_WRITER_SCOPES, "operator.approvals"].join(
-                  ",",
-                ),
-              },
+              upstreamHeaders: approvalHeaders,
             });
+            approvalHeaders["x-forwarded-host"] = new URL(approvalProxy.url).host;
             approvals = {
               gatewayURL: approvalProxy.url,
               requests: Object.fromEntries(
@@ -1317,6 +1314,13 @@ async function runNative(platform: "ios" | "macos", fixture: NativeActionFixture
       "-parallel-testing-enabled",
       "NO",
       "-only-testing:OpenClawTests/NativeActionGatewayWireTests",
+      "-only-testing:OpenClawTests/RemoteRunActivityGatewayTests",
+      "-only-testing:OpenClawTests/RemoteRunLiveActivityTests",
+      "-only-testing:OpenClawTests/PushRelayActivityTests",
+      "-only-testing:OpenClawTests/OpenClawRunActivityAttributesTests",
+      "-only-testing:OpenClawTests/LiveActivityPresentationArbiterTests",
+      "-only-testing:OpenClawTests/IOSGatewayChatTransportTests",
+      "-only-testing:OpenClawTests/GatewayConnectionControllerTests",
       "test",
     ],
     env: { ...process.env, TEST_RUNNER_OPENCLAW_NATIVE_ACTION_FIXTURE: descriptor },

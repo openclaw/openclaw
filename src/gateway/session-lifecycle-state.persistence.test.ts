@@ -35,6 +35,7 @@ import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
@@ -281,6 +282,7 @@ it.each(["success", "failed-write"])(
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
       subscriptions = startGatewayEventSubscriptions({
+        sessionLifecyclePersistence: createSessionLifecyclePersistenceOwner(),
         log: silentLog,
         broadcast,
         broadcastToConnIds,
@@ -483,6 +485,7 @@ it.each([
       const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
       const agentRunSeq = new Map<string, number>();
       subscriptions = startGatewayEventSubscriptions({
+        sessionLifecyclePersistence: createSessionLifecyclePersistenceOwner(),
         log: silentLog,
         broadcast: vi.fn(),
         broadcastToConnIds: vi.fn(),

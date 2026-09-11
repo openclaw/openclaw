@@ -4,13 +4,12 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import {
-  emitAgentActivityEvent,
-  type AgentCommandOutputEventData,
-  type AgentItemEventData,
-  type AgentPatchSummaryEventData,
+import type {
+  AgentCommandOutputEventData,
+  AgentItemEventData,
+  AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -141,11 +140,13 @@ export async function handleToolExecutionEnd(
     }
   }
   try {
-    ctx.params.onAgentToolResult?.({
-      toolName,
-      result: sanitizedResult,
-      isError: observerIsError,
-    });
+    if (ctx.isCurrent()) {
+      ctx.params.onAgentToolResult?.({
+        toolName,
+        result: sanitizedResult,
+        isError: observerIsError,
+      });
+    }
   } catch (error) {
     ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
   }
@@ -374,7 +375,9 @@ export async function handleToolExecutionEnd(
         ctx.trimMessagingToolSent();
       }
     }
-    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+    if (ctx.isCurrent()) {
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+    }
   }
   if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
@@ -409,7 +412,8 @@ export async function handleToolExecutionEnd(
         runBestEffortCallback({
           label: "heartbeat tool response",
           log: ctx.log,
-          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+          callback: () =>
+            ctx.isCurrent() ? ctx.params.onHeartbeatToolResponse?.(response) : undefined,
         });
       }
     }
@@ -429,24 +433,24 @@ export async function handleToolExecutionEnd(
         ...planUpdate,
       },
     };
-    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    ctx.emitEvent({ runId: ctx.params.runId, ...planEvent });
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
-  emitAgentEvent({
+  const toolResultData = {
+    phase: "result",
+    name: toolName,
+    toolCallId,
+    meta,
+    isError: isToolError,
+    commandBearing: callSummary.commandBearing,
+    ...(toolErrorSummary ? { toolErrorSummary } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  };
+  ctx.emitEvent({
     runId: ctx.params.runId,
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
-      result: eventResult,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: { ...toolResultData, result: eventResult },
   });
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);
@@ -471,16 +475,7 @@ export async function handleToolExecutionEnd(
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: toolResultData,
   });
 
   if (isExecToolName(toolName)) {
@@ -513,7 +508,7 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentActivityEvent({
+      ctx.emitEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         stream: "approval",
@@ -583,7 +578,7 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentActivityEvent({
+      ctx.emitEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         stream: "command_output",
@@ -610,7 +605,7 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentActivityEvent({
+          ctx.emitEvent({
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             stream: "approval",
@@ -657,7 +652,7 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentActivityEvent({
+      ctx.emitEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         stream: "patch",
@@ -685,13 +680,17 @@ export async function handleToolExecutionEnd(
       sanitizedResult,
     });
   }
-  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
-    ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
-  });
+  await Promise.resolve(ctx.isCurrent() ? ctx.params.onToolStreamBoundary?.() : undefined).catch(
+    (error: unknown) => {
+      ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
+    },
+  );
 
   // Run after_tool_call plugin hook (fire-and-forget)
-  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
-  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+  const hookRunnerAfter = ctx.isCurrent()
+    ? (ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner())
+    : undefined;
+  if (hookRunnerAfter?.hasHooks("after_tool_call") && ctx.isCurrent()) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,

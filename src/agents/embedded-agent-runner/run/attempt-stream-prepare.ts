@@ -292,6 +292,7 @@ export function prepareEmbeddedAttemptStream(input: {
     onModelUsage: input.onModelUsage,
     runId: attempt.runId,
     lifecycleGeneration: attempt.lifecycleGeneration,
+    admittedRunContext: attempt.admittedRunContext,
     messageChannel: input.runtimeChannel,
     initialReplayState: attempt.initialReplayState,
     hookRunner: getGlobalHookRunner() ?? undefined,

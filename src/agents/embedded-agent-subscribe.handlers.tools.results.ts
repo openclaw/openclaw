@@ -574,6 +574,9 @@ export async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  if (!ctx.isCurrent()) {
+    return;
+  }
   const recordApprovalPromptDeliveryFailure = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
@@ -606,6 +609,9 @@ export async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      if (!ctx.isCurrent()) {
+        return;
+      }
       await ctx.params.onToolResult(
         buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
@@ -636,6 +642,9 @@ export async function emitToolResultOutput(params: {
     // Setup notices are progress, not pending prompts that replace the final answer.
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
+      if (!ctx.isCurrent()) {
+        return;
+      }
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,

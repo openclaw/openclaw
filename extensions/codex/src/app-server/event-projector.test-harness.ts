@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
@@ -59,7 +60,7 @@ export type ProjectorNotification = Parameters<
 >[0];
 type CodexAppServerEventProjectorOptions = ConstructorParameters<
   typeof CodexAppServerEventProjector
->[3];
+>[4];
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
 export function flushDiagnosticEvents() {
@@ -115,7 +116,13 @@ export async function createProjector(
   options?: CodexAppServerEventProjectorOptions,
 ): Promise<CodexAppServerEventProjector> {
   const resolvedParams = params ?? (await createParams());
-  return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID, options);
+  return new CodexAppServerEventProjector(
+    resolvedParams,
+    THREAD_ID,
+    TURN_ID,
+    captureCodexAgentEventBinding(resolvedParams),
+    options,
+  );
 }
 
 export async function createProjectorWithAssistantHooks() {

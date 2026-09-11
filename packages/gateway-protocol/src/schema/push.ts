@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+export * from "./push-live-activity.js";
 
 /**
  * Push-notification protocol schemas.

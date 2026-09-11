@@ -65,16 +65,20 @@ function createFailingTool(name: string) {
 }
 
 function createToolHandlerCtx() {
+  const state = {
+    ...createBaseToolHandlerState(),
+    successfulCronAdds: 0,
+    unsubscribed: false,
+  };
   return {
+    emitEvent: emitAgentEvent,
+    isCurrent: () => !state.unsubscribed,
     params: {
       runId: "integration-test",
       session: { messages: [] },
     },
     hookRunner: hookMocks.runner,
-    state: {
-      ...createBaseToolHandlerState(),
-      successfulCronAdds: 0,
-    },
+    state,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
@@ -88,6 +92,7 @@ function createToolHandlerCtx() {
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 let handleToolExecutionStart: typeof import("./embedded-agent-subscribe.handlers.tools.js").handleToolExecutionStart;
 let handleToolExecutionEnd: typeof import("./embedded-agent-subscribe.handlers.tools.js").handleToolExecutionEnd;
+let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
 
 async function loadFreshAfterToolCallModulesForTest() {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
@@ -126,6 +131,7 @@ async function loadFreshAfterToolCallModulesForTest() {
   ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
   ({ handleToolExecutionStart, handleToolExecutionEnd } =
     await import("./embedded-agent-subscribe.handlers.tools.js"));
+  ({ emitAgentEvent } = await import("../infra/agent-events.js"));
 }
 
 describe("after_tool_call fires exactly once in embedded runs", () => {

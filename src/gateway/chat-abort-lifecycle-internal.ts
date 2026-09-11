@@ -1,3 +1,5 @@
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
+
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
 const removalWaitersByEntry = new WeakMap<object, Set<() => void>>();
 
@@ -9,12 +11,28 @@ export function markChatAbortTerminalPersistenceError(entry: object, error: unkn
   terminalPersistenceErrorByEntry.set(entry, error);
 }
 
-export function notifyChatAbortControllerRemoved(entry: object): void {
-  const waiters = removalWaitersByEntry.get(entry);
-  removalWaitersByEntry.delete(entry);
-  for (const resolve of waiters ?? []) {
-    resolve();
+export function removeChatAbortControllerEntry(
+  entries: Map<string, ChatAbortControllerEntry>,
+  runId: string,
+  expectedEntry?: ChatAbortControllerEntry,
+): boolean {
+  const entry = entries.get(runId);
+  if (!entry || (expectedEntry && entry !== expectedEntry)) {
+    return false;
   }
+  entries.delete(runId);
+  try {
+    entry.onRemoved?.();
+  } catch {
+    // Removal owns state cleanup even if a caller-provided release hook fails.
+  } finally {
+    const waiters = removalWaitersByEntry.get(entry);
+    removalWaitersByEntry.delete(entry);
+    for (const resolve of waiters ?? []) {
+      resolve();
+    }
+  }
+  return true;
 }
 
 /** Waits for captured run registrations and their terminal persistence owner to leave. */

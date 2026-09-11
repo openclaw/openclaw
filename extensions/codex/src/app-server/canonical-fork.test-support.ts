@@ -18,6 +18,7 @@ import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
 } from "../session-upstream-marker.js";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createCanonicalForkNativeFixture } from "./canonical-fork-native.test-support.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -226,6 +227,7 @@ export async function createCanonicalForkFixture(params: {
           senderId: options.senderId,
           abortSignal: host.abortController.signal,
         } as unknown as EmbeddedRunAttemptParamsV2;
+        const agentEvents = captureCodexAgentEventBinding(attempt);
         const runAbortController = host.abortController;
         const startupBinding = bindingStore.read(session);
         const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
@@ -240,6 +242,7 @@ export async function createCanonicalForkFixture(params: {
           connection: {
             assertCurrent: host.capabilities.assertActive,
             params: attempt,
+            agentEvents,
             attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
             preDynamicStartupStages: createCodexDynamicToolBuildStageTracker(),

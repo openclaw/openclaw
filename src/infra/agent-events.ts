@@ -4,6 +4,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
 import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
+import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 import {
   getAgentRunContext,
   getAgentRunContextOwnership,
@@ -11,6 +12,7 @@ import {
   registerAgentRunSequenceResetHandler,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "./agent-run-registry.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
@@ -212,6 +214,7 @@ export function rotateAgentEventLifecycleGeneration(): string {
 function enrichAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId?: string,
+  admittedRoot?: AgentRunDelegatedAuthority,
 ): AgentEventRuntimePayload | undefined {
   const state = getAgentEventState();
   const currentLifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -219,7 +222,10 @@ function enrichAgentEvent(
   if (claimId !== undefined) {
     if (
       owners?.lifecycleGeneration !== currentLifecycleGeneration ||
-      owners.exclusiveClaimId !== claimId ||
+      (admittedRoot
+        ? getAgentRunContext(event.runId)?.delegatedAuthority !== admittedRoot ||
+          (owners.exclusiveClaimId !== undefined && owners.exclusiveClaimId !== claimId)
+        : owners.exclusiveClaimId !== claimId) ||
       !owners.claimIds.has(claimId) ||
       owners.clearRequested
     ) {
@@ -406,11 +412,12 @@ export function emitAgentRunOutputTokens(params: {
   lifecycleGeneration: string;
   outputTokens: number;
   sessionKey?: string;
+  emitEvent?: typeof emitAgentEventIfCurrent;
 }): { outputTokens: number } | undefined {
   return recordAgentRunOutputTokens({
     ...params,
     emit: (data) =>
-      emitAgentEventIfCurrent({
+      (params.emitEvent ?? emitAgentEventIfCurrent)({
         runId: params.runId,
         lifecycleGeneration: params.lifecycleGeneration,
         sessionKey: params.sessionKey,
@@ -423,6 +430,48 @@ export function emitAgentRunOutputTokens(params: {
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   emitAgentEventIfCurrent(event);
+}
+
+/** Publish only for the exact admitted root, never a copied or subordinate authority. */
+export function emitAgentEventForAdmittedRun(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  root: AgentRunDelegatedAuthority,
+  isCurrent?: () => boolean,
+): boolean {
+  if (
+    event.runId !== root.operationalRunInstance.runId ||
+    (event.lifecycleGeneration !== undefined &&
+      event.lifecycleGeneration !== root.lifecycleGeneration)
+  ) {
+    return false;
+  }
+  try {
+    if (!validateAgentRunDelegatedAuthority(root)) {
+      return false;
+    }
+    if (isCurrent) {
+      switch (isCurrent()) {
+        case true:
+          break;
+        default:
+          return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+  // Source and attempt predicates can reenter. Enrichment rereads the exact root
+  // and active claim before touching sequence or lifecycle metadata.
+  const enriched = enrichAgentEvent(
+    { ...event, lifecycleGeneration: root.lifecycleGeneration },
+    root.claimId,
+    root,
+  );
+  if (!enriched) {
+    return false;
+  }
+  notifyListeners(iterateAgentEventListeners(getAgentEventState(), enriched), enriched);
+  return true;
 }
 
 export function emitAgentEventForOwner(

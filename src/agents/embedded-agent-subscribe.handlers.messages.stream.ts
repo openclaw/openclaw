@@ -242,7 +242,7 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   runBestEffortCallback({
     label: "reasoning end",
     log: ctx.log,
-    callback: () => ctx.params.onReasoningEnd?.(),
+    callback: () => (ctx.isCurrent() ? ctx.params.onReasoningEnd?.() : undefined),
   });
 }
 
@@ -251,7 +251,7 @@ export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
   runBestEffortCallback({
     label: "assistant message start",
     log: ctx.log,
-    callback: () => ctx.params.onAssistantMessageStart?.(),
+    callback: () => (ctx.isCurrent() ? ctx.params.onAssistantMessageStart?.() : undefined),
   });
 }
 

@@ -10,8 +10,35 @@ import { pathToFileURL } from "node:url";
  * @typedef {"front-open" | "upstream-open" | "challenge-received" |
  *   "challenge-write-ok" | "challenge-write-error" | "challenge-forward-unavailable" |
  *   "connect-received" | "front-close" | "upstream-close" | "front-error" |
- *   "upstream-error"} FirstConnectionTag
+ *   "upstream-error" | "upstream-tcp-connected" | "upstream-request-finished" |
+ *   "upstream-http-response" | "upstream-upgrade-received"} FirstConnectionTag
+ * @typedef {"connecting" | "open" | "closing" | "closed"} UpstreamState
+ * @typedef {"ECONNREFUSED" | "ECONNRESET" | "ETIMEDOUT" | "EHOSTUNREACH" |
+ *   "ENETUNREACH" | "EPIPE" | "EPROTO" | "resource-exhausted" | "opening-abort" | "other"} UpstreamErrorClass
+ * @typedef {{ upstreamState?: UpstreamState | undefined, httpStatus?: number | undefined,
+ *   errorClass?: UpstreamErrorClass }} FirstConnectionFacts
  */
+
+/** @param {Error & { code?: string }} error @returns {UpstreamErrorClass} */
+function classifyUpstreamError(error) {
+  switch (error.code) {
+    case "ECONNREFUSED":
+    case "ECONNRESET":
+    case "ETIMEDOUT":
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+    case "EPIPE":
+    case "EPROTO":
+      return error.code;
+    case "EMFILE":
+    case "ENFILE":
+      return "resource-exhausted";
+    default:
+      return error.message === "WebSocket was closed before the connection was established"
+        ? "opening-abort"
+        : "other";
+  }
+}
 
 /**
  * @param {{
@@ -47,17 +74,20 @@ export async function startQaGatewayRpcProxy({
   let held;
   let holdMethod;
   let heldResponse;
+  /** @type {((error?: Error) => void) | undefined} */
   let heldWaiter;
   let mediaTask;
-  /** @type {Array<{ tag: FirstConnectionTag, elapsedMs: number }>} */
+  /** @type {readonly UpstreamState[]} */
+  const upstreamStates = ["connecting", "open", "closing", "closed"];
+  /** @type {Array<{ tag: FirstConnectionTag, elapsedMs: number } & FirstConnectionFacts>} */
   const firstConnection = [];
   let firstConnectionStartedAt = 0;
   // Diagnostics must not throw through socket callbacks or consume the RPC evidence limit.
-  /** @param {number} id @param {FirstConnectionTag} tag */
-  const recordFirstConnection = (id, tag) => {
+  /** @param {number} id @param {FirstConnectionTag} tag @param {FirstConnectionFacts} facts */
+  const recordFirstConnection = (id, tag, facts = {}) => {
     if (
       id !== 1 ||
-      firstConnection.length >= 11 ||
+      firstConnection.length >= 15 ||
       firstConnection.some((entry) => entry.tag === tag)
     ) {
       return;
@@ -65,11 +95,19 @@ export async function startQaGatewayRpcProxy({
     firstConnection.push({
       tag,
       elapsedMs: Math.max(0, Math.floor(performance.now() - firstConnectionStartedAt)),
+      ...(facts.upstreamState ? { upstreamState: facts.upstreamState } : {}),
+      ...(typeof facts.httpStatus === "number" &&
+      Number.isInteger(facts.httpStatus) &&
+      facts.httpStatus >= 100 &&
+      facts.httpStatus <= 599
+        ? { httpStatus: facts.httpStatus }
+        : {}),
+      ...(facts.errorClass ? { errorClass: facts.errorClass } : {}),
     });
   };
   const snapshot = () => ({
     events: [...events],
-    firstConnection: firstConnection.map(({ tag, elapsedMs }) => ({ tag, elapsedMs })),
+    firstConnection: firstConnection.map((entry) => Object.assign({}, entry)),
     media: { ...media },
     held: Boolean(held),
     heldResponse: heldResponse?.summary,
@@ -192,7 +230,7 @@ export async function startQaGatewayRpcProxy({
       media.matched += 1;
     }
     const upstream = request(
-      { hostname: "127.0.0.1", port: Number(backendPort), path: req.url, method: req.method },
+      { hostname: "127.0.0.1", port: backendPort, path: req.url, method: req.method },
       (response) => {
         if (observedMedia) {
           response.once("end", () => {
@@ -267,6 +305,35 @@ export async function startQaGatewayRpcProxy({
     // as their trusted proxy without changing signed client/device identity.
     const back = new WebSocket(`ws://127.0.0.1:${backendPort}`, {
       headers: upstreamHeaders,
+      finishRequest: (req, websocket) => {
+        req.once("socket", (socket) => {
+          socket.once("connect", () => {
+            recordFirstConnection(id, "upstream-tcp-connected", {
+              upstreamState: upstreamStates[websocket.readyState],
+            });
+          });
+        });
+        req.once("finish", () => {
+          recordFirstConnection(id, "upstream-request-finished", {
+            upstreamState: upstreamStates[websocket.readyState],
+          });
+        });
+        req.once("response", (response) => {
+          recordFirstConnection(id, "upstream-http-response", {
+            upstreamState: upstreamStates[websocket.readyState],
+            httpStatus: response.statusCode,
+          });
+        });
+        // This notification precedes ws validation; never handle unexpected-response,
+        // which would suppress ws's automatic rejection of a non-upgrade response.
+        websocket.once("upgrade", (response) => {
+          recordFirstConnection(id, "upstream-upgrade-received", {
+            upstreamState: upstreamStates[websocket.readyState],
+            httpStatus: response.statusCode,
+          });
+        });
+        req.end();
+      },
     });
     const peer = { front, back };
     peers.add(peer);
@@ -432,7 +499,9 @@ export async function startQaGatewayRpcProxy({
       }
     });
     front.on("close", () => {
-      recordFirstConnection(id, "front-close");
+      recordFirstConnection(id, "front-close", {
+        upstreamState: upstreamStates[back.readyState],
+      });
       back.terminate();
       peers.delete(peer);
       if (held?.front === front) {
@@ -444,11 +513,16 @@ export async function startQaGatewayRpcProxy({
       front.terminate();
     });
     front.on("error", () => {
-      recordFirstConnection(id, "front-error");
+      recordFirstConnection(id, "front-error", {
+        upstreamState: upstreamStates[back.readyState],
+      });
       back.terminate();
     });
-    back.on("error", () => {
-      recordFirstConnection(id, "upstream-error");
+    back.on("error", (error) => {
+      recordFirstConnection(id, "upstream-error", {
+        upstreamState: upstreamStates[back.readyState],
+        errorClass: classifyUpstreamError(error),
+      });
       front.terminate();
     });
   });
