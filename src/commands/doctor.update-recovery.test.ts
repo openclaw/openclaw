@@ -506,9 +506,10 @@ describe("update Doctor state recovery", () => {
       expect(mocks.create).not.toHaveBeenCalled();
       expect(mocks.restore).toHaveBeenCalledTimes(2);
       expect(mocks.closeStores).toHaveBeenCalledTimes(2);
-      expect(mocks.closeStores.mock.invocationCallOrder[1]).toBeLessThan(
-        mocks.restore.mock.invocationCallOrder[1],
-      );
+      const closeOrder = mocks.closeStores.mock.invocationCallOrder[1];
+      const restoreOrder = mocks.restore.mock.invocationCallOrder[1];
+      assert(closeOrder !== undefined && restoreOrder !== undefined, "Recovery must settle stores");
+      expect(closeOrder).toBeLessThan(restoreOrder);
       expect(mocks.outcome).toHaveBeenCalledExactlyOnceWith(
         ref,
         { status: "restored" },
