@@ -322,33 +322,62 @@ describe("runDetachedWebhookWork", () => {
   it("keeps tracked descendants alive after the requester scope closes", async () => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");
-    const { AsyncWorkScope, trackAsyncWork } = await import("../shared/async-work-scope.js");
+    const { AsyncWorkScope, captureAsyncWorkTracker } =
+      await import("../shared/async-work-scope.js");
 
-    let detached: Promise<number> | null = null;
-    let releaseCallback!: () => void;
-    const callbackGate = new Promise<void>((resolve) => {
-      releaseCallback = resolve;
-    });
     const requester = new AsyncWorkScope();
+    let detached: Promise<string> | undefined;
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () =>
+        await requester.track(async () => {
+          detached = runDetachedWebhookWork(async () => {
+            const trackOwner = captureAsyncWorkTracker();
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 25);
+            });
+            return await trackOwner(async () => "tracked-after-close");
+          });
+          return true;
+        }),
+    );
+
+    requester.beginClose();
+    await requester.drain();
+    await expect(detached).resolves.toBe("tracked-after-close");
+  });
+
+  it("reserves post-ack work across a closed suspension fence", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { getActiveGatewayRootWorkHolders, tryBeginGatewaySuspendAdmission } =
+      await import("../process/gateway-work-admission.js");
+
+    let releaseWork!: () => void;
+    const workGate = new Promise<void>((resolve) => {
+      releaseWork = resolve;
+    });
+    let rollbackSuspension: (() => boolean) | undefined;
+    let detached: Promise<string> | undefined;
     await runWithGatewayHttpWorkAdmission(
       new ServerResponse(new IncomingMessage(new Socket())),
       async () => {
-        requester.run(() => {
-          detached = runDetachedWebhookWork(async () => {
-            await callbackGate;
-            return await trackAsyncWork(async () => 42);
-          });
+        const suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension).not.toBeNull();
+        rollbackSuspension = suspension?.rollback;
+        detached = runDetachedWebhookWork(async () => {
+          await workGate;
+          return "completed-across-fence";
         });
-        await requester.drain();
-        releaseCallback();
+        expect(getActiveGatewayRootWorkHolders()).toEqual(["http:request", "webhook:detached"]);
         return true;
       },
     );
 
-    if (!detached) {
-      throw new Error("detached webhook work was not started");
-    }
-    await expect(detached).resolves.toBe(42);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["webhook:detached"]);
+    expect(rollbackSuspension?.()).toBe(true);
+    releaseWork();
+    await expect(detached).resolves.toBe("completed-across-fence");
   });
 
   it("keeps post-ack processing admitted after the request admission is released", async () => {
