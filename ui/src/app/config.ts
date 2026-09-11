@@ -137,43 +137,40 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
   };
 }
 
-async function loadApplicationConfig(params: {
-  url: string;
-  authCandidates: readonly string[];
-  signal?: AbortSignal;
-}): Promise<{ config: ApplicationConfig; seamColor?: string } | null> {
-  if (typeof window === "undefined" || typeof fetch !== "function") {
-    return null;
-  }
-
+async function loadApplicationConfig(
+  url: string,
+  authCandidates: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ config: ApplicationConfig; seamColor?: string } | null> {
   try {
-    let res: Response | null = null;
-    for (const candidate of params.authCandidates.length ? params.authCandidates : [""]) {
+    for (const candidate of authCandidates.length ? authCandidates : [""]) {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(params.url, {
-        method: "GET",
+      const res = await fetch(url, {
         headers,
         credentials: "same-origin",
-        signal: params.signal,
+        signal,
       });
       if (res.ok) {
-        break;
+        const parsed = (await res.json()) as ControlUiBootstrapConfig;
+        return { config: normalizeApplicationConfig(parsed), seamColor: parsed.seamColor };
       }
       if (res.status !== 401 && res.status !== 403) {
-        return null;
+        break;
       }
     }
-    if (!res?.ok) {
-      return null;
-    }
-    const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    return { config: normalizeApplicationConfig(parsed), seamColor: parsed.seamColor };
   } catch {
-    return null;
+    // Failed bootstrap requests leave the current configuration in place.
   }
+  return null;
+}
+
+function sameAuthCandidates(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length && left.every((candidate, index) => candidate === right[index])
+  );
 }
 
 export function createApplicationConfigCapability(params: {
@@ -213,10 +210,7 @@ export function createApplicationConfigCapability(params: {
       // Queued bootstrap work cannot own credentials: plugin activation may
       // request its asset grant before that queue reaches the config refresh.
       const candidates = resolveAuth();
-      if (
-        candidates.length !== authCandidates.length ||
-        candidates.some((candidate, index) => candidate !== authCandidates[index])
-      ) {
+      if (!sameAuthCandidates(candidates, authCandidates)) {
         // Changing credentials retires previous authority even when this refresh
         // skips its request. Equivalent startup consumers share the live load.
         authCandidates = candidates;
@@ -237,15 +231,10 @@ export function createApplicationConfigCapability(params: {
         return (
           authority === authVersion &&
           !signal?.aborted &&
-          candidates.length === liveCandidates.length &&
-          candidates.every((candidate, index) => candidate === liveCandidates[index])
+          sameAuthCandidates(candidates, liveCandidates)
         );
       };
-      const promise = loadApplicationConfig({
-        url,
-        authCandidates: candidates,
-        signal,
-      }).then((loaded) => {
+      const promise = loadApplicationConfig(url, candidates, signal).then((loaded) => {
         if (!loaded || !isCurrent()) {
           return null;
         }

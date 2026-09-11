@@ -69,7 +69,6 @@ export function normalizeAssistantIdentity(
       ? input.avatarStatus
       : null;
   const avatarReason = normalizeAssistantValue("avatarReason", input?.avatarReason) ?? null;
-  const agentId =
-    typeof input?.agentId === "string" && input.agentId.trim() ? input.agentId.trim() : null;
+  const agentId = normalizeOptionalString(input?.agentId) ?? null;
   return { agentId, name, avatar, avatarSource, avatarStatus, avatarReason };
 }
