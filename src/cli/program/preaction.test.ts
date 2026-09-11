@@ -9,6 +9,7 @@ import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
   COLD_READ_COMMAND_PATHS,
   registerColdReadCommandFixtures,
+  registerNativeExecutorPreActionTests,
 } from "./preaction.test-helpers.js";
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
@@ -329,45 +330,10 @@ describe("registerPreActionHooks", () => {
     await preActionHook(program, actionCommand);
   }
 
-  async function runNativeExecutorPreAction(primary: string, action: string, args: string[]) {
-    const parser = new Command().name("openclaw");
-    const invoke = vi.fn();
-    parser
-      .command(primary)
-      .command(action)
-      .option("--update-executor <mode>")
-      .option("--token <token>")
-      .action(invoke);
-    registerPreActionHooks(parser, "9.9.9-test");
-    process.argv = ["node", "openclaw", primary, action, ...args];
-    await parser.parseAsync(process.argv);
-    expect(invoke).toHaveBeenCalledOnce();
-  }
-
-  it.each(
-    ["gateway", "daemon"].flatMap((primary) =>
-      ["install", "restart", "stop"].map((action) => [primary, action]),
-    ),
-  )(
-    "keeps the %s %s native capability probe outside stateful bootstrap",
-    async (primary, action) => {
-      await runNativeExecutorPreAction(primary, action, ["--update-executor", "check"]);
-
-      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-      expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-      expect(emitCliBannerMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { label: "ordinary install", args: [] },
-    { label: "native execution", args: ["--update-executor", "run"] },
-    { label: "invalid mode", args: ["--update-executor", "invalid"] },
-    { label: "check text in another option's value", args: ["--token", "--update-executor=check"] },
-  ])("retains config bootstrap for $label", async ({ args }) => {
-    await runNativeExecutorPreAction("gateway", "install", args);
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+  registerNativeExecutorPreActionTests(() => registerPreActionHooks, {
+    config: ensureConfigReadyMock,
+    plugins: ensurePluginRegistryLoadedMock,
+    banner: emitCliBannerMock,
   });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
