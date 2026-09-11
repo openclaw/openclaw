@@ -261,7 +261,12 @@ export async function runRemoteGatewayInferenceOnboarding(
     const sessionId = randomUUID();
     let started = false;
     let terminal = false;
-    let prompter = params.prompter;
+    const prompter: WizardPrompter =
+      params.prompter ??
+      (await (deps.createPrompter?.() ??
+        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
+          createClackPrompter(),
+        )));
     let result: WizardNextResult;
     try {
       result = await request<WizardStartResult>({
@@ -286,17 +291,10 @@ export async function runRemoteGatewayInferenceOnboarding(
         const step = result.step;
         let answer: { stepId: string; value: unknown } | undefined;
         if (step) {
-          const stepPrompter =
-            prompter ??
-            (await (deps.createPrompter?.() ??
-              import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-                createClackPrompter(),
-              )));
-          prompter = stepPrompter;
           if (result.error) {
-            await stepPrompter.note(result.error);
+            await prompter.note(result.error);
           }
-          const value = await answerSetupStep(step, stepPrompter);
+          const value = await answerSetupStep(step, prompter);
           if (step.type !== "progress" && step.executor !== "gateway") {
             answer = { stepId: step.id, value };
           }
