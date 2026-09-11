@@ -4,6 +4,7 @@ import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
@@ -764,7 +765,7 @@ describe("runDaemonInstall", () => {
     "refuses runtime repair on $failure without claiming success",
     async ({ failure, message }) => {
       service.isLoaded.mockResolvedValue(true);
-      const oldNode = failure === "probe" ? process.execPath : "/opt/old/bin/node";
+      const oldNode = failure === "probe" ? resolveTestNodeExecPath() : "/opt/old/bin/node";
       service.readCommand.mockResolvedValue({
         programArguments: [oldNode, "/opt/openclaw/dist/index.js", "gateway"],
       });

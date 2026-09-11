@@ -17,6 +17,7 @@ import {
 import { buildSystemdUnit, parseSystemdExecStart } from "../../daemon/systemd-unit.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
@@ -271,7 +272,7 @@ describe("runDaemonInstall integration", () => {
         if (!nodePath) {
           throw new Error("Missing repaired runtime");
         }
-        expect(await fs.realpath(nodePath)).toBe(await fs.realpath(process.execPath));
+        expect(await fs.realpath(nodePath)).toBe(await fs.realpath(resolveTestNodeExecPath()));
         expect(repaired?.programArguments).toContain(entry);
         expect(await fs.readFile(definitionPath, "utf8")).not.toContain(oldNode);
         expect(runtimeLogs.join("\n")).toContain(
