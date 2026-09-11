@@ -7,6 +7,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
@@ -16,6 +17,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
+import { hashConfigRaw } from "./io.read-helpers.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { replaceConfigFile } from "./mutate.js";
@@ -171,16 +173,22 @@ describe("writeConfigFile canonical reread", () => {
             },
           });
 
-          const failure = await writeConfigFile(
-            { gateway: { mode: "local", port: 19001 } },
-            {
-              ...writeOptions,
-              assertCurrent,
-              baseSnapshot: snapshot,
-              observe: false,
-              skipPluginValidation: true,
+          const { failure, capture } = await captureUpdateDoctorConfigWrites(
+            configPath,
+            async (writeCapture) => {
+              const writeFailure = await writeConfigFile(
+                { gateway: { mode: "local", port: 19001 } },
+                {
+                  ...writeOptions,
+                  assertCurrent,
+                  baseSnapshot: snapshot,
+                  observe: false,
+                  skipPluginValidation: true,
+                },
+              ).catch((error: unknown) => error);
+              return { failure: writeFailure, capture: writeCapture };
             },
-          ).catch((error: unknown) => error);
+          );
           expect(failure).toBeInstanceOf(Error);
           expect(failure).toMatchObject({
             name: "ConfigWritePostCommitError",
@@ -208,6 +216,9 @@ describe("writeConfigFile canonical reread", () => {
               await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
             }
           }
+          expect(capture.hash).toBe(
+            hashConfigRaw(revoke ? String(committedRaw) : existed ? original : null),
+          );
         }),
       );
     },

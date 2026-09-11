@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
@@ -8,6 +9,7 @@ import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   createManagedRuntimeEnvBase,
+  hashConfigRaw,
   replaceEnvSnapshot,
   resolveManagedRuntimeEnvBaseline,
   restoreEnvChangesIfUnchanged,
@@ -535,6 +537,12 @@ async function finalizeCommittedConfigWrite(params: {
       });
       rollbackStatus = rolledBackConfig ? "restored" : "not-restored";
       if (rolledBackConfig) {
+        params.assertPostCommitCurrent?.();
+        recordUpdateDoctorConfigWrite(
+          io.configPath,
+          writeResult.persistedHash,
+          hashConfigRaw(baseSnapshot.raw),
+        );
         restoreEnvChangesIfUnchanged({
           env: io.env,
           before: envBeforeCanonicalRead,
