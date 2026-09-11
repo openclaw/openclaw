@@ -11,14 +11,8 @@ const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
-/** Scan budget used when the caller does not supply one. */
 const DEFAULT_SCAN_MS = 30_000;
-/**
- * Ceiling for a caller-supplied budget. The tree bounds above admit installs whose
- * full-tree hash needs well over the default budget on slower hosts, and a budget
- * clamped below that need downgrades rollback verification on every update.
- */
-const MAX_SCAN_MS = 5 * 60_000;
+const MAX_BASELINE_SCAN_MS = 5 * 60_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
@@ -63,10 +57,16 @@ function unchanged(left: BigIntStats, right: BigIntStats): boolean {
 }
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
-export function createPackageIntegrityReader(timeoutMs = DEFAULT_SCAN_MS) {
+export function createPackageIntegrityReader(
+  timeoutMs = DEFAULT_SCAN_MS,
+  purpose: "baseline" | "recovery" = "recovery",
+) {
   const startedAtMonotonicMs = performance.now();
+  // Only full baseline hashing runs while the old Gateway is still serving.
+  // Recovery and other observations keep their bound to avoid extending downtime.
+  const ceiling = purpose === "baseline" ? MAX_BASELINE_SCAN_MS : DEFAULT_SCAN_MS;
   const budget = Number.isFinite(timeoutMs)
-    ? Math.min(MAX_SCAN_MS, Math.max(1, timeoutMs))
+    ? Math.min(ceiling, Math.max(1, timeoutMs))
     : DEFAULT_SCAN_MS;
   const deadline = Date.now() + budget;
   const timing = {
