@@ -249,6 +249,7 @@ export function createHarness(initialScopeId: string) {
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
     notifyRuntimeConfig: () => runtimeConfigListener?.(),
+    publishEvent: gatewaySource.publishEvent,
     request,
     runtimeConfig,
     snapshot,

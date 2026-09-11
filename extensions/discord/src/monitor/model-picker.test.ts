@@ -1515,7 +1515,7 @@ describe("model-specific runtime view", () => {
         pendingModelIndex: 2,
       }),
     );
-    expect(payload).toContain("runtime openclaw");
+    expect(payload).toContain("Selected: openai/gpt-4o · OpenClaw (press Submit)");
   });
   it.each(["unknown", "empty", "retired"])(
     "disables Submit for %s model runtime choices",

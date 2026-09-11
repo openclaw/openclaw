@@ -10,6 +10,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  createAuthStatus,
   createHarness,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
@@ -93,6 +94,44 @@ function createCatalogHarness() {
 }
 
 describe("ModelProvidersPage catalog discovery", () => {
+  it.each(["config.changed", "chat.metadata.changed"])(
+    "updates credential and catalog facts on %s without clearing a key draft",
+    async (event) => {
+      const { context, request, publishEvent, readPublished, discover, catalogRequest } =
+        createCatalogHarness();
+      let auth = createAuthStatus([{ status: "missing", profiles: [] }]);
+      request.mockImplementation((method: string, params?: { refresh?: boolean }) =>
+        method === "models.authStatus" ? Promise.resolve(auth) : catalogRequest(method, params),
+      );
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.textContent).toContain("Not configured"));
+      const editKey = [
+        ...page.querySelectorAll<HTMLButtonElement>(".model-providers__card-actions button"),
+      ].find((button) => button.textContent?.trim() === "Set API key");
+      expect(editKey).toBeDefined();
+      editKey!.click();
+      await page.updateComplete;
+      const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+      input.value = "unsaved-key-draft";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      auth = createAuthStatus([{ status: "static", profiles: [], apiKey: { source: "config" } }]);
+      const current = {
+        models: [{ id: "new", name: "New model", provider: "openai", available: true }],
+      };
+      readPublished.mockReturnValue(current);
+
+      publishEvent({ type: "event", event, payload: {} });
+
+      await waitForFast(() => expect(page.data?.models).toEqual(current.models));
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Not configured");
+      expect(page.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe(
+        "unsaved-key-draft",
+      );
+      expect(discover).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "shows a catalog refresh failure without changing saved choices (retained rows: %s)",
     async (hasRows) => {

@@ -90,6 +90,31 @@ afterEach(() => {
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([
+    { commandBodyNormalized: "/models", choice: "- anthropic (1)" },
+    { commandBodyNormalized: "/models anthropic", choice: "- anthropic/claude-opus-4-5" },
+  ])(
+    "keeps usable choices and clears the refresh warning after recovery for $commandBodyNormalized",
+    async ({ commandBodyNormalized, choice }) => {
+      const snapshot: ModelCatalogSnapshot = {
+        entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Available model" }],
+        routeVariants: [],
+        refreshFailed: true,
+      };
+      catalogMocks.readSnapshot.mockReturnValue(snapshot);
+      const params = { cfg: staleCfg, commandBodyNormalized };
+
+      const failedRefresh = await resolveModelsCommandReply(params);
+
+      expect(failedRefresh?.text).toContain("Some models could not be refreshed.");
+      expect(failedRefresh?.text).toContain(choice);
+      snapshot.refreshFailed = false;
+      const recovered = await resolveModelsCommandReply(params);
+      expect(recovered?.text).not.toContain("Some models could not be refreshed.");
+      expect(recovered?.text).toContain(choice);
+    },
+  );
+
   it.each(["default", "all"] as const)(
     "rejects a generation retired during %s projection and allows a current retry",
     async (view) => {

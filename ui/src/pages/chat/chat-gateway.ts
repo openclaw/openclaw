@@ -148,6 +148,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
+  if (payload.state === "aborted" && payload.stopReason === "auth-revoked") {
+    payload = { ...payload, errorMessage: t("chat.providerAccessRemoved") };
+  }
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;

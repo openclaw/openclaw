@@ -42,6 +42,8 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
   const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
   return {
     ...sdk,
+    // The shipped minimum host lacks the shared message export.
+    MODEL_PICKER_CHANGED_MESSAGE: undefined,
     get getModelsRuntimeChoices() {
       return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
     },
@@ -324,6 +326,33 @@ function createBoundThreadBindingManager(params: {
 }
 
 describe("Discord model picker interactions", () => {
+  it.each(["model", "provider", "runtime"] as const)(
+    "offers the shared recovery when a retained %s dropdown choice disappears",
+    async (action) => {
+      const context = createModelPickerContext();
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+        createModelsProviderData({ openai: ["gpt-4.1"] }),
+      );
+      const dispatchSpy = createDispatchSpy();
+      const interaction = await runModelSelect({
+        context,
+        data: {
+          cmd: "models",
+          act: action,
+          view: "models",
+          u: "owner",
+          p: action === "model" ? "openai" : "removed",
+        },
+        values: [action === "model" ? "removed-model" : "removed"],
+        dispatchCommandInteraction: dispatchSpy,
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(firstMockArg(interaction.editReply, "removed choice"))).toContain(
+        "Available models changed. Open /models and choose again.",
+      );
+    },
+  );
+
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
@@ -816,7 +845,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
       JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
-    ).toContain("selection expired");
+    ).toContain("Available models changed. Open /models and choose again.");
   });
 
   it("requires submit and retains Gateway ownership through the /model pipeline", async () => {
@@ -1229,7 +1258,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
       JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
-    ).toContain("selection expired");
+    ).toContain("Available models changed. Open /models and choose again.");
   });
 
   it("refuses legacy compact recents runtime without dispatch", async () => {
