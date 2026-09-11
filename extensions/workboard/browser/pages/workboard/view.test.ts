@@ -2,10 +2,10 @@ import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { render as litRender } from "lit";
 import type { ControlUiComponents } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
@@ -18,6 +18,21 @@ import {
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import { renderWorkboard } from "./view.ts";
+
+const renderedRoots = new Set<ReturnType<typeof litRender>>();
+
+function render(...args: Parameters<typeof litRender>) {
+  const root = litRender(...args);
+  renderedRoots.add(root);
+  return root;
+}
+
+afterEach(() => {
+  for (const root of renderedRoots) {
+    root.setConnected(false);
+  }
+  renderedRoots.clear();
+});
 
 type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
 
@@ -1400,7 +1415,7 @@ describe("renderWorkboard", () => {
     expect(state.editingCardId).toBe("card-1");
   });
 
-  it("passes dialog labels and cancellation back to the plugin draft owner", () => {
+  it("passes dialog labels and cancellation back to the plugin draft owner", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.lastDispatchSummary = {
       started: 0,
@@ -1417,7 +1432,7 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => renderInto(container, props),
     });
     renderInto(container, props);
-    expect(container.textContent).not.toContain("No cards were started.");
+    expect(container.querySelector("openclaw-workboard-toast:not([hidden])")).toBeNull();
     const dialog = container.querySelector("[data-test-dialog]")!;
     expect(dialog.getAttribute("aria-label")).toBe("New card");
     expect(dialog.getAttribute("aria-description")).toContain("Queue work");
@@ -1432,7 +1447,11 @@ describe("renderWorkboard", () => {
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     expect(state.draftOpen).toBe(false);
     expect(container.querySelector(".workboard-draft")).toBeNull();
-    expect(container.textContent).toContain("No cards were started.");
+    await waitForFast(() =>
+      expect(toast(container).shadowRoot?.querySelector("[role=status]")?.textContent?.trim()).toBe(
+        "No cards were started.",
+      ),
+    );
   });
 
   it("keeps cards compact and puts model-specific execution actions in details", () => {

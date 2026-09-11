@@ -59,16 +59,7 @@ export function renderCardAlert(alerts: CardAlert[], descriptionId: string) {
     <span id=${descriptionId} hidden>${fullText}</span>`;
 }
 
-export function cardRelativeTime(value: number, now: number) {
-  const minutes = Math.floor(Math.max(0, now - value) / 60_000);
-  if (!minutes) {
-    return t("workboard.cardUpdatedNow");
-  }
-  const unit = minutes >= 1440 ? 1440 : minutes >= 60 ? 60 : 1;
-  return t("workboard.cardUpdatedAgo", {
-    time: formatDurationCompact(Math.floor(minutes / unit) * unit * 60_000) ?? "",
-  });
-}
+export { cardRelativeTime } from "./view-card-time.ts";
 
 function labelOverflowRef(labels: readonly string[]) {
   let dispose = () => {};
