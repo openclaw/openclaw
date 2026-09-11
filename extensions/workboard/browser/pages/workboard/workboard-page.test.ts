@@ -689,9 +689,13 @@ describe("selection reconciliation", () => {
       expect(pendingNotes).toBe("Keep these unsaved notes");
       expect(pendingBusy).toBe("true");
       expect(enabledControls).toHaveLength(0);
-      const alert = expectDefined(form().querySelector('[role="alert"]'), "retry guidance");
-      expect(alert.textContent).toBe("Save unavailable; retry this edit.");
-      expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
+      await vi.waitFor(() =>
+        expect(
+          visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
+        ).toBe("Save unavailable; retry this edit."),
+      );
+      const toast = expectDefined(visibleToast(page.container), "retry guidance");
+      expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(form().querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
         "Submitted task",
       );
