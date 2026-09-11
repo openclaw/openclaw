@@ -1552,6 +1552,7 @@ jobs:
               }
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              runnerBackend: runnerProfile,
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
             });
@@ -1567,6 +1568,7 @@ jobs:
           // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
             changedNodeTestShards === null ||
+            changedNodeTestShards.some((shard) => shard.requiresDist) ||
             typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
             changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
           const changedScopeHasQaImpact =

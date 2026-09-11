@@ -11,6 +11,7 @@ import {
   type CompactNodeTestShard,
   createNodeTestShardBundles,
   createNodeTestShards,
+  createToolingNodeTestShardBundles,
   createVitestCacheWarmGroups,
   isExclusiveCompactShardName,
   isPolicyTestOwnedPath,
@@ -2084,6 +2085,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(owner?.runner, runnerBackend).toBe(
         runnerBackend === "blacksmith" ? EXTRA_LARGE_NODE_TEST_RUNNER : DEFAULT_NODE_TEST_RUNNER,
       );
+      const precise = createToolingNodeTestShardBundles([compilerFixture], { runnerBackend });
+      const preciseOwner = precise?.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(compilerFixture)),
+      );
+      expect(preciseOwner?.runner, runnerBackend).toBe(owner?.runner);
+      expect(preciseOwner?.planConcurrency).toBe(1);
+      expect(preciseOwner?.groups).toEqual([
+        expect.objectContaining({
+          includePatterns: [compilerFixture],
+          env: expect.objectContaining({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
+        }),
+      ]);
       expect(
         jobs
           .flatMap((job) => job.groups)
@@ -2207,6 +2220,32 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(nonToolingPlacement([changed, split])).not.toEqual(expected);
     }
     expect({ anchor, unsplit, split }).toEqual(original);
+  });
+
+  it("keeps precise tooling selection through hosted overflow refusal", () => {
+    const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+    const selected = tooling.flatMap((shard) => shard.includePatterns ?? []).slice(0, 96);
+    expect(selected).toHaveLength(96);
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(tooling.map((shard) => [shard.shardName, 20_000])),
+    );
+    // Every selected file is now indivisible above the admission cap. Overflow
+    // must retain these 96 files plus two dist owners, never resurrect the full suite.
+    expect(() => createToolingNodeTestShardBundles(selected, { runnerBackend: "github" })).toThrow(
+      "exceeds 80 jobs (98 planned)",
+    );
+  });
+
+  it("keeps the private runtime prerequisite on precise tooling readers", () => {
+    const shards = createToolingNodeTestShardBundles([PRIVATE_QA_TOOLING_TEST]);
+    expect(shards).not.toBeNull();
+    const readers = shards?.filter((shard) => !shard.requiresDist) ?? [];
+    expect(readers).toHaveLength(1);
+    expect(readers[0]?.pretestBuildMode).toBe("private-qa");
+    expect(readers[0]?.planConcurrency).toBe(1);
+    expect(readers[0]?.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([
+      PRIVATE_QA_TOOLING_TEST,
+    ]);
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
