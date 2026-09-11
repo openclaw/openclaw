@@ -471,7 +471,7 @@ describe("ChannelsPage lifecycle", () => {
               "abort",
               () => {
                 aborted.resolve(signal.reason);
-                reject(signal.reason);
+                reject(new DOMException("The operation was aborted.", "AbortError"));
               },
               { once: true },
             );
