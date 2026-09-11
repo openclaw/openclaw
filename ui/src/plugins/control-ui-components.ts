@@ -90,14 +90,14 @@ export function createControlUiComponents(options: {
       mount(
         container,
         props,
-        async () => {
+        async (): Promise<OpenClawModalDialog> => {
           await import("../components/modal-dialog.ts");
           return document.createElement("openclaw-modal-dialog");
         },
         (element, next) => {
           element.label = next.label;
           element.description = next.description ?? "";
-          (element as OpenClawModalDialog).lightDismiss = next.lightDismiss ?? true;
+          element.lightDismiss = next.lightDismiss ?? true;
           element.className = next.className ?? "";
           element.style.cssText = next.style ?? "";
           if (next.returnFocusTarget !== undefined) {
