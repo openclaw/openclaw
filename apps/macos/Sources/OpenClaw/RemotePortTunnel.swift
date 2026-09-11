@@ -97,12 +97,13 @@ final class RemotePortTunnel: @unchecked Sendable {
     static func ports(
         root: [String: Any],
         sshHost: String,
-        legacyPort: Int,
+        legacyPort: Int? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment) -> (local: Int, remote: Int)
     {
         // Shipped SSH profiles without a URL use the shared port until hosting repair
         // materializes their route. Explicit remote fields own the split configuration.
-        (
+        let legacyPort = legacyPort ?? GatewayEnvironment.gatewayPort(root: root)
+        return (
             self.localPort(root: root, legacyPort: legacyPort, environment: environment),
             self.resolveRemotePortOverride(defaultRemotePort: legacyPort, for: sshHost, root: root) ?? legacyPort)
     }
@@ -120,7 +121,7 @@ final class RemotePortTunnel: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
         let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ports = Self.ports(root: root, sshHost: sshHost, legacyPort: GatewayEnvironment.gatewayPort(root: root))
+        let ports = Self.ports(root: root, sshHost: sshHost)
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -289,17 +290,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         let stderr = stderrCapture.snapshot()
         let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
-    }
-
-    /// Shared with MacChatTranscriptCache: the offline cache identity must key
-    /// on the same remote gateway port this tunnel actually forwards to, or two
-    /// gateways behind one SSH target would share cached transcripts.
-    static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
-        let root = OpenClawConfigFile.loadDict()
-        return self.resolveRemotePortOverride(
-            defaultRemotePort: defaultRemotePort,
-            for: sshHost,
-            root: root)
     }
 
     static func resolveRemotePortOverride(

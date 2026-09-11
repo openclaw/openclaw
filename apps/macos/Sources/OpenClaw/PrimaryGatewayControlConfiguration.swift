@@ -93,10 +93,8 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             var remote = Self.replacingRemoteRoute(previousRemote)
             let tunnelPort = localPort ?? effectiveLocalPort
             guard (1...65535).contains(tunnelPort) else { throw PrimaryGatewayControlError.invalidPort }
-            let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: tunnelPort,
-                for: parsedTarget.host,
-                root: current) ?? tunnelPort
+            let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.ports(
+                root: current, sshHost: parsedTarget.host).remote
             let resolvedRemotePort = remotePort ?? previousRemotePort ?? 18789
             let previousPolicy = (previousRemote["sshHostKeyPolicy"] as? String)
                 .flatMap(CommandResolver.SSHHostKeyPolicy.init(rawValue:))
