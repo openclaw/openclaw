@@ -262,8 +262,9 @@ describe("Discord durable ingress", () => {
       const lifecycles = new Map<string, DiscordIngressLifecycle>();
       const dispatch = vi.fn(
         async (event: DiscordMessageEvent, lifecycle: DiscordIngressLifecycle) => {
-          dispatched.push(event.id!);
-          lifecycles.set(event.id!, lifecycle);
+          const id = String(event.id);
+          dispatched.push(id);
+          lifecycles.set(id, lifecycle);
           return { kind: "deferred" as const };
         },
       );

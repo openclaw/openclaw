@@ -8,7 +8,10 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMattermostIngressMonitor } from "./monitor-ingress.js";
+import {
+  createMattermostIngressMonitor,
+  type MattermostIngressLifecycle,
+} from "./monitor-ingress.js";
 
 type MattermostIngressQueue = NonNullable<
   Parameters<typeof createMattermostIngressMonitor>[0]["queue"]
