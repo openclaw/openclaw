@@ -1,22 +1,23 @@
 import { consume } from "@lit/context";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import "../../components/terminal/terminal-panel-registration.ts";
-import type { TerminalRouteTarget } from "../../components/terminal/terminal-panel-session-types.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { resolveTerminalRouteLocation } from "./route-location.ts";
 import "./terminal-page.css";
 
 class TerminalPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) target: TerminalRouteTarget = null;
+  @property({ attribute: false }) location: RouteLocation | null = null;
 
   constructor() {
     super();
@@ -43,7 +44,9 @@ class TerminalPage extends OpenClawLightDomElement {
     const context = this.context;
     const snapshot = context.gateway.snapshot;
     const owner = context.agentSelection.state.selectedId ?? snapshot.assistantAgentId;
-    const target = this.target;
+    const target = this.location
+      ? resolveTerminalRouteLocation(this.location, context.basePath)
+      : null;
     const key = target
       ? "sessionId" in target
         ? target.sessionId
