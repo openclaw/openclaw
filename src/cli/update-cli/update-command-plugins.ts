@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
+import { getLogger } from "../../logging/logger.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
@@ -363,6 +364,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
           : "Keep the pin if intentional; replacing it is an explicit operator choice.",
       ],
     });
+    if (unavailable) {
+      getLogger().warn(message);
+    }
     if (!params.json && !loggedPluginWarnings.has(stripAnsi(message))) {
       runtime.log(theme.warn(message));
     }

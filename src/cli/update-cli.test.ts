@@ -44,6 +44,7 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-manage
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -5181,6 +5182,12 @@ describe("update-cli", () => {
         version,
       };
       const records = { demo: record };
+      const warningLogPath = path.join(installPath, "update-warning.log");
+      setLoggerOverride({ level: "warn", file: warningLogPath });
+      onTestFinished(async () => {
+        await flushLogger();
+        resetLogger();
+      });
       loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
       mockNpmPluginOutcomes(
         [
@@ -5203,6 +5210,22 @@ describe("update-cli", () => {
       await updateCommand({ yes: true, json, restart: false });
 
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      await flushLogger();
+      const logEntries = fsSync.existsSync(warningLogPath)
+        ? (await fs.readFile(warningLogPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line): unknown => JSON.parse(line))
+        : [];
+      const retainedWarning = expect.objectContaining({
+        message,
+        _meta: expect.objectContaining({ logLevelName: "WARN" }),
+      });
+      if (repaired) {
+        expect(logEntries).not.toContainEqual(retainedWarning);
+      } else {
+        expect(logEntries).toContainEqual(retainedWarning);
+      }
       if (json) {
         const result = lastWriteJsonCall();
         if (repaired) {
