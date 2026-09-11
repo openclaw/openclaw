@@ -253,7 +253,7 @@ extensions/copilot/src/attempt-config.ts	16
 extensions/copilot/src/attempt-execution.ts	4
 extensions/copilot/src/attempt-finalize.ts	5
 extensions/copilot/src/attempt-prepare.ts	4
-extensions/copilot/src/attempt-transcript-journal.ts	25
+extensions/copilot/src/attempt-transcript-journal.ts	17
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	3

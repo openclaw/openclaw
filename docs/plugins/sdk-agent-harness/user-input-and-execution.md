@@ -148,7 +148,11 @@ plugins must not reconstruct that authority or add a capability-free fallback.
 Older hosts do not expose this method. A package that requires it must declare
 the first OpenClaw release containing the capability in
 `openclaw.compat.pluginApi`; do not publish that package until the release
-version is assigned.
+version is assigned. A package that exposes the dependent feature conditionally
+may instead gate that feature after final tool filtering and keep unrelated
+harness surfaces available. Do not use an unconditional future floor for an
+optional feature, or infer capability availability from release-synchronized
+package metadata.
 
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
 `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and

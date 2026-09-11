@@ -39,13 +39,19 @@ describe("decideReplayAction", () => {
     }
   });
 
-  it("returns resume when sdkSessionId is present and replayInvalid is not true", () => {
-    expect(decideReplayAction({ sdkSessionId: "sess-1" })).toEqual({
+  it("returns resume only when sdkSessionId has a validated journal", () => {
+    expect(decideReplayAction({ journalValidated: true, sdkSessionId: "sess-1" })).toEqual({
       action: "resume",
       sdkSessionId: "sess-1",
       downgradedFromResume: false,
     });
-    expect(decideReplayAction({ sdkSessionId: "sess-2", replayInvalid: false })).toEqual({
+    expect(
+      decideReplayAction({
+        journalValidated: true,
+        sdkSessionId: "sess-2",
+        replayInvalid: false,
+      }),
+    ).toEqual({
       action: "resume",
       sdkSessionId: "sess-2",
       downgradedFromResume: false,
@@ -53,20 +59,29 @@ describe("decideReplayAction", () => {
   });
 
   it("trims whitespace around sdkSessionId before resuming", () => {
-    expect(decideReplayAction({ sdkSessionId: "  sess-3  " })).toEqual({
+    expect(decideReplayAction({ journalValidated: true, sdkSessionId: "  sess-3  " })).toEqual({
       action: "resume",
       sdkSessionId: "sess-3",
       downgradedFromResume: false,
     });
   });
 
-  it("downgrades to create when replayInvalid is true even with sdkSessionId", () => {
-    expect(decideReplayAction({ sdkSessionId: "sess-4", replayInvalid: true })).toEqual({
-      action: "create",
-      downgradedFromResume: true,
-      downgradeReason: "replay-invalid",
-    });
-  });
+  it.each([
+    { journalValidated: true, replayInvalid: true },
+    { journalValidated: false, replayInvalid: false },
+    { journalValidated: undefined, replayInvalid: false },
+  ])(
+    "downgrades to create for invalid or unvalidated session history %#",
+    ({ journalValidated, replayInvalid }) => {
+      expect(
+        decideReplayAction({ journalValidated, sdkSessionId: "sess-4", replayInvalid }),
+      ).toEqual({
+        action: "create",
+        downgradedFromResume: true,
+        downgradeReason: "replay-invalid",
+      });
+    },
+  );
 });
 
 describe("classifyResumeFailure", () => {

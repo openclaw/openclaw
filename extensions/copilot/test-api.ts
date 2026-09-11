@@ -1,13 +1,16 @@
 /** Test-only Copilot boundary for host/plugin integration suites. */
+import { randomUUID } from "node:crypto";
 import {
   CopilotClient,
   CopilotRequestHandler,
   CopilotSession,
   type AssistantMessageEvent,
+  type MessageOptions,
   type ResumeSessionConfig,
   type SessionConfig,
   type SessionEvent,
   type Tool,
+  type UserMessageEvent,
 } from "@github/copilot-sdk";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import { createCopilotClientPool, type CopilotClientPool } from "./src/runtime.js";
@@ -41,24 +44,45 @@ function createAssistantMessageEvent(id: string): AssistantMessageEvent {
   };
 }
 
+function createUserMessageEvent(id: string, content: string): UserMessageEvent {
+  return {
+    data: { content },
+    id,
+    parentId: null,
+    timestamp: "2026-09-09T00:00:00.000Z",
+    type: "user.message",
+  };
+}
+
 function createProbeSession(params: {
   onSend: () => Promise<void>;
   sessionId: string;
 }): CopilotSession {
   const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
+  const emit = (event: SessionEvent) => {
+    for (const listener of listeners.get(event.type) ?? []) {
+      listener(event);
+    }
+  };
+  const send = async (optionsOrPrompt: MessageOptions | string) => {
+    const options =
+      typeof optionsOrPrompt === "string" ? { prompt: optionsOrPrompt } : optionsOrPrompt;
+    const event = createUserMessageEvent(randomUUID(), options.displayPrompt ?? options.prompt);
+    emit(event);
+    return event.id;
+  };
   const session: CopilotSession = Object.assign(Object.create(CopilotSession.prototype), {
     abort: async () => undefined,
     disconnect: async () => undefined,
     on(eventType: string, handler: (event: SessionEvent) => void) {
       listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
     },
-    send: async () => "sdk-user",
-    async sendAndWait() {
+    send,
+    async sendAndWait(optionsOrPrompt: MessageOptions | string) {
+      await send(optionsOrPrompt);
       await params.onSend();
       const event = createAssistantMessageEvent(`assistant-${params.sessionId}`);
-      for (const listener of listeners.get(event.type) ?? []) {
-        listener(event);
-      }
+      emit(event);
       return event;
     },
     sessionId: params.sessionId,

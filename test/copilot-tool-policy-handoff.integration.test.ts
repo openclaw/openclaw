@@ -145,6 +145,9 @@ describe("Copilot tool policy handoff", () => {
     });
 
     expect(created.terminal).toEqual({ kind: "ok" });
+    expect((created as typeof created & { journalValidated?: boolean }).journalValidated).toBe(
+      true,
+    );
     expect(resumed.terminal).toEqual({ kind: "ok" });
     expect(fixture.createConfigs).toHaveLength(1);
     expect(fixture.resumeConfigs).toHaveLength(1);

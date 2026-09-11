@@ -3,7 +3,7 @@
 // Owns three concerns:
 //   1. Pre-call: should this attempt resume an existing SDK session or
 //      start a new one? Honours `initialReplayState.sdkSessionId` and
-//      `initialReplayState.replayInvalid`.
+//      `initialReplayState.replayInvalid` and journal validation.
 //   2. Post-call: if `resumeSession` fails, was the failure recoverable
 //      (session-gone) so we should downgrade to `createSession`, or
 //      unrecoverable so the error should surface as a prompt error?
@@ -35,6 +35,7 @@ type ReplayDecision =
     };
 
 interface ReplayShimInput {
+  readonly journalValidated?: boolean;
   readonly sdkSessionId?: string;
   readonly replayInvalid?: boolean;
 }
@@ -50,9 +51,9 @@ function normalizeSdkSessionId(value: unknown): string | undefined {
  * Rules:
  *   - No input                            → create (no-replay-state)
  *   - No (trimmed) sdkSessionId          → create (no-sdk-session-id)
- *   - sdkSessionId + replayInvalid=true   → create (replay-invalid),
- *                                            downgradedFromResume=true
- *   - sdkSessionId + replayInvalid=false  → resume
+ *   - sdkSessionId + invalid/unvalidated journal → create (replay-invalid),
+ *                                                   downgradedFromResume=true
+ *   - sdkSessionId + validated journal            → resume
  */
 export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
   if (!input) {
@@ -70,7 +71,7 @@ export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
       downgradeReason: "no-sdk-session-id",
     };
   }
-  if (input.replayInvalid === true) {
+  if (input.replayInvalid === true || input.journalValidated !== true) {
     return {
       action: "create",
       downgradedFromResume: true,

@@ -3,11 +3,14 @@ import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
@@ -15,6 +18,14 @@ import { createCopilotFaultPeer } from "./catalog-lifetime.test-support.js";
 import { createCopilotClientPool } from "./runtime.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 import * as toolBridgeModule from "./tool-bridge.js";
+
+function readWaitingRunId(result: unknown): string {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  if (details?.status !== "waiting" || typeof details.runId !== "string") {
+    throw new Error("Expected a waiting Code Mode result with a run id");
+  }
+  return details.runId;
+}
 
 it("cancels a resumed Code Mode cell during real SDK session.error cleanup before host closure", async () => {
   const state = await createOpenClawTestState({ label: "copilot-catalog-lifetime" });
@@ -58,6 +69,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   const sessionKey = "agent:main:catalog-lifetime";
   const runId = "catalog-lifetime-run";
   const providerFailure = "deterministic non-timeout provider failure";
+  const steeringPrompt = "Use the accepted steering before reporting the provider failure.";
   const target = {
     agentId: "main",
     sessionId,
@@ -71,6 +83,11 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   };
   let persisted = false;
   let blocked = false;
+  let steeringPersisted = false;
+  let steeringBlocked = false;
+  let steeringPersistence: Promise<void> | undefined;
+  const steeringPending = createDeferred<void>();
+  const steeringAccepted = createDeferred<boolean>();
   const recorder: NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]> = {
     message: userMessage,
     resolveMessage: async () => userMessage,
@@ -91,6 +108,33 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     persistFallback: async () => {},
   };
   const config = { tools: { codeMode: { enabled: true } } };
+  const steeringMessage = {
+    role: "user" as const,
+    content: "Change course after the waiting cell.",
+    timestamp: Date.now() + 1,
+    provenance: {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:ops:source",
+      sourceTool: "sessions_send",
+    },
+  };
+  const steeringRecorder: NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]> = {
+    ...recorder,
+    message: steeringMessage,
+    resolveMessage: async () => steeringMessage,
+    markRuntimePersistencePending: (pending) => {
+      steeringPersistence = pending;
+      steeringPending.resolve();
+    },
+    markRuntimePersisted: () => {
+      steeringPersisted = true;
+    },
+    markBlocked: () => {
+      steeringBlocked = true;
+    },
+    hasPersisted: () => steeringPersisted,
+    isBlocked: () => steeringBlocked,
+  };
   const host = await createAdmittedHostCapabilityTestFixture({
     config,
     runId,
@@ -100,6 +144,32 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     workspaceDir: state.workspaceDir,
     abortSignal: callController.signal,
   });
+  const commitProviderTranscriptPrefix: NonNullable<
+    AgentHarnessAttemptParamsV2["hostCapabilities"]["commitProviderTranscriptPrefix"]
+  > = async ({ assertCurrent, baseAnchor, entries }) => {
+    assertCurrent();
+    host.hostCapabilities.assertActive();
+    return {
+      kind: "committed",
+      results: entries.map((entry, index) => ({
+        anchor: {
+          agentId: baseAnchor?.agentId ?? target.agentId,
+          sessionId: baseAnchor?.sessionId ?? target.sessionId,
+          sessionKey: baseAnchor?.sessionKey ?? target.sessionKey,
+          storePath: baseAnchor?.storePath ?? target.storePath,
+          generation: baseAnchor?.generation ?? "catalog-lifetime-generation",
+          entryId: entry.eventId,
+          rawSeq: (baseAnchor?.rawSeq ?? 0) + index + 1,
+          effectiveParentId:
+            index === 0 ? (baseAnchor?.entryId ?? null) : entries[index - 1]!.eventId,
+          activeMessagePosition: (baseAnchor?.activeMessagePosition ?? 0) + index + 1,
+          idempotencyKey: entry.identity,
+        },
+        identity: entry.identity,
+        message: entry.message,
+      })),
+    };
+  };
   let attempt: ReturnType<typeof harness.runAttempt> | undefined;
   const realCreateToolBridge = createCopilotToolBridge;
   const constructBridge = vi
@@ -130,7 +200,10 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       sessionFile: path.join(state.sessionsDir(), "catalog-lifetime.jsonl"),
       runId,
       config,
-      hostCapabilities: host.hostCapabilities,
+      hostCapabilities: {
+        ...host.hostCapabilities,
+        commitProviderTranscriptPrefix,
+      },
       auth: { useLoggedInUser: true },
       provider: "github-copilot",
       modelId: "auto",
@@ -168,21 +241,32 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       code: 'await yield_control(); await fixture_gate({}); text("STALE AFTER CLOSE"); return "stale";',
     });
     await execReply;
-    const execResult = observed.find((event) => event.toolName === "exec")?.result as {
-      details: { status: string; runId: string };
-    };
-    expect(execResult.details.status).toBe("waiting");
+    const execResult = observed.find((event) => event.toolName === "exec")?.result;
+    const execRunId = readWaitingRunId(execResult);
     const catalogIdentity = catalog?.current;
     expect(catalogIdentity).toBeDefined();
-    const waitReply = peer.requestTool("wait", { runId: execResult.details.runId });
+    const waitReply = peer.requestTool("wait", { runId: execRunId });
     await entered.promise;
     host.hostCapabilities.assertActive();
     expect(nestedSignal?.aborted).toBe(false);
+    expect(
+      queueAgentHarnessMessage(sessionId, steeringPrompt, {
+        onQueueAccepted: (accepted) => steeringAccepted.resolve(accepted),
+        userTurnTranscriptRecorder: steeringRecorder,
+        waitForTranscriptCommit: true,
+      }),
+    ).toBe(true);
+    await expect(steeringAccepted.promise).resolves.toBe(true);
+    await steeringPending.promise;
+    expect(peer.prompts.at(-1)).toBe(steeringPrompt);
     peer.emit("session.error", {
       message: providerFailure,
       errorType: "model_error",
     });
     await peer.destroying;
+    await expect(steeringPersistence).resolves.toBeUndefined();
+    expect(steeringPersisted).toBe(true);
+    expect(steeringBlocked).toBe(false);
     expect(catalog?.current).toBeUndefined();
     host.hostCapabilities.assertActive();
     expect(callController.signal.aborted).toBe(false);
@@ -193,7 +277,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     await waitReply;
     const waitResult = observed.find((event) => event.toolName === "wait")?.result;
     const cleanupWindow = {
-      cellId: execResult.details.runId,
+      cellId: execRunId,
       catalogId: catalogIdentity?.counterScope,
       catalogClosed: catalog?.current === undefined,
       contextAborted: contextSignal?.aborted,
@@ -266,6 +350,9 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       errorMessage: providerFailure,
     });
     expect(callController.signal.aborted).toBe(false);
+    expect(
+      (await readVisibleSessionTranscriptMessageEntries(target)).map((entry) => entry.role),
+    ).toEqual(["user", "user"]);
     expect(attemptResult.lastToolError).toMatchObject({
       toolName: "wait",
       error: "code mode execution aborted",

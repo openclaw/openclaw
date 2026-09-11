@@ -35,6 +35,16 @@ For the broader model/provider/runtime split, start with
 - A writable `copilotHome` directory. Defaults to `<agentDir>/copilot` when
   OpenClaw provides an agent directory, otherwise
   `~/.openclaw/agents/<agentId>/copilot`.
+- The package's historical `openclaw.install.minHostVersion` is
+  `>=2026.5.28`, while its current enforced Plugin API admission floor is
+  `openclaw.compat.pluginApi: ">=2026.9.3"`.
+- Code Mode additionally requires provider transcript commit support only when
+  `exec` or `wait` remains in the final prompt tool surface. On an admitted host
+  without that optional capability, disable Code Mode or filter both controls;
+  ordinary tools remain available.
+- Unrestricted Code Mode support cannot be assigned a numeric compatibility
+  floor until the release owner names the first release containing the host
+  capability.
 
 `openclaw doctor` runs the plugin's [doctor contract](#doctor) for
 session-state ownership and future config migrations. It does not probe the

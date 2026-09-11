@@ -16,6 +16,12 @@ import {
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
+import {
+  validateOpenClawPackageInstallCompatibility,
+  type PluginInstallRuntime,
+} from "../src/plugins/install-shared.js";
+import type { OpenClawPackageManifest } from "../src/plugins/manifest.js";
+import { checkMinHostVersion } from "../src/plugins/min-host-version.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -125,6 +131,37 @@ describe("plugin npm runtime build planning", () => {
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
+  });
+
+  it("preserves the Copilot release-synced admission floor in packed metadata", () => {
+    const rootPackage = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      version: string;
+    };
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "copilot"),
+      }),
+    );
+    const packageMetadata = plan.packageJson.openclaw as OpenClawPackageManifest;
+    const pluginApi = `>=${rootPackage.version}`;
+
+    expect(packageMetadata.install?.minHostVersion).toBe(">=2026.5.28");
+    expect(packageMetadata.compat?.pluginApi).toBe(pluginApi);
+    expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(pluginApi);
+    expect(
+      validateOpenClawPackageInstallCompatibility({
+        runtime: {
+          checkMinHostVersion,
+          resolveCompatibilityHostVersion: () => rootPackage.version,
+        } satisfies Pick<
+          PluginInstallRuntime,
+          "checkMinHostVersion" | "resolveCompatibilityHostVersion"
+        >,
+        pluginId: "copilot",
+        packageMetadata,
+      }),
+    ).toBeNull();
   });
 
   it("includes top-level public runtime surfaces", () => {

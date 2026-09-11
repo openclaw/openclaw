@@ -24,4 +24,13 @@ questions, replay, and the supported-surface contract.
 
 - Plugin id: `copilot`
 - Package: `@openclaw/copilot`
-- Minimum OpenClaw host: `2026.5.28`
+- Historical installation floor: `openclaw.install.minHostVersion` remains
+  `>=2026.5.28`. This is not the package admission floor.
+- Current package admission floor: `openclaw.compat.pluginApi` is
+  `>=2026.9.3`. Install and load enforce this declared Plugin API range.
+- Code Mode is an optional surface on an admitted host. It additionally
+  requires provider transcript commit support when `exec` or `wait` survives
+  final prompt filtering. Ordinary tools remain available without it.
+- Unrestricted Code Mode publication remains blocked until the release owner
+  assigns the first release containing that capability and the package floor
+  is updated to that release.

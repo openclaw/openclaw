@@ -45,6 +45,7 @@ import type {
   CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { buildSuspendableToolResultMessage } from "./event-bridge-transcript.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
@@ -102,11 +103,8 @@ export async function runCopilotExecution(context: {
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
-  // Resumed sessions may predate the atomic journal or survive a crash. Only a
-  // session created under this journal can be deleted after incomplete cleanup.
-  let nativeSessionCreatedFresh = false;
+  let nativeSessionCreatedFresh = false; // Only journal-created sessions may be deleted.
   let nativeSessionHistoryValidated = false;
-  let disconnectError: Error | undefined;
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
@@ -246,11 +244,9 @@ export async function runCopilotExecution(context: {
   const cleanupByokProxy = byokProxy?.close;
   const sessionProvider = byokProxy?.provider ?? poolAcquire.provider;
   const sessionRef: { current: SessionLike | undefined } = { current: undefined };
-  const computerContextEpoch: {
-    value: number;
-    frameToolCallId?: string;
-    frameImageIdentity?: string;
-  } = { value: 0 };
+  const computerContextEpoch: NonNullable<
+    Parameters<typeof createToolBridge>[0]["computerContextEpoch"]
+  > = { value: 0 };
   let codeModeEngaged: boolean | undefined;
   let promptToolPolicy:
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
@@ -314,6 +310,17 @@ export async function runCopilotExecution(context: {
               startedAt,
             });
           },
+          onSuspendableToolCompleted: (completion) => {
+            if (!transcriptJournal) {
+              throw new Error("Copilot waiting result arrived before transcript journal");
+            }
+            return transcriptJournal.recordProviderToolResult(
+              buildSuspendableToolResultMessage({
+                ...completion,
+                resultContentSource: resultContentSourceByToolName.get(completion.toolName),
+              }),
+            );
+          },
         });
         cleanupToolBridge = toolBridge.cleanup;
         codeModeEngaged = toolBridge.codeModeEngaged;
@@ -364,10 +371,11 @@ export async function runCopilotExecution(context: {
       userInputBridge,
     } = sessionSetup;
     userInputBridgeRef = userInputBridge;
-    const replayDecision = decideReplayAction({
-      sdkSessionId: input.initialReplayState?.sdkSessionId,
-      replayInvalid: input.initialReplayState?.replayInvalid,
-    });
+    const replayDecision = decideReplayAction(
+      settledToolFinalization
+        ? { journalValidated: true, sdkSessionId: settledFinalizationSessionId }
+        : input.initialReplayState,
+    );
     downgradedFromResume = replayDecision.downgradedFromResume;
     const resumeSessionId = settledToolFinalization
       ? settledFinalizationSessionId
@@ -552,6 +560,10 @@ export async function runCopilotExecution(context: {
       } else {
         try {
           bridge?.flushTranscriptProjection();
+          if (bridge?.snapshot().streamError) {
+            settled = true;
+            await transcriptJournal?.finalizeProviderTerminal();
+          }
           await transcriptJournal?.barrier("attempt error");
           promptError = toCopilotError(error);
         } catch (transcriptError) {
@@ -634,7 +646,7 @@ export async function runCopilotExecution(context: {
         try {
           await session.disconnect();
         } catch (error: unknown) {
-          disconnectError = toCopilotError(error);
+          const disconnectError = toCopilotError(error);
           if (!promptError && !timedOut) {
             promptError = disconnectError;
           }

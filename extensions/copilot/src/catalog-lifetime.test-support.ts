@@ -12,24 +12,25 @@ export async function createCopilotFaultPeer() {
   const releaseDestroy = createDeferred<void>();
   const replies = new Map<string, ReturnType<typeof createDeferred<Record<string, unknown>>>>();
   const methods: string[] = [];
+  const prompts: string[] = [];
   const sockets = new Set<Socket>();
   let socket: Socket;
   let sessionId: string;
   let previousEventId: string | null = null;
+  let userMessageCount = 0;
   const send = (value: unknown) => {
     const bytes = Buffer.from(JSON.stringify(value));
     socket.write(`Content-Length: ${bytes.length}\r\n\r\n`);
     socket.write(bytes);
   };
-  const emit = (type: string, data: Record<string, unknown>) => {
-    const id = randomUUID();
+  const emit = (type: string, data: Record<string, unknown>, eventId: string = randomUUID()) => {
     send({
       jsonrpc: "2.0",
       method: "session.event",
       params: {
         sessionId,
         event: {
-          id,
+          id: eventId,
           parentId: previousEventId,
           timestamp: new Date().toISOString(),
           type,
@@ -37,7 +38,7 @@ export async function createCopilotFaultPeer() {
         },
       },
     });
-    previousEventId = id;
+    previousEventId = eventId;
   };
   const handle = async (request: Request) => {
     methods.push(request.method);
@@ -47,10 +48,21 @@ export async function createCopilotFaultPeer() {
       case "session.create":
         sessionId = String(request.params.sessionId);
         return { sessionId };
-      case "session.send":
-        emit("user.message", { content: request.params.prompt });
+      case "session.send": {
+        const prompt = String(request.params.prompt);
+        const messageId = `fixture-user-${++userMessageCount}`;
+        prompts.push(prompt);
+        emit(
+          "user.message",
+          {
+            content: request.params.displayPrompt ?? prompt,
+            transformedContent: prompt,
+          },
+          messageId,
+        );
         sent.resolve();
-        return { messageId: "fixture-user" };
+        return { messageId };
+      }
       case "session.tools.handlePendingToolCall":
         replies.get(String(request.params.requestId))?.resolve(request.params);
         return {};
@@ -114,6 +126,7 @@ export async function createCopilotFaultPeer() {
   return {
     client,
     methods,
+    prompts,
     sent: sent.promise,
     destroying: destroying.promise,
     releaseDestroy: () => releaseDestroy.resolve(),
@@ -122,6 +135,11 @@ export async function createCopilotFaultPeer() {
       const requestId = randomUUID();
       const reply = createDeferred<Record<string, unknown>>();
       replies.set(requestId, reply);
+      emit("assistant.message", {
+        content: "",
+        messageId: `fixture-${requestId}`,
+        toolRequests: [{ arguments: args, name, toolCallId: requestId }],
+      });
       emit("external_tool.requested", {
         requestId,
         toolCallId: requestId,
