@@ -72,6 +72,30 @@ describe("client voice confirmation", () => {
     vi.useRealTimers();
   });
 
+  it.each(["yes", "yes do it"])("guides users to an accepted spoken reply: %s", (text) => {
+    const blocked = checkClientVoiceToolConfirmationPolicy({
+      voiceSessionId: "voice-1",
+      runId: "voice-run",
+      toolName: "message",
+      toolParams: { action: "send", message: "hello" },
+      now: 100,
+    });
+    if (blocked.allowed) {
+      throw new Error("expected a confirmation request");
+    }
+    expect(blocked.reason).toContain(`"${text}"`);
+    const confirmationId = confirmationIdFrom(blocked.reason);
+    noteClientVoiceConfirmationUtterance({
+      voiceSessionId: "voice-1",
+      text,
+      timestamp: 101,
+    });
+    expect(
+      authorizeClientVoiceConfirmation({ voiceSessionId: "voice-1", confirmationId, now: 102 })
+        .confirmationId,
+    ).toBe(confirmationId);
+  });
+
   it("does not pause a concurrent non-voice run sharing the session key", () => {
     block({ voiceSessionId: "voice-1", runId: "voice-run" });
 
