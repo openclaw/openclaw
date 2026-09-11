@@ -4,6 +4,7 @@ read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
   - You need to list or resolve a pending approval without a chat surface
+  - You need the recorded outcome of past approval decisions from a terminal
 title: "Approvals"
 ---
 
@@ -23,6 +24,7 @@ openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
 openclaw approvals pending
 openclaw approvals resolve <id> <allow-once|allow-always|deny>
+openclaw approvals history
 ```
 
 `get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result. Nodes with a host-native policy, such as the Windows companion, show that policy directly instead of applying OpenClaw approvals-file policy math.
@@ -77,6 +79,24 @@ default:
 ```bash
 openclaw approvals resolve <id> allow-always --expires-in-days 30
 ```
+
+## Approval history
+
+Resolved approvals stay readable from the Gateway's rolling 30-day ledger without opening the Control UI:
+
+```bash
+openclaw approvals history
+openclaw approvals history --kind exec
+openclaw approvals history --limit 100
+openclaw approvals history --cursor <nextCursor>
+openclaw approvals history --json
+```
+
+The table shows the resolution time in UTC, the approval kind, the recorded decision, the resolution reason, the source agent/session, the resolver attribution (`device`, `channel`, `runtime`, or `system`), and the reviewer-safe command or summary. Rows that failed closed without a reviewer decision show their terminal status (`expired` or `cancelled`) in the decision column, so a timeout is never mistaken for an approval.
+
+`--kind` accepts `exec`, `plugin`, and `system-agent`; `--limit` accepts 1-100. Both filters are applied by the Gateway, and malformed values are rejected before any request is sent. Paging is cursor-based: when more rows remain, the output ends with the `nextCursor` value and the command that continues from it. `--json` returns the Gateway result unchanged (`items`, `nextCursor`) for audit scripts.
+
+The read requests the `operator.approvals` scope only — no admin scope is needed — and the Gateway applies the same per-reviewer session-access filtering it applies to every other approval surface, so a restricted operator sees only the rows it may review. History is read-only: decisions are recorded by `openclaw approvals resolve`, the Control UI, or channel surfaces.
 
 ## Standing grants
 
