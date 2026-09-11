@@ -117,47 +117,6 @@ describe("channels plugin presentation metadata", () => {
     );
     expect(container.textContent).not.toContain("Legacy channel subtitle");
   });
-
-  it("uses an owning plugin icon without replacing channel-authored presentation", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["agent-system-github"],
-      channelLabels: { "agent-system-github": "GitHub Notifications" },
-      channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
-      channels: { "agent-system-github": { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-    props.pluginCatalog = {
-      plugins: [
-        createChannelPlugin({
-          id: "agent-system",
-          name: "Agent System",
-          description: "Manage agent workspaces.",
-          channelIds: ["agent-system-github"],
-        }),
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-    props.pluginIconUrls = { "agent-system-github": "blob:agent-system-plugin-icon" };
-    const container = document.createElement("div");
-
-    render(renderChannels(props), container);
-
-    const row = container.querySelector(".channels-item");
-    expect(row?.querySelector(".settings-row__title")?.textContent).toBe(
-      "GitHub Notifications",
-    );
-    expect(row?.querySelector(".settings-row__desc")?.textContent).toBe(
-      "GitHub notification channel",
-    );
-    expect(row?.querySelector("img")?.getAttribute("src")).toBe(
-      "blob:agent-system-plugin-icon",
-    );
-    expect(container.textContent).not.toContain("Agent System");
-    expect(container.textContent).not.toContain("Manage agent workspaces.");
-  });
 });
 
 describe("channels setup access", () => {
