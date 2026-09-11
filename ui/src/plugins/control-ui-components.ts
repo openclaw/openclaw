@@ -214,6 +214,22 @@ export function createControlUiComponents(options: {
           };
         },
       ),
+    mountSessionSummary: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("./control-ui-session-summary.ts");
+          return document.createElement("openclaw-plugin-session-summary");
+        },
+        (element, next, current) => {
+          element.session = next.session;
+          element.gateway = current().gateway;
+          element.agents = current().agents.state.agentsList?.agents ?? [];
+          element.presented = next.presented;
+          element.requestUpdate();
+        },
+      ),
     mountDashboard: (container, props) =>
       mount(
         container,

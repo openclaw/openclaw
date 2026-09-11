@@ -25,7 +25,7 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
-import type { WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
+import type { WorkboardCard, WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
@@ -152,6 +152,12 @@ export async function addWorkboardCardComment(params: {
     // Clear only the draft that submitted it, preserving the raw text for comparison.
     const draftCardId =
       draftField === "draftCommentBody" ? state.editingCardId : state.detailCardId;
+    if (
+      draftField === "detailCommentBody" &&
+      state.detailCommentDrafts.get(cardId) === submittedDraft
+    ) {
+      state.detailCommentDrafts.delete(cardId);
+    }
     if (draftCardId === cardId && state[draftField] === submittedDraft) {
       state[draftField] = "";
     }
@@ -241,6 +247,51 @@ export async function moveWorkboardCard(
       preserveError: true,
       taskRefresh: "linked",
     });
+  }
+}
+
+export async function updateWorkboardCardProperties(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  card: WorkboardCard;
+  patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(params.card.id)
+  ) {
+    return false;
+  }
+  invalidateWorkboardLoads(params.host);
+  state.busyCardIds.add(params.card.id);
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.cards.update", {
+      id: params.card.id,
+      expectedUpdatedAt: params.card.updatedAt,
+      patch: params.patch,
+    });
+    replaceCard(state, normalizeCardPayload(payload));
+    return true;
+  } catch (error) {
+    if (
+      isGatewayRequestError(error) &&
+      error.code === "workboard_conflict" &&
+      isRecord(error.details) &&
+      error.details.type === "workboard_card_conflict"
+    ) {
+      replaceCard(state, normalizeCardPayload(error.details));
+    }
+    state.error = formatError(error);
+    return false;
+  } finally {
+    state.busyCardIds.delete(params.card.id);
+    params.requestUpdate?.();
   }
 }
 

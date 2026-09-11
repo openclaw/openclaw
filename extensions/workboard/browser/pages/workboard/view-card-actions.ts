@@ -32,7 +32,7 @@ import {
   type WorkboardProps,
 } from "./view-helpers.ts";
 
-async function moveCardToStatus(
+export async function moveCardToStatus(
   props: WorkboardProps,
   card: WorkboardCard,
   status: WorkboardStatus,
@@ -367,21 +367,4 @@ export function renderStartExecutionButton(
     </button>
   `;
   return options.iconOnly ? html`<span title=${title}>${button}</span>` : button;
-}
-
-export function renderStartExecutionControls(props: WorkboardProps, card: WorkboardCard) {
-  const canModelOverride = props.canModelOverride !== false;
-  return html`
-    <div class="workboard-card__execution-controls">
-      ${renderStartExecutionButton(props, card, null, "autonomous")}
-      ${
-        canModelOverride
-          ? html`${renderStartExecutionButton(props, card, "codex", "autonomous")}
-            ${renderStartExecutionButton(props, card, "claude", "autonomous")}`
-          : nothing
-      }
-      ${renderStartExecutionButton(props, card, "codex", "manual")}
-      ${renderStartExecutionButton(props, card, "claude", "manual")}
-    </div>
-  `;
 }

@@ -498,7 +498,8 @@ suite.define(() => {
       await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
-      await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
+      await details.getByRole("button", { name: /^Status:/u }).waitFor({ state: "visible" });
+      await details.locator("button[popovertarget=workboard-detail-actions]").click();
       expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
@@ -511,7 +512,7 @@ suite.define(() => {
         writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
         [details.getByRole("button", { name: "Open session" })],
       );
-      await details.locator('button[aria-label="Cancel"]').click();
+      await details.locator('button[aria-label="Close"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
       const dragSource = cardInColumn(writable.page, "Todo", editedCard.title);
@@ -601,6 +602,7 @@ suite.define(() => {
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
       await clickCardAction(reviewedCardSurface, "View details");
+      await writable.page.getByRole("tab", { name: "Activity", exact: true }).click();
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
@@ -611,7 +613,7 @@ suite.define(() => {
         writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
         [details.getByText("Moved to Review")],
       );
-      await details.locator('button[aria-label="Cancel"]').click();
+      await details.locator('button[aria-label="Close"]').click();
       await details.waitFor({ state: "hidden" });
 
       await clickCardAction(cardInColumn(writable.page, "Review", editedCard.title), "Edit card");
@@ -725,7 +727,7 @@ suite.define(() => {
         state: "visible",
       });
       const readOnlyDetail = readOnly.page.locator(".workboard-detail");
-      expect(await readOnlyDetail.locator(".workboard-card__move-select").count()).toBe(0);
+      expect(await readOnlyDetail.getByRole("button", { name: /^Status:/u }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Edit card" }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Archive card" }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Delete card" }).count()).toBe(0);

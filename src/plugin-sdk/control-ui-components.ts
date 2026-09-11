@@ -42,6 +42,11 @@ export type ControlUiAgentPickerProps = {
   onSelect: (value: string) => void;
 };
 
+export type ControlUiSessionSummaryProps = {
+  session: BoardGetParams;
+  presented: boolean;
+};
+
 export type ControlUiDashboardProps = {
   session: BoardGetParams;
   canMutate: boolean;
@@ -103,6 +108,10 @@ export type ControlUiComponents = {
     container: HTMLElement,
     props: ControlUiSelectPickerProps,
   ) => ControlUiComponentHandle<ControlUiSelectPickerProps>;
+  mountSessionSummary: (
+    container: HTMLElement,
+    props: ControlUiSessionSummaryProps,
+  ) => ControlUiComponentHandle<ControlUiSessionSummaryProps>;
   mountDashboard: (
     container: HTMLElement,
     props: ControlUiDashboardProps,
