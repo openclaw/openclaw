@@ -77,6 +77,7 @@ import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-tur
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
+import { resolveAgentHarnessDeliveryDefaults } from "./selection-decision.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
@@ -2178,29 +2179,34 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("rejects a harness replaced during its support probe", () => {
-    const replacement: AgentHarness = {
-      id: "codex",
-      label: "Replacement",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult("replacement"),
-    };
-    registerAgentHarness({
-      ...replacement,
-      supports: () => {
-        registerAgentHarness(replacement);
-        return { supported: true };
-      },
-    });
+  it.each(["runtime", "delivery"] as const)(
+    "rejects a harness replaced during its %s support probe",
+    (surface) => {
+      const replacement: AgentHarness = {
+        id: "codex",
+        label: "Replacement",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => createAttemptResult("replacement"),
+      };
+      registerAgentHarness({
+        ...replacement,
+        supports: () => {
+          registerAgentHarness(replacement);
+          return { supported: true };
+        },
+      });
 
-    expect(() =>
-      selectAgentHarness({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).toThrow("changed during owner resolution");
-  });
+      const select =
+        surface === "runtime" ? selectAgentHarness : resolveAgentHarnessDeliveryDefaults;
+      expect(() =>
+        select({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).toThrow("changed during owner resolution");
+    },
+  );
 
   it("does not select Codex from a non-OpenAI model name", () => {
     registerSuccessfulCodexHarness();
