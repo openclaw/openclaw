@@ -1,10 +1,9 @@
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import net, { type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
 import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.js";
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
@@ -16,14 +15,13 @@ import {
 import { withEnv } from "../../src/test-utils/env.js";
 import {
   createDesktopResizeGuest,
-  observeDesktopFilterPackets,
+  observeDesktopEndpointPackets,
   readDesktopResizeFixture,
   resizeSources,
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
   type DesktopResizeFixture,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.js";
-import { createDeferred } from "./promise.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -184,128 +182,140 @@ describe("desktop resize fixture provenance and carrier", () => {
   });
 });
 
-type Filter = ReturnType<typeof desktopFilter.createRfbClientMessageFilter>;
-
-async function openObservers(delayed: boolean[]) {
+async function openEndpointTap() {
   const abort = new AbortController();
-  const probe = observeDesktopFilterPackets(abort.signal);
-  const server = createServer();
-  const servers = delayed.map(() => new WebSocketServer({ noServer: true }));
-  const clients: WebSocket[] = [];
-  const gates = delayed.map(() => createDeferred());
-  const ready = delayed.map(() => createDeferred<Filter>());
-  onTestFinished(async () => {
-    gates.forEach((gate) => gate.resolve());
-    abort.abort();
-    clients.forEach((client) => client.terminate());
-    servers.forEach((owner) => owner.clients.forEach((socket) => socket.terminate()));
-    await Promise.all(
-      servers.map(
-        (owner) =>
-          new Promise<void>((resolve) => {
-            owner.close(() => resolve());
-          }),
-      ),
-    );
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    probe.close();
-  });
-  server.on("upgrade", (request, socket, head) => {
-    const index = Number(new URL(request.url!, "http://127.0.0.1").searchParams.get("token"));
-    servers[index]!.handleUpgrade(request, socket, head, (ws) => {
-      const install = () => {
-        const filter = desktopFilter.createRfbClientMessageFilter({ startPhase: "clientInit" });
-        expect(filter.filter(Buffer.from([1]))).toEqual({ forward: Buffer.from([1]) });
-        ws.on("message", (data) => {
-          if (!Buffer.isBuffer(data)) {
-            throw new Error("Expected the real WebSocket binary message buffer");
-          }
-          filter.filter(data);
-        });
-        ready[index]!.resolve(filter);
-      };
-      if (delayed[index]) {
-        void gates[index]!.promise.then(install);
-      } else {
-        install();
-      }
+  const peers = new Set<Socket>();
+  const received: Buffer[] = [];
+  const server = net.createServer((socket) => {
+    peers.add(socket);
+    socket.on("error", () => {});
+    socket.once("close", () => peers.delete(socket));
+    socket.on("data", (chunk: Buffer) => {
+      received.push(chunk);
+      socket.write(chunk);
     });
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
-    throw new Error("Missing loopback observer address");
+    throw new Error("Missing loopback endpoint address");
   }
-  for (let index = 0; index < delayed.length; index += 1) {
-    const client = new WebSocket(`ws://127.0.0.1:${address.port}/desktop/observe?token=${index}`);
-    clients.push(client);
-    await once(client, "open");
-  }
-  return { abort, probe, clients, gates, ready };
+  const tap = await observeDesktopEndpointPackets(address.port, abort.signal);
+  const clients = new Set<Socket>();
+  onTestFinished(async () => {
+    abort.abort();
+    await tap.close();
+    for (const socket of [...clients, ...peers]) {
+      socket.destroy();
+    }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+  return {
+    abort,
+    tap,
+    peers,
+    received,
+    connect: async () => {
+      const client = net.connect({ host: "127.0.0.1", port: tap.port });
+      clients.add(client);
+      client.on("error", () => {});
+      await once(client, "connect");
+      return client;
+    },
+  };
 }
 
-describe("desktop observer packet attribution", () => {
-  it.each([false, true])(
-    "preserves the real receiver and forwarding after delayed=%s",
-    async (delayed) => {
-      const owner = await openObservers([delayed]);
-      owner.gates[0]!.resolve();
-      const filter = await owner.ready[0]!.promise;
-      const client = owner.clients[0]!;
-      expect(owner.probe.startPhase(client.url)).toBe("clientInit");
-      const request = Buffer.from([3, 0, 0, 0, 0, 0, 0, 10, 0, 10]);
-      const processed = owner.probe.expectPacket(client.url, Array.from(request));
-      client.send(request);
-      expect(await processed).toEqual({ forward: request });
-      // ClientInit and this exact request each enter the unchanged stateful filter once.
-      expect(Object.getOwnPropertyDescriptor(filter, "filter")!.value).toHaveBeenCalledTimes(2);
+describe("desktop endpoint packet attribution", () => {
+  const key = [4, 1, 0, 0, 0, 0, 0, 97];
+  it("counts zero only after fragmented same-connection markers traverse the real filter", async () => {
+    const owner = await openEndpointTap();
+    const client = await owner.connect();
+    const filter = desktopFilter.createRfbClientMessageFilter({ startPhase: "clientInit" });
+    filter.filter(Buffer.from([1]));
+    const probe = owner.tap.expectPacket(key);
+    const filtered = filter.filter(Buffer.from(probe.bytes));
+    expect(filtered.error).toBeUndefined();
+    expect(filtered.forward).toHaveLength(20);
+    for (const byte of filtered.forward!) {
+      const echo = once(client, "data");
+      client.write(Buffer.from([byte]));
+      await echo;
+    }
+    expect(await probe.result).toBe(0);
+    expect(Buffer.concat(owner.received)).toEqual(filtered.forward);
+  });
+
+  it("detects forwarded forbidden bytes instead of accepting unchanged guest state", async () => {
+    const owner = await openEndpointTap();
+    const client = await owner.connect();
+    const probe = owner.tap.expectPacket(key);
+    client.write(Buffer.from(probe.bytes));
+    expect(await probe.result).toBe(key.length);
+  });
+
+  it.each(["split", "duplicate-before", "duplicate-after"])(
+    "rejects %s marker attribution",
+    async (kind) => {
+      const owner = await openEndpointTap();
+      const first = await owner.connect();
+      const second = await owner.connect();
+      const probe = owner.tap.expectPacket(key);
+      const bytes = Buffer.from(probe.bytes);
+      const before = bytes.subarray(0, 10);
+      const after = bytes.subarray(-10);
+      const rejection = expect(probe.result).rejects.toThrow(/duplicated|crossed/u);
+      if (kind === "split") {
+        const echo = once(first, "data");
+        first.write(before);
+        await echo;
+        second.write(after);
+      } else {
+        first.write(
+          Buffer.concat(
+            kind === "duplicate-before" ? [before, before, after] : [before, after, after],
+          ),
+        );
+      }
+      await rejection;
     },
   );
 
-  it("attributes identical packets to interleaved asynchronous observer sockets", async () => {
-    const owner = await openObservers([true, true]);
-    owner.gates[1]!.resolve();
-    await owner.ready[1]!.promise;
-    owner.gates[0]!.resolve();
-    await owner.ready[0]!.promise;
-    const packet = [4, 1, 0, 0, 0, 0, 0, 97];
-    const [first, second] = owner.clients as [WebSocket, WebSocket];
-    const firstProcessed = owner.probe.expectPacket(first.url, packet);
-    let secondProcessed = false;
-    const secondResult = owner.probe.expectPacket(second.url, packet).then((result) => {
-      secondProcessed = true;
-      return result;
-    });
-    first.send(Buffer.from(packet));
-    expect(await firstProcessed).toEqual({ forward: Buffer.alloc(0) });
-    expect(secondProcessed).toBe(false);
-    second.send(Buffer.from(packet));
-    expect(await secondResult).toEqual({ forward: Buffer.alloc(0) });
-  });
+  it.each(["abort", "close", "upstream-close", "overflow"])(
+    "rejects unfinished evidence on %s",
+    async (kind) => {
+      const owner = await openEndpointTap();
+      const client = await owner.connect();
+      const probe = owner.tap.expectPacket(key);
+      const rejection = expect(probe.result).rejects.toThrow(/aborted|ended|closed|bound/u);
+      const echo = once(client, "data");
+      client.write(Buffer.from(probe.bytes.slice(0, 10)));
+      await echo;
+      if (kind === "abort") {
+        owner.abort.abort();
+      } else if (kind === "close") {
+        await owner.tap.close();
+      } else if (kind === "upstream-close") {
+        owner.peers.forEach((socket) => socket.destroy());
+      } else {
+        client.write(Buffer.alloc(64 * 1024 + 1, 9));
+      }
+      await rejection;
+    },
+  );
 
-  it("rejects incomplete packet expectations on abort and restores instrumentation on close", async () => {
-    const original = Object.getOwnPropertyDescriptor(
-      WebSocketServer.prototype,
-      "handleUpgrade",
-    )!.value;
-    const factory = desktopFilter.createRfbClientMessageFilter;
-    const owner = await openObservers([false]);
-    await owner.ready[0]!.promise;
-    const client = owner.clients[0]!;
-    const rejection = expect(owner.probe.expectPacket(client.url, [4, 1])).rejects.toThrow(
-      "ended before processing",
-    );
-    client.send(Buffer.from([4]));
+  it("joins its listener and rejects late or concurrent observations", async () => {
+    const owner = await openEndpointTap();
+    const probe = owner.tap.expectPacket(key);
+    expect(() => owner.tap.expectPacket(key)).toThrow("busy");
+    const rejection = expect(probe.result).rejects.toThrow("aborted");
     owner.abort.abort();
     await rejection;
-    expect(() => owner.probe.expectPacket(client.url, [4])).toThrow();
-    owner.probe.close();
-    expect(Object.getOwnPropertyDescriptor(WebSocketServer.prototype, "handleUpgrade")!.value).toBe(
-      original,
-    );
-    expect(desktopFilter.createRfbClientMessageFilter).toBe(factory);
+    await owner.tap.close();
+    expect(() => owner.tap.expectPacket(key)).toThrow();
+    const socket = net.connect({ host: "127.0.0.1", port: owner.tap.port });
+    await expect(once(socket, "connect")).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 });

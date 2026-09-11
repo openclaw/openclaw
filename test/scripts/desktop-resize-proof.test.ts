@@ -7,7 +7,6 @@ import {
   desktopProofCommit,
   desktopProofSource,
   desktopProofSshdFailure,
-  desktopProofStartupSnapshot,
   desktopProofTestReport,
   desktopResizeStages,
   exportDesktopResizeProof,
@@ -53,7 +52,7 @@ const rawTestReport = (message = "AssertionError: private-token") => ({
 });
 const proof = (carrier: "node" | "ssh" = "node") => ({
   carrier,
-  observerFilterPhase: carrier === "node" ? "clientInit" : "version",
+  gateway: { execution: "built-process", readiness: "readyz", minimal: false },
   node:
     carrier === "node"
       ? {
@@ -62,7 +61,11 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
           disconnectClosedViewer: true,
         }
       : null,
-  observer: { keyboardForwardedBytes: 0, resizeForwardedBytes: 0 },
+  observer: {
+    evidence: "endpoint-marker-brackets",
+    keyboardForwardedBytes: 0,
+    resizeForwardedBytes: 0,
+  },
   assets,
   samples: desktopResizeStages.map((stage) => ({ stage, ...size })),
   pixels: { distinctSampledColors: 100 },
@@ -259,7 +262,7 @@ describe("desktop proof identity and public evidence", () => {
     expect(lastObserved).toEqual({
       status: "available",
       lastObservedPhase: "node-admission",
-      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      owners: null,
     });
   });
 
@@ -269,76 +272,61 @@ describe("desktop proof identity and public evidence", () => {
     expect(await readDesktopProofPhase(file)).toEqual({
       status: "unavailable",
       lastObservedPhase: null,
-      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      owners: null,
     });
     await writeFile(file, JSON.stringify({ lastObservedPhase: "file-loaded", secret: "private" }));
     expect(await readDesktopProofPhase(file)).toEqual({
       status: "available",
       lastObservedPhase: "file-loaded",
-      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      owners: null,
     });
     const link = path.join(root, "linked-phase.json");
     await symlink(file, link);
     expect(await readDesktopProofPhase(link)).toEqual({
       status: "invalid",
       lastObservedPhase: null,
-      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      owners: null,
     });
     expect(await readDesktopProofPhase(root)).toEqual({
       status: "invalid",
       lastObservedPhase: null,
-      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      owners: null,
     });
-    for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(2049)]) {
+    for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(1025)]) {
       await writeFile(file, content);
       expect(await readDesktopProofPhase(file)).toEqual({
         status: "invalid",
         lastObservedPhase: null,
-        startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+        owners: null,
       });
     }
   });
 
-  it("projects only fixed startup names, never diagnostic details or arbitrary labels", async () => {
-    const snapshot = desktopProofStartupSnapshot({
-      currentPhase: "sidecars.model-runtime",
-      recentPhases: ["config.load", "private-token", "gateway.lifecycle"],
-      details: { secret: "private-token" },
-      startedAt: 123,
-    });
-    expect(snapshot).toEqual({
-      status: "available",
-      currentPhase: "sidecars.model-runtime",
-      recentPhases: ["config.load", "gateway.lifecycle"],
-    });
-    const root = dirs.make("desktop-startup-snapshot-");
+  it("projects explicit resource ownership without inferring detached-process cleanup", async () => {
+    const root = dirs.make("desktop-process-ownership-");
     const file = path.join(root, "desktop-phase.json");
-    await writeFile(
-      file,
-      JSON.stringify({ lastObservedPhase: "gateway-start", startupAtAbort: snapshot }),
-    );
-    expect(await readDesktopProofPhase(file)).toEqual({
-      status: "available",
-      lastObservedPhase: "gateway-start",
-      startupAtAbort: snapshot,
-    });
-    expect(
-      desktopProofStartupSnapshot({ currentPhase: "private-token", recentPhases: [] }),
-    ).toEqual({
-      status: "available",
-      currentPhase: null,
-      recentPhases: [],
-    });
-    for (const value of [
-      null,
-      { currentPhase: null, recentPhases: Array(9).fill("config.load") },
-      { currentPhase: null, recentPhases: [42] },
-    ]) {
-      expect(desktopProofStartupSnapshot(value)).toEqual({
-        status: "invalid",
-        currentPhase: null,
-        recentPhases: [],
+    for (const gateway of ["not-started", "owned", "closed"] as const) {
+      await writeFile(
+        file,
+        JSON.stringify({
+          lastObservedPhase: "gateway-start",
+          owners: { gateway, endpointTap: "owned", privatePath: "/private/fixture" },
+          startupAtAbort: { currentPhase: "private-token" },
+        }),
+      );
+      expect(await readDesktopProofPhase(file)).toEqual({
+        status: "available",
+        lastObservedPhase: "gateway-start",
+        owners: { gateway, endpointTap: "owned" },
       });
+    }
+    for (const owners of [
+      null,
+      { gateway: "closed" },
+      { gateway: "private", endpointTap: "closed" },
+    ]) {
+      await writeFile(file, JSON.stringify({ lastObservedPhase: "gateway-start", owners }));
+      expect((await readDesktopProofPhase(file)).owners).toBeNull();
     }
   });
 
@@ -532,7 +520,8 @@ describe("desktop proof identity and public evidence", () => {
     { node: null },
     { node: { passwordAbsentFromObserve: true, disconnectClosedViewer: false } },
     { observer: { keyboardForwardedBytes: 1, resizeForwardedBytes: 0 } },
-    { observerFilterPhase: "version" },
+    { gateway: { execution: "built-process", readiness: "readyz", minimal: true } },
+    { observer: { evidence: "filter-spy", keyboardForwardedBytes: 0, resizeForwardedBytes: 0 } },
     { samples: [] },
     { pixels: { distinctSampledColors: 8 } },
   ])("rejects incomplete or failed node proof: %j", (invalid) => {

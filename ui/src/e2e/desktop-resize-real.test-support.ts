@@ -1,10 +1,9 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { randomInt } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import net, { type Socket } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
-import * as desktopFilter from "../../../src/gateway/desktop/rfb-view-only-filter.js";
 import { hashWorkerCredential } from "../../../src/gateway/worker-environments/credential.js";
 import {
   prepareWorkerSsh,
@@ -41,96 +40,156 @@ export const resizeSources = {
   unmanaged: "desktop-resize-unmanaged",
 };
 
-/** Observe real filter decisions without replacing its state machine or forwarding result. */
-export function observeDesktopFilterPackets(signal: AbortSignal) {
-  const sockets = new Map<string, WebSocket>();
-  type FilterResult = ReturnType<
-    ReturnType<typeof desktopFilter.createRfbClientMessageFilter>["filter"]
-  >;
-  type Expectation = {
-    socket: WebSocket;
-    bytes: Buffer;
-    resolve: (result: FilterResult) => void;
+/** A transparent loopback tap observes what the real desktop endpoint receives. */
+export async function observeDesktopEndpointPackets(port: number, signal: AbortSignal) {
+  type Probe = {
+    before: Buffer;
+    after: Buffer;
+    socket?: Socket;
+    between: Buffer;
+    resolve: (bytes: number) => void;
     reject: (error: Error) => void;
   };
-  const pending = new Set<Expectation>();
-  const filterSpies: Array<{ mockRestore: () => void }> = [];
-  const upgrading = new AsyncLocalStorage<WebSocket>();
-  const phases = new Map<WebSocket, "version" | "clientInit">();
-  // Capture before spying; each invocation must retain its actual server receiver.
-  // oxlint-disable-next-line typescript/unbound-method
-  const upgrade: WebSocketServer["handleUpgrade"] = WebSocketServer.prototype.handleUpgrade;
-  const upgradeSpy = vi.spyOn(WebSocketServer.prototype, "handleUpgrade");
-  upgradeSpy.mockImplementation(function (this: WebSocketServer, request, socket, head, callback) {
-    return upgrade.call(this, request, socket, head, (ws, incoming) => {
-      if (request.url?.startsWith("/desktop/observe?")) {
-        sockets.set(request.url, ws);
-      }
-      // Node preauthentication creates the filter after an await. Keep this
-      // observer's identity through that continuation and concurrent upgrades.
-      upgrading.run(ws, () => callback(ws, incoming));
-    });
-  });
-  const createFilter = desktopFilter.createRfbClientMessageFilter;
-  const factorySpy = vi
-    .spyOn(desktopFilter, "createRfbClientMessageFilter")
-    .mockImplementation((options) => {
-      const filter = createFilter(options);
-      const socket = upgrading.getStore();
-      if (socket) {
-        phases.set(socket, options?.startPhase ?? "version");
-      }
-      const original = filter.filter.bind(filter);
-      filterSpies.push(
-        vi.spyOn(filter, "filter").mockImplementation((bytes) => {
-          const result = original(bytes);
-          for (const expected of pending) {
-            if (expected.socket === socket && expected.bytes.equals(bytes)) {
-              pending.delete(expected);
-              expected.resolve(result);
-            }
-          }
-          return result;
-        }),
-      );
-      return filter;
-    });
-  const abort = () => {
-    for (const expected of pending) {
-      expected.reject(new Error("Desktop packet observation ended before processing"));
-    }
-    pending.clear();
+  const peers = new Set<Socket>();
+  const tails = new Map<Socket, Buffer>();
+  let pending: Probe | undefined;
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const fail = (message: string) => {
+    pending?.reject(new Error(message));
+    pending = undefined;
+    tails.clear();
   };
-  signal.addEventListener("abort", abort, { once: true });
-  const observerSocket = (socketUrl: string) => {
-    const url = new URL(socketUrl);
-    const socket = sockets.get(`${url.pathname}${url.search}`);
-    if (!socket) {
-      throw new Error("The selected observer socket has no production upgrade identity");
+  const observe = (socket: Socket, chunk: Buffer) => {
+    const probe = pending;
+    if (!probe) {
+      return;
     }
-    return socket;
+    let bytes = Buffer.concat([tails.get(socket) ?? Buffer.alloc(0), chunk]);
+    if (probe.socket === socket) {
+      bytes = Buffer.concat([probe.between, chunk]);
+    }
+    if (bytes.length > 64 * 1024) {
+      fail("Desktop endpoint observation exceeded its byte bound");
+      return;
+    }
+    const before = bytes.indexOf(probe.before);
+    if (before >= 0) {
+      if (probe.socket || bytes.includes(probe.before, before + probe.before.length)) {
+        fail("Desktop endpoint marker was duplicated or crossed connections");
+        return;
+      }
+      probe.socket = socket;
+      bytes = bytes.subarray(before + probe.before.length);
+    }
+    const after = bytes.indexOf(probe.after);
+    if (after >= 0) {
+      if (probe.socket !== socket || bytes.includes(probe.after, after + probe.after.length)) {
+        fail("Desktop endpoint completion marker was duplicated or crossed connections");
+        return;
+      }
+      pending = undefined;
+      tails.clear();
+      probe.resolve(after);
+    } else if (probe.socket === socket) {
+      probe.between = bytes;
+      tails.delete(socket);
+    } else {
+      // Retain only a possible split marker, never unrelated authentication or input bytes.
+      tails.set(socket, bytes.subarray(-9));
+    }
   };
-  return {
-    startPhase: (socketUrl: string) => phases.get(observerSocket(socketUrl)),
-    expectPacket: (socketUrl: string, bytes: number[]) => {
-      signal.throwIfAborted();
-      const socket = observerSocket(socketUrl);
-      return new Promise<FilterResult>((resolve, reject) => {
-        pending.add({ socket, bytes: Buffer.from(bytes), resolve, reject });
+  const server = net.createServer((client) => {
+    if (closed || peers.size >= 32) {
+      fail("Desktop endpoint connection bound exceeded");
+      client.destroy();
+      return;
+    }
+    const upstream = net.connect({ host: "127.0.0.1", port });
+    for (const socket of [client, upstream]) {
+      peers.add(socket);
+      socket.on("error", () => {
+        fail("Desktop endpoint connection failed during observation");
+        client.destroy();
+        upstream.destroy();
       });
-    },
-    close: () => {
+      socket.once("close", () => {
+        peers.delete(socket);
+        tails.delete(client);
+        if (pending) {
+          fail("Desktop endpoint closed before the completion marker");
+        }
+        client.destroy();
+        upstream.destroy();
+      });
+    }
+    client.on("data", (chunk: Buffer) => observe(client, chunk));
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+  const close = () =>
+    (closing ??= (async () => {
+      closed = true;
       signal.removeEventListener("abort", abort);
-      abort();
-      for (const spy of filterSpies) {
-        spy.mockRestore();
+      fail("Desktop endpoint observation ended before completion");
+      const stopped = [...peers].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            socket.once("close", resolve);
+            socket.destroy();
+          }),
+      );
+      await Promise.all([
+        ...stopped,
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+      ]);
+    })());
+  const abort = () => fail("Desktop endpoint observation aborted before completion");
+  signal.throwIfAborted();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    await close();
+    signal.throwIfAborted();
+  }
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await close();
+    throw new Error("Missing desktop endpoint tap address");
+  }
+  return {
+    port: address.port,
+    expectPacket: (bytes: number[]) => {
+      signal.throwIfAborted();
+      if (closed || pending || bytes.length > 32 * 1024) {
+        throw new Error("Desktop endpoint probe is closed, busy, or oversized");
       }
-      factorySpy.mockRestore();
-      upgradeSpy.mockRestore();
-      upgrading.disable();
-      phases.clear();
-      sockets.clear();
+      const marker = (x: number, y: number) => {
+        // Valid one-pixel requests inside every tested display; noVNC requests the full frame.
+        const packet = Buffer.from([3, 1, 0, 0, 0, 0, 0, 1, 0, 1]);
+        packet.writeUInt16BE(x, 2);
+        packet.writeUInt16BE(y, 4);
+        return packet;
+      };
+      const x = randomInt(1, 120);
+      const y = randomInt(1, 120);
+      const before = marker(x, y);
+      const after = marker(x + 1, y + 1);
+      const payload = Buffer.from(bytes);
+      if (payload.includes(before) || payload.includes(after)) {
+        throw new Error("Desktop endpoint marker collided with the forbidden payload");
+      }
+      const result = new Promise<number>((resolve, reject) => {
+        pending = { before, after, between: Buffer.alloc(0), resolve, reject };
+      });
+      // A failed browser send can enter cleanup before the caller awaits the observation.
+      void result.catch(() => {});
+      return { bytes: Array.from(Buffer.concat([before, payload, after])), result };
     },
+    close,
   };
 }
 

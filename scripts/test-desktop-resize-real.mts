@@ -11,7 +11,6 @@ import {
   desktopProofCommit,
   desktopProofSource,
   desktopProofSshdFailure,
-  desktopProofStartupSnapshot,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
@@ -76,6 +75,7 @@ const receipt = {
   cleanup: {
     joined: false,
     unjoinedWork: false,
+    testOwnersClosed: true,
     listenersClosed: false,
     privateFixtureRemoved: false,
   },
@@ -549,10 +549,11 @@ async function main() {
         checkpoint: {
           status: "unavailable",
           lastObservedPhase: null,
-          startupAtAbort: desktopProofStartupSnapshot(undefined),
+          owners: null,
         },
       };
       receipt.testDiagnostics.push(diagnostic);
+      receipt.cleanup.testOwnersClosed = false;
       await writeFile(fixtureFile, JSON.stringify({ ...fixture, carrier }), { mode: 0o600 });
       await withDesktopProofCleanup(
         async () => {
@@ -589,6 +590,16 @@ async function main() {
               diagnostic.checkpoint = await readDesktopProofPhase(
                 path.join(diagnosticDirectory, "desktop-phase.json"),
               );
+              // The Gateway owns a detached group; joining Vitest alone cannot retire it.
+              const owners = diagnostic.checkpoint.owners;
+              const ownersClosed =
+                owners !== null && owners.gateway !== "owned" && owners.endpointTap !== "owned";
+              receipt.cleanup.testOwnersClosed = receipt.testDiagnostics.every(
+                ({ checkpoint }) =>
+                  checkpoint.owners !== null &&
+                  checkpoint.owners.gateway !== "owned" &&
+                  checkpoint.owners.endpointTap !== "owned",
+              );
               try {
                 diagnostic.report = await readDesktopProofTestReport(reportFile);
                 diagnostic.status = "available";
@@ -600,6 +611,8 @@ async function main() {
                 throw error;
               }
               assert.equal(diagnostic.checkpoint.status, "available");
+              assert(ownersClosed, "Desktop child resource cleanup is unverified");
+              assert.deepEqual(owners, { gateway: "closed", endpointTap: "closed" });
             },
             async () => {
               const exported = await exportDesktopResizeProof(
@@ -690,7 +703,10 @@ async function main() {
     for (const error of cleanupErrors) {
       recordFailure(error);
     }
-    receipt.cleanup.joined = cleanupErrors.length === 0 && !receipt.cleanup.unjoinedWork;
+    receipt.cleanup.joined =
+      cleanupErrors.length === 0 &&
+      !receipt.cleanup.unjoinedWork &&
+      receipt.cleanup.testOwnersClosed;
     if (!failure && receipt.cleanup.joined) {
       try {
         await sourceIdentity();

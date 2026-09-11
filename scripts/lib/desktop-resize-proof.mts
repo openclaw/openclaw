@@ -16,9 +16,7 @@ const desktopProofTestPhases = [
   "file-loaded",
   "fixture",
   "gateway-config",
-  "gateway-import",
   "gateway-start",
-  "gateway-startup-settled",
   "admin-connect",
   "node-admission",
   "guest-ssh",
@@ -30,77 +28,14 @@ const desktopProofTestPhases = [
   "control-takeover",
   "resize-matrix",
 ] as const;
-// Names emitted by the Gateway startup owner; never accept arbitrary diagnostic labels.
-const gatewayStartupPhases = new Set([
-  "config.snapshot.read",
-  "config.load",
-  "config.normalize",
-  "config.runtime-imports",
-  "state.ownership",
-  "state.runtime-imports",
-  "state.schema-preflight",
-  "runtime.network-imports",
-  "runtime.network-bootstrap",
-  "runtime.agent-cli",
-  "control-ui.seed",
-  "agents.github-profile-cleanup",
-  "worker-environments.store-import",
-  "plugins.bootstrap-imports",
-  "startup.maintenance",
-  "plugins.load",
-  "gateway.kernel-state",
-  "gateway.shutdown-runtime-import",
-  "gateway.lifecycle",
-  "gateway.core-runtime",
-  "gateway.request-runtime",
-  "gateway.ws-imports",
-  "gateway.ws-attach",
-  "http.listen",
-  "gateway.active-work-import",
-  "gateway.ready",
-  "post-attach.system-ca",
-  "plugins.runtime-post-bind",
-  "post-attach.log",
-  "sidecars.total",
-  "sidecars.internal-hooks",
-  "sidecars.main-session-recovery",
-  "sidecars.main-session-recovery-load",
-  "sidecars.main-session-recovery-scan",
-  "sidecars.model-runtime",
-  "sidecars.model-auth",
-  "sidecars.reply-runtime",
-  "sidecars.chat-metadata",
-  "sidecars.channels",
-  "sidecars.channel-skip",
-  "sidecars.channel-start",
-  "sidecars.plugin-services",
-  "sidecars.acp.runtime-ready",
-  "sidecars.acp.identity-reconcile",
-]);
-
-/** Global diagnostic observations can overlap; names do not identify the blocked await. */
-export function desktopProofStartupSnapshot(value: unknown) {
-  const empty = { currentPhase: null, recentPhases: [] as string[] };
-  if (value === undefined) {
-    return { status: "unavailable" as const, ...empty };
+const desktopOwnerStates = ["not-started", "owned", "closed"] as const;
+function desktopOwners(value: unknown) {
+  if (!isRecord(value)) {
+    return null;
   }
-  if (
-    !isRecord(value) ||
-    (value.currentPhase !== null && typeof value.currentPhase !== "string") ||
-    !Array.isArray(value.recentPhases) ||
-    value.recentPhases.length > 8 ||
-    value.recentPhases.some((phase) => typeof phase !== "string")
-  ) {
-    return { status: "invalid" as const, ...empty };
-  }
-  return {
-    status: "available" as const,
-    currentPhase:
-      typeof value.currentPhase === "string" && gatewayStartupPhases.has(value.currentPhase)
-        ? value.currentPhase
-        : null,
-    recentPhases: value.recentPhases.filter((phase: string) => gatewayStartupPhases.has(phase)),
-  };
+  const gateway = desktopOwnerStates.find((state) => state === value.gateway);
+  const endpointTap = desktopOwnerStates.find((state) => state === value.endpointTap);
+  return gateway && endpointTap ? { gateway, endpointTap } : null;
 }
 const desktopTestFile = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
 const failureSourceFiles = [
@@ -222,11 +157,11 @@ export async function readDesktopProofTestReport(file: string) {
 export async function readDesktopProofPhase(file: string) {
   const absent = {
     lastObservedPhase: null,
-    startupAtAbort: desktopProofStartupSnapshot(undefined),
+    owners: null,
   };
   try {
     const stat = await lstat(file);
-    if (!stat.isFile() || stat.size > 2 * 1024) {
+    if (!stat.isFile() || stat.size > 1024) {
       return { status: "invalid" as const, ...absent };
     }
     let value: unknown;
@@ -245,9 +180,7 @@ export async function readDesktopProofPhase(file: string) {
       ? {
           status: "available" as const,
           lastObservedPhase: phase,
-          startupAtAbort: desktopProofStartupSnapshot(
-            isRecord(value) ? value.startupAtAbort : undefined,
-          ),
+          owners: desktopOwners(isRecord(value) ? value.owners : undefined),
         }
       : { status: "invalid" as const, ...absent };
   } catch {
@@ -410,8 +343,12 @@ export function sanitizeDesktopResizeProof(value: unknown, carrier: "node" | "ss
   if (
     !isRecord(value) ||
     value.carrier !== carrier ||
-    value.observerFilterPhase !== (carrier === "node" ? "clientInit" : "version") ||
+    !isRecord(value.gateway) ||
+    value.gateway.execution !== "built-process" ||
+    value.gateway.readiness !== "readyz" ||
+    value.gateway.minimal !== false ||
     !isRecord(value.observer) ||
+    value.observer.evidence !== "endpoint-marker-brackets" ||
     value.observer.keyboardForwardedBytes !== 0 ||
     value.observer.resizeForwardedBytes !== 0 ||
     !isRecord(value.pixels) ||
@@ -436,10 +373,14 @@ export function sanitizeDesktopResizeProof(value: unknown, carrier: "node" | "ss
   // Never copy arbitrary fixture metadata, node IDs, diagnostics, or credentials.
   return {
     carrier,
-    observerFilterPhase: value.observerFilterPhase,
+    gateway: { execution: "built-process", readiness: "readyz", minimal: false },
     node:
       carrier === "node" ? { passwordAbsentFromObserve: true, disconnectClosedViewer: true } : null,
-    observer: { keyboardForwardedBytes: 0, resizeForwardedBytes: 0 },
+    observer: {
+      evidence: "endpoint-marker-brackets",
+      keyboardForwardedBytes: 0,
+      resizeForwardedBytes: 0,
+    },
     viewports: "native desktop windows; viewport-emulated mobile, not a physical phone",
     assets: desktopProofAssets(value.assets),
     samples,
