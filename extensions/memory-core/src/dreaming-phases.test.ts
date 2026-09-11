@@ -1058,6 +1058,51 @@ describe("memory-core dreaming phases", () => {
     expect(after.some((entry) => entry.snippet.includes("Canonical daily note"))).toBe(true);
   });
 
+  it("does not recount unvisited daily files after a capped sweep", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const files = [
+      "2026-04-05.md",
+      "2026-04-05-alpha.md",
+      "2026-04-05-beta.md",
+      "2026-04-05-delta.md",
+      "2026-04-05-gamma.md",
+    ];
+    for (const fileName of files) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", fileName),
+        `- Initial ${fileName} checkpoint has enough detail to ingest.\n`,
+        "utf-8",
+      );
+    }
+
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      limit: 1,
+      lookbackDays: 2,
+    });
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 0);
+
+      for (const fileName of files.slice(0, -1)) {
+        await fs.writeFile(
+          path.join(workspaceDir, "memory", fileName),
+          dailyCapStressLines(`Updated ${fileName}`).join("\n"),
+          "utf-8",
+        );
+      }
+
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 2);
+      const recalls = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        new Date(DREAMING_TEST_BASE_TIME.getTime() + 2 * 60_000).toISOString(),
+      );
+      expect(
+        Object.values(recalls.entries).find((entry) => entry.path.endsWith("-gamma.md")),
+      ).toMatchObject({ dailyCount: 1 });
+    });
+  });
+
   it("prioritizes the date-only daily file before same-day slugged files during historical seeding", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");
