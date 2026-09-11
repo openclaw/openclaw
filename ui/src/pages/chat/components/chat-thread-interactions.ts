@@ -84,6 +84,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   announceTranscript?: boolean;
   loading: boolean;
   routeLoadingSkeleton?: boolean;
+  startupLoading?: boolean;
   /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
   historyPagination?: ChatHistoryBoundaryProps;
   messages: unknown[];

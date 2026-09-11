@@ -377,6 +377,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor();
 
+      await expect.poll(() => composer.isEditable()).toBe(true);
       await gateway.setOnline(false);
       await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
       await composer.fill(text);

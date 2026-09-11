@@ -8,6 +8,7 @@ import type {
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import { STARTUP_REGION_READY_EVENT } from "../app/startup-presentation.ts";
 import { t } from "../i18n/index.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -135,6 +136,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
+  private initialListReady = false;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private projectedSessionSections: SidebarVisibleSections = {
@@ -262,6 +264,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
+    const ready = this.sessionData.initialListReady;
+    if (ready !== this.initialListReady) {
+      this.initialListReady = ready;
+      this.dispatchEvent(new Event(STARTUP_REGION_READY_EVENT, { bubbles: true }));
+    }
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();

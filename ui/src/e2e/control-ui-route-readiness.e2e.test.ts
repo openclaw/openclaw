@@ -38,9 +38,10 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat/main/draft-timing-12345678`);
           const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
           const composer = pane.locator(".agent-chat__composer-combobox textarea");
+          const skeleton = page.locator(".startup-chat-skeleton .startup-transcript-skeleton");
           await composer.waitFor({ state: "visible" });
           await expect.poll(() => composer.isEnabled()).toBe(true);
-          await expect.poll(() => pane.locator(".loading-skeleton").isVisible()).toBe(true);
+          await expect.poll(() => skeleton.isVisible()).toBe(true);
           expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
             false,
           );
@@ -79,7 +80,7 @@ suite.define(() => {
           const before = await composer.boundingBox();
 
           await gateway.resolveDeferred("chat.startup");
-          await expect.poll(() => pane.locator(".loading-skeleton").count()).toBe(0);
+          await expect.poll(() => skeleton.count()).toBe(0);
           await expect.poll(() => pane.textContent()).toContain("The conversation is ready.");
           expect(
             await input!.evaluate(

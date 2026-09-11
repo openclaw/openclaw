@@ -132,7 +132,11 @@ describeControlUiE2e("Control UI chat file links", () => {
         await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
         await gateway.waitForRequest("sessions.files.get");
 
-        await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
+        await page
+          .locator(
+            'openclaw-chat-pane.chat-pane-cache__pane--active .sidebar-region__right-runtime [data-region-header="side"]',
+          )
+          .waitFor({ state: "visible" });
         expect(await page.locator(".sidebar-file-view").count()).toBe(0);
         await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
 

@@ -165,7 +165,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-      const header = page.locator(".chat-pane__header");
+      const header = page.locator(".chat-pane-cache__pane--active .chat-pane__header");
       await header.waitFor({ state: "visible" });
       await header.locator(".chat-side-panel-toggle").click();
       await header.getByRole("button", { name: "Focus", exact: true }).click();

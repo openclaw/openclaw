@@ -182,6 +182,13 @@ suite.define(() => {
             await page.addInitScript(holdRecoveryDigest);
           }
           await page.reload();
+          if (historyFails) {
+            await gateway.waitForRequest("chat.startup");
+            await gateway.rejectDeferred("chat.startup", {
+              code: "UNAVAILABLE",
+              message: "History is temporarily unavailable",
+            });
+          }
           if (coldScope) {
             const pane = page.locator(".chat-pane-cache__pane--active");
             await expect

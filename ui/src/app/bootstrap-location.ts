@@ -44,7 +44,6 @@ async function normalizeReleasedSessionQueryLocation(params: {
     params.agentsList()?.mainKey?.trim() ||
     (params.gateway.snapshot.phase === "connected" && params.gateway.snapshot.hello),
   );
-  const parsed = parseAgentSessionKey(released.sessionKey);
   if (released.sessionKey && !defaultsKnown) {
     await waitForGatewayClient(params.gateway, params.signal);
   }
@@ -53,7 +52,7 @@ async function normalizeReleasedSessionQueryLocation(params: {
     hello: params.gateway.snapshot.hello,
   };
   const agentId =
-    parsed?.agentId ??
+    parseAgentSessionKey(released.sessionKey)?.agentId ??
     (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
       resolveUiDefaultAgentId(defaults));
   const mainKey = resolveUiConfiguredMainKey(defaults);

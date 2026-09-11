@@ -72,7 +72,7 @@ suite.define(() => {
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), mode: colorScheme },
           );
           await page.goto(`${suite.server.baseUrl}chat`);
-          const transcript = page.locator(".chat-thread");
+          const transcript = page.locator("openclaw-chat-pane .chat-thread");
           await transcript
             .locator(".chat-virtual-row")
             .getByText("Transcript checkpoint 239 with code and emphasis.", { exact: true })

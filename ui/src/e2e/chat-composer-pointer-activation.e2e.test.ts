@@ -147,7 +147,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
         content: ":root { --safe-area-bottom: 34px !important; }",
       });
 
-      const composerShell = page.locator(".agent-chat__composer-shell");
+      const composerShell = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
       const textarea = page.locator(".agent-chat__input textarea");
       await textarea.fill("Verify mobile safe-area touch controls");
       await textarea.focus();
@@ -230,7 +230,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
         content: ":root { --safe-area-bottom: 34px !important; }",
       });
 
-      const composerShell = page.locator(".agent-chat__composer-shell");
+      const composerShell = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
       const textarea = page.locator(".agent-chat__input textarea");
       await textarea.fill("Verify narrow desktop pointer controls");
       await textarea.focus();

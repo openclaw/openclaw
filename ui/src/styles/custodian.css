@@ -584,3 +584,28 @@ openclaw-custodian-page {
     animation: none;
   }
 }
+
+/* Keep the opening transcript independent of history hydration and scrolling. */
+.custodian-surface:has(> .custodian__startup) > .custodian__messages {
+  grid-area: 1 / 1;
+  transition: var(--startup-mask-transition, opacity 160ms var(--ease-out));
+}
+
+.shell[data-startup-stage] .custodian__messages:not(.custodian__startup) {
+  --startup-mask-opacity: 0;
+}
+
+.custodian__startup {
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.shell[data-startup-stage] .custodian__startup .skeleton::after {
+  transform: none;
+}
+
+.shell:not([data-startup-stage="ready"]) .custodian__startup + .custodian__messages,
+.shell[data-startup-stage="ready"] .custodian__startup {
+  opacity: 0;
+}

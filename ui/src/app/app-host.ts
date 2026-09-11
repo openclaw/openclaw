@@ -9,7 +9,7 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import "../components/resizable-divider.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
 import type {
   CommandPaletteElement,
@@ -33,8 +33,14 @@ import {
 import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+  CHAT_ROUTE_READY_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import { PLUGIN_SURFACE_PRESENTATION_CHANGED_EVENT } from "../plugins/control-ui-view-presentation.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
@@ -45,6 +51,7 @@ import {
   type StoredOutboxScopeHost,
 } from "./app-shell-gateway.ts";
 import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
+import { ShellStartupOwner } from "./app-shell-startup.ts";
 import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -61,7 +68,11 @@ import {
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
-import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
+import {
+  isNativeEmbedHost,
+  readNativeHistoryState,
+  type NativeHistoryState,
+} from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import {
   changedServerUiPrefs,
@@ -74,6 +85,12 @@ import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
+import {
+  READY_STARTUP_PRESENTATION,
+  STARTUP_REGION_READY_EVENT,
+  type StartupPresentation,
+  type StartupPresentationController,
+} from "./startup-presentation.ts";
 
 const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 const APP_SIDEBAR_ELEMENT = {
@@ -95,10 +112,12 @@ i18n.setLocaleLoadRecovery({
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
   return (
     previous.routeId === next.routeId &&
+    previous.routeFailed === next.routeFailed &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash &&
     previous.committedRouteId === next.committedRouteId &&
+    previous.committedRouteStatus === next.committedRouteStatus &&
     previous.committedLocation?.pathname === next.committedLocation?.pathname &&
     previous.committedLocation?.search === next.committedLocation?.search &&
     previous.committedLocation?.hash === next.committedLocation?.hash &&
@@ -112,6 +131,9 @@ class OpenClawShell
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
   @property({ attribute: false }) onboarding = false;
+  @property({ attribute: false }) startupPresentation?: StartupPresentationController;
+  @property({ attribute: false }) startupSnapshot: StartupPresentation = READY_STARTUP_PRESENTATION;
+  private readonly shellStartup = new ShellStartupOwner(this);
 
   @state() navDrawerOpen = false;
   @state() desktopNavigationExpanded = false;
@@ -135,8 +157,9 @@ class OpenClawShell
     () => this.shellChrome.cancelPendingLazyAction(),
     (canReload) => this.shellChrome.retryPendingLazyAction(canReload),
   );
+  readonly sidebarLoader = new LazyCustomElementRequestController(this);
   // Gates lazy-action replay on the element being rendered; while the shell is
-  // still splash-gated, replaying would loop through the open handlers forever.
+  // not mounted, replaying would loop through the open handlers forever.
   readonly queryRenderedElement = (tagName: string): Element | null =>
     this.renderRoot?.querySelector(tagName) ?? null;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
@@ -255,10 +278,19 @@ class OpenClawShell
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
-  private get workspaceChromeVisible(): boolean {
+  get assistantRestorationPending(): boolean {
+    return this.shellChrome.panels.assistantRestorationPending;
+  }
+
+  get workspaceChromeVisible(): boolean {
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
-    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
+    return (
+      !isNativeEmbedHost() &&
+      routeId != null &&
+      !isSettingsNavigationRoute(routeId) &&
+      !this.onboardingMode
+    );
   }
 
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
@@ -298,6 +330,11 @@ class OpenClawShell
 
   constructor() {
     super();
+    this.addEventListener(CHAT_ROUTE_READY_EVENT, () => this.requestUpdate());
+    this.addEventListener(STARTUP_REGION_READY_EVENT, () => this.requestUpdate());
+    this.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, () => this.requestUpdate());
+    this.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, () => this.requestUpdate());
+    this.addEventListener(PLUGIN_SURFACE_PRESENTATION_CHANGED_EVENT, () => this.requestUpdate());
     this.subscriptions
       .effect(
         () => this.context,
@@ -413,6 +450,21 @@ class OpenClawShell
     this.shellGateway.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal);
   }
 
+  prepareDockReservations(): void {
+    const routeId =
+      this.routeState.routeId ?? routeIdFromPath(location.pathname, this.context?.basePath ?? "");
+    if (
+      !isNativeEmbedHost() &&
+      !this.onboardingMode &&
+      routeId != null &&
+      !isSettingsNavigationRoute(routeId)
+    ) {
+      this.shellChrome.panels.prepareReservations();
+    } else {
+      this.shellChrome.panels.releasePreparedReservations();
+    }
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     if (this.outboxStoreRuntime) {
@@ -439,6 +491,7 @@ class OpenClawShell
   }
 
   override disconnectedCallback() {
+    this.sidebarLoader.requestWhileActive(APP_SIDEBAR_ELEMENT, false);
     this.shellChrome.disconnect();
     syncControlUiSystemChrome();
     this.outboxStoreImport.dispose();
@@ -634,6 +687,9 @@ class OpenClawShell
   }
 
   override updated(changed: PropertyValues<this>) {
+    queueMicrotask(() =>
+      this.shellStartup.synchronize(this.sidebarLoader.visibleState?.status === "error"),
+    );
     this.syncDocumentTitle();
     // Theme and breakpoint owners sync their changes; route/runtime changes
     // can change whether the committed shell uses the chat background.
@@ -659,6 +715,8 @@ class OpenClawShell
     }
     if (this.workspaceChromeVisible) {
       this.shellChrome.panels.restore();
+    } else if (this.routeState.routeId !== undefined) {
+      this.shellChrome.panels.releasePreparedReservations();
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       this.lazyCustomElements.preload(this.execApprovalElement);
@@ -719,9 +777,7 @@ class OpenClawShell
   }
 
   override render() {
-    if (this.workspaceChromeVisible) {
-      this.lazyCustomElements.preload(APP_SIDEBAR_ELEMENT);
-    }
+    this.sidebarLoader.requestWhileActive(APP_SIDEBAR_ELEMENT, this.workspaceChromeVisible);
     return renderApplicationShell(this);
   }
 }

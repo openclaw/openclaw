@@ -25,6 +25,10 @@ import {
   listQuestionPrompts,
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
+import {
+  startupPresentationContext,
+  READY_STARTUP_PRESENTATION,
+} from "../../app/startup-presentation.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
@@ -140,6 +144,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ChatPageContext;
+  @consume({ context: startupPresentationContext, subscribe: true })
+  @property({ attribute: false })
+  protected startupPresentation = READY_STARTUP_PRESENTATION;
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
@@ -205,15 +212,52 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.notifyConversationPresentation(wasConversationPresented);
   }
   protected presentedChanged(_presented: boolean): void {}
+  protected initialPresentationManaged = false;
+  private initialComposerMetadataSettled = false;
+
+  protected completeInitialComposerPreparation(): void {
+    if (this.initialComposerMetadataSettled) {
+      return;
+    }
+    this.initialComposerMetadataSettled = true;
+    this.requestUpdate();
+    this.dispatchEvent(
+      new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, { bubbles: true, composed: true }),
+    );
+  }
+
+  /** Initial model metadata is settled; its controls can join the chrome reveal. */
+  get composerReady(): boolean {
+    return (
+      !this.initialPresentationManaged ||
+      this.initialComposerMetadataSettled ||
+      this.startupPresentation.stage === "ready" ||
+      Boolean(parseCatalogSessionKey(this.sessionKey))
+    );
+  }
+
   /** True while the authoritative transcript for this pane is still being fetched. */
   get transcriptLoading(): boolean {
+    if (parseCatalogSessionKey(this.sessionKey)) {
+      return this.catalogLoading;
+    }
     const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
     return phase === "pending-connection" || phase === "in-flight";
   }
   /** The initial authoritative transcript has a visible result, including errors. */
   get transcriptReady(): boolean {
+    if (parseCatalogSessionKey(this.sessionKey)) {
+      return this.catalogRequestedSessionKey === this.sessionKey && !this.catalogLoading;
+    }
     const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
     return phase === "committed" || phase === "failed";
+  }
+  get transcriptPresentationReady(): boolean {
+    return (
+      this.transcriptReady &&
+      (this.transcript.initialLayoutReady ||
+        Boolean(this.querySelector(".chat-history-error:not(.chat-history-error--inline)")))
+    );
   }
   protected get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
@@ -287,6 +331,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this, {
+    isContentReady: () => this.transcriptReady,
+    onInitialLayoutReady: () =>
+      this.dispatchEvent(
+        new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     onReaderScroll: () => this.state && handleChatScrollTakeover(this.state),
   });

@@ -10,6 +10,7 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { initialAssistantName } from "../../lib/assistant-identity.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
@@ -66,6 +67,8 @@ import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
+  sessionKey?: string;
+  agentId?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
@@ -142,6 +145,12 @@ export function createPageState(
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
+  const initialAgentId = resolveAgentIdForSession({
+    sessionKey: page.sessionKey?.trim() || settings.sessionKey,
+    assistantAgentId: page.agentId ?? context.agentSelection.state.selectedId,
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway?.snapshot.hello,
+  });
   const state = {
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
@@ -150,7 +159,10 @@ export function createPageState(
     settings,
     password: "",
     onboarding: false,
-    assistantName: appConfig.assistantIdentity.name,
+    assistantName: initialAssistantName(
+      context.agents.state.agentsList?.agents.find((agent) => agent.id === initialAgentId),
+      appConfig.assistantIdentity.name,
+    ),
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,

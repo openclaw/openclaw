@@ -77,7 +77,7 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
           await gateway.waitForRequest("chat.startup");
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
           const panel = page.locator("openclaw-assistant-panel");
           await panel.locator("openclaw-chat-pane").waitFor();
           await gateway.waitForRequest("chat.startup", { after: 1 });
@@ -138,7 +138,7 @@ suite.define(() => {
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, work.key));
-        await page.locator(".sidebar-footer-bar__home").click();
+        await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
         const panel = page.locator("openclaw-assistant-panel");
         const details = panel.locator(".assistant-panel-context details");
         await details.locator("summary").click();

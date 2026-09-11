@@ -20,6 +20,7 @@
   max-width: var(--chat-thread-max-width, 48rem);
   margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
+
 /* Input-affecting notices belong to the composer owner but not its layout.
    One absolute lane keeps model, placement, voice and lifecycle feedback on
    the same axis without changing transcript or composer geometry. */
@@ -33,13 +34,16 @@
   gap: 6px;
   pointer-events: none;
 }
+
 .agent-chat__composer-overlay:empty {
   display: none;
 }
+
 /* Reserve notice height beside publication controls instead of covering them. */
 .chat-prs:has(.chat-pr__create) ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
   position: static;
 }
+
 .agent-chat__composer-overlay > * {
   pointer-events: auto;
 }
@@ -916,6 +920,7 @@
     min-width: 0;
     order: 3;
   }
+
   .agent-chat__composer-footer {
     --chat-composer-chip-icon: 16px;
     margin-bottom: 0;
@@ -960,6 +965,11 @@
     margin-inline-start: auto;
     overflow: visible;
   }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls--reserved {
+    min-height: 44px;
+  }
+
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 105px;
     --chat-mobile-row-target-size: 32px;

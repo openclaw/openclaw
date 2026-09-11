@@ -339,7 +339,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const transcript = page.locator(".chat-thread-inner");
+      const transcript = page.locator("openclaw-chat-pane .chat-thread-inner");
       await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
       const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
       const artifactDir = artifactRoot
@@ -355,7 +355,7 @@ suite.define(() => {
         await transcript.screenshot({ path: path.join(artifactDir, `transcript-${viewport}.png`) });
       }
 
-      const assistantGroups = page.locator(".chat-group.assistant");
+      const assistantGroups = transcript.locator(".chat-group.assistant");
       expect(await assistantGroups.count()).toBe(4);
       const firstRun = assistantGroups.filter({
         hasText: "I’ll create the launch card and check the existing style first.",

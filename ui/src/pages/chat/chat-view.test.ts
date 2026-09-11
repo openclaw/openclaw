@@ -1948,6 +1948,23 @@ describe("chat transcript rendering", () => {
     expect(announcement.textContent).toBe("");
   });
 
+  it("announces uncached history loading after startup without duplicating cold feedback", () => {
+    const container = document.createElement("div");
+    const transcript = createTestTranscript();
+    renderChatInto(container, { transcript, loading: true });
+    const announcement = requireElement(container, ".chat-transcript-announcement", "status");
+    expect(announcement.textContent).toBe(t("chat.thread.loading"));
+    expect(container.querySelector(".chat-thread-inner")?.getAttribute("aria-busy")).toBe("true");
+
+    renderChatInto(container, { transcript, loading: true, startupLoading: true });
+    expect(announcement.textContent).toBe("");
+    expect(container.querySelector(".chat-thread")?.hasAttribute("inert")).toBe(true);
+
+    renderChatInto(container, { transcript, loading: false });
+    expect(announcement.textContent).toBe("");
+    expect(container.querySelector(".chat-thread-inner")?.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("announces only a genuinely appended assistant row", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
@@ -3058,14 +3075,14 @@ describe("chat loading skeleton", () => {
     {
       name: "shows the skeleton while the initial history load has no rendered content",
       props: { loading: true },
-      present: { "openclaw-panel-loading-skeleton": null },
+      present: { ".startup-transcript-skeleton": null },
       absent: [".agent-chat__welcome"],
-      counts: { "openclaw-panel-loading-skeleton": 1 },
+      counts: { ".startup-transcript-skeleton": 1 },
     },
     {
       name: "shows the loading skeleton for an active run with no stream",
       props: { canAbort: true, loading: true },
-      present: { "openclaw-panel-loading-skeleton": null },
+      present: { ".startup-transcript-skeleton": null },
       absent: [".agent-chat__welcome"],
       counts: { ".chat-reading-indicator": 0 },
     },
@@ -3106,18 +3123,18 @@ describe("chat loading skeleton", () => {
         messages: [{ role: "assistant", content: "Already loaded answer", timestamp: 1 }],
       },
       present: { ".chat-group": "Already loaded answer" },
-      absent: ["openclaw-panel-loading-skeleton"],
+      absent: [".startup-transcript-skeleton"],
     },
     {
       name: "keeps active stream content visible without the skeleton during a background reload",
       props: { loading: true, stream: "Partial streamed answer", streamStartedAt: 1 },
       present: { ".chat-stream": "Partial streamed answer" },
-      absent: ["openclaw-panel-loading-skeleton"],
+      absent: [".startup-transcript-skeleton"],
     },
     {
       name: "keeps the reading indicator visible without the skeleton before stream text arrives",
       props: { loading: true, stream: "", streamStartedAt: 1 },
-      absent: ["openclaw-panel-loading-skeleton"],
+      absent: [".startup-transcript-skeleton"],
       counts: { ".chat-reading-indicator": 1 },
     },
   ] satisfies Array<{

@@ -656,8 +656,7 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page, {
         sessions: roster.sessions,
-        heldMethods: ["sessions.list"],
-        deferredMethods: ["config.get"],
+        heldMethods: ["sessions.list", "config.get"],
         methodResponses: {
           // The held roster owns readiness; other projections must not expose the seeded row early.
           "chat.startup": { messages: [], sessionId: "capability-menu-session" },

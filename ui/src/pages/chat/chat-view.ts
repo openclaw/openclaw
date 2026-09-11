@@ -20,8 +20,8 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-catalog.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import "../../plugins/control-ui-contributions.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -111,6 +111,7 @@ export type ChatProps = Omit<
     onSessionSelect?: (sessionKey: string) => void;
     onRevealWorkspaceFile?: (path: string) => void;
     header?: TemplateResult | typeof nothing;
+    initialPresentationManaged?: boolean;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -316,7 +317,7 @@ export function renderChat(props: ChatProps) {
       ${ref((element) => {
         chatSection = element instanceof HTMLElement ? element : null;
       })}
-      class="card chat"
+      class="card chat ${props.initialPresentationManaged ? "chat--startup-managed" : ""}"
       style=${styleMap(
         props.chatMessageMaxWidth
           ? {

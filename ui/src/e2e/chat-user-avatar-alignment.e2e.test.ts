@@ -16,6 +16,15 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
         hasMultipleSessionSharingIdentities: true,
+        methodResponses: {
+          "session.members.listEvidence": {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [],
+            role: "owner",
+            allowedVisibilities: ["shared"],
+          },
+        },
         sessions: [{ key: "agent:main:main", visibility: "shared", sharingRole: "owner" }],
         presenceUsers: [{ ...viewer, identity: viewer, self: true }],
         historyMessages: [
@@ -33,7 +42,9 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const visibleAvatar = page.locator(".chat-group.user .chat-avatar:visible");
+      const visibleAvatar = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"].chat-pane-cache__pane--active .chat-group.user .chat-avatar:visible',
+      );
       const [offset, leftGap, rightGap, height] = await visibleAvatar.evaluate((node) => {
         const group = node.closest(".chat-group")!;
         const body = group.querySelector(".chat-text")!.getBoundingClientRect();

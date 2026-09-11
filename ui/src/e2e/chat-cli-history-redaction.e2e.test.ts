@@ -94,7 +94,7 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await waitForRequests(gateway, "chat.startup", 1);
-      const thread = page.locator(".chat-thread");
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });
       await thread.getByText("CLI imported-only reply", { exact: false }).waitFor({
         timeout: 10_000,

@@ -408,7 +408,7 @@ suite.define(() => {
           })
           .waitFor();
         await selectedPane.locator(".agent-chat__composer-combobox textarea").waitFor();
-        await page.locator(".sidebar-footer-bar__home").click();
+        await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
         await page
           .locator("openclaw-assistant-panel .chat-thread")
           .getByText("Synthetic Home message 900.", { exact: false })

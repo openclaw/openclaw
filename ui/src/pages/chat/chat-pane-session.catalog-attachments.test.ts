@@ -20,6 +20,8 @@ describe("catalog session open", () => {
       dataUrl: "data:image/png;base64,c3RhZ2Vk",
       file: new File(["staged"], "staged.png", { type: "image/png" }),
     });
+    pane.sessionKey = "catalog:cat-1:host-1:thread-1";
+    state.connected = false;
     state.chatAttachments = [attachment];
 
     (
@@ -28,6 +30,7 @@ describe("catalog session open", () => {
       }
     ).openCatalogSession({ catalogId: "cat-1", hostId: "host-1", threadId: "thread-1" }, state);
 
+    expect(pane.transcriptReady).toBe(false);
     expect(state.chatAttachments).toEqual([]);
     // The payload-store entry must be gone: a retained entry keeps the File
     // and its object URL resident for the whole tab lifetime.

@@ -101,18 +101,24 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     });
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-group.assistant .chat-text").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--active .chat-group.assistant .chat-text")
+        .waitFor();
       if (captureProof) {
         await page.screenshot({
           path: path.join(artifactDir, `${proofStage}-indented-history.png`),
         });
       }
-      expect(await page.locator(".chat-group.user pre code").textContent()).toBe(
-        "*user literal*\n",
-      );
-      expect(await page.locator(".chat-group.assistant pre code").textContent()).toBe(
-        "*assistant literal*\n",
-      );
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-group.user pre code")
+          .textContent(),
+      ).toBe("*user literal*\n");
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-group.assistant pre code")
+          .textContent(),
+      ).toBe("*assistant literal*\n");
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("Show an indented example");
@@ -142,7 +148,11 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       }
       await gateway.emitChatFinal({ runId, text: second });
       await expect
-        .poll(() => page.locator(".chat-group.assistant pre code").allTextContents())
+        .poll(() =>
+          page
+            .locator(".chat-pane-cache__pane--active .chat-group.assistant pre code")
+            .allTextContents(),
+        )
         .toContain("*first\n\nsecond\n");
     } finally {
       await context.close();
@@ -201,7 +211,11 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       }
 
       await gateway.emitChatFinal({ runId, text: completedFence });
-      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
+      await expect
+        .poll(() =>
+          page.locator(".chat-pane-cache__pane--active .chat-thread code.language-ts.hljs").count(),
+        )
+        .toBe(1);
     } finally {
       await context.close();
     }
@@ -269,7 +283,9 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect.poll(async () => (await observations()).connected).toBe(2);
-      const code = await page.locator(".chat-thread code").elementHandle();
+      const code = await page
+        .locator(".chat-pane-cache__pane--active .chat-thread code")
+        .elementHandle();
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       await sidebar
@@ -286,10 +302,12 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       await expect.poll(async () => (await observations()).detached).toBe(0);
       await page.goBack();
       await page.goBack();
-      await page.locator(".chat-thread code").waitFor({ state: "visible" });
+      await page
+        .locator(".chat-pane-cache__pane--active .chat-thread code")
+        .waitFor({ state: "visible" });
       expect(
         await page
-          .locator(".chat-thread code")
+          .locator(".chat-pane-cache__pane--active .chat-thread code")
           .evaluate((element, previous) => element === previous, code),
       ).toBe(true);
       await expect.poll(async () => (await observations()).connected).toBe(2);
@@ -444,7 +462,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         await expect.poll(() => shortWrap.isVisible()).toBe(false);
 
         // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
-        const thread = page.locator(".chat-thread");
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         // Focused rows stay mounted offscreen; move focus out of the wrap control first.
         await page.locator(".agent-chat__composer-combobox textarea").click();
         await thread.hover();

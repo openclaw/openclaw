@@ -3,13 +3,13 @@ import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
-import { renderLazyElementModal } from "../components/lazy-view-error.ts";
-import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
 } from "../components/settings-sidebar-lazy.ts";
+import { renderStartupChatSkeleton } from "../components/startup-chat-skeleton.ts";
+import { renderStartupSidebarSkeleton } from "../components/startup-sidebar-skeleton.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -25,17 +25,18 @@ import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderControlUiPluginRecovery } from "../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import {
   renderLazyDevicePairSetup,
   type DevicePairSetupHost,
 } from "./app-shell-device-pair-setup.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
+import { renderShellLazyModal } from "./app-shell-lazy-modal.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
+import { initialSessionIdentity } from "./initial-session-identity.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -67,6 +68,7 @@ import {
   normalizeChatSendShortcut,
 } from "./settings.ts";
 import { renderCollapsedAssistantToggles } from "./shell-assistant-toggles.ts";
+import type { StartupPresentation, StartupPresentationController } from "./startup-presentation.ts";
 import { createUpdateProgressWatcher } from "./update-confirmation.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
@@ -81,12 +83,16 @@ export interface ShellViewHost extends DevicePairSetupHost {
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly sidebarLoader: LazyCustomElementRequestController;
+  prepareDockReservations(): void;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
+  readonly startupSnapshot?: StartupPresentation;
+  readonly startupPresentation?: StartupPresentationController;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
   readonly settingsSidebarLoadFailed: boolean;
@@ -116,16 +122,14 @@ export interface ShellViewHost extends DevicePairSetupHost {
 }
 
 export function renderApplicationShell(host: ShellViewHost) {
-  const context = host.context;
-  const runtime = host.runtime;
+  const { context, runtime, lazyCustomElements, sidebarLoader } = host;
   if (!context || !runtime) {
     return nothing;
   }
-  if (host.routeState.routeId === undefined) {
-    return renderConnectingSplash();
-  }
   const gatewaySnapshot = context.gateway.snapshot;
   const config = context.config.current;
+  const assistantName = config.assistantIdentity.name;
+  const startupName = host.startupSnapshot?.initialAssistantName ?? assistantName;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
   const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
@@ -141,13 +145,11 @@ export function renderApplicationShell(host: ShellViewHost) {
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
-  const browserPanelAvailable = isBrowserPanelSurfaceAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
-  const lazyElementState = host.lazyCustomElements.visibleState;
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   // Session routes have an offline outbox, New Session keeps a local draft, and
@@ -169,7 +171,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           context.basePath,
         )
       : null;
-  const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its fixed sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
@@ -181,19 +182,19 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRoute === "skills" ||
       activeRoute === "cron");
   const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  if (host.startupSnapshot?.stage === "pending") {
+    host.prepareDockReservations();
+  }
   const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
-  host.lazyCustomElements.requestWhileActive(
-    host.onboardingMemoryImportElement,
-    memoryImportActive,
-  );
+  lazyCustomElements.requestWhileActive(host.onboardingMemoryImportElement, memoryImportActive);
   const navDrawerOpen = host.navDrawerOpen && !onboarding && !nativeEmbed;
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost() && !nativeEmbed;
   // Native chrome is absent in browsers; the shell owns visible retry if its chunk fails.
   if (nativeWebChrome && !onboarding) {
-    host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+    lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
   }
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
@@ -215,30 +216,27 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
-  const floatingAttentionVisible =
-    !nativeEmbed &&
-    floatingSidebarAttentionVisible({
-      navigationSurfaceHidden,
-      mobileNavLayout,
-      onboarding,
-      compact: mergedChatChrome,
-    });
+  const floatingAttentionVisible = floatingSidebarAttentionVisible({
+    navigationSurfaceHidden,
+    mobileNavLayout,
+    onboarding,
+    compact: mergedChatChrome,
+  });
   if (!nativeEmbed && (onboarding || floatingAttentionVisible)) {
-    host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+    lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
   }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
+  const { agentsList } = context.agents.state;
+  const { selectedId } = context.agentSelection.state;
   const requestedRouteAgentId = host.newSessionRouteAgentId();
   const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
-  const routeAgentIsKnown =
+  const selectedAgentId =
     routeAgentId !== null &&
-    context.agents.state.agentsList?.agents.some(
-      (agent) => normalizeAgentId(agent.id) === routeAgentId,
-    ) === true;
-  const selectedAgentId = routeAgentIsKnown
-    ? routeAgentId
-    : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
+    agentsList?.agents.some((agent) => normalizeAgentId(agent.id) === routeAgentId) === true
+      ? routeAgentId
+      : normalizeAgentId(selectedId ?? gatewaySnapshot.assistantAgentId);
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
@@ -253,6 +251,10 @@ export function renderApplicationShell(host: ShellViewHost) {
     }
   };
   const uiSettings = context.theme.settings;
+  const { location = globalThis.location, committedSessionKey } = host.routeState;
+  const presentationSessionKey =
+    committedSessionKey ||
+    initialSessionIdentity(location, context, host.activeSessionKey).sessionKey;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
@@ -260,7 +262,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
       activeRouteId: activeRoute,
-      activePluginTabId,
+      activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
       enabledRouteIds: host.enabledRouteIds(),
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
@@ -378,12 +380,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   const workspace = html`
-    ${
-      lazyElementState?.status === "loading" &&
-      lazyElementState.element === host.commandPaletteElement
-        ? renderCommandPaletteLoading(() => host.lazyCustomElements.close())
-        : renderLazyElementModal(host.lazyCustomElements)
-    }
+    ${renderShellLazyModal(lazyCustomElements, sidebarLoader, host.commandPaletteElement)}
     ${
       isOptionalElementDefined(host.commandPaletteElement)
         ? html`<openclaw-command-palette
@@ -409,6 +406,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing
     }
     <div
+      ?data-startup-managed=${host.startupPresentation?.started}
+      data-startup-stage=${host.startupSnapshot?.stage ?? "ready"}
+      data-startup-placeholder=${host.startupSnapshot?.stage === "ready" ? nothing : String(host.startupSnapshot?.placeholderVisible ?? false)}
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${
         navCollapsed ? "shell--nav-collapsed" : ""
       } ${mobileNavLayout ? "shell--mobile-nav" : ""} ${
@@ -465,9 +465,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
                     aria-label=${t("nav.expand")}
                     aria-expanded="false"
-                    data-env-avatar=${
-                      config.environment ? config.assistantIdentity.name.charAt(0) : nothing
-                    }
+                    data-env-avatar=${config.environment ? assistantName.charAt(0) : nothing}
                     @click=${() => host.toggleNavigationSurface()}
                   >
                     ${icons.panelLeftOpen}
@@ -519,9 +517,14 @@ export function renderApplicationShell(host: ShellViewHost) {
                 aria-label=${mobileNavLayout ? t("palette.categories.navigation") : nothing}
                 aria-hidden=${mobileNavLayout && navigationSurfaceHidden ? "true" : nothing}
                 tabindex=${mobileNavLayout ? -1 : nothing}
-                ?inert=${navigationSurfaceHidden}
+                ?inert=${navigationSurfaceHidden || host.startupSnapshot?.stage === "pending"}
               >
                 ${navigationContent}
+                ${
+                  host.startupPresentation?.retainSkeletons && !settingsTakeover && !onboarding
+                    ? renderStartupSidebarSkeleton(host.startupSnapshot)
+                    : nothing
+                }
               </div>`
       }
       ${
@@ -592,6 +595,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           onOpenApprovals: () => host.openApprovals(),
         })}
         ${nativeEmbed ? navigationContent : nothing}
+        ${
+          host.startupPresentation?.retainSkeletons && chatLikeRoute
+            ? renderStartupChatSkeleton(presentationSessionKey, startupName, uiSettings)
+            : nothing
+        }
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
@@ -620,7 +628,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                 ?inert=${navDrawerOpen}
                 data-chat-autotype-exempt
                 .client=${gatewayConnected ? gatewaySnapshot.client : null}
-                .available=${browserPanelAvailable}
+                .available=${isBrowserPanelSurfaceAvailable(gatewaySnapshot)}
                 .remoteAvailable=${isBrowserPanelAvailable(gatewaySnapshot)}
                 .suppressed=${settingsTakeover || nativeEmbed}
                 .resourceBasePath=${context.resourceBasePath}
@@ -701,9 +709,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       agentId: resolveUiSelectedSessionAgentId(
         {
-          assistantAgentId:
-            context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
-          agentsList: context.agents.state.agentsList,
+          assistantAgentId: selectedId ?? gatewaySnapshot.assistantAgentId,
+          agentsList,
           hello: gatewaySnapshot.hello,
         },
         host.activeSessionKey,

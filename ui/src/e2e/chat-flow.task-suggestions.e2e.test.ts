@@ -173,7 +173,7 @@ suite.define(() => {
         .toBe(1);
 
       await page
-        .locator(".agent-chat__composer-shell")
+        .locator("openclaw-chat-pane .agent-chat__composer-shell")
         .waitFor({ state: "visible", timeout: 10_000 });
       const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
       await card.waitFor({ state: "visible", timeout: 10_000 });
@@ -226,7 +226,7 @@ suite.define(() => {
       await tray.getByRole("button", { name: "Next suggested task" }).click();
       expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
 
-      const composer = page.locator(".agent-chat__composer-shell");
+      const composer = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       const box = await composer.boundingBox();
       expect(box).not.toBeNull();

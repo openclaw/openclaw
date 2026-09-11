@@ -378,7 +378,7 @@ suite.define(() => {
       const panel = panelFor(page, prompt);
       await panel.waitFor();
       await panel.locator(".chat-question-panel__collapse").click();
-      const shell = page.locator(".agent-chat__composer-shell");
+      const shell = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
       const composer = shell.locator(".agent-chat__input");
       await composer.waitFor();
       await screenshot(page, `07-question-mobile-compound-${screenshotName}.png`);
@@ -481,7 +481,9 @@ suite.define(() => {
     await expect
       .poll(async () => {
         const panelBox = await panel.boundingBox();
-        const shellBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+        const shellBox = await page
+          .locator("openclaw-chat-pane .agent-chat__composer-shell")
+          .boundingBox();
         if (!panelBox || !shellBox) {
           return null;
         }

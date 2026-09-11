@@ -400,7 +400,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar .sidebar-shell__footer").waitFor();
       const card = page.locator(".community-invite-card");
       await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
       await settleSidebarIdleWork(page);
@@ -417,7 +417,7 @@ suite.define(() => {
       expect(imageRequests).toEqual([]);
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
       const pet = page.locator("openclaw-lobster-pet");
-      const footer = page.locator(".sidebar-shell__footer");
+      const footer = page.locator("openclaw-app-sidebar .sidebar-shell__footer");
       const petBox = await pet.boundingBox();
       const footerBox = await footer.boundingBox();
       if (!petBox || !footerBox) {
@@ -443,7 +443,7 @@ suite.define(() => {
         communityInvite = enabled;
         await page.reload();
         await waitForInvitePolicy(page, enabled);
-        await page.locator(".sidebar-shell__footer").waitFor();
+        await page.locator("openclaw-app-sidebar .sidebar-shell__footer").waitFor();
         await settleSidebarIdleWork(page);
         expect(await card.count()).toBe(0);
         expect(await mountedInvites()).toBe(0);
@@ -566,7 +566,7 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.keyboard.press("Escape");
-      await page.locator(".sidebar-shell__footer").waitFor();
+      await page.locator("openclaw-app-sidebar .sidebar-shell__footer").waitFor();
       await settleSidebarIdleWork(page);
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(1);

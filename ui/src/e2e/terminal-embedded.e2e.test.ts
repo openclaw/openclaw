@@ -41,7 +41,14 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}${route}`);
       await waitForControlUiGatewayReady(page);
       if (route === "chat") {
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.waitForFunction(() => {
+          const pane = document.querySelector<
+            HTMLElement & {
+              state?: { terminalAvailable?: boolean };
+            }
+          >('openclaw-chat-pane[aria-hidden="false"].chat-pane-cache__pane--active');
+          return pane?.state?.terminalAvailable === true;
+        });
         await page.keyboard.press("Control+Backquote");
       }
       const panel = page

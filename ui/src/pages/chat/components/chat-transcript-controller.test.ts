@@ -286,6 +286,33 @@ describe("chat transcript controller", () => {
     expect(app.parentElement?.parentElement).toBe(rowParent);
   });
 
+  it("waits for authoritative content before committing measured initial layout", async () => {
+    let contentReady = false;
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      },
+      { isContentReady: () => contentReady },
+    );
+    transcriptDomState.measuredRowHeight = 120;
+    const mounted = await mountTestTranscript("pane-exact-estimate", [], transcript);
+    Object.defineProperties(mounted.container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+    mounted.session.setContentReady(true);
+    mounted.renderRows([]);
+    await flushDeferredRowPrune();
+    expect(mounted.transcript.initialLayoutReady).toBe(false);
+    contentReady = true;
+    mounted.renderRows([{ kind: "content", key: "answer", content: "Answer" }]);
+    await flushDeferredRowPrune();
+    expect(mounted.transcript.initialLayoutReady).toBe(true);
+  });
+
   it("reconciles an implicit end anchor when committed content has no scroll range", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentIdentityResult } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
+import type { AgentsListResult } from "../api/types.ts";
 
 // Short text/emoji avatars (e.g. "A", "PS", "🦞"). Anything longer that is not
 // a renderable image URL is dropped during normalization.
@@ -72,4 +73,16 @@ export function normalizeAssistantIdentity(
   const agentId =
     typeof input?.agentId === "string" && input.agentId.trim() ? input.agentId.trim() : null;
   return { agentId, name, avatar, avatarSource, avatarStatus, avatarReason };
+}
+
+/** Cached roster identity supplies the first paint while the session identity request is pending. */
+export function initialAssistantName(
+  agent: AgentsListResult["agents"][number] | undefined,
+  fallback: string,
+): string {
+  return (
+    normalizeAssistantValue("name", agent?.identity?.name) ??
+    normalizeAssistantValue("name", agent?.name) ??
+    fallback
+  );
 }

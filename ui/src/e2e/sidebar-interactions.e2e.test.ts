@@ -84,7 +84,7 @@ suite.define(() => {
         controlUiSessionUrl(`${suite.server.baseUrl}operator/`, `agent:${agentId}:main`),
       );
       await waitForControlUiRoute(page, { routeId: "chat" });
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator(".agent-chat__composer-combobox > textarea:visible");
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
@@ -203,7 +203,7 @@ suite.define(() => {
       };
       const observer = new MutationObserver(() => {
         const textarea = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
+          "openclaw-chat-pane .agent-chat__composer-combobox > textarea",
         );
         const input = textarea?.closest<HTMLElement>(".agent-chat__input");
         if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
@@ -237,7 +237,7 @@ suite.define(() => {
         .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
         .click();
 
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const textarea = page.locator("openclaw-chat-pane .agent-chat__composer-combobox > textarea");
       const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
       let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
       await expect

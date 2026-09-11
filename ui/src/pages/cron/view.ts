@@ -1,4 +1,3 @@
-import "../../styles/chat/startup-layout.css";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -10,6 +9,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import type {

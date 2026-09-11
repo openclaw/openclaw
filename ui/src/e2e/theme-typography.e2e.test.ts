@@ -446,7 +446,8 @@ suite.define(() => {
   it("keeps Phosphor shortcut modifier glyphs on the system UI stack", async () => {
     const { page } = await openThemedChat("phosphor", "dark");
     await page.goto(`${suite.server.baseUrl}chat`);
-    const identity = page.locator(".sidebar-identity-card");
+    const identity = page.locator("openclaw-app-sidebar button.sidebar-identity-card");
+    await identity.waitFor();
     await identity.focus();
     await page.keyboard.press("Enter");
     const menu = page.locator("wa-dropdown.sidebar-identity-menu");
@@ -792,6 +793,7 @@ suite.define(() => {
       .locator(".agent-chat__composer-combobox textarea")
       .waitFor({ state: "visible", timeout: 30_000 });
 
+    await page.locator("#openclaw-typeface-space-grotesk").waitFor({ state: "attached" });
     const linkHref = await page.evaluate(
       () =>
         document.getElementById("openclaw-typeface-space-grotesk")?.getAttribute("href") ?? null,

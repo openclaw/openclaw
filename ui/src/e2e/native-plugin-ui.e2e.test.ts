@@ -575,7 +575,7 @@ suite.define(() => {
           "ui-fixture/failing-composer",
         ]) {
           await selectView(page, "Composer", replacement);
-          const composer = page.locator(".agent-chat__composer-shell");
+          const composer = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
           await composer.waitFor();
           expect(
             await composer.evaluate((element) =>

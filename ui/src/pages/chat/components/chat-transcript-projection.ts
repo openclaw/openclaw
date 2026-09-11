@@ -1,5 +1,5 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
-import { nothing } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
@@ -62,11 +62,7 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
-import type {
-  ChatTranscriptProjection,
-  ChatTranscriptSession,
-  TranscriptHeader,
-} from "./chat-transcript-session.ts";
+import type { ChatTranscriptProjection, ChatTranscriptSession } from "./chat-transcript-session.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -233,7 +229,11 @@ export function projectChatTranscript(
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const isEmpty =
-    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
+    chatItems.length === 0 &&
+    !props.loading &&
+    !props.startupLoading &&
+    !hasRealtimeTalkConversation &&
+    !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
   // multiple voices. The capped sessions list may omit the selected row, so absent
@@ -264,7 +264,8 @@ export function projectChatTranscript(
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
+  const showLoadingSkeleton =
+    (props.loading || props.startupLoading === true) && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
@@ -717,14 +718,15 @@ export function projectChatTranscript(
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
+    renderRows: (overlay = nothing, header = null, emptyContent?: TemplateResult) =>
       transcript.render(
-        transcriptRows,
+        emptyContent ? [] : transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
+        emptyContent,
       ),
   };
 }

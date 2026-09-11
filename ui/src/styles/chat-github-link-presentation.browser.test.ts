@@ -16,7 +16,11 @@ const describeGitHubLinkPresentation = canRunPlaywrightChromium(chromiumExecutab
   : describe.skip;
 
 function readChatCss(): string {
-  return ["ui/src/styles/base.css", "ui/src/styles/chat/text.css"]
+  return [
+    "ui/src/styles/base.css",
+    "ui/src/styles/chat/startup-layout.css",
+    "ui/src/styles/chat/text.css",
+  ]
     .map((file) => readStyleSheet(file))
     .join("\n");
 }

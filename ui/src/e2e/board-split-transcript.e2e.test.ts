@@ -141,7 +141,11 @@ async function expectSidePanelTabs(page: Page, expected: string[], visible = tru
 }
 
 async function expectMinimizedDashboard(page: Page) {
-  await page.locator('[data-region-header="side"]').waitFor({ state: "hidden" });
+  await page
+    .locator(
+      'openclaw-chat-pane.chat-pane-cache__pane--active .sidebar-region__right-runtime .side-panel [data-region-header="side"]',
+    )
+    .waitFor({ state: "hidden" });
   await expect
     .poll(() =>
       page.locator(".board-session-surface").evaluate((panel) => ({
@@ -318,12 +322,16 @@ describeControlUiE2e("Board split transcript restore", () => {
       },
     });
     await showDashboard(page);
-    await page.locator('[data-region-header="side"]').waitFor();
+    await page
+      .locator(
+        'openclaw-chat-pane.chat-pane-cache__pane--active .sidebar-region__right-runtime .side-panel [data-region-header="side"]',
+      )
+      .waitFor();
     await openChatSidePanelType(page, "Browser");
     await openChatSidePanelType(page, "Terminal");
 
     const sidePanel = page.locator(".side-panel");
-    const chat = page.locator(".chat-thread");
+    const chat = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active .chat-thread");
     const recordStep = async (name: string) => {
       if (!recordProof) {
         return;

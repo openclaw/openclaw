@@ -183,7 +183,7 @@ suite.define(() => {
       .getByText(renderedDiagnostic)
       .waitFor();
     expect(await failedAlert.locator("details").count()).toBe(0);
-    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
+    expect(await currentPage.locator("openclaw-chat-pane .chat-group.assistant").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.clock.setFixedTime(firstStartedAt + 981_000);
@@ -241,7 +241,7 @@ suite.define(() => {
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
     expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
-    expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
+    expect(await currentPage.locator("openclaw-chat-pane .chat-group.user").count()).toBe(2);
   });
 
   it("keeps a continuing run inside its latest assistant reply", async () => {
@@ -265,7 +265,7 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    const assistantGroup = currentPage.locator(".chat-group.assistant");
+    const assistantGroup = currentPage.locator("openclaw-chat-pane .chat-group.assistant");
     await assistantGroup.getByText("First result is ready.", { exact: true }).waitFor();
     await assistantGroup.locator(".chat-working-indicator--continuation").waitFor();
 
@@ -305,7 +305,7 @@ suite.define(() => {
     await currentPage.getByText("Older run result.", { exact: true }).waitFor();
     await currentPage.locator(".chat-reading-indicator").waitFor();
 
-    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(2);
+    expect(await currentPage.locator("openclaw-chat-pane .chat-group.assistant").count()).toBe(2);
     expect(
       await currentPage
         .locator(".chat-group.assistant", { hasText: "Older run result." })

@@ -185,7 +185,9 @@ suite.define(() => {
         };
         await page.goto(suite.server.baseUrl);
         await gateway.waitForRequest("connect");
-        await page.locator(".connect-splash").waitFor();
+        await page
+          .locator('.shell[data-startup-stage="pending"][data-startup-placeholder="true"]')
+          .waitFor();
         expect(failure.chunkRequestCount()).toBe(0);
         await rejectLogin();
         const error = page.locator(".lazy-view-error");

@@ -1,0 +1,328 @@
+@property --startup-shimmer {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: -100%;
+}
+
+@keyframes startup-shimmer {
+  to {
+    --startup-shimmer: 100%;
+  }
+}
+
+openclaw-app:has(.shell:not([data-startup-stage="ready"])) {
+  animation: startup-shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+}
+
+/* Keep this stamp after reveal so the shell's entrance cannot restart. */
+.shell[data-startup-managed] {
+  animation: none;
+}
+
+.shell[data-startup-managed] > .content--chat {
+  position: relative;
+}
+
+.startup-chat-skeleton {
+  z-index: 2;
+  pointer-events: none;
+  padding: inherit;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.startup-sidebar-skeleton {
+  --startup-mask-opacity: 1;
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: var(--startup-mask-transition, opacity 160ms var(--ease-out));
+}
+
+.shell[data-startup-stage="pending"][data-startup-placeholder="true"] .startup-sidebar-skeleton {
+  opacity: 1;
+}
+
+.startup-sidebar-skeleton * {
+  --startup-mask-transition: none;
+  visibility: hidden;
+}
+
+.shell[data-startup-stage] .startup-chat-skeleton .skeleton::after {
+  animation: none;
+  transform: none;
+}
+
+.shell[data-startup-stage="pending"] .content > openclaw-router-outlet > .lazy-view-state {
+  visibility: hidden;
+}
+
+.startup-sidebar-skeleton .sidebar-agent-card {
+  flex: 1;
+  min-width: 0;
+}
+
+.startup-sidebar-skeleton :is(.nav-item__text, .sidebar-recent-session__name) {
+  flex: 1;
+}
+
+.startup-sidebar-skeleton .sidebar-recent-sessions__label-text {
+  flex: 1;
+}
+
+.startup-sidebar-skeleton .nav-item__icon {
+  --startup-bar-width: 16px;
+  --startup-bar-height: 16px;
+}
+
+.startup-sidebar-skeleton :is(.sidebar-agent-card__avatar, .viewer-avatar) {
+  --startup-bar-height: 100%;
+  --startup-bar-radius: var(--radius-full);
+}
+
+.startup-sidebar-skeleton .sidebar-agent-card__avatar,
+.startup-transcript-skeleton .chat-avatar {
+  border-radius: var(--radius-full);
+}
+
+.startup-transcript-skeleton .chat-group-messages {
+  width: var(--chat-message-column-max);
+}
+
+.startup-transcript-skeleton .user .chat-group-messages {
+  max-width: 100%;
+}
+
+.startup-transcript-skeleton .user .chat-bubble {
+  width: 42%;
+  max-width: var(--chat-message-column-max);
+}
+
+.startup-transcript-skeleton .user ~ .user .chat-bubble {
+  width: 32%;
+}
+
+/* Each region inherits one reveal; its leaves retain their existing boxes. */
+.shell[data-startup-stage]
+  :is(
+    .shell-nav,
+    .chat-pane__header,
+    .assistant-panel-header,
+    .chat-thread,
+    :where(.assistant-panel) .custodian__messages
+  ) {
+  --startup-mask-opacity: 0;
+}
+
+.shell[data-startup-stage="pending"] :is(.shell-nav, .chat-pane__header, .assistant-panel-header),
+.shell:not([data-startup-stage="ready"])
+  :is(.chat-thread, :where(.assistant-panel) .custodian__messages) {
+  --startup-mask-opacity: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.shell[data-startup-stage="pending"] :is(.sidebar, .chat-pane__header, .assistant-panel-header) *,
+.shell:not([data-startup-stage="ready"])
+  :is(.chat-thread, :where(.assistant-panel) .custodian__messages)
+  * {
+  visibility: hidden;
+}
+
+/* Keep the bounded virtual range measured through the masks' exit fade.
+   Once the placeholders retire, the transcript resumes its normal containment. */
+.shell:has(.startup-chat-skeleton, .startup-sidebar-skeleton)
+  .chat--startup-managed
+  .chat-virtual-row {
+  content-visibility: visible;
+}
+
+.shell[data-startup-placeholder="true"] .startup-transcript-skeleton {
+  visibility: visible;
+}
+
+.shell[data-startup-placeholder="false"]
+  :is(
+    .shell-nav,
+    .chat-pane__header,
+    .assistant-panel-header,
+    .chat-thread,
+    :where(.assistant-panel) .custodian__messages
+  ) {
+  --startup-mask-opacity: 0;
+}
+
+.shell[data-startup-stage]
+  :where(
+    .assistant-panel-title,
+    .chat-pane__workspace-chip > span:not(.workspace-icon-fallback),
+    .chat-pane__session-title-text,
+    .chat-pane__workspace-chip,
+    .assistant-panel-icon,
+    .startup-transcript-skeleton .chat-bubble,
+    .startup-transcript-lines > .skeleton-line,
+    .startup-transcript-skeleton .chat-avatar
+  ) {
+  :where(&) {
+    position: relative;
+  }
+
+  &:not(:where(.chat-pane__workspace-chip, .assistant-panel-icon))::after,
+  &:where(.chat-pane__workspace-chip, .assistant-panel-icon)::before {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    visibility: visible;
+    border-radius: inherit;
+    background-color: var(--skeleton-base, var(--bg-muted));
+    background-image: linear-gradient(
+      90deg,
+      transparent 25%,
+      var(--skeleton-highlight, var(--bg-hover)) 50%,
+      transparent 75%
+    );
+    background-size: 200% 100%;
+    background-position-x: calc(var(--startup-shimmer) + 100%);
+    content: "";
+    opacity: var(--startup-mask-opacity, 0);
+    pointer-events: none;
+    transition: var(--startup-mask-transition, opacity 160ms var(--ease-out));
+  }
+}
+
+.startup-sidebar-skeleton .sidebar-session-toolbar__button {
+  --startup-bar-width: 14px;
+  --startup-bar-height: 14px;
+  --startup-bar-radius: var(--radius-full);
+}
+
+.startup-sidebar-skeleton .sidebar-identity-card__name {
+  flex: 1;
+}
+
+.startup-sidebar-skeleton :is(.sidebar-session-indicator, .sidebar-footer-actions) .skeleton {
+  border-radius: var(--radius-sm);
+}
+
+.startup-sidebar-skeleton .sidebar-issues-button__icon {
+  --startup-bar-height: 18px;
+}
+
+.startup-sidebar-skeleton .sidebar-identity-card .viewer-avatar {
+  border: 0;
+}
+
+/* Paint text-sized bars without changing the canonical row boxes. */
+.shell[data-startup-stage] .startup-sidebar-skeleton .skeleton::after {
+  inset: 50% auto auto 0;
+  width: var(--startup-bar-width, 100%);
+  height: var(--startup-bar-height, 10px);
+  border-radius: var(--startup-bar-radius, var(--radius-sm));
+  background: var(--skeleton-base, var(--bg-muted));
+  visibility: visible;
+  animation: none;
+  transform: translateY(-50%);
+}
+
+/* These controls contain bare SVGs, so mask their icon box, not the button. */
+.shell[data-startup-stage] :where(.chat-pane__workspace-chip, .assistant-panel-icon)::before {
+  inset: 50% auto auto 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-sm);
+}
+
+.shell[data-startup-stage] .chat-pane__workspace-chip::before {
+  inset-inline-start: 5px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+}
+
+.shell:not([data-startup-stage="ready"]) .skeleton::after {
+  animation: none;
+  transform: translateX(var(--startup-shimmer));
+}
+
+.shell[data-startup-stage="pending"][data-startup-placeholder="false"]
+  :is(.shell-nav, .chat-pane__header, .assistant-panel-header),
+.shell[data-startup-placeholder="false"]
+  :is(.chat-thread, :where(.assistant-panel) .custodian__messages) {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  openclaw-app:has(.shell:not([data-startup-stage="ready"])) {
+    animation: none;
+  }
+
+  .shell[data-startup-stage] {
+    --startup-mask-transition: none;
+  }
+}
+
+/* This pane has already entered through the cold presentation owner. Keep the
+   stamp after readiness so removing an override cannot restart the card rise. */
+.card.chat--startup-managed {
+  animation: none;
+}
+
+/* Use the transcript's line rhythm while the message lengths are unknown. */
+.startup-transcript-skeleton .assistant .chat-bubble {
+  width: 100%;
+}
+
+.startup-transcript-lines {
+  display: grid;
+  gap: calc(1lh - 14px);
+  padding-block: calc((1lh - 14px) / 2);
+}
+
+.startup-transcript-lines > .skeleton-line {
+  margin-block: 0;
+}
+
+.startup-transcript-line--short {
+  width: 45%;
+}
+
+.shell[data-startup-stage] .startup-transcript-lines > .skeleton-line::after {
+  animation: none;
+  transform: none;
+}
+
+.shell[data-startup-stage] .startup-transcript-skeleton .assistant .chat-bubble::after {
+  content: none;
+}
+
+.shell[data-startup-managed] openclaw-app-sidebar .sidebar,
+.shell[data-startup-managed] .content > openclaw-router-outlet .chat-pane__header,
+.shell[data-startup-managed] .content > openclaw-router-outlet .chat-thread {
+  --startup-mask-opacity: 0;
+  transition: var(--startup-mask-transition, opacity 160ms var(--ease-out));
+}
+
+.shell[data-startup-stage="pending"]
+  :is(openclaw-app-sidebar .sidebar, openclaw-chat-pane .chat-pane__header),
+.shell:not([data-startup-stage="ready"]) openclaw-chat-pane .chat-thread {
+  opacity: 0;
+}
+
+.content:has(openclaw-chat-pane .agent-chat__composer-shell)
+  > .startup-chat-skeleton
+  :is(.agent-chat__composer-shell, .sidebar-region__right-runtime) {
+  visibility: hidden;
+}
+
+.shell:not([data-startup-stage="pending"]) .startup-chat-skeleton .chat-pane__header,
+.shell[data-startup-stage="ready"] .startup-chat-skeleton {
+  opacity: 0;
+  visibility: hidden;
+  transition: var(--startup-mask-transition, opacity 160ms var(--ease-out), visibility 0s 160ms);
+}

@@ -139,7 +139,9 @@ suite.define(() => {
             (profile === "device-token" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
-        await page.locator(".connect-splash").waitFor();
+        await page
+          .locator('.shell[data-startup-stage="pending"][data-startup-placeholder="true"]')
+          .waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "cold-connecting.png") });
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -161,8 +163,10 @@ suite.define(() => {
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
         if (profile === "trusted-proxy") {
-          await page.locator(".connect-splash").waitFor();
-          expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+          await page
+            .locator('.shell[data-startup-stage="pending"][data-startup-placeholder="true"]')
+            .waitFor();
+          expect(await page.locator("openclaw-app-shell").getAttribute("aria-busy")).toBe("true");
           expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
           expect(await transcript.getByText(transcriptText, { exact: true }).count()).toBe(0);
           expect(await gateway.getRequests("sessions.list")).toEqual([]);
@@ -175,6 +179,9 @@ suite.define(() => {
           return;
         }
         await sidebar.locator(".nav-item--home").waitFor();
+        expect(
+          await page.locator(".startup-chat-skeleton, .startup-sidebar-skeleton").count(),
+        ).toBe(0);
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
@@ -246,6 +253,9 @@ suite.define(() => {
         }
         await gateway.waitForRequest("sessions.list");
         await sidebar.locator(".nav-item--home").waitFor();
+        expect(
+          await page.locator(".startup-chat-skeleton, .startup-sidebar-skeleton").count(),
+        ).toBe(0);
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
         await transcript

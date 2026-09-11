@@ -83,26 +83,32 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-app-shell")).toBeNull();
   });
 
-  it("keeps cold first connections on the existing splash", () => {
+  it("mounts the shell during cold first connections", () => {
     const { container, draw } = createWarmSurface(false);
     draw();
 
-    expect(container.querySelector(".connect-splash")).not.toBeNull();
-    expect(container.querySelector("openclaw-app-shell")).toBeNull();
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+    expect(container.querySelector("openclaw-login-gate")).toBeNull();
   });
 
   it.each(["connecting", "starting"] as const)(
-    "does not replace a manual login submission with warm shell during %s",
+    "preserves manual submission admission during %s",
     (phase) => {
       const { app, snapshot, container, draw } = createWarmSurface();
       Object.assign(app, { loginGatePinned: true });
       snapshot.phase = phase;
       draw();
 
-      expect(container.querySelector("openclaw-app-shell")).toBeNull();
       expect(
-        container.querySelector(phase === "starting" ? ".connect-splash" : "openclaw-login-gate"),
+        container.querySelector(
+          phase === "starting" ? "openclaw-app-shell" : "openclaw-login-gate",
+        ),
       ).not.toBeNull();
+      expect(
+        container.querySelector(
+          phase === "starting" ? "openclaw-login-gate" : "openclaw-app-shell",
+        ),
+      ).toBeNull();
     },
   );
 });

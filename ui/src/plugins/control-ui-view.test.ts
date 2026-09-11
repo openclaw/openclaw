@@ -10,6 +10,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { hasPresentedReplacement } from "./control-ui-view-presentation.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
 import "./control-ui-view.runtime.ts";
 
@@ -274,6 +275,7 @@ describe("native UI built-in delegation", () => {
       },
     });
     await vi.waitFor(() => expect(host.textContent).toBe("Custom workspace"));
+    expect(hasPresentedReplacement(host, "workspace")).toBe(true);
     const retired = host.querySelector<LitElement>("openclaw-plugin-view")!;
     expect(link.isConnected).toBe(false);
 
@@ -312,6 +314,7 @@ describe("native UI built-in delegation", () => {
     await vi.waitFor(() =>
       expect(host.querySelector("openclaw-plugin-view button")).not.toBeNull(),
     );
+    expect(hasPresentedReplacement(host, "workspace")).toBe(false);
     host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
     expect(host.count).toBe(2);
 

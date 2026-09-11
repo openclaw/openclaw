@@ -334,6 +334,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    hasSettledList: () => canonicalListRevision > 0,
     captureConnectionScope: () => scopedSessions?.captureConnectionScope() ?? null,
     isConnectionScopeCurrent: (
       scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],

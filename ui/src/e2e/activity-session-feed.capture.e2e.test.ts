@@ -298,7 +298,7 @@ suite.define(() => {
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
-        await page.locator(".sidebar").screenshot({
+        await page.locator("openclaw-app-sidebar .sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
         });
@@ -316,7 +316,7 @@ suite.define(() => {
           .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
           .toContain("+2");
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await page.locator(".sidebar").screenshot({
+        await page.locator("openclaw-app-sidebar .sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "02-sidebar-online-user-collapsed-light.png"),
         });
@@ -333,7 +333,7 @@ suite.define(() => {
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
         await page.emulateMedia({ colorScheme: "dark" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        await page.locator(".sidebar").screenshot({
+        await page.locator("openclaw-app-sidebar .sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "03-sidebar-online-persisted-collapsed-dark.png"),
         });
@@ -342,7 +342,7 @@ suite.define(() => {
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await page.locator(".sidebar").screenshot({
+        await page.locator("openclaw-app-sidebar .sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "04-sidebar-online-user-expanded-dark.png"),
         });

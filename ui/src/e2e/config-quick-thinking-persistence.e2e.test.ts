@@ -64,8 +64,9 @@ suite.define(() => {
       const initialConfig = configResponse("low", "hash-1");
       const savedConfig = configResponse("high", "hash-2");
       const gateway = await installMockGateway(page, {
+        heldMethods: ["config.patch"],
         methodResponses: {
-          "config.get": { sequence: [initialConfig, savedConfig] },
+          "config.get": initialConfig,
           "config.patch": savedConfig,
         },
       });
@@ -81,6 +82,8 @@ suite.define(() => {
       await modelCard.getByRole("radio", { name: "High", exact: true }).click();
 
       const raw = requestRaw(await gateway.waitForRequest("config.patch"));
+      await gateway.setMethodResponse("config.get", savedConfig);
+      await gateway.resolveDeferred("config.patch", savedConfig);
       expect(raw).toEqual({
         agents: {
           defaults: {
@@ -118,8 +121,9 @@ suite.define(() => {
         const initialConfig = configResponse("low", "hash-1", initial);
         const savedConfig = configResponse("low", "hash-2", next);
         const gateway = await installMockGateway(page, {
+          heldMethods: ["config.patch"],
           methodResponses: {
-            "config.get": { sequence: [initialConfig, savedConfig] },
+            "config.get": initialConfig,
             "config.patch": savedConfig,
           },
         });
@@ -139,6 +143,8 @@ suite.define(() => {
         await fastModeGroup.getByRole("radio", { name: nextLabel, exact: true }).click();
 
         const raw = requestRaw(await gateway.waitForRequest("config.patch"));
+        await gateway.setMethodResponse("config.get", savedConfig);
+        await gateway.resolveDeferred("config.patch", savedConfig);
         expect(raw).toEqual({
           agents: {
             defaults: {

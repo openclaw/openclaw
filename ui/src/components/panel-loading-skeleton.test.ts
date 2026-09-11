@@ -78,7 +78,6 @@ describe("panel loading skeleton", () => {
     expect(skeleton?.dataset.panelSkeleton).toBe(variant);
     expect(skeleton?.getAttribute("aria-label")).toBe(`Loading ${variant}`);
     expect(skeleton?.getAttribute("aria-busy")).toBe("true");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
   });
 
   it("supports a compact structural placeholder for nested loading surfaces", async () => {

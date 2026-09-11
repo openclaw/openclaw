@@ -86,8 +86,8 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(controlUiSessionUrl(server.baseUrl, WORK_SESSION_KEY));
       expect(response?.status()).toBe(200);
       await page.locator(".sidebar-brand__search").waitFor();
-      await page.locator(".sidebar-identity-card").waitFor();
-      await page.locator(".sidebar-footer-bar__home").click();
+      await page.locator("openclaw-app-sidebar .sidebar-identity-card").waitFor();
+      await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
       const panel = page.locator("openclaw-assistant-panel");
       await panel.getByRole("button", { name: "Home", exact: true }).waitFor();
       expect(await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).count()).toBe(
@@ -118,7 +118,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(controlUiSessionUrl(server.baseUrl, WORK_SESSION_KEY));
       expect(response?.status()).toBe(200);
 
-      await page.locator(".sidebar-footer-bar__home").click();
+      await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
       const panel = page.locator("openclaw-assistant-panel");
       const openClawTab = panel.getByRole("button", { name: "Ask OpenClaw", exact: true });
       await openClawTab.waitFor();

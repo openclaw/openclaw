@@ -46,7 +46,7 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
-  it.each(["visible", "later page", "another agent"])(
+  it.each(["visible", "later page", "another agent", "cold start"])(
     "opens a linked job's history when the job is on %s",
     async (placement) => {
       const job: CronJob = {
@@ -104,9 +104,18 @@ describe("CronPage editor state sync", () => {
         }
         return {};
       });
-      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-      const page = createPage(createContext(gateway), { render: true });
+      const coldStart = placement === "cold start";
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, !coldStart);
+      const context = createContext(gateway, coldStart ? null : "main");
+      if (coldStart) {
+        gateway.subscribe(() => context.agentSelection.set("main"));
+      }
+      const page = createPage(context, { render: true });
       page.routeSearch = "?job=linked-job&run=cron%3Alinked-job%3A1";
+      if (coldStart) {
+        await page.updateComplete;
+        gateway.emitSnapshot({ phase: "connected", assistantAgentId: "main" });
+      }
 
       await waitForCronPage(() => expect(page.cron.cronLoading).toBe(true));
       const inventory = cronListResponse(

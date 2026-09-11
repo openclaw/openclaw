@@ -25,6 +25,7 @@ suite.define(() => {
 
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.isEditable()).toBe(true);
         await composer.evaluate((element, text) => {
           const clipboard = new DataTransfer();
           clipboard.setData("text/plain", text);

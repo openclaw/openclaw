@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import {
@@ -24,12 +23,10 @@ import {
   isSidebarRegionCollapsed,
   openSlot,
   reorderPanel,
-  sidebarDock,
-  sidebarMainPanel,
-  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
+import { renderPendingSidebarRegion, renderSidebarRegionFrame } from "./sidebar-region-frame.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 type LazyPanelRuntime = {
@@ -155,7 +152,6 @@ export function renderSidebarRegion(params: {
   requestUpdate: () => void;
 }): TemplateResult {
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
-  const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
   const regionError = hasPanels ? ensureLazyElement("region", params.requestUpdate) : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
@@ -170,9 +166,6 @@ export function renderSidebarRegion(params: {
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
   const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
-  const main = sidebarMainPanel(params.layout);
-  const chatMain = !main || main.slot === "conversation";
-  const column = params.layout.columns[0];
   const activePanelId = params.layout.columns[0]?.activePanelId;
   const activePanelSlot = params.layout.columns[0]?.panels.find(
     (panel) => panel.id === activePanelId,
@@ -180,21 +173,14 @@ export function renderSidebarRegion(params: {
   const regionLoading = panelDefinitions.find(
     (definition) => definition.slot === activePanelSlot,
   )?.loading;
-  return html`<div
-    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
-      params.layout.expanded ? "sidebar-region--expanded" : ""
-    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
-    style=${styleMap({
-      "--side-panel-width": `${column?.width ?? 480}px`,
-      "--side-panel-height": `${column?.height ?? 360}px`,
-    })}
-  >
-    <div class="sidebar-region__header">${params.header ?? nothing}</div>
-    ${
+  return renderSidebarRegionFrame({
+    layout: params.layout,
+    collapsed,
+    header: params.header,
+    primary: params.primary,
+    controller:
       regionError !== undefined
-        ? regionError === null
-          ? (regionLoading ?? null)
-          : null
+        ? nothing
         : html`<openclaw-chat-sidebar-region
             .layout=${params.layout}
             .panelDefinitions=${panelDefinitions}
@@ -204,17 +190,17 @@ export function renderSidebarRegion(params: {
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
             .availableWidth=${params.availableWidth}
-          ></openclaw-chat-sidebar-region>`
-    }
-    <div
-      class="sidebar-region__primary"
-      data-region=${chatMain ? "main" : "side"}
-      ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
-    >
-      ${params.primary}
-    </div>
-    <div class="sidebar-region__right-runtime">${regionError ?? null}</div>
-  </div>`;
+          ></openclaw-chat-sidebar-region>`,
+    runtime:
+      regionError !== undefined
+        ? renderPendingSidebarRegion(
+            params.layout,
+            collapsed,
+            regionError ?? regionLoading ?? null,
+            regionError !== null,
+          )
+        : null,
+  });
 }
 
 export function resolveSidebarLayoutForBoard(params: {

@@ -50,14 +50,16 @@ type UpdatingHost = {
   queryRenderedElement?: (tagName: string) => Element | null;
 };
 
+type LazyCustomElementRequestError = {
+  status: "error";
+  element: OptionalCustomElement;
+  error: unknown;
+  stale: boolean;
+};
+
 type LazyCustomElementRequestState =
   | { status: "loading"; element: OptionalCustomElement }
-  | {
-      status: "error";
-      element: OptionalCustomElement;
-      error: unknown;
-      stale: boolean;
-    };
+  | LazyCustomElementRequestError;
 
 type LazyCustomElementRequest = LazyCustomElementRequestState & {
   action?: () => void;
@@ -66,7 +68,10 @@ type LazyCustomElementRequest = LazyCustomElementRequestState & {
 /** Owns visible lazy-element requests while global registration stays deduplicated by tag. */
 export class LazyCustomElementRequestController {
   private current: LazyCustomElementRequest | undefined;
-  private readonly preloads = new Set<string>();
+  private readonly preloads = new Map<
+    string,
+    "loading" | "settled" | LazyCustomElementRequestError
+  >();
   private active: OptionalCustomElement | undefined;
   private activeDismissed = false;
 
@@ -81,30 +86,57 @@ export class LazyCustomElementRequestController {
     return this.current;
   }
 
+  isPreloading(element: OptionalCustomElement): boolean {
+    return this.preloads.get(element.tagName) === "loading";
+  }
+
+  resetPreload(element: OptionalCustomElement): void {
+    if (this.preloads.get(element.tagName) !== "loading") {
+      this.preloads.delete(element.tagName);
+    }
+  }
+
   preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
       return;
     }
-    this.preloads.add(element.tagName);
+    this.preloads.set(element.tagName, "loading");
     void ensureCustomElementDefined(element.tagName, element.loadModule)
-      .then(
-        () => this.host.requestUpdate(),
-        (error: unknown) => {
-          if (options?.reportError && !this.current) {
-            this.current = {
-              element,
-              error,
-              stale: isStaleChunkImportError(error),
-              status: "error",
-            };
-            this.host.requestUpdate();
-          }
-        },
-      )
-      .finally(() => this.preloads.delete(element.tagName));
+      .then(() => this.preloads.set(element.tagName, "settled"))
+      .catch((error: unknown) => {
+        this.preloads.set(
+          element.tagName,
+          options?.reportError && this.current?.element.tagName !== element.tagName
+            ? { element, error, stale: isStaleChunkImportError(error), status: "error" }
+            : "settled",
+        );
+        this.showPendingPreloadError();
+      })
+      .finally(() => {
+        this.host.requestUpdate();
+      });
+  }
+
+  private showPendingPreloadError(): void {
+    if (this.current) {
+      return;
+    }
+    for (const [tagName, state] of this.preloads) {
+      if (typeof state !== "string") {
+        this.preloads.set(tagName, "settled");
+        if (isOptionalElementDefined(state.element)) {
+          continue;
+        }
+        this.current = state;
+        return;
+      }
+    }
   }
 
   request(element: OptionalCustomElement, action?: () => void): void {
+    if (typeof this.preloads.get(element.tagName) === "object") {
+      this.preloads.set(element.tagName, "settled");
+    }
     const request = {
       action,
       element,
@@ -167,6 +199,7 @@ export class LazyCustomElementRequestController {
       this.current = undefined;
       this.host.requestUpdate();
       this.pumpActive();
+      this.showPendingPreloadError();
     }
   }
 
@@ -191,7 +224,7 @@ export class LazyCustomElementRequestController {
         await this.host.updateComplete;
         if (this.current === request) {
           // Replay only once the host has actually rendered the element.
-          // During boot the shell can still be splash-gated after this update;
+          // During boot the shell can still be unmounted after this update;
           // replaying then re-dispatches an event nothing handles, which
           // re-enters this controller in a microtask cycle that starves the
           // render (and the Gateway socket) forever. The skipped action stays

@@ -134,15 +134,15 @@ export function renderChatComposer(props: ChatComposerProps) {
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
-  const contextNotice = renderContextNotice(
-    props.selectedSession,
-    props.sessions?.defaults?.contextTokens ?? null,
-    {
-      messages: props.messages,
-      providerUsage: props.providerUsage,
-    },
-  );
-  const composerControls = props.composerControls ?? nothing;
+  const contextNotice = props.initialMetadataPending
+    ? nothing
+    : renderContextNotice(props.selectedSession, props.sessions?.defaults?.contextTokens ?? null, {
+        messages: props.messages,
+        providerUsage: props.providerUsage,
+      });
+  const composerControls = props.initialMetadataPending
+    ? nothing
+    : (props.composerControls ?? nothing);
   const composerLeadControl = props.permissionPicker
     ? renderChatPermissionPicker(props.permissionPicker)
     : nothing;
@@ -301,7 +301,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     ? t("chat.goals.objectivePlaceholder")
     : hasVisualAttachments
       ? t("chat.composer.placeholderWithAttachments")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+      : t("chat.composer.placeholder", {
+          name:
+            (props.initialMetadataPending ? props.initialAssistantName : undefined) ??
+            (props.assistantName || "agent"),
+        });
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -663,10 +667,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
-  const cameraFacingMode = props.realtimeTalkVideoStream
-    ?.getVideoTracks?.()[0]
-    ?.getSettings?.().facingMode;
-  const mirrorCameraPreview = cameraFacingMode !== "environment";
+  const mirrorCameraPreview =
+    props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
+    "environment";
   if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
     resetSlashMenuState(state);
   }
@@ -686,7 +689,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     activeMenuOptionLabel: activeSlashMenuOptionLabel,
     menuListboxId: slashMenuListboxId,
   } = resolveComposerMenus(props.paneId, commandsVisible, state, state, state.mentionMenu);
-  const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
 
   return renderChatComposerView({
     props,
@@ -725,7 +727,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
-    slashMenuAnnouncementId,
+    slashMenuAnnouncementId: paneDomId(props.paneId, "slash-active-announcement"),
     goalComposer,
   });
 }

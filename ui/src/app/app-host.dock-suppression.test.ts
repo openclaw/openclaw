@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
+import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
@@ -75,7 +76,12 @@ describe("OpenClaw shell dock suppression", () => {
       },
       agentSelection: { state: { selectedId: "research" } },
       config: {
-        current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
+        current: {
+          assistantIdentity: normalizeAssistantIdentity(),
+          terminalEnabled: true,
+          serverVersion: null,
+          devGitBranch: null,
+        },
       },
       runtimeConfig: {
         state: { configSchema: null, configForm: null, configSnapshot: null, configUiHints: null },

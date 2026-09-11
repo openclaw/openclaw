@@ -1,9 +1,16 @@
 import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import {
+  loadAssistantDestination,
+  resolveAssistantHomeTarget,
+  isAssistantDestinationSuppressed,
+  type AssistantDestination,
+} from "../components/assistant-panel-destination.ts";
 import { desktopPanelLayout } from "../components/desktop/desktop-panel-layout.ts";
 import {
   assistantPanelLayout,
   browserPanelLayout,
   terminalPanelLayout,
+  prepareDockPanelLayout,
 } from "../components/dock-panel-layout.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -17,6 +24,7 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
+import { initialSessionIdentity } from "./initial-session-identity.ts";
 import {
   isOptionalElementDefined,
   type LazyCustomElementRequestController,
@@ -41,7 +49,42 @@ export interface ShellPanelHost {
 }
 
 export class ShellPanelOwner {
+  private savedAssistantDestination: AssistantDestination | undefined;
   private readonly restoredPanels = new Set<OptionalCustomElement>();
+  private readonly prepared = new Map<
+    OptionalCustomElement,
+    ReturnType<typeof prepareDockPanelLayout>
+  >();
+
+  prepareReservations(): void {
+    const host = this.host;
+    const sessionRoute = this.isSessionRoute();
+    for (const [element, store, prefix, visible] of [
+      [host.terminalPanelElement, terminalPanelLayout, "terminal", true],
+      [host.browserPanelElement, browserPanelLayout, "browser", !sessionRoute],
+      [host.desktopPanelElement, desktopPanelLayout, "desktop", !sessionRoute],
+      [host.assistantPanelElement, assistantPanelLayout, "assistant", true],
+    ] as const) {
+      let prepared = this.prepared.get(element);
+      if (!prepared && !isOptionalElementDefined(element)) {
+        prepared = prepareDockPanelLayout(store, prefix);
+        this.prepared.set(element, prepared);
+      }
+      prepared?.synchronize(
+        visible &&
+          !(
+            element === host.assistantPanelElement &&
+            prepared.layout.open &&
+            this.assistantSuppressed()
+          ) &&
+          !(
+            element === host.terminalPanelElement &&
+            sessionRoute &&
+            prepared.layout.dock !== "bottom"
+          ),
+      );
+    }
+  }
 
   constructor(
     private readonly host: ShellPanelHost,
@@ -51,7 +94,24 @@ export class ShellPanelOwner {
     ) => void,
   ) {}
 
+  get assistantRestorationPending(): boolean {
+    const element = this.host.assistantPanelElement;
+    return this.restoredPanels.has(element) && this.host.lazyCustomElements.isPreloading(element);
+  }
+
+  releasePreparedReservations(): void {
+    for (const prepared of this.prepared.values()) {
+      prepared.release();
+    }
+    this.prepared.clear();
+  }
+
   reset(): void {
+    this.savedAssistantDestination = undefined;
+    this.releasePreparedReservations();
+    for (const element of this.restoredPanels) {
+      this.host.lazyCustomElements.resetPreload(element);
+    }
     this.restoredPanels.clear();
   }
 
@@ -85,10 +145,22 @@ export class ShellPanelOwner {
       [host.desktopPanelElement, desktopPanelLayout, !sessionRoute && desktopAvailable],
       [host.assistantPanelElement, assistantPanelLayout, assistantAvailable],
     ] as const) {
+      const prepared = this.prepared.get(element);
       if (!available) {
+        if (gatewaySnapshot.phase === "connected") {
+          prepared?.release();
+        }
         continue;
       }
-      const restored = !this.restoredPanels.has(element) && layout.load().open;
+      if (
+        this.restoredPanels.has(element) &&
+        !host.lazyCustomElements.isPreloading(element) &&
+        !isOptionalElementDefined(element)
+      ) {
+        prepared?.release();
+      }
+      const restored =
+        !this.restoredPanels.has(element) && (prepared?.layout ?? layout.load()).open;
       // Consume the attempt even if its import fails: dismissing the error must
       // survive unrelated updates until the context or document lifecycle resets.
       this.restoredPanels.add(element);
@@ -98,6 +170,37 @@ export class ShellPanelOwner {
         host.lazyCustomElements.preload(element, { reportError: true });
       }
     }
+  }
+
+  private assistantSuppressed(): boolean {
+    const context = this.host.context;
+    if (!context) {
+      return false;
+    }
+    const destination = (this.savedAssistantDestination ??= loadAssistantDestination(
+      context.gateway.connection.gatewayUrl,
+    ));
+    const pathname = this.host.routeState.location?.pathname ?? globalThis.location?.pathname ?? "";
+    const routeId =
+      this.host.routeState.routeId ?? routeIdFromPath(pathname, context.basePath) ?? "chat";
+    const defaults = {
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    };
+    const home = resolveAssistantHomeTarget(defaults, context.agentSelection.state.selectedId);
+    const routeSession = initialSessionIdentity(
+      this.host.routeState.location ?? globalThis.location,
+      context,
+    );
+    return isAssistantDestinationSuppressed({
+      destination,
+      custodianSuppressed: routeId === "custodian",
+      pageRouteId: routeId,
+      pageSessionKey: this.host.routeState.committedSessionKey ?? routeSession.sessionKey,
+      pageAgentId: routeSession.agentId ?? context.agentSelection.state.selectedId ?? "",
+      defaults,
+      home,
+    });
   }
 
   private isSessionRoute(): boolean {

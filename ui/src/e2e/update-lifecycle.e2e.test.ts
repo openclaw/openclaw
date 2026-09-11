@@ -49,7 +49,7 @@ function createDevRun() {
 }
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page.locator(".sidebar-issues-button").click();
+  await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );

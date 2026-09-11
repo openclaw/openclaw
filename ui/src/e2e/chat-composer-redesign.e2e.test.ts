@@ -139,7 +139,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps the loading model picker beside the microphone", async () => {
+  it("reveals the ready model controls beside the microphone", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
@@ -154,18 +154,25 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const model = composer.locator('[data-chat-model-select="true"]');
       const voice = page.getByRole("button", { name: "Start voice input" });
-      await expect.poll(() => model.getAttribute("aria-busy")).toBe("true");
+      await gateway.waitForRequest("models.list");
+      await composer.waitFor({ state: "visible" });
+      expect(await model.count()).toBe(0);
+      await gateway.resolveDeferred("models.list");
+      await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
       await expect.poll(() => voice.isVisible()).toBe(true);
       if (artifactDir) {
         await composer.screenshot({
           animations: "disabled",
-          path: `${artifactDir}/loading-model-picker-spacing.png`,
+          path: `${artifactDir}/ready-model-picker-spacing.png`,
         });
       }
 
       const measureGap = async () => {
-        const [modelBox, voiceBox] = await Promise.all([model.boundingBox(), voice.boundingBox()]);
-        return modelBox && voiceBox ? voiceBox.x - (modelBox.x + modelBox.width) : null;
+        const [controlsBox, voiceBox] = await Promise.all([
+          composer.locator(".agent-chat__composer-controls").boundingBox(),
+          voice.boundingBox(),
+        ]);
+        return controlsBox && voiceBox ? voiceBox.x - (controlsBox.x + controlsBox.width) : null;
       };
       await expect.poll(measureGap).toBeGreaterThanOrEqual(0);
       await expect.poll(measureGap).toBeLessThanOrEqual(16);
@@ -371,7 +378,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
-      const composerShell = page.locator(".agent-chat__composer-shell");
+      const composerShell = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');

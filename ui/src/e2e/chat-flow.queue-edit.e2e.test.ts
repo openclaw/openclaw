@@ -27,6 +27,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
 
       // Offline holds the queue still, so the round-trip stays observable.
       await gateway.setOnline(false);
@@ -82,6 +83,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
@@ -119,6 +121,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
@@ -183,6 +186,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat?session=main`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
       await composer.fill("keep the first run active");
       await page.getByRole("button", { name: "Send message" }).click();
       const active = requireRecord((await gateway.waitForRequest("chat.send")).params);

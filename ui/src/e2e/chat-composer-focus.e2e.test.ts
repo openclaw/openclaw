@@ -137,7 +137,7 @@ suite.define(() => {
 
       await page.keyboard.type("x");
 
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator("openclaw-chat-pane .agent-chat__composer-combobox > textarea");
       await expect.poll(() => composer.inputValue()).toBe("x");
       await expect
         .poll(() => composer.evaluate((element) => document.activeElement === element))
@@ -181,7 +181,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator("openclaw-chat-pane .agent-chat__composer-combobox > textarea");
       await composer.waitFor({ state: "visible" });
 
       for (const [label, selector] of [

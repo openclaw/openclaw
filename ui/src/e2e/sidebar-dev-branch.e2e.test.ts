@@ -57,7 +57,7 @@ suite.define(() => {
 
       const artifactDir = createControlUiE2eArtifactDir("dev-branch");
       await page
-        .locator(".sidebar-shell__footer")
+        .locator("openclaw-app-sidebar .sidebar-shell__footer")
         .screenshot({ path: path.join(artifactDir, "footer-dev-branch.png") });
     });
   });
@@ -68,7 +68,7 @@ suite.define(() => {
 
       const response = await page.goto(suite.server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-agent-card").waitFor();
+      await page.locator("openclaw-app-sidebar .sidebar-agent-card").waitFor();
       expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
     });
   });

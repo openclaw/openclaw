@@ -1,4 +1,3 @@
-import "../../styles/chat/startup-layout.css";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -14,6 +13,7 @@ import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/message-layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/chat/grouped.css";

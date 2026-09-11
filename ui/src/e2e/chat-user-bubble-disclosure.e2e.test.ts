@@ -29,7 +29,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-group.user .chat-bubble");
+      const bubble = page.locator(".chat-pane-cache__pane--active .chat-group.user .chat-bubble");
       await bubble.waitFor({ state: "visible", timeout: 10_000 });
       if (captureUiProofEnabled) {
         await bubble.screenshot({
@@ -66,7 +66,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-group.user .chat-bubble");
+      const bubble = page.locator(".chat-pane-cache__pane--active .chat-group.user .chat-bubble");
       await bubble.waitFor({ state: "visible", timeout: 10_000 });
       const content = bubble.locator(".chat-message-disclosure__content");
       const toggle = bubble.getByRole("button", { name: "Show more" });
@@ -139,7 +139,9 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        const bubble = page.locator(".chat-group.user .chat-bubble").first();
+        const bubble = page
+          .locator(".chat-pane-cache__pane--active .chat-group.user .chat-bubble")
+          .first();
         const toggle = bubble.getByRole("button", { name: "Show more", exact: true });
         await toggle.waitFor({ state: "visible" });
         await page.reload();
@@ -238,7 +240,7 @@ suite.define(() => {
         expect(await content.evaluate((element) => element.clientHeight)).toBeLessThanOrEqual(
           5 * lineHeight + 1,
         );
-        const siblings = page.locator(".chat-group .chat-bubble");
+        const siblings = page.locator(".chat-pane-cache__pane--active .chat-group .chat-bubble");
         expect(await siblings.nth(1).textContent()).toContain("Short follow-up request.");
         expect(await siblings.nth(2).textContent()).toContain("The sample review is complete.");
         const boxes = await siblings.evaluateAll((elements) =>

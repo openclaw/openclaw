@@ -1,4 +1,4 @@
-import type { RouteLocation, RouterState } from "@openclaw/uirouter";
+import type { RouteLocation, RouteMatch, RouterState } from "@openclaw/uirouter";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -8,6 +8,7 @@ export type ShellRouteState = {
   routeFailed?: boolean;
   location?: RouteLocation;
   committedRouteId?: RouteId;
+  committedRouteStatus?: RouteMatch<RouteId>["status"];
   committedLocation?: RouteLocation;
   committedSessionKey?: string;
 };
@@ -37,7 +38,11 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
         }
       : {}),
     ...(committedMatch
-      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
+      ? {
+          committedRouteId: committedMatch.routeId,
+          committedRouteStatus: committedMatch.status,
+          committedLocation: committedMatch.location,
+        }
       : {}),
     ...(committedSessionKey ? { committedSessionKey } : {}),
   };

@@ -1,7 +1,7 @@
 export type DockPanelSide = "bottom" | "left" | "right";
 export type DockPanelPlacement = DockPanelSide | "main";
 
-type DockPanelLayout<TDock extends DockPanelPlacement> = {
+export type DockPanelLayout<TDock extends DockPanelPlacement> = {
   open: boolean;
   dock: TDock;
   height: number;
@@ -10,6 +10,7 @@ type DockPanelLayout<TDock extends DockPanelPlacement> = {
 
 export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = {
   defaults: DockPanelLayout<TDock>;
+  prepared?: { layout: DockPanelLayout<TDock>; detach(): void };
   minHeight: number;
   minWidth: number;
   maxHeight(): number;
@@ -30,7 +31,7 @@ type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
 
 export function createDockPanelLayout<TDock extends DockPanelPlacement>(
   options: DockPanelLayoutOptions<TDock>,
-) {
+): DockPanelLayoutStore<TDock> {
   const defaults: DockPanelLayout<TDock> = {
     open: false,
     dock: options.defaultDock,
@@ -115,3 +116,66 @@ export const assistantPanelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 440,
 });
+
+/** Shared viewport geometry for live docks and their saved-layout preparation. */
+export function writeDockPanelReservation(
+  prefix: string,
+  layout: DockPanelLayout<DockPanelPlacement> | undefined,
+): void {
+  const style = document.documentElement.style;
+  style.setProperty(
+    `--oc-${prefix}-reserve-bottom`,
+    layout?.open && layout.dock === "bottom" ? `${layout.height}px` : "0px",
+  );
+  style.setProperty(
+    `--oc-${prefix}-reserve-right`,
+    layout?.open && layout.dock === "right" ? `${layout.width}px` : "0px",
+  );
+}
+
+/** Transfer the saved layout without rereading storage when the real dock mounts. */
+export function consumePreparedDockPanelLayout<TDock extends DockPanelPlacement>(
+  store: DockPanelLayoutStore<TDock>,
+): DockPanelLayout<TDock> {
+  const prepared = store.prepared;
+  delete store.prepared;
+  prepared?.detach();
+  return prepared?.layout ?? store.load();
+}
+
+export function prepareDockPanelLayout(
+  store: DockPanelLayoutStore<DockPanelPlacement>,
+  prefix: string,
+) {
+  const layout = store.load();
+  let visible = false;
+  const ownsReservation = () => store.prepared?.layout === layout;
+  const synchronize = () => {
+    if (!ownsReservation()) {
+      window.removeEventListener("resize", synchronize);
+      return;
+    }
+    layout.width = Math.min(layout.width, store.maxWidth());
+    layout.height = Math.min(layout.height, store.maxHeight());
+    writeDockPanelReservation(prefix, visible ? layout : undefined);
+  };
+  const detach = () => window.removeEventListener("resize", synchronize);
+  if (layout.open) {
+    store.prepared = { layout, detach };
+    window.addEventListener("resize", synchronize);
+  }
+  return {
+    layout,
+    synchronize(nextVisible: boolean) {
+      visible = nextVisible;
+      synchronize();
+    },
+    release() {
+      window.removeEventListener("resize", synchronize);
+      if (ownsReservation()) {
+        delete store.prepared;
+        writeDockPanelReservation(prefix, undefined);
+      }
+    },
+  };
+}

@@ -90,6 +90,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let eventRefreshQueued = false;
   let lastListOptions: SessionListOptions = {};
   let primaryList: { scope: SessionListScope } = { scope: {} };
+  let settledList: { connection: SessionConnectionScope; query: SessionListOptions } | undefined;
   let listOptionsSource: "none" | "seeded" | "foreground" = "none";
   const observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
@@ -296,6 +297,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         issuedRevision,
         false,
       );
+      settledList = { connection: scope, query: primaryList.scope };
       host.onCanonicalList(nextResult, issuedRevision, requestOptions.agentId, result);
       const state = host.readState();
       const error = host.observerError();
@@ -319,6 +321,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const message = formatUiError(error);
       const ownsError = isErrorCurrent?.() !== false;
       if (isCurrent()) {
+        if (ownsError) {
+          settledList = { connection: scope, query: durableListOptions };
+        }
         const state = host.readState();
         host.publish(
           {
@@ -516,6 +521,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     projectRows: observations.projectRows,
     captureEvent,
     primaryList: () => primaryList,
+    hasSettledList: () =>
+      Boolean(
+        settledList &&
+        host.connection.isCurrent(settledList.connection) &&
+        isSameSessionListQuery(settledList.query, lastListOptions, false),
+      ),
     get requestRevision() {
       return requestRevision;
     },

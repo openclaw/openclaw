@@ -106,7 +106,7 @@ suite.define(() => {
           )
           .toBe(messageWidth);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-        const transcript = page.locator(".chat-thread-inner");
+        const transcript = page.locator("openclaw-chat-pane .chat-thread-inner");
         await transcript
           .getByText("Keep the restored reading column clear of the notch.")
           .waitFor({ state: "attached" });
@@ -115,7 +115,10 @@ suite.define(() => {
             document.documentElement.dir = dir;
           }, direction);
           await captureProof(page, `restored-width-${direction}.png`);
-          for (const frame of [transcript, page.locator(".agent-chat__composer-shell")]) {
+          for (const frame of [
+            transcript,
+            page.locator("openclaw-chat-pane .agent-chat__composer-shell"),
+          ]) {
             const bounds = await frame.evaluate((element) => {
               const rect = element.getBoundingClientRect();
               return { left: rect.left, right: rect.right };
@@ -178,7 +181,7 @@ suite.define(() => {
             ],
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          const transcript = page.locator(".chat-thread-inner");
+          const transcript = page.locator("openclaw-chat-pane .chat-thread-inner");
           await transcript.getByText("The response uses the available transcript width.").waitFor();
           const expectColumn = async (content: Locator) => {
             const frame = await transcript.boundingBox();
@@ -192,14 +195,14 @@ suite.define(() => {
             await page.evaluate((dir) => {
               document.documentElement.dir = dir;
             }, direction);
-            await expectColumn(page.locator(".agent-chat__composer-shell"));
+            await expectColumn(page.locator("openclaw-chat-pane .agent-chat__composer-shell"));
             const frame = await transcript.boundingBox();
             expect(frame!.x - Math.max(4, safeAreaLeft)).toBeCloseTo(
               width - 4 - frame!.x - frame!.width,
               0,
             );
-            await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
-            await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
+            await expectColumn(transcript.locator(".chat-group.assistant > .chat-group-messages"));
+            await expect(transcript.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
           }
           await page
             .locator(".agent-chat__composer-combobox textarea")
@@ -266,7 +269,7 @@ suite.define(() => {
             await expect
               .poll(() => thread.evaluate((element) => element.scrollTop))
               .toBeGreaterThan(0);
-            await expectColumn(page.locator(".agent-chat__composer-shell"));
+            await expectColumn(page.locator("openclaw-chat-pane .agent-chat__composer-shell"));
           }
         },
       );
@@ -603,7 +606,7 @@ suite.define(() => {
           { instanceId: "peer-tab", user: peerUser, ts: Date.now() },
         ],
       });
-      await expect(page.locator(".sidebar-identity-card")).toContainText(localUser.name);
+      await expect(page.locator("button.sidebar-identity-card")).toContainText(localUser.name);
       const before = await readUserAvatarLayout(priorPrompt);
       const peerBefore = await readUserAvatarLayout(peerPrompt);
 

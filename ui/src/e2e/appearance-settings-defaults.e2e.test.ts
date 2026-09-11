@@ -423,7 +423,7 @@ suite.define(() => {
     const page = await context.newPage();
     const initialPrefs = { accent: serverAccent, theme: "knot" };
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["config.get"],
+      heldMethods: ["config.get"],
       methodResponses: {
         "config.get": configResponse(initialPrefs, "appearance-accent-1"),
         "config.patch": { ok: true },

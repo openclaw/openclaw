@@ -12,6 +12,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
 export type { ParsedAgentSessionKey };
+export { isCronSessionKey } from "./classify-session-kind.js";
 
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
@@ -282,14 +283,6 @@ export function parseCronRunScopeSuffix(
     baseSessionKey: raw.slice(0, markerIndex),
     runId: raw.slice(markerIndex + runMarker.length),
   };
-}
-
-export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return false;
-  }
-  return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {

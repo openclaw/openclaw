@@ -15,6 +15,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  isContentReady?: () => boolean;
+  onInitialLayoutReady?: () => void;
   onViewportResize?: () => void;
   onReaderScroll?: () => void;
 };
@@ -45,6 +47,7 @@ export type ChatTranscriptSession = {
     announce: boolean,
     overlay?: unknown,
     header?: TranscriptHeader | null,
+    emptyContent?: TemplateResult,
   ): TemplateResult;
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
@@ -65,7 +68,11 @@ export type ChatTranscriptProjection = {
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
   searchOpen: boolean;
-  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
+  renderRows: (
+    overlay?: unknown,
+    header?: TranscriptHeader | null,
+    emptyContent?: TemplateResult,
+  ) => TemplateResult;
 };
 
 /** Rows and lookup identities that must be promoted as one rendered projection. */
@@ -76,6 +83,7 @@ export type TranscriptRenderSnapshot<T> = {
   announce: boolean;
   overlay: unknown;
   header: TranscriptHeader | null;
+  emptyContent?: TemplateResult;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
 };

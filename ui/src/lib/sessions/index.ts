@@ -554,6 +554,7 @@ export function createSessionCapability(
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    hasSettledList: roster.hasSettledList,
     githubPublication,
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: () => connection.capture(),

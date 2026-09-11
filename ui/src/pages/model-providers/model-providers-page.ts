@@ -185,7 +185,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => {
-        if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
+        const { connected, configSnapshot, configLoading } = runtimeConfig.state;
+        if (connected && !configSnapshot && !configLoading) {
           void runtimeConfig.ensureLoaded().catch(() => undefined);
         }
         this.profileActions.flushPendingOrders();

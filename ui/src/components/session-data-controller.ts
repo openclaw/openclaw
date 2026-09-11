@@ -170,6 +170,19 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return this.host.connected;
   }
 
+  get initialListReady(): boolean {
+    const sessions = this.context?.sessions;
+    if (!sessions) {
+      return false;
+    }
+    if (hasSidebarListFilter(this.host)) {
+      const snapshot = sessions.listSnapshot(this.sessionListQuery(this.expandedAgentId()));
+      return !snapshot.loading && Boolean(snapshot.result || snapshot.error);
+    }
+    // Background hydration does not set loading; history can reconcile a partial result first.
+    return sessions.hasSettledList();
+  }
+
   expandedAgentId = (): string => this.host.expandedAgentId();
 
   readonly requestSessionDataUpdate = () => this.host.requestUpdate();

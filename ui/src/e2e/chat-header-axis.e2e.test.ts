@@ -171,12 +171,16 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox > textarea").focus();
+        const composer = page.locator(
+          "openclaw-chat-pane.chat-pane-cache__pane--active .agent-chat__composer-combobox > textarea",
+        );
+        await expect.poll(() => composer.isEditable()).toBe(true);
+        await composer.focus();
         await page.keyboard.press("ControlOrMeta+f");
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();
         const [headerBox, searchBox] = await Promise.all([
-          page.locator(".chat-pane__header").first().boundingBox(),
+          page.locator("openclaw-chat-pane .chat-pane__header").first().boundingBox(),
           search.boundingBox(),
         ]);
         expect(headerBox).not.toBeNull();

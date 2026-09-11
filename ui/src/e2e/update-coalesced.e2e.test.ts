@@ -17,7 +17,7 @@ const suite = createControlUiE2eSuite({
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page.locator(".sidebar-issues-button").click();
+  await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
@@ -69,7 +69,7 @@ suite.define(() => {
           },
         });
 
-        await page.locator(".sidebar-issues-button").click();
+        await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
         const updateIssue = page.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
@@ -228,7 +228,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await page.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-issues-button").click();
+        await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
         const updateIssue = page.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
@@ -243,7 +243,9 @@ suite.define(() => {
           .getByText("⬆️ OpenClaw update in progress: restarting.", { exact: true })
           .waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
+        expect(
+          await page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count(),
+        ).toBe(1);
         expect(pageErrors).toEqual([]);
         await captureUpdateProof(page, artifactDir, "coalesced-restart-banner.png");
       },

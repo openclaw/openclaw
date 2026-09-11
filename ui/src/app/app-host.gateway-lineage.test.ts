@@ -403,7 +403,7 @@ describe("Control UI Gateway target lineage", () => {
     expect(clients[1]?.opts.password).toBeUndefined();
   });
 
-  it("keeps retryable Gateway startup on the initial progress surface", () => {
+  it("keeps retryable Gateway startup in the shell", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
     clients[0]?.opts.onClose?.({
@@ -422,12 +422,11 @@ describe("Control UI Gateway target lineage", () => {
     const surface = renderGatewaySurface(gateway);
 
     expect(gateway.snapshot.phase).toBe("starting");
-    expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
-    expect(surface).toContain("Gateway starting…");
+    expect(surface).toContain("<openclaw-app-shell");
     expect(surface).not.toContain("<openclaw-login-gate");
   });
 
-  it("shows startup progress after a manual connection attempt", () => {
+  it("mounts the shell while a manual connection waits for Gateway startup", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
     clients[0]?.opts.onClose?.({
@@ -472,7 +471,7 @@ describe("Control UI Gateway target lineage", () => {
     });
     render(app.render(), container);
 
-    expect(container.innerHTML).toContain("Gateway starting…");
+    expect(container.innerHTML).toContain("<openclaw-app-shell");
     expect(container.innerHTML).not.toContain("<openclaw-login-gate");
 
     clients[1]?.opts.onHello?.(HELLO);
@@ -500,8 +499,8 @@ describe("Control UI Gateway target lineage", () => {
 
       const surface = renderGatewaySurface(gateway, documentView);
 
-      expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
-      expect(surface).toContain("Gateway starting…");
+      expect(surface).toContain('class="skeleton skeleton-line skeleton-line--medium"');
+      expect(surface).not.toContain("Gateway starting…");
     },
   );
 

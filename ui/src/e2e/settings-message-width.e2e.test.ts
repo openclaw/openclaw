@@ -45,7 +45,7 @@ suite.define(() => {
       await widthInput.waitFor();
       const restoredWidth = await widthInput.inputValue();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      const transcript = page.locator(".chat-thread-inner");
+      const transcript = page.locator(".chat-pane-cache__pane--active .chat-thread-inner");
       await transcript.getByText("A comfortable reading column.").waitFor();
       const rendered = await transcript.evaluate((element) => ({
         maxWidth: getComputedStyle(element).maxWidth,

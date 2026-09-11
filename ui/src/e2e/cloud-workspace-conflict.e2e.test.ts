@@ -170,7 +170,7 @@ suite.define(() => {
         await capture(page, "01-live-conflict.png");
 
         await page.setViewportSize({ width: 390, height: 844 });
-        const composer = page.locator(".agent-chat__composer-shell");
+        const composer = page.locator("openclaw-chat-pane .agent-chat__composer-shell");
         const title = notice.locator(".chat-composer-neighbor-card__copy strong");
         const summary = notice.locator(".chat-composer-neighbor-card__copy > span");
         const dismiss = notice.getByRole("button", { name: "Dismiss workspace conflict notice" });
@@ -266,7 +266,7 @@ suite.define(() => {
           expect(response?.status()).toBe(200);
           const notice = page.locator(".chat-group.other").filter({ hasText: content });
           await notice.waitFor({ timeout: 10_000 });
-          expect(await page.locator(".chat-group.assistant").count()).toBe(0);
+          expect(await page.locator("openclaw-chat-pane .chat-group.assistant").count()).toBe(0);
           await page.reload();
           await notice.waitFor({ timeout: 10_000 });
           expect(await notice.count()).toBe(1);

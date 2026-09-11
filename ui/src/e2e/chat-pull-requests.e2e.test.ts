@@ -238,7 +238,7 @@ describeControlUiE2e("session pull request chips", () => {
       .locator(".chat-prs")
       .evaluate((node) => node.getBoundingClientRect().bottom);
     const composerTop = await page
-      .locator(".agent-chat__composer-shell")
+      .locator("openclaw-chat-pane .agent-chat__composer-shell")
       .evaluate((node) => node.getBoundingClientRect().top);
     expect(rowBottom).toBeLessThanOrEqual(composerTop);
 
@@ -363,7 +363,9 @@ describeControlUiE2e("session pull request chips", () => {
     // The row shares the composer's centered width; it is part of the input
     // stack, not a full-pane banner.
     const rowBox = await page.locator(".chat-prs").boundingBox();
-    const composerBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+    const composerBox = await page
+      .locator("openclaw-chat-pane .agent-chat__composer-shell")
+      .boundingBox();
     expect(rowBox && composerBox).toBeTruthy();
     if (rowBox && composerBox) {
       expect(Math.abs(rowBox.width - composerBox.width)).toBeLessThanOrEqual(1);

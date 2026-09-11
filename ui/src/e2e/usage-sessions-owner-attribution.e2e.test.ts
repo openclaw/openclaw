@@ -47,6 +47,15 @@ async function prepareUsageProofPage(page: Page) {
   }, COMMUNITY_INVITE_KEY);
 }
 
+async function selectAllAgents(page: Page) {
+  const scope = page.locator(".agent-scope-control openclaw-agent-select");
+  await scope.locator(".agent-select__trigger").click();
+  await scope
+    .locator("wa-dropdown-item[data-agent-option]")
+    .filter({ hasText: "All agents" })
+    .click();
+}
+
 async function dragTimelineRange(page: Page, fraction: number) {
   const panel = page.locator(".session-detail-panel");
   const handle = panel.locator(".chart-handle-right");
@@ -226,6 +235,7 @@ suite.define(() => {
                 .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
                 .click();
 
+              await selectAllAgents(page);
               const otherRow = page.locator(
                 `.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`,
               );
@@ -465,6 +475,7 @@ suite.define(() => {
               ]);
               await page.goto(new URL("usage", suite.server.baseUrl).toString());
               await waitForControlUiGatewayReady(page);
+              await selectAllAgents(page);
               const selected = page.locator(
                 `.session-bar-row[title="${key}"] .session-bar-selection`,
               );

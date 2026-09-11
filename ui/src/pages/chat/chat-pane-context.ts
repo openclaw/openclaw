@@ -8,6 +8,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
+import { initialAssistantName } from "../../lib/assistant-identity.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -456,6 +457,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // active-run snapshot before secondary session surfaces hydrate.
       const historyRefresh = refreshPageChat(state, {
         startup: true,
+        onInitialModelCatalogSettled: () => this.completeInitialComposerPreparation(),
         awaitHistory: true,
         deferBranches: true,
         historyLoad: resumedHistory,
@@ -484,11 +486,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     }
     // Keep the session-specific identity loaded by agent.identity.get across
-    // ordinary gateway snapshots. Reset to the configured fallback only when
-    // the logical connection changes; the startup path refreshes the identity
-    // for the active session afterward.
+    // ordinary gateway snapshots. A new connection starts from its routed agent
+    // in the cached roster; the session identity request refreshes it afterward.
     if (sourceChanged) {
-      state.assistantName = this.context.config.current.assistantIdentity.name;
+      state.assistantName = initialAssistantName(
+        this.context.agents.state.agentsList?.agents.find((agent) => agent.id === assistantAgentId),
+        this.context.config.current.assistantIdentity.name,
+      );
     }
     if (snapshot.phase !== "connected") {
       if (wasConnected) {
@@ -550,6 +554,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void syncSelectedSessionMessageSubscription(state, { force: true });
       const historyRefresh = refreshPageChat(state, {
         startup: true,
+        onInitialModelCatalogSettled: () => this.completeInitialComposerPreparation(),
         awaitHistory: true,
         deferBranches: true,
         historyLoad: resumedHistory,

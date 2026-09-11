@@ -68,15 +68,11 @@ export function fitSidebarLayout(
     column.height = clampHeight(column.height);
     return next;
   }
-  const maxColumnWidth = Math.max(
-    SIDEBAR_MIN_WIDTH_PX,
-    Math.min(SIDEBAR_MAX_WIDTH_PX, availableWidth * 0.6),
-  );
-  const budget = Math.max(0, availableWidth - SIDEBAR_MAIN_MIN_WIDTH_PX - SIDEBAR_DIVIDER_WIDTH_PX);
+  const budget = availableWidth - SIDEBAR_MAIN_MIN_WIDTH_PX - SIDEBAR_DIVIDER_WIDTH_PX;
   if (SIDEBAR_MIN_WIDTH_PX > budget) {
     return null;
   }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
+  column.width = Math.min(availableWidth * 0.6, budget, clampWidth(column.width));
   return next;
 }
 

@@ -1,23 +1,30 @@
-import "../../styles/chat/startup-layout.css";
 import { consume } from "@lit/context";
 import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
+import {
+  startupPresentationContext,
+  READY_STARTUP_PRESENTATION,
+  type StartupPresentation,
+} from "../../app/startup-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { markdownBlocks } from "../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
-import "../../components/openclaw-mascot.ts";
+import { renderChatTranscriptSkeleton } from "../../components/startup-chat-skeleton.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/openclaw-mascot.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CHAT_PANE_LIFECYCLE_CHANGED_EVENT } from "../chat/chat-history-events.ts";
+import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/message-layout.css";
-import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
+import "../../styles/chat/composer.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
@@ -31,6 +38,13 @@ class CustodianSurface extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
+  @consume({ context: startupPresentationContext, subscribe: true })
+  private startup: StartupPresentation = READY_STARTUP_PRESENTATION;
+
+  get transcriptPresentationReady(): boolean {
+    return !this.isUpdatePending && !this.store.transcript.refreshing;
+  }
+
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) newAgentIntent = false;
@@ -41,6 +55,7 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
+  private initialPresentationManaged = false;
   private lastMessageId: number | null = null;
 
   constructor() {
@@ -69,6 +84,7 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override willUpdate(): void {
+    this.initialPresentationManaged ||= this.startup.stage !== "ready";
     this.store.connect(this.context, sessionVariant(this.onboarding, this.newAgentIntent));
   }
 
@@ -79,14 +95,26 @@ class CustodianSurface extends OpenClawLightDomElement {
         (question, admission, display) => void store.send(question, display, false, admission),
       );
     }
-    const transcript = this.querySelector<HTMLElement>(".custodian__messages");
+    const transcript = this.querySelector<HTMLElement>(
+      ".custodian__messages:not(.custodian__startup)",
+    );
     const messageId = this.store.messages.at(-1)?.id ?? null;
     if (messageId !== this.lastMessageId) {
       this.lastMessageId = messageId;
-      const lastMessage = transcript?.lastElementChild;
-      if (lastMessage instanceof HTMLElement) {
-        lastMessage.scrollIntoView?.({ block: "nearest" });
+      if (transcript && this.startup.stage !== "ready") {
+        // Hidden messages cannot scrollIntoView; position the live scroller before reveal.
+        transcript.scrollTop = transcript.scrollHeight;
+      } else {
+        const lastMessage = transcript?.lastElementChild;
+        if (lastMessage instanceof HTMLElement) {
+          lastMessage.scrollIntoView?.({ block: "nearest" });
+        }
       }
+    }
+    if (this.startup.stage !== "ready") {
+      this.dispatchEvent(
+        new CustomEvent(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, { bubbles: true, composed: true }),
+      );
     }
   }
 
@@ -143,6 +171,7 @@ class CustodianSurface extends OpenClawLightDomElement {
           emptyError ? "custodian-surface--empty-error" : ""
         }"
       >
+        ${this.initialPresentationManaged ? html`<div class="custodian__messages custodian__startup" aria-hidden="true" inert>${renderChatTranscriptSkeleton()}</div>` : nothing}
         <div
           class="custodian__messages"
           ${markdownBlocks()}

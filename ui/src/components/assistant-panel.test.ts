@@ -32,6 +32,7 @@ type TestAssistantPanel = HTMLElement & {
   pageAgentId: string;
   pageRouteFailed: boolean;
   assistantPanelOpen: boolean;
+  homePresentationPending: boolean;
   minimizeRequestId: number;
   store: CustodianSessionStore;
   custodianSuppressed: boolean;
@@ -353,6 +354,7 @@ describe("assistant panel", () => {
   it("restores Home only after the selected transcript has rendered, preserving dock geometry", async () => {
     const { panel: replacement, provider } = await restoreHomePanel();
     const home = () => replacement.querySelector("openclaw-home-session");
+    expect(replacement.homePresentationPending).toBe(true);
     expect(replacement.assistantPanelOpen).toBe(true);
     expect(document.documentElement.style.getPropertyValue("--oc-assistant-reserve-right")).toBe(
       "440px",
@@ -387,6 +389,9 @@ describe("assistant panel", () => {
     replacement.pageSessionKey = "agent:main:task";
     await replacement.updateComplete;
     await vi.waitFor(() => expect(home()).not.toBeNull());
+    expect(replacement.homePresentationPending).toBe(true);
+    home()!.append(document.createElement("openclaw-chat-pane"));
+    expect(replacement.homePresentationPending).toBe(false);
     expect(document.documentElement.style.getPropertyValue("--oc-assistant-reserve-right")).toBe(
       "440px",
     );

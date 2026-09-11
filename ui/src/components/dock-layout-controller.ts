@@ -6,7 +6,12 @@ import {
   type ReactiveControllerHost,
   type TemplateResult,
 } from "lit";
-import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
+import {
+  consumePreparedDockPanelLayout,
+  writeDockPanelReservation,
+  type DockPanelLayoutStore,
+  type DockPanelPlacement,
+} from "./dock-panel-layout.ts";
 import "./resizable-divider.ts";
 
 type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
@@ -56,7 +61,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       this.open = this.options.isAvailable();
       return;
     }
-    const layout = this.options.layout.load();
+    const layout = consumePreparedDockPanelLayout(this.options.layout);
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
     this.height = layout.height;
@@ -146,15 +151,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     // Reserving the viewport here would apply the standalone dock a second time.
     const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
     const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
-    const root = document.documentElement.style;
-    root.setProperty(
-      `--oc-${this.options.reservationPrefix}-reserve-bottom`,
-      visible && this.dock === "bottom" ? `${this.height}px` : "0px",
-    );
-    root.setProperty(
-      `--oc-${this.options.reservationPrefix}-reserve-right`,
-      visible && this.dock === "right" ? `${this.width}px` : "0px",
-    );
+    writeDockPanelReservation(this.options.reservationPrefix, visible ? this : undefined);
   }
 
   private resize(event: CustomEvent<{ splitRatio: number }>): void {
@@ -203,9 +200,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     if (this.options.reserveViewport === false) {
       return;
     }
-    const root = document.documentElement.style;
-    root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
-    root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
+    writeDockPanelReservation(this.options.reservationPrefix, undefined);
   }
 
   private isFullscreen(): boolean {

@@ -22,6 +22,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
 
       // Offline is the honest way to hold a queue still: nothing drains while
       // the Gateway is gone, so the rows stay observable.
@@ -79,6 +80,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
 
       await gateway.setOnline(false);
       await gateway.closeLatest();

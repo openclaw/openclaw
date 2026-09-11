@@ -898,7 +898,9 @@ suite.define(() => {
       // Sections must lay out below the rows above them, not paint over them.
       const overlaps = await page.evaluate(() => {
         const rects = [
-          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+          ...document.querySelectorAll(
+            "openclaw-app-sidebar .sidebar-recent-session, openclaw-app-sidebar .sidebar-recent-sessions__head",
+          ),
         ]
           .map((element) => {
             const rect = element.getBoundingClientRect();
@@ -966,7 +968,9 @@ suite.define(() => {
       // Sections must stack below each other, not paint over the rows above.
       const overlaps = await page.evaluate(() => {
         const rects = [
-          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+          ...document.querySelectorAll(
+            "openclaw-app-sidebar .sidebar-recent-session, openclaw-app-sidebar .sidebar-recent-sessions__head",
+          ),
         ]
           .map((element) => {
             const rect = element.getBoundingClientRect();

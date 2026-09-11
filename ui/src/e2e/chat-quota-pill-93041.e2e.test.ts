@@ -533,7 +533,19 @@ suite.define(() => {
         sessionKey: "global",
         sessionScope: "global",
       });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").waitFor();
+      await page.evaluate(
+        (pathname) => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: {
+              context: { navigate: (route: string, options: { pathname: string }) => void };
+            };
+          };
+          app.runtime.context.navigate("chat", { pathname });
+        },
+        new URL(controlUiSessionUrl(suite.server.baseUrl, "global")).pathname,
+      );
       const connectRequest = await gateway.waitForRequest("connect");
       const { client: connectedClient } = connectRequest.params as {
         client: { instanceId: string };
@@ -606,7 +618,7 @@ suite.define(() => {
             };
           }),
         )
-        .toEqual({ name: "OpenClaw", avatar: null, renderedAvatar: null });
+        .toEqual({ name: "Work", avatar: null, renderedAvatar: null });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {

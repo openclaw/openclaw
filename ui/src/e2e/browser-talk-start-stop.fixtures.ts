@@ -468,7 +468,9 @@ export async function captureComposerProof(
 ) {
   const artifactDir = path.join(owner.artifactDir, "voice-controls");
   await page
-    .locator(".agent-chat__composer-shell")
+    .locator(
+      ":is(openclaw-chat-pane.chat-pane-cache__pane--active, openclaw-new-session-page) .agent-chat__composer-shell:visible",
+    )
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
@@ -489,7 +491,7 @@ export async function captureVideoTalkProof(
 ) {
   const artifactDir = path.join(owner.artifactDir, "video-talk");
   await page
-    .locator(".agent-chat__composer-shell")
+    .locator("openclaw-chat-pane.chat-pane-cache__pane--active .agent-chat__composer-shell:visible")
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 

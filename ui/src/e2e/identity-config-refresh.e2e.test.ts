@@ -68,7 +68,7 @@ suite.define(() => {
       await expect.poll(() => composer.getAttribute("placeholder")).toContain(initialName);
       await composer.fill(draft);
       const sessionUrl = page.url();
-      expect(await page.locator(".chat-group").count()).toBe(0);
+      expect(await page.locator(".chat-pane-cache__pane--active .chat-group").count()).toBe(0);
       await capture("initial.png");
 
       const successfulResponses = await page.evaluateHandle(
@@ -122,7 +122,7 @@ suite.define(() => {
         expect([initialAvatar, nextAvatar]).toContain(observed.avatar);
         expect(await composer.inputValue()).toBe(draft);
         expect(page.url()).toBe(sessionUrl);
-        expect(await page.locator(".chat-group").count()).toBe(0);
+        expect(await page.locator(".chat-pane-cache__pane--active .chat-group").count()).toBe(0);
         expect((await gateway.getRequests("chat.send")).length).toBe(0);
         await capture("settled.png");
 
@@ -133,9 +133,16 @@ suite.define(() => {
         expect(params.message).toBe(draft);
         const runId = requireString(params.idempotencyKey, "chat run id");
         await gateway.emitChatFinal({ runId, text: reply });
-        await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor();
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-group.assistant .chat-text", {
+            hasText: reply,
+          })
+          .waitFor();
         const sender = (
-          await page.locator(".chat-group.assistant .chat-sender-name").first().textContent()
+          await page
+            .locator(".chat-pane-cache__pane--active .chat-group.assistant .chat-sender-name")
+            .first()
+            .textContent()
         )?.trim();
         expect(page.url()).toBe(sessionUrl);
         expect((await gateway.getRequests("chat.send")).length).toBe(1);

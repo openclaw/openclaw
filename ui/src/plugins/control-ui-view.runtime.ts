@@ -20,6 +20,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
+import { PLUGIN_SURFACE_PRESENTATION_CHANGED_EVENT } from "./control-ui-view-presentation.ts";
 import { renderPluginContribution, type ViewKind } from "./control-ui-view.ts";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
@@ -55,6 +56,33 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
       }
     },
   );
+
+  get replacesDefault(): boolean {
+    const current = this.resolveRegistration();
+    return Boolean(
+      this.isConnected &&
+      this.presented &&
+      this.kind === "replacements" &&
+      !this.ownerChanged &&
+      !this.error &&
+      current?.value === this.registration?.value &&
+      current?.signal === this.registration?.signal &&
+      !current?.signal.aborted &&
+      this.mountAbort &&
+      !this.mountAbort.signal.aborted &&
+      this.viewContext &&
+      this.defaultContainers.size === 0,
+    );
+  }
+
+  private notifyPresentation(): void {
+    (this.defaultHost ?? this).dispatchEvent(
+      new Event(PLUGIN_SURFACE_PRESENTATION_CHANGED_EVENT, {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
 
   private resolveRegistration(): ViewRegistration | undefined {
     const runtime = this.context?.plugins;
@@ -141,15 +169,23 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
             if (abort.signal.aborted) {
               throw new Error("This plugin UI view has ended.");
             }
+            const firstDefault = this.defaultContainers.size === 0;
             this.defaultContainers.add(target);
             render(this.defaultView, target, { host: this.defaultHost ?? this });
+            if (firstDefault) {
+              this.notifyPresentation();
+            }
             return () => {
-              this.defaultContainers.delete(target);
+              const removed = this.defaultContainers.delete(target);
               render(nothing, target);
+              if (removed && this.defaultContainers.size === 0) {
+                this.notifyPresentation();
+              }
             };
           },
         };
         this.handle = registration.value.mount(container, this.viewContext);
+        this.notifyPresentation();
       } else if (this.viewContext) {
         this.viewContext = {
           ...this.viewContext,
@@ -225,6 +261,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   }
 
   private unmount(): void {
+    const mounted = this.viewContext !== undefined;
     this.mountGeneration += 1;
     this.mountAbort?.abort();
     this.mountAbort = undefined;
@@ -240,6 +277,9 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     }
     this.defaultContainers.clear();
     this.viewContext = undefined;
+    if (mounted) {
+      this.notifyPresentation();
+    }
   }
 
   override connectedCallback(): void {

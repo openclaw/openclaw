@@ -272,6 +272,7 @@ async function openStreamingTurn(
     state: "delta",
   });
   await page.locator(".chat-bubble.streaming").getByText("warmup").waitFor();
+  await page.locator(".startup-chat-skeleton").waitFor({ state: "detached" });
   return runId;
 }
 

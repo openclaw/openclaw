@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { createQaGatewayChild } from "../api.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
@@ -176,6 +177,7 @@ suite.define(() => {
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
             await confirmation.getByRole("button", { name: /^Switch to /u }).click();
+            await waitForControlUiGatewayReady(page);
 
             await page.locator("#new-session-where-trigger").click();
             const place = page.locator("wa-popover.new-session-page__where-popover");
@@ -227,6 +229,7 @@ suite.define(() => {
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
+            await waitForControlUiGatewayReady(page);
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
@@ -266,6 +269,7 @@ suite.define(() => {
             );
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.reload();
+            await waitForControlUiGatewayReady(page);
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);

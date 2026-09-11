@@ -439,7 +439,9 @@ suite.define(() => {
           await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [busyRow]),
         );
       }
-      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      await page
+        .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-session-sort")
+        .click();
       const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
       expect(
         await previewToggle.evaluate(

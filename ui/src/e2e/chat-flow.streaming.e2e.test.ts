@@ -435,7 +435,7 @@ suite.define(() => {
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
         const [alertBox, composerBox] = await Promise.all([
           alert.boundingBox(),
-          page.locator(".agent-chat__composer-shell").boundingBox(),
+          page.locator("openclaw-chat-pane .agent-chat__composer-shell").boundingBox(),
         ]);
         expect(alertBox).not.toBeNull();
         expect(composerBox).not.toBeNull();

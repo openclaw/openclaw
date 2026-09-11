@@ -186,7 +186,7 @@ suite.define(() => {
             : controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"),
         );
         if (surface === "panel") {
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
           await page
             .locator("openclaw-assistant-panel")
             .getByRole("button", { name: "Ask OpenClaw", exact: true })

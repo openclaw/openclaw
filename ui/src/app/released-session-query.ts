@@ -24,7 +24,7 @@ export function resolvePersistedAgentId(
 }
 
 export function releasedSessionQuery(
-  location: RouteLocation,
+  location: Pick<RouteLocation, "pathname" | "search">,
   basePath: string,
 ): ReleasedSessionQuery | null {
   const params = new URLSearchParams(location.search);

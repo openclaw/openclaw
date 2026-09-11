@@ -25,6 +25,19 @@ import { renderChat } from "./chat-view.ts";
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
+  it("uses the routed agent's cached name before requests resolve", () => {
+    const context = createInitializationContext();
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "research", identity: { name: "Cached Research" } }],
+    };
+    const pane = createRenderTestChatPane();
+    pane.sessionKey = "agent:research:main";
+    expect(pane.initialize(context).assistantName).toBe("Cached Research");
+  });
+
   it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

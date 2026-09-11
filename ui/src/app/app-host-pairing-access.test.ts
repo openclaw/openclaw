@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
@@ -94,7 +95,7 @@ function createPairingShell(params: {
       snapshot: overlaySnapshot,
       openDevicePairSetup,
     },
-    config: { current: {} },
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
     runtimeConfig: {
       state: { configSnapshot: null, configForm: null, configSchema: null, configUiHints: {} },
     },

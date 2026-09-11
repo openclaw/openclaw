@@ -696,6 +696,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.resetConfigViewState();
     }
     const config = runtimeConfig.state;
+    if (!config.connected) {
+      return;
+    }
     if (!config.configSnapshot && !config.configLoading) {
       void runtimeConfig
         .ensureLoaded()

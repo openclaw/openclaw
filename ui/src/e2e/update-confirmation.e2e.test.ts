@@ -57,7 +57,7 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   }
-  await page.locator(".sidebar-issues-button:visible").click();
+  await page.locator("openclaw-app-sidebar .sidebar-issues-button:visible").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
@@ -96,7 +96,7 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
 
         // The Inbox is the sole update surface; the badge carries the attention.
-        const inboxBadge = page.locator(".sidebar-issues-button__count");
+        const inboxBadge = page.locator("openclaw-app-sidebar .sidebar-issues-button__count");
         await inboxBadge.waitFor();
         expect(
           await page
@@ -107,12 +107,12 @@ suite.define(() => {
                 .filter((className) => typeof className === "string" && className.length > 0),
             ),
         ).toEqual(["sr-only", "sidebar-issues-button"]);
-        await page.locator(".sidebar-shell__footer").screenshot({
+        await page.locator("openclaw-app-sidebar .sidebar-shell__footer").screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "00-footer-inbox-badge.png"),
         });
 
-        await page.locator(".sidebar-issues-button").click();
+        await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
         const updateIssue = page.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
@@ -123,13 +123,15 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await inboxBadge.waitFor({ state: "detached" });
 
-        await page.locator(".sidebar-identity-card").click();
+        await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
         await page.getByText("Update available", { exact: true }).waitFor();
         await page.keyboard.press("Escape");
 
         await page.reload();
         await gateway.waitForRequest("chat.startup");
-        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count(),
+        ).toBe(0);
 
         await gateway.setGatewayBootId("gateway-boot-b");
         await gateway.setOnline(false);
@@ -156,7 +158,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
         await gateway.waitForRequest("chat.startup");
 
-        await page.locator(".sidebar-issues-button").click();
+        await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
         const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
         await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
         await scopeGuidance.waitFor({ state: "detached" });
@@ -165,7 +167,9 @@ suite.define(() => {
         );
         await updateIssue.waitFor();
         expect(await updateIssue.locator(".sidebar-issues-panel__dismiss").count()).toBe(0);
-        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+        expect(
+          await page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count(),
+        ).toBe(0);
         expect(await page.locator("#sidebar-issues-tab-all .hub-tab__badge--count").count()).toBe(
           0,
         );
@@ -337,7 +341,7 @@ suite.define(() => {
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await page.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-issues-button").click();
+        await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
         const updateIssue = page.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );

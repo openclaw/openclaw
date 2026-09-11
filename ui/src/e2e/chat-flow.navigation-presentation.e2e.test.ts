@@ -330,14 +330,7 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect
-        .poll(() =>
-          panes
-            .last()
-            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
-            .count(),
-        )
-        .toBe(0);
+      await expect.poll(() => panes.last().locator(".startup-transcript-skeleton").count()).toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
@@ -660,7 +653,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps chat usable while sessions are still loading", async () => {
+  it("keeps chat usable while a background session hydrate is still loading", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -676,7 +669,16 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").waitFor();
+      await page.evaluate((pathname) => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime: {
+            context: { navigate: (route: string, options: { pathname: string }) => void };
+          };
+        };
+        app.runtime.context.navigate("chat", { pathname });
+      }, new URL("chat", suite.server.baseUrl).pathname);
 
       await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
       const composer = page.locator(".agent-chat__composer-combobox textarea");

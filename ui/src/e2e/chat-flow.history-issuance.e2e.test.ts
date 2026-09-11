@@ -3,7 +3,6 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
-  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -40,10 +39,14 @@ suite.define(() => {
       methodResponses: { "sessions.list": chatSessionListResponse() },
     });
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").waitFor();
+      await page
+        .locator('[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link')
+        .click();
       await gateway.waitForRequest("chat.startup");
       const loader = page.locator(
-        ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+        ".chat-pane-cache__pane--visible .chat-thread .startup-transcript-skeleton",
       );
       await loader.waitFor({ state: "attached" });
       const frames = await loader.evaluate(async (node) => {
@@ -85,7 +88,7 @@ suite.define(() => {
               // Retain their clock before getAnimations() drops the finished effect.
               const observer = new MutationObserver(() => {
                 const skeleton = document.querySelector(
-                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                  ".chat-pane-cache__pane--visible .chat-thread .startup-transcript-skeleton",
                 );
                 revealAnimation ??= skeleton?.getAnimations()[0];
                 if (revealAnimation) {
@@ -100,7 +103,7 @@ suite.define(() => {
               });
               const sample = () => {
                 const skeleton = document.querySelector(
-                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                  ".chat-pane-cache__pane--visible .chat-thread .startup-transcript-skeleton",
                 );
                 if (skeleton) {
                   revealAnimation ??= skeleton.getAnimations()[0];
@@ -165,9 +168,7 @@ suite.define(() => {
         .click();
       await previous.waitFor({ state: "visible" });
       expect(
-        await page
-          .locator(".chat-pane-cache__pane--visible openclaw-panel-loading-skeleton")
-          .count(),
+        await page.locator(".chat-pane-cache__pane--visible .startup-transcript-skeleton").count(),
       ).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
@@ -292,7 +293,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup", { after: 1 });
       await historyError.waitFor({ state: "detached" });
       await page
-        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+        .locator("openclaw-chat-pane .chat-thread .startup-transcript-skeleton")
         .waitFor({ state: "visible" });
       await gateway.resolveDeferred("chat.startup");
       await page

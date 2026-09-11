@@ -546,7 +546,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       const openSource = async () => {
         await page.goto(controlUiSessionUrl(server.baseUrl, sourceKey));
         if (surface === "assistant panel") {
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.locator("openclaw-app-sidebar .sidebar-footer-bar__home").click();
           await page
             .locator("openclaw-assistant-panel")
             .getByRole("button", { name: "Ask OpenClaw", exact: true })

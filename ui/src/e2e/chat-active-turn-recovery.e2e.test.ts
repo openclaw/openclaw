@@ -251,7 +251,7 @@ async function assertSteeredRecoveryOrder(
   page: Page,
   texts: { original: string; beforeSteer: string; steer: string; afterSteer: string },
 ): Promise<void> {
-  const thread = page.locator(".chat-thread");
+  const thread = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active .chat-thread");
   await assertActiveTurnVisible(page, texts.afterSteer);
   for (const text of [texts.original, texts.beforeSteer, texts.steer]) {
     await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
@@ -63,7 +64,7 @@ describe("optional custom element requests", () => {
       .fn<(canReload: () => boolean) => Promise<boolean>>()
       .mockResolvedValue(false);
     const requests = new LazyCustomElementRequestController(host, undefined, retryStale);
-    return { requests, retryStale };
+    return { requests, retryStale, requestUpdate };
   }
 
   it("publishes loading and error before retrying the canonical load and replaying once", async () => {
@@ -271,7 +272,7 @@ describe("optional custom element requests", () => {
 
   it("keeps preload failures silent until an explicit request owns visibility", async () => {
     const error = new Error("chunk unavailable");
-    const { requests } = createRequestHarness();
+    const { requests, requestUpdate } = createRequestHarness();
     const element = {
       tagName: uniqueTag(),
       label: "preloaded panel",
@@ -280,10 +281,13 @@ describe("optional custom element requests", () => {
       }),
     };
 
+    // The next host render asks for the same optional surface again.
+    requestUpdate.mockImplementationOnce(() => requests.preload(element));
     requests.preload(element);
     requests.preload(element);
 
-    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(requests.isPreloading(element)).toBe(false));
+    expect(element.loadModule).toHaveBeenCalledOnce();
     expect(requests.visibleState).toBeUndefined();
 
     requests.request(element);
@@ -293,7 +297,7 @@ describe("optional custom element requests", () => {
 
   it("reports a preload failure when an active surface opts into recovery", async () => {
     const error = new Error("chunk unavailable");
-    const { requests } = createRequestHarness();
+    const { requests, requestUpdate } = createRequestHarness();
     const element = {
       tagName: uniqueTag(),
       label: "active panel",
@@ -302,7 +306,21 @@ describe("optional custom element requests", () => {
       }),
     };
 
+    const pending = createDeferred();
+    const tagName = uniqueTag();
+    const current = {
+      tagName,
+      label: "current panel",
+      loadModule: async () => {
+        await pending.promise;
+        customElements.define(tagName, class extends HTMLElement {});
+      },
+    };
+    requests.request(current);
     requests.preload(element, { reportError: true });
+    await waitForFast(() => expect(requests.isPreloading(element)).toBe(false));
+    expect(requests.visibleState?.element).toBe(current);
+    pending.resolve();
 
     await waitForFast(() =>
       expect(requests.visibleState).toMatchObject({
@@ -312,5 +330,10 @@ describe("optional custom element requests", () => {
         status: "error",
       }),
     );
+    requestUpdate.mockImplementationOnce(() => requests.preload(element, { reportError: true }));
+    requests.close();
+    await waitForFast(() => expect(requests.isPreloading(element)).toBe(false));
+    expect(element.loadModule).toHaveBeenCalledOnce();
+    expect(requests.visibleState).toBeUndefined();
   });
 });

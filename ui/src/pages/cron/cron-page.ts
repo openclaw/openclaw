@@ -87,7 +87,10 @@ class CronPage extends OpenClawLightDomElement {
     },
   });
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
-    this.pendingRouteData = null;
+    // Initial scope hydration must not consume a link before its lookup starts.
+    if (this.routeJobState) {
+      this.pendingRouteData = null;
+    }
     // Replace the mutable request state so responses started for the old
     // scope cannot populate the newly selected agent's page.
     this.resetGatewayState(this.context.gateway.snapshot);

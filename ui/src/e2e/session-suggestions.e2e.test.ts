@@ -124,7 +124,7 @@ suite.define(() => {
     const [typingModelBox, typingRowBox, composerShellBox] = await Promise.all([
       modelTrigger.boundingBox(),
       typingRow.boundingBox(),
-      page.locator(".agent-chat__composer-shell").boundingBox(),
+      page.locator("openclaw-chat-pane .agent-chat__composer-shell").boundingBox(),
     ]);
     if (typingModelBox === null || typingRowBox === null || composerShellBox === null) {
       throw new Error("Expected the transcript typing row and stable composer layout");

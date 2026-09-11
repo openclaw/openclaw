@@ -747,7 +747,7 @@ describe("ConfigPage Updates integration", () => {
 });
 
 describe("ConfigPage runtime config lifecycle", () => {
-  it("loads Updates without requesting the admin-only config schema", async () => {
+  it("waits for connection to load Updates without requesting the admin-only config schema", async () => {
     const page = new ConfigPage();
     page.pageId = "updates";
     const state = page as unknown as {
@@ -755,6 +755,7 @@ describe("ConfigPage runtime config lifecycle", () => {
     };
     const runtimeConfig = {
       state: {
+        connected: false,
         configSnapshot: null,
         configLoading: false,
         configSchema: null,
@@ -764,6 +765,11 @@ describe("ConfigPage runtime config lifecycle", () => {
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
 
+    state.synchronizeRuntimeConfig(runtimeConfig);
+    expect(runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+    expect(runtimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+
+    runtimeConfig.state.connected = true;
     state.synchronizeRuntimeConfig(runtimeConfig);
     await Promise.resolve();
 
@@ -780,6 +786,7 @@ describe("ConfigPage runtime config lifecycle", () => {
     const createRuntimeConfig = () =>
       ({
         state: {
+          connected: true,
           configSnapshot: null,
           configLoading: false,
           configSchema: null,

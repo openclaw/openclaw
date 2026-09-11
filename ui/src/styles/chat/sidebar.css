@@ -17,6 +17,7 @@
   min-height: 28px;
   padding: 5px;
 }
+
 /* The workspace rail docks flush to the window edge like the terminal panel:
    drop the chat content's right gutter and square the card's right corners in
    both rail states. Guarded to wide viewports; narrow ones keep the gutter

@@ -137,7 +137,7 @@ suite.define(() => {
             .evaluate((element) => getComputedStyle(element).textWrap),
         ).toBe("balance");
         expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-        expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
+        await expect.poll(() => page.locator(".agent-chat__input textarea").count()).toBe(0);
         expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.resolve")).toEqual([
