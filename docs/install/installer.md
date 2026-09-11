@@ -16,7 +16,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm or git. No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
 
-All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.19.0; Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
+All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.19.0; Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
 Before changing packages, every installer probes the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
 
@@ -139,6 +139,34 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
   </Step>
 </Steps>
+
+### Existing nvm installations
+
+`install.sh` preserves an active compatible Node, including `nvm use system`.
+If the active runtime is unsupported, it first checks installed nvm versions,
+then other available Node binaries, including Homebrew. Each candidate must pass
+both the version and SQLite capability checks. Selecting an existing nvm version
+changes only the installer session; the script prints `nvm use <version>` for
+later commands and leaves the default alias and shell profiles unchanged.
+
+The installer detects nvm through `NVM_DIR`, `~/.nvm`, and shell startup hooks.
+It loads `nvm.sh` with `--no-use` rather than activating the default. Startup
+files are never executed for discovery. If a custom or lazy hook is the only
+location available, load nvm in your shell before rerunning the installer.
+
+When nvm is present but no compatible runtime is available, the installer offers
+to run `nvm install 26` in that existing installation. Because nvm refreshes LTS aliases, the prompt also asks to preserve the
+current default version by pinning its alias if the refresh would change its
+resolution. That consent applies even if the download fails. When no default
+exists, the prompt explicitly includes nvm's creation of one. The installer logs
+any approved alias change and the final default version. Declining or running non-interactively exits nonzero with the exact
+commands to run, without provisioning Node or changing nvm, npm config, or shell
+profiles. The installer never installs a second nvm.
+
+On Linux, an unwritable system npm prefix also routes through the existing nvm
+installation. The installer reuses a compatible nvm Node or asks to install one;
+it does not write an npm `prefix` setting that would break later `nvm use`
+commands. Without nvm, the existing user-local npm prefix setup still applies.
 
 ### Source checkout detection
 
