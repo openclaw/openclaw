@@ -1,4 +1,6 @@
 // Verifies OpenClaw tool registration, availability, and construction policy.
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -16,7 +18,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, resolveSuggestedTaskCwd } from "./openclaw-tools.js";
 import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
@@ -277,6 +279,27 @@ describe("openclaw-tools progress_card gating", () => {
     expect(withoutSink).not.toContain("suggest_task");
     expect(withoutSink).not.toContain("dismiss_task");
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
+  });
+
+  it.each([
+    ["sandboxed", true, "/container/workdir", "host-workspace"],
+    ["not sandboxed", false, "host-task-repo", "host-task-repo"],
+  ] as const)(
+    "resolves a host-resolvable suggestion cwd when the run is %s",
+    (_name, sandboxed, runCwd, expected) => {
+      // Accepting a suggestion creates the follow-up session on the Gateway host, so a
+      // sandboxed run must not persist its container workdir as the card's project.
+      const workspaceDir = path.resolve(tmpdir(), "workspace-agent");
+      const runCwdPath = path.resolve(tmpdir(), runCwd);
+      expect(resolveSuggestedTaskCwd({ sandboxed, cwd: runCwdPath, workspaceDir })).toBe(
+        expected === "host-workspace" ? workspaceDir : runCwdPath,
+      );
+    },
+  );
+
+  it("falls back to the host workspace when a sandboxed run reports no cwd", () => {
+    const workspaceDir = path.resolve(tmpdir(), "workspace-agent");
+    expect(resolveSuggestedTaskCwd({ sandboxed: true, workspaceDir })).toBe(workspaceDir);
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
