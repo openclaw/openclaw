@@ -136,9 +136,9 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
       await page.locator('[data-chat-model-select="true"]').click();
-      const picker = page.locator(".chat-model-account__picker");
-      await picker.locator("[data-chat-account-trigger]").click();
-      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      const picker = page.locator("[data-chat-account-selection]");
+      await picker.locator("[data-chat-account-group-toggle]").click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
       await expect
         .poll(() =>
           page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
