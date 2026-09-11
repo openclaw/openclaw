@@ -5854,9 +5854,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expectBroadcast: false,
       });
 
+      const internalSessionKey = sessionKey === "main" ? "agent:main:main" : sessionKey;
       expectDispatchContextFields({
         OriginatingChannel: options.external ? delivery.channel : "webchat",
-        OriginatingTo: options.external ? delivery.to : undefined,
+        OriginatingTo: options.external ? delivery.to : internalSessionKey,
         ExplicitDeliverRoute: Boolean(options.external && options.deliver),
         AccountId: options.external ? delivery.accountId : undefined,
         ...(options.external && delivery.threadId !== undefined
