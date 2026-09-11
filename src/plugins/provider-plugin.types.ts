@@ -95,6 +95,8 @@ import type {
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
+  /** Loader-owned dependency root, shared by lightweight and full registration. */
+  pluginRoot?: string;
   label: string;
   docsPath?: string;
   aliases?: string[];
@@ -627,7 +629,11 @@ export type ProviderPlugin = {
    * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
    */
   prepareSyntheticAuth?: (
-    ctx: ProviderResolveSyntheticAuthContext & { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+    ctx: ProviderResolveSyntheticAuthContext & {
+      env?: NodeJS.ProcessEnv;
+      signal?: AbortSignal;
+      pluginRoot?: string;
+    },
   ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.

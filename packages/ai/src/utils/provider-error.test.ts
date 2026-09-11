@@ -201,79 +201,69 @@ describe("projectProviderError", () => {
   });
 
   it.each([
-    {
-      name: "Error.message",
-      error: new Error("failed data:video/mp4;base64,QUJDRA=="),
-      expected: "failed <redacted>",
-    },
-    {
-      name: "string throw",
-      error: "failed data:audio/mpeg;base64,QUJDRA==",
-      expected: "failed <redacted>",
-    },
-    {
-      name: "structured response body",
-      error: Object.assign(new Error("415 status code (no body)"), {
+    ["Error.message", new Error("failed data:video/mp4;base64,QUJDRA=="), "failed <redacted>"],
+    ["string throw", "failed data:audio/mpeg;base64,QUJDRA==", "failed <redacted>"],
+    [
+      "structured response body",
+      Object.assign(new Error("415 status code (no body)"), {
         status: 415,
         body: { type: "video", data: "QUJDRA==" },
       }),
-      expected: '415: {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
-    },
-    {
-      name: "prefixed JSON message",
-      error: new Error('Error: {"b64_json":"QUJDRA=="}'),
-      expected: 'Error: {"b64_json":"<redacted>"}',
-    },
-    {
-      name: "credential in a JSON message prefix",
-      error: new Error('Provider token=abcdefghijklmnop : {"b64_json":"QUJDRA=="}'),
-      expected: 'Provider token=<redacted> : {"b64_json":"<redacted>"}',
-    },
-    {
-      name: "bracketed provider prefix",
-      error: new Error('Error [provider]: {"b64_json":"QUJDRA=="}'),
-      expected: 'Error [provider]: {"b64_json":"<redacted>"}',
-    },
-    {
-      name: "provider prefix without a delimiter",
-      error: new Error('Error [provider] {"b64_json":"QUJDRA=="}'),
-      expected: 'Error [provider] {"b64_json":"<redacted>"}',
-    },
-    {
-      name: "multiline provider prefix",
-      error: new Error('Error from\nprovider: {"b64_json":"QUJDRA=="}'),
-      expected: 'Error from\nprovider: {"b64_json":"<redacted>"}',
-    },
-    {
-      name: "long provider prefix",
-      error: new Error(`${"x".repeat(129)}: {"b64_json":"QUJDRA=="}`),
-      expected: `${"x".repeat(129)}: {"b64_json":"<redacted>"}`,
-    },
-    {
-      name: "suffixed Anthropic JSON message",
-      error: new Error(
+      '415: {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
+    ],
+    [
+      "prefixed JSON message",
+      new Error('Error: {"b64_json":"QUJDRA=="}'),
+      'Error: {"b64_json":"<redacted>"}',
+    ],
+    [
+      "credential in a JSON message prefix",
+      new Error('Provider token=abcdefghijklmnop : {"b64_json":"QUJDRA=="}'),
+      'Provider token=<redacted> : {"b64_json":"<redacted>"}',
+    ],
+    [
+      "bracketed provider prefix",
+      new Error('Error [provider]: {"b64_json":"QUJDRA=="}'),
+      'Error [provider]: {"b64_json":"<redacted>"}',
+    ],
+    [
+      "provider prefix without a delimiter",
+      new Error('Error [provider] {"b64_json":"QUJDRA=="}'),
+      'Error [provider] {"b64_json":"<redacted>"}',
+    ],
+    [
+      "multiline provider prefix",
+      new Error('Error from\nprovider: {"b64_json":"QUJDRA=="}'),
+      'Error from\nprovider: {"b64_json":"<redacted>"}',
+    ],
+    [
+      "long provider prefix",
+      new Error(`${"x".repeat(129)}: {"b64_json":"QUJDRA=="}`),
+      `${"x".repeat(129)}: {"b64_json":"<redacted>"}`,
+    ],
+    [
+      "suffixed Anthropic JSON message",
+      new Error(
         'HTTP 429: {"type":"error","error":{"message":"safe","b64_json":"QUJDRA=="}}; Retry-After: 30 seconds',
       ),
-      expected:
-        'HTTP 429: {"error":{"b64_json":"<redacted>","message":"safe"},"type":"error"}; Retry-After: 30 seconds',
-    },
-    {
-      name: "bracket-tagged JSON message",
-      error: new Error('[ERROR] payload {"type":"video","data":"QUJDRA=="}'),
-      expected: '[ERROR] payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
-    },
-    {
-      name: "harmless JSON before sensitive JSON",
-      error: new Error('meta {"ok":true} payload {"type":"video","data":"QUJDRA=="}'),
-      expected:
-        'meta {"ok":true} payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
-    },
-    {
-      name: "two sensitive JSON fragments",
-      error: new Error('first {"b64_json":"QUJDRA=="} second {"b64_json":"QUJDRA=="}'),
-      expected: 'first {"b64_json":"<redacted>"} second {"b64_json":"<redacted>"}',
-    },
-  ])("redacts media from $name", ({ error, expected }) => {
+      'HTTP 429: {"error":{"b64_json":"<redacted>","message":"safe"},"type":"error"}; Retry-After: 30 seconds',
+    ],
+    [
+      "bracket-tagged JSON message",
+      new Error('[ERROR] payload {"type":"video","data":"QUJDRA=="}'),
+      '[ERROR] payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
+    ],
+    [
+      "harmless JSON before sensitive JSON",
+      new Error('meta {"ok":true} payload {"type":"video","data":"QUJDRA=="}'),
+      'meta {"ok":true} payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
+    ],
+    [
+      "two sensitive JSON fragments",
+      new Error('first {"b64_json":"QUJDRA=="} second {"b64_json":"QUJDRA=="}'),
+      'first {"b64_json":"<redacted>"} second {"b64_json":"<redacted>"}',
+    ],
+  ])("redacts media from %s", (_name, error, expected) => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
   });
 
@@ -323,80 +313,40 @@ describe("projectProviderError", () => {
   });
 
   it.each([
-    {
-      name: "nested videoBytes",
-      body: '{"generatedVideos":[{"video":{"videoBytes":"QUJDRA=="}}]}',
-      leaked: "QUJDRA==",
-    },
-    { name: "bare b64_json", body: '{"b64_json":"QUJDRA=="}', leaked: "QUJDRA==" },
-    {
-      name: "typed video data",
-      body: '{"type":"video","data":"QUJDRA=="}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "typed numeric video data",
-      body: '{"type":"video","data":[65,66,67,68]}',
-      leaked: "[65,66,67,68]",
-    },
-    {
-      name: "image generation result",
-      body: '{"type":"image_generation_call","result":"QUJDRA=="}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "typed video URI",
-      body: '{"type":"video","uri":"https://media.invalid/private"}',
-      leaked: "https://media.invalid/private",
-    },
-    {
-      name: "MIME-qualified file URI",
-      body: '{"mimeType":"video/mp4","fileUri":"https://media.invalid/signed"}',
-      leaked: "https://media.invalid/signed",
-    },
-    { name: "audio wrapper data", body: '{"audio":{"data":"QUJDRA=="}}', leaked: "QUJDRA==" },
-    { name: "video wrapper blob", body: '{"video":{"blob":"QUJDRA=="}}', leaked: "QUJDRA==" },
-    {
-      name: "video frame wrapper data",
-      body: '{"video_frame":{"data":"QUJDRA=="}}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "camel-case video frame wrapper data",
-      body: '{"videoFrame":{"data":"QUJDRA=="}}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "camel-case input video frame wrapper data",
-      body: '{"inputVideoFrame":{"data":"QUJDRA=="}}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "output audio wrapper data",
-      body: '{"output_audio":{"data":"QUJDRA=="}}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "audio wrapper bytes",
-      body: '{"audio":{"bytes":[65,66,67,68]}}',
-      leaked: "[65,66,67,68]",
-    },
-    {
-      name: "video wrapper buffer",
-      body: '{"video":{"buffer":"QUJDRA=="}}',
-      leaked: "QUJDRA==",
-    },
-    {
-      name: "plural video container URL",
-      body: '{"videos":[{"url":"https://media.invalid/private/path-token"}]}',
-      leaked: "https://media.invalid/private/path-token",
-    },
-    {
-      name: "array following a JSON literal",
-      body: '[true,{"b64_json":"QUJDRA=="}]',
-      leaked: "QUJDRA==",
-    },
-  ])("redacts $name from a JSON response-body string", ({ body, leaked }) => {
+    ["nested videoBytes", '{"generatedVideos":[{"video":{"videoBytes":"QUJDRA=="}}]}', "QUJDRA=="],
+    ["bare b64_json", '{"b64_json":"QUJDRA=="}', "QUJDRA=="],
+    ["typed video data", '{"type":"video","data":"QUJDRA=="}', "QUJDRA=="],
+    ["typed numeric video data", '{"type":"video","data":[65,66,67,68]}', "[65,66,67,68]"],
+    ["image generation result", '{"type":"image_generation_call","result":"QUJDRA=="}', "QUJDRA=="],
+    [
+      "typed video URI",
+      '{"type":"video","uri":"https://media.invalid/private"}',
+      "https://media.invalid/private",
+    ],
+    [
+      "MIME-qualified file URI",
+      '{"mimeType":"video/mp4","fileUri":"https://media.invalid/signed"}',
+      "https://media.invalid/signed",
+    ],
+    ["audio wrapper data", '{"audio":{"data":"QUJDRA=="}}', "QUJDRA=="],
+    ["video wrapper blob", '{"video":{"blob":"QUJDRA=="}}', "QUJDRA=="],
+    ["video frame wrapper data", '{"video_frame":{"data":"QUJDRA=="}}', "QUJDRA=="],
+    ["camel-case video frame wrapper data", '{"videoFrame":{"data":"QUJDRA=="}}', "QUJDRA=="],
+    [
+      "camel-case input video frame wrapper data",
+      '{"inputVideoFrame":{"data":"QUJDRA=="}}',
+      "QUJDRA==",
+    ],
+    ["output audio wrapper data", '{"output_audio":{"data":"QUJDRA=="}}', "QUJDRA=="],
+    ["audio wrapper bytes", '{"audio":{"bytes":[65,66,67,68]}}', "[65,66,67,68]"],
+    ["video wrapper buffer", '{"video":{"buffer":"QUJDRA=="}}', "QUJDRA=="],
+    [
+      "plural video container URL",
+      '{"videos":[{"url":"https://media.invalid/private/path-token"}]}',
+      "https://media.invalid/private/path-token",
+    ],
+    ["array following a JSON literal", '[true,{"b64_json":"QUJDRA=="}]', "QUJDRA=="],
+  ])("redacts %s from a JSON response-body string", (_name, body, leaked) => {
     const projected = projectProviderError({ status: 500, body });
 
     expect(JSON.stringify(projected)).not.toContain(leaked);
@@ -605,14 +555,11 @@ describe("projectProviderError", () => {
   });
 
   it.each([
-    { name: "Buffer", body: Buffer.from([1, 2, 3]) },
-    { name: "Uint8Array", body: new Uint8Array([4, 5, 6]) },
-    { name: "ArrayBuffer", body: new Uint8Array([7, 8, 9]).buffer },
-    {
-      name: "DataView",
-      body: new DataView(new Uint8Array([0, 10, 11, 12, 0]).buffer, 1, 3),
-    },
-  ])("redacts a bare $name response body by value", ({ body }) => {
+    ["Buffer", Buffer.from([1, 2, 3])],
+    ["Uint8Array", new Uint8Array([4, 5, 6])],
+    ["ArrayBuffer", new Uint8Array([7, 8, 9]).buffer],
+    ["DataView", new DataView(new Uint8Array([0, 10, 11, 12, 0]).buffer, 1, 3)],
+  ])("redacts a bare %s response body by value", (_name, body) => {
     const projected = projectProviderError({ status: 500, body });
     const summary = '{"bytes":3,"redacted":"<redacted>"}';
 

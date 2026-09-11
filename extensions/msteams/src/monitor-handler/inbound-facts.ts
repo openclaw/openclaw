@@ -120,11 +120,7 @@ function buildStoredConversationReference(params: {
   };
 }
 
-export function assembleMSTeamsInboundFacts(params: {
-  entry: MSTeamsDebounceEntry;
-  mediaMaxBytes: number;
-}) {
-  const { entry, mediaMaxBytes } = params;
+export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const activity = entry.context.activity;
   const conversation = activity.conversation;
   const rawConversationId = conversation?.id ?? "";
@@ -136,10 +132,7 @@ export function assembleMSTeamsInboundFacts(params: {
   const threadId = isChannel
     ? (conversationMessageId ?? activity.replyToId ?? undefined)
     : undefined;
-  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments, {
-    maxInlineBytes: mediaMaxBytes,
-    maxInlineTotalBytes: mediaMaxBytes,
-  });
+  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
 
   return {
     ...entry,

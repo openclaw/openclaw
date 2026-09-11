@@ -149,9 +149,28 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
     ["prefixed fallback", "custom", "configured", "custom/configured", undefined],
     ["case-insensitive fallback", "custom", "configured", "Configured", undefined],
     ["static alias", "xai", "grok-4.3-latest", "grok-4.3", undefined],
+    ["exact provider key", "custom", "configured", "configured", undefined, "custom", "Custom"],
+    ["provider case fallback", "custom", "configured", "configured", undefined, "Custom"],
+    [
+      "merged trimmed provider keys",
+      "custom",
+      "configured",
+      "configured",
+      undefined,
+      " custom ",
+      "custom",
+    ],
   ] as const)(
     "uses configured model context without acquiring a runtime lease (%s)",
-    async (_case, provider, modelId, rowId, siblingId) => {
+    async (
+      _case,
+      provider,
+      modelId,
+      rowId,
+      siblingId,
+      providerKey?: string,
+      siblingProviderKey?: string,
+    ) => {
       const { acquireEffectiveToolInventoryRuntimeModelContext, resolveConfiguredModelCompat } =
         await import("./tools-effective-inventory.js");
       const configuredModel = {
@@ -164,7 +183,23 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       const cfg = makeOpenClawConfigFixture({
         models: {
           providers: {
-            [provider]: {
+            ...(siblingProviderKey
+              ? {
+                  [siblingProviderKey]: {
+                    baseUrl: "https://sibling.example.invalid",
+                    api: "openai-completions" as const,
+                    models: [
+                      {
+                        ...configuredModel,
+                        name: "Sibling provider",
+                        compat: { supportsTools: false },
+                      },
+                    ],
+                  },
+                }
+              : {}),
+            [providerKey ?? provider]: {
+              baseUrl: "https://configured.example.invalid",
               api: "anthropic-messages",
               models: [
                 ...(siblingId

@@ -5,7 +5,7 @@
  * more actionable remediation text.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConfiguredProviderModel } from "./context-resolution.js";
+import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
@@ -38,9 +38,12 @@ export function resolveContextWindowInfo(params: {
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
-  const match = resolveConfiguredProviderModel(params.cfg, params.provider, params.modelId);
+  const configured = resolveConfiguredContextTokenLimits(
+    { cfg: params.cfg, provider: params.provider, model: params.modelId },
+    normalizePositiveInt,
+  );
   const fromModelsConfig =
-    normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
+    configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
   const fromModel =
     normalizePositiveInt(params.modelContextTokens) ??
     normalizePositiveInt(params.modelContextWindow);

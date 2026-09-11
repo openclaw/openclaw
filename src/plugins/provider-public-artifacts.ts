@@ -35,40 +35,50 @@ function resolveBundledProviderPolicyPlugin(
     options.manifestRegistry ??
     options.loadManifestRegistry?.() ??
     loadPluginManifestRegistryCore();
-  for (const plugin of registry.plugins.toSorted((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
-    if (plugin.origin !== "bundled") {
+  let owner: PluginManifestRegistry["plugins"][number] | null = null;
+  for (const plugin of registry.plugins) {
+    if (plugin.origin !== "bundled" || (owner && owner.id.localeCompare(plugin.id) <= 0)) {
       continue;
     }
     if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
-      return plugin;
+      owner = plugin;
     }
   }
 
-  return null;
+  return owner;
+}
+
+function pluginDeclaresProviderPolicyRef(
+  plugin: PluginManifestRegistry["plugins"][number],
+  normalizedProviderId: string,
+): boolean {
+  const matches = (provider: string) => normalizeProviderId(provider) === normalizedProviderId;
+  return Boolean(
+    normalizedProviderId &&
+    (plugin.providers.some(matches) ||
+      plugin.cliBackends.some(matches) ||
+      plugin.contracts?.embeddingProviders?.some(matches)),
+  );
 }
 
 function pluginOwnsProviderPolicyRef(
   plugin: PluginManifestRegistry["plugins"][number],
   normalizedProviderId: string,
 ): boolean {
-  const ownedProviders = new Set(
-    [...plugin.providers, ...plugin.cliBackends, ...(plugin.contracts?.embeddingProviders ?? [])]
-      .map((provider) => normalizeProviderId(provider))
-      .filter(Boolean),
-  );
-  if (ownedProviders.has(normalizedProviderId)) {
+  if (pluginDeclaresProviderPolicyRef(plugin, normalizedProviderId)) {
     return true;
   }
 
-  for (const [rawAlias, rawTarget] of Object.entries(plugin.providerAuthAliases ?? {})) {
-    const alias = normalizeProviderId(rawAlias);
-    if (typeof rawTarget !== "string") {
-      continue;
-    }
-    const target = normalizeProviderId(rawTarget);
-    if (alias === normalizedProviderId && ownedProviders.has(target)) {
+  const aliases = plugin.providerAuthAliases;
+  if (!aliases) {
+    return false;
+  }
+  for (const [rawAlias, rawTarget] of Object.entries(aliases)) {
+    if (
+      typeof rawTarget === "string" &&
+      normalizeProviderId(rawAlias) === normalizedProviderId &&
+      pluginDeclaresProviderPolicyRef(plugin, normalizeProviderId(rawTarget))
+    ) {
       return true;
     }
   }
@@ -149,10 +159,10 @@ export function listTrustedExternalProviderPolicyOwners(
 ) {
   const normalizedProviderId = normalizeProviderId(providerId);
   return manifestRegistry.plugins
-    .toSorted((left, right) => left.id.localeCompare(right.id))
     .filter(
       (plugin) =>
         plugin.trustedOfficialInstall === true &&
         pluginOwnsProviderPolicyRef(plugin, normalizedProviderId),
-    );
+    )
+    .toSorted((left, right) => left.id.localeCompare(right.id));
 }

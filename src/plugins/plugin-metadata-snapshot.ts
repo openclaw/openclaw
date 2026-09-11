@@ -459,7 +459,10 @@ export function completePluginMetadataSnapshot(params: {
       inputs.snapshot.bundledManifestRegistry ??
       loadBundledPluginManifestRegistry({ env: inputs.env });
     const manifestRegistryMs = performance.now() - manifestStartedAt;
-    const rebased = rebasePluginMetadataSnapshotManifestRegistry(inputs.snapshot, manifestRegistry);
+    const rebased =
+      snapshot.pluginIds === undefined
+        ? snapshot
+        : rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry);
     const { pluginIds: _pluginIds, ...unscoped } = rebased;
     const completed = finalizePluginMetadataSnapshot({
       ...unscoped,

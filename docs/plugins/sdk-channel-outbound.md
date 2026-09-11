@@ -243,6 +243,14 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+A `suppressed` result is ambiguous when its reason is
+`adapter_returned_no_identity`, or any payload outcome records a send, an
+identityless send, or a failure with `sentBeforeError`. Check the whole batch
+before treating suppression as intentional non-delivery. For a known omission,
+an action can return `{ status: "suppressed", reason: result.reason }` without
+a tool error or a fabricated receipt. Keep free-form hook diagnostics private.
+Suppression does not recover an earlier failed send.
+
 Failure is not permission to send the same payload through another path.
 Once admitted, the queue owns retry or reconciliation until its exact owner
 acknowledges or terminally retires the intent. Pending custody is not a
@@ -334,3 +342,11 @@ Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migratio
 This subpath is not tied to the next Plugin SDK major, and eligibility does not
 itself remove an export. External imports do not emit a runtime warning; update
 plugin imports rather than waiting for one.
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive side that records and dispatches before a reply is sent
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver that produces the participant identity a send is attributed to
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — which subpath exports each helper
+- [Plugin SDK migration](/plugins/sdk-migration) — removal-eligibility windows for legacy outbound exports

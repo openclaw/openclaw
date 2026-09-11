@@ -27,6 +27,31 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage profile actions", () => {
+  it("keeps a committed logout refresh warning in the visible success message", async () => {
+    const shell = document.body.appendChild(document.createElement("div"));
+    shell.className = "shell";
+    const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.authLogout"
+        ? {
+            provider: "openai",
+            removedProfiles: ["openai:one"],
+            abortedRunIds: [],
+            warning: "Restart the Gateway to apply removal.",
+          }
+        : original(method),
+    );
+    await page.profileActions.logout("openai", { provider: "openai", profileIds: ["openai:one"] });
+    await waitForFast(() =>
+      expect(toast.textContent).toContain("Restart the Gateway to apply removal."),
+    );
+    expect(toast.textContent).toContain("Logged out.");
+  });
+
   it.each([
     { name: "reorder", profileIds: ["openai:two", "openai:one"] },
     { name: "Reset", profileIds: null },

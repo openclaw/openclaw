@@ -109,21 +109,23 @@ describe("model runtime generation scope", () => {
   it.each([
     { selection: "explicit", profileId: "openai:default" },
     { selection: "automatic", profileId: undefined },
-  ])(
-    "resolves $selection external Codex credentials without persisting them",
-    async ({ profileId }) => {
-      const generation = await createExternalCodexGeneration();
+  ])("keeps $selection host auth separate from native Codex credentials", async ({ profileId }) => {
+    const generation = await createExternalCodexGeneration();
 
-      expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
-      expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: "openai:default", authProfileMode: "oauth" }),
-      );
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
-      ).toBeUndefined();
-      expect(globalThis.fetch).not.toHaveBeenCalled();
-    },
-  );
+    if (profileId) {
+      await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
+        code: "selected_auth_profile_unavailable",
+      });
+    } else {
+      const result = await resolveGeneration(generation);
+      expect(result.model?.id).toBe(generation.modelId);
+      expect(result.authStorage.get("openai")).toBeUndefined();
+    }
+    expect(
+      ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
+    ).toBeUndefined();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
 
   it("does not replace a missing managed profile with an external Codex account", async () => {
     const generation = await createExternalCodexGeneration();

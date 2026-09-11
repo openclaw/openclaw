@@ -700,6 +700,50 @@ describe("LINE send helpers", () => {
     expect(recordChannelActivityMock).not.toHaveBeenCalled();
   });
 
+  it("delivers a quoted reply unquoted when LINE refuses the quote token", async () => {
+    // LINE answers a token it no longer accepts with a bare 400 that names no
+    // field, so the reply would otherwise disappear instead of arriving plain.
+    lineFetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "Quote token is invalid" }), {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    const result = await sendModule.pushMessagesLine(
+      "U123",
+      [{ type: "text", text: "answering you" }],
+      { cfg: LINE_TEST_CFG, quoteToken: "stale-token" },
+    );
+
+    expect(result.messageId).toBe("push");
+    const bodies = lineFetchMock.mock.calls.map((call) => {
+      const body = (call[1] as RequestInit).body;
+      if (typeof body !== "string") {
+        throw new Error("expected a JSON string LINE request body");
+      }
+      return JSON.parse(body) as { messages: unknown[] };
+    });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.messages).toEqual([
+      { type: "text", text: "answering you", quoteToken: "stale-token" },
+    ]);
+    expect(bodies[1]?.messages).toEqual([{ type: "text", text: "answering you" }]);
+  });
+
+  it("does not resend a rejected send that carried no quote", async () => {
+    lineFetchMock.mockResolvedValueOnce(
+      new Response("invalid payload", { status: 400, statusText: "Bad Request" }),
+    );
+
+    await expect(
+      sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toBeInstanceOf(HTTPFetchError);
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps rejected LINE sends distinguishable from accepted delivery", async () => {
     lineFetchMock.mockResolvedValueOnce(
       new Response("invalid payload", { status: 400, statusText: "Bad Request" }),

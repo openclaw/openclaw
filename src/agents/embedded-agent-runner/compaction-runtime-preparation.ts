@@ -182,10 +182,18 @@ export async function prepareCompactionHarnessAuth(params: {
         profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
+  const harnessSelectionParams = {
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+    agentId: params.runtimePolicyAgentId,
+    sessionKey: params.runtimePolicySessionKey ?? undefined,
+    agentHarnessId: params.agentHarnessId,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+  };
   const selectPreparedHarness = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>
     selectAgentHarnessForPreparedModelProviders({
-      provider: params.provider,
-      modelId: params.modelId,
+      ...harnessSelectionParams,
       modelProviders: attempts.map((attempt) =>
         projectPreparedModelProvider({
           model: params.model,
@@ -193,23 +201,12 @@ export async function prepareCompactionHarnessAuth(params: {
           attemptKind: attempt.kind,
         }),
       ),
-      config: params.config,
-      agentId: params.runtimePolicyAgentId,
-      sessionKey: params.runtimePolicySessionKey ?? undefined,
-      agentHarnessId: params.agentHarnessId,
-      agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     });
   const initialHarness = params.reusableRuntimeAuthPlan
     ? undefined
     : selectAgentHarness({
-        provider: params.provider,
-        modelId: params.modelId,
+        ...harnessSelectionParams,
         modelProvider: projectPreparedModelProvider({ model: params.model }),
-        config: params.config,
-        agentId: params.runtimePolicyAgentId,
-        sessionKey: params.runtimePolicySessionKey ?? undefined,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
   const prepare = (harness: AgentHarness) =>
     prepareAgentRuntimeAuth({

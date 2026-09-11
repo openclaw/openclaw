@@ -13,6 +13,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -900,58 +901,75 @@ describe("prepared model runtime snapshots", () => {
     }
   });
 
-  it("keeps one dispatch gate across overlapping auth mutations", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    const agentDir = state.agentDir("default");
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-    });
-    const finishFirstRefreshGate = createDeferred();
-    const finishSecondRefreshGate = createDeferred();
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async (_config, targetDir) => {
-        await finishFirstRefreshGate.promise;
-        return { agentDir: String(targetDir), wrote: false };
-      })
-      .mockImplementationOnce(async (_config, targetDir) => {
-        await finishSecondRefreshGate.promise;
-        return { agentDir: String(targetDir), wrote: false };
+  it.each([false, true])(
+    "keeps one dispatch gate across overlapping auth mutations (shared owner changed: %s)",
+    async (sharedOwnerChanged) => {
+      mocks.configuredAgentIds = ["default"];
+      const config = {};
+      const agentDir = state.agentDir("default");
+      await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+      const events: string[] = [];
+      const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+        events.push(event.phase);
       });
+      const finishFirstRefreshGate = createDeferred();
+      const finishSecondRefreshGate = createDeferred();
+      mocks.ensureOpenClawModelsJson
+        .mockImplementationOnce(async (_config, targetDir) => {
+          await finishFirstRefreshGate.promise;
+          return { agentDir: String(targetDir), wrote: false };
+        })
+        .mockImplementationOnce(async (_config, targetDir) => {
+          await finishSecondRefreshGate.promise;
+          return { agentDir: String(targetDir), wrote: false };
+        });
 
-    let dispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    try {
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-      void dispatch.catch(() => undefined);
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      finishFirstRefreshGate.resolve();
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(
-        Promise.race([dispatch.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      let dispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+      const inheritance = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
+      try {
+        mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
+        await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
+        dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+        void dispatch.catch(() => undefined);
+        if (sharedOwnerChanged) {
+          inheritance.mockReturnValue(undefined);
+        }
+        mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
+        reader = prepareModelRuntimeSnapshot({ config, agentId: "default", agentDir });
+        void reader.catch(() => undefined);
+        finishFirstRefreshGate.resolve();
+        await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
+        await expect(
+          Promise.race([dispatch.then(() => "settled"), Promise.resolve("pending")]),
+        ).resolves.toBe("pending");
 
-      finishSecondRefreshGate.resolve();
-      const runtime = await dispatch;
-      unregister();
+        finishSecondRefreshGate.resolve();
+        const runtime = await dispatch;
+        await expect(reader).resolves.toBe(
+          await prepareModelRuntimeSnapshot({ config, agentId: "default", agentDir }),
+        );
+        unregister();
 
-      expect(runtime).toBe(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }));
-      expect(events.filter((phase) => phase === "published")).toHaveLength(1);
-      expect(events).not.toContain("failed");
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      finishFirstRefreshGate.resolve();
-      finishSecondRefreshGate.resolve();
-      await Promise.allSettled([
-        dispatch,
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ]);
-      unregister();
-    }
-  });
+        expect(runtime).toBe(
+          await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+        );
+        expect(events.filter((phase) => phase === "published")).toHaveLength(1);
+        expect(events).not.toContain("failed");
+        expect(mocks.warn).not.toHaveBeenCalled();
+      } finally {
+        finishFirstRefreshGate.resolve();
+        finishSecondRefreshGate.resolve();
+        await Promise.allSettled([
+          dispatch,
+          reader,
+          loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+        ]);
+        inheritance.mockRestore();
+        unregister();
+      }
+    },
+  );
 
   it("does not let a superseded owner hide a genuine sibling refresh failure", async () => {
     const config = {};

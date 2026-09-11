@@ -457,15 +457,18 @@ function readLauncherJson(relativePath) {
 }
 
 function resolveLauncherVersion() {
-  const packageJson = readLauncherJson("./package.json");
-  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
-  if (packageVersion) {
-    return packageVersion;
-  }
+  // Report what is built, not what the source says: resolveLauncherCommit already
+  // prefers dist provenance, so reading package.json first pairs a source version
+  // with a built commit and hides a checkout that pulled without rebuilding.
   const buildInfo = readLauncherJson("./dist/build-info.json");
   const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
   if (buildVersion) {
     return buildVersion;
+  }
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
   }
   return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
 }

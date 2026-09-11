@@ -13,7 +13,7 @@ OpenClaw can host **PeekabooBridge** as a local, permission-aware UI automation 
 ## What this is (and is not)
 
 - **Host**: OpenClaw.app can act as a PeekabooBridge host.
-- **Client**: the `peekaboo` CLI (there is no separate `openclaw ui ...` surface).
+- **Client**: the `peekaboo` CLI, installed from [peekaboo.sh](https://peekaboo.sh/) (there is no separate `openclaw ui ...` surface).
 - **UI**: visual overlays stay in Peekaboo.app. OpenClaw is a thin broker host.
 
 ## Relationship to other desktop-control paths

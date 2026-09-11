@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   listTrustedExternalProviderPolicyOwners,
@@ -78,6 +79,120 @@ describe("provider public artifacts", () => {
       expect(resolveProviderPolicySurface(providerId)).toBeNull();
     },
   );
+
+  it.each([
+    [" FIXTURE-TEXT ", true],
+    [" fixture-cli ", true],
+    ["FIXTURE-EMBEDDING", true],
+    [" TEXT-ALIAS ", true],
+    ["cli-alias", true],
+    ["embedding-alias", true],
+    ["orphan-alias", false],
+    ["scoped-alias", false],
+    ["empty-target", false],
+    ["setup-only", false],
+    ["setup-cli", false],
+    [" ", true],
+  ] as const)("preserves declared policy ownership for %j", (query, matches) => {
+    const owner = createPluginManifestRecordFixture({
+      id: "fixture-owner",
+      origin: "global",
+      trustedOfficialInstall: true,
+      providers: [" fixture-text "],
+      cliBackends: [" FIXTURE-CLI "],
+      contracts: { embeddingProviders: [" fixture-embedding "] },
+      setup: { providers: [{ id: "setup-only" }], cliBackends: ["setup-cli"] },
+      providerAuthAliases: {
+        " text-alias ": " fixture-text ",
+        "cli-alias": "fixture-cli",
+        "embedding-alias": "fixture-embedding",
+        "orphan-alias": "missing",
+        "scoped-alias": { provider: "fixture-text", baseUrls: ["https://fixture.example.test"] },
+        "empty-target": " ",
+        "": "fixture-text",
+      },
+    });
+
+    expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual(
+      matches ? [owner] : [],
+    );
+  });
+
+  it("does not treat empty declarations as policy ownership", () => {
+    const owner = createPluginManifestRecordFixture({
+      id: "empty-owner",
+      trustedOfficialInstall: true,
+      providers: [""],
+      cliBackends: [" "],
+      contracts: { embeddingProviders: [""] },
+      providerAuthAliases: { empty: " " },
+    });
+    for (const query of ["", " ", "empty"]) {
+      expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual([]);
+    }
+  });
+
+  it("orders trusted external matches stably without reordering the registry", () => {
+    const owner = (id: string, rootDir: string, trustedOfficialInstall = true) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir,
+        origin: "global",
+        trustedOfficialInstall,
+        providers: ["fixture-provider"],
+      });
+    const last = owner("z-owner", "/fixture/z");
+    const first = owner("a-owner", "/fixture/first");
+    const equal = owner("a-owner", "/fixture/equal");
+    const untrusted = owner("0-owner", "/fixture/untrusted", false);
+    const plugins = [last, first, untrusted, equal];
+
+    expect(listTrustedExternalProviderPolicyOwners("fixture-provider", { plugins })).toEqual([
+      first,
+      equal,
+      last,
+    ]);
+    expect(plugins).toEqual([last, first, untrusted, equal]);
+  });
+
+  it("selects the first equal-id bundled owner in stable lexical order", async () => {
+    vi.doMock("./bundled-dir.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./bundled-dir.js")>()),
+      resolveBundledPluginsDir: () => "/fixture",
+    }));
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync: ({
+        dirName,
+      }: {
+        dirName: string;
+      }) =>
+        dirName.endsWith("-root")
+          ? { resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }) }
+          : null,
+    }));
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=stable-owner-order");
+    const owner = (id: string, root: string) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir: `/fixture/${root}-root`,
+        providers: ["fixture-provider"],
+      });
+    const last = owner("z-owner", "last");
+    const first = owner("a-owner", "first");
+    const equal = owner("a-owner", "equal");
+    const external = { ...owner("0-owner", "external"), origin: "global" as const };
+    const earlierUnrelated = { ...owner("0-unrelated", "unrelated"), providers: ["other"] };
+    const plugins = [last, external, first, earlierUnrelated, equal];
+
+    expect(
+      resolvePolicySurface("fixture-provider", {
+        manifestRegistry: { plugins },
+      })?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" }),
+    ).toEqual({ levels: [{ id: "first-root" }] });
+    expect(plugins).toEqual([last, external, first, earlierUnrelated, equal]);
+  });
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");

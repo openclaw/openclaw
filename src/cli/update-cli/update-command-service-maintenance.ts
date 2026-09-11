@@ -26,7 +26,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
@@ -333,7 +332,6 @@ type ManagedServiceStopParams = {
     PreManagedServiceStop,
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
-  activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
   onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 };
@@ -591,39 +589,13 @@ async function stopManagedServiceBeforeMutableUpdate(
         env: params.updateRun.env,
       });
     }
-    const stop = async (assertStopCurrent: () => void) => {
-      if (params.activatedInstall) {
-        // Activation Doctor may have stamped newer config. Keep its service stop
-        // in that runtime too; the old parent's destructive-action guard is valid.
-        const stopped = await runUpdatedInstallGatewayCommand(
-          {
-            result: { root: params.root },
-            opts: { json: params.jsonMode },
-            invocationEnv: process.env,
-            serviceEnv: currentState.env,
-            timeoutMs: params.timeoutMs,
-            nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
-            invocationCwd: params.activatedInstall.invocationCwd,
-            assertCurrent: assertStopCurrent,
-          },
-          "stop",
-        );
-        if (stopped !== "accepted") {
-          throw new Error(
-            "Updated Gateway CLI did not confirm the service stopped for plugin maintenance.",
-          );
-        }
-      } else {
-        await service.stop({
-          env: currentState.env,
-          stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
-          assertCurrent: assertStopCurrent,
-          // Native stop may unload the service before a later port check fails.
-          onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
-        });
-      }
-    };
-    await stop(assertCurrent);
+    await service.stop({
+      env: currentState.env,
+      stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+      assertCurrent,
+      // Native stop may unload the service before a later port check fails.
+      onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
+    });
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);

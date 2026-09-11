@@ -10,8 +10,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { openUrl } from "../infra/browser-open.js";
-import { isRemoteEnvironment } from "../infra/remote-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -24,9 +22,9 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
+import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
-import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthOptionBag,
@@ -249,48 +247,6 @@ function resolveManifestAuthChoiceScope(params: {
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
-export async function runProviderPluginAuthMethodUnpersisted(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  runtime: RuntimeEnv;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-  /** Force remote/manual browser presentation for a connected GUI client. */
-  isRemote?: boolean;
-  prompter: WizardPrompter;
-  method: ProviderAuthMethod;
-  agentDir?: string;
-  workspaceDir?: string;
-  secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
-  allowSecretRefPrompt?: boolean;
-  opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<ProviderAuthResult> {
-  return await params.method.run({
-    config: params.config,
-    env: params.env,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    prompter: params.prompter,
-    runtime: params.runtime,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
-    opts: params.opts,
-    secretInputMode: params.secretInputMode,
-    allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: params.isRemote ?? isRemoteEnvironment(),
-    openUrl: async (url) => {
-      if (params.isRemote === true) {
-        await params.prompter.openUrl?.(url);
-        return;
-      }
-      await openUrl(url);
-    },
-    oauth: {
-      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
-    },
-  });
-}
-
 export function applyProviderPluginAuthMethodResultConfig(params: {
   config: OpenClawConfig;
   result: ProviderAuthResult;

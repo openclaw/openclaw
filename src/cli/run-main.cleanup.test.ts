@@ -207,6 +207,51 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
+  it.each(["process", "borrowed"])("keeps catalog discovery with its %s owner", async (mode) => {
+    const registry = emptyRegistry.createEmptyPluginRegistry();
+    const resource = resourceHarness("codex");
+    registerHarness(registry, resource.harness);
+    dispatch.run = async () => {
+      const { augmentModelCatalogWithAgentHarness } =
+        await import("../agents/harness/model-catalog.js");
+      const config = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: {
+              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      };
+      await augmentModelCatalogWithAgentHarness({
+        cfg: config,
+        agentId: "main",
+        agentDir: process.cwd(),
+        workspaceDir: process.cwd(),
+        defaultProvider: "openai",
+        defaultModel: "openai/gpt-5.4",
+        snapshot: { entries: [], routeVariants: [] },
+        pluginRegistry: registry,
+        observationConfig: config,
+        isCurrent: () => true,
+      });
+    };
+    try {
+      if (mode === "process") {
+        await runProcessEntry();
+        expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
+      } else {
+        const { runCli } = await import("./run-main.js");
+        await runCli(argv);
+        expect(resource.snapshot()).toEqual({ disposeCalls: 0, exitCode: null, signalCode: null });
+        await resource.ping();
+      }
+    } finally {
+      await resource.closeAndJoin();
+    }
+  });
+
   it("installs the rejection handler before the direct Gateway fast path", async () => {
     dispatch.run = async () => {
       expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();

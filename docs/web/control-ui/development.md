@@ -9,6 +9,10 @@ sidebarTitle: "Build and develop"
 
 Contributor notes for building the Control UI and running it against a Gateway you choose.
 
+Every command on this page runs from a checkout of the `openclaw/openclaw`
+repository with `pnpm install` already done. A packaged CLI install has no
+`pnpm` scripts.
+
 ## Build and develop the UI
 
 The Gateway serves static files from `dist/control-ui`:

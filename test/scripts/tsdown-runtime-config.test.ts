@@ -1,6 +1,7 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
@@ -18,6 +19,10 @@ type TsdownConfigEntry = {
   entry?: Record<string, string> | string[];
   inputOptions?: TsdownInputOptions;
   minify?: unknown;
+  dts?: boolean | { emitDtsOnly?: boolean };
+  define?: Record<string, unknown>;
+  outputOptions?: { codeSplitting?: boolean };
+  outExtensions?: () => { js: string };
   outDir?: string;
   plugins?: Array<{ name?: string }>;
 };
@@ -66,6 +71,16 @@ function entrySources(config: TsdownConfigEntry): Record<string, string> {
     return {};
   }
   return config.entry;
+}
+
+function requireSqliteReadOnlyChildGraph(): TsdownConfigEntry {
+  const graphs = asConfigArray(tsdownConfig).filter(
+    (config) =>
+      !(typeof config.dts === "object" && config.dts.emitDtsOnly) &&
+      entryKeys(config).includes("infra/sqlite-readonly-location.worker"),
+  );
+  expect(graphs).toHaveLength(1);
+  return expectDefined(graphs[0], "read-only snapshot child graph");
 }
 
 function bundledEntry(pluginId: string): string {
@@ -171,6 +186,9 @@ describe("tsdown config", () => {
         (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
       );
     });
+    const handoffGraph = configs.find((config) =>
+      entryKeys(config).includes("managed-handoff-runtime"),
+    );
     const inlinePlugins = configs.flatMap(
       (config) =>
         config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
@@ -182,10 +200,16 @@ describe("tsdown config", () => {
     expect(workerGraph?.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
     );
+    expect(handoffGraph?.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
     expect(entrySources(unifiedGraph)["native-hook-relay/entry"]).toBe(
       "src/cli/native-hook-relay-entry.ts",
     );
-    expect(inlinePlugins).toHaveLength(2);
+    expect(requireSqliteReadOnlyChildGraph().plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(4);
   });
 
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
@@ -201,9 +225,8 @@ describe("tsdown config", () => {
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
       "config/sessions/session-accessor.sqlite-archive.worker",
-      "infra/sqlite-readonly-location.worker",
+      "plugin-sdk/sqlite-runtime",
       "state/openclaw-database-verify.worker",
-      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
@@ -226,6 +249,18 @@ describe("tsdown config", () => {
     ]) {
       expect(keys).toContain(entry);
     }
+  });
+
+  it("emits the read-only snapshot child once without sealing its package loaders", () => {
+    const child = requireSqliteReadOnlyChildGraph();
+    expect(entrySources(child)).toEqual({
+      "infra/sqlite-readonly-location.worker": path.resolve(
+        "src/infra/sqlite-readonly-location.worker.ts",
+      ),
+    });
+    expect(child.outputOptions).toEqual({ codeSplitting: false });
+    expect(child.outExtensions?.().js).toBe(".js");
+    expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
   });
 
   it("builds the Docker healthcheck as a stable dist entry", () => {
@@ -335,20 +370,22 @@ describe("tsdown config", () => {
   });
 
   it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {
-    const unifiedGraph = requireUnifiedDistGraph();
-    const alwaysBundle = unifiedGraph.deps?.alwaysBundle;
+    for (const graph of [requireUnifiedDistGraph(), requireSqliteReadOnlyChildGraph()]) {
+      const alwaysBundle = graph.deps?.alwaysBundle;
+      const external = graph.inputOptions?.({})?.external;
+      if (typeof alwaysBundle !== "function" || typeof external !== "function") {
+        throw new Error("expected runtime graph dependency predicates");
+      }
 
-    if (typeof alwaysBundle !== "function") {
-      throw new Error("expected unified graph alwaysBundle predicate");
+      expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
+      expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
+      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(true);
+      expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
+      expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
+      expect(alwaysBundle("zod")).toBe(true);
+      expect(alwaysBundle("zod/v4/core")).toBe(true);
+      expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
     }
-
-    expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
-    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
-    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
-    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
-    expect(alwaysBundle("zod")).toBe(true);
-    expect(alwaysBundle("zod/v4/core")).toBe(true);
-    expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
   });
 
   it("suppresses unresolved imports from extension source", () => {

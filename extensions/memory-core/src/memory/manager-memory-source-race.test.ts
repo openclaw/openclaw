@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -29,18 +30,20 @@ describe("memory source changes during indexing", () => {
     async ({ provider, force, mutation, maintenance }) => {
       const changingFile = path.join(fixture.paths.memory, "changing.md");
       const siblingFile = path.join(fixture.paths.memory, "sibling.md");
+      const obsoleteContent = "Obsolete alpha source awaiting embeddings.";
+      const latestContent = "Latest alpha source after the concurrent edit.";
       await fs.writeFile(changingFile, "Original alpha source.");
       await fs.writeFile(siblingFile, "Original beta sibling.");
       const cfg = fixture.createConfig({
         provider,
         batchEnabled: true,
+        cacheEnabled: true,
         vectorEnabled: false,
         sources: ["memory"],
       });
-      cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
       const manager = await fixture.getFreshManager(cfg, "cli");
       await manager.sync({ reason: "baseline", force: true });
-      await fs.writeFile(changingFile, "Obsolete alpha source awaiting embeddings.");
+      await fs.writeFile(changingFile, obsoleteContent);
       await fs.writeFile(siblingFile, "Updated beta sibling survives the concurrent edit.");
       Reflect.set(manager, "dirty", true);
       let releaseEmbedding = () => {};
@@ -77,7 +80,7 @@ describe("memory source changes during indexing", () => {
         if (mutation === "delete") {
           await fs.unlink(changingFile);
         } else {
-          await fs.writeFile(changingFile, "Latest alpha source after the concurrent edit.");
+          await fs.writeFile(changingFile, latestContent);
         }
         releaseEmbedding();
         await expect(activeSync).resolves.toBeUndefined();
@@ -90,6 +93,11 @@ describe("memory source changes during indexing", () => {
             .join("\n");
         expect(indexedText()).toContain("Updated beta sibling");
         expect(indexedText()).not.toContain("Obsolete alpha");
+        expect(
+          db
+            .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = ?")
+            .get(hashText(obsoleteContent)),
+        ).toBeUndefined();
         expect(manager.status().dirty).toBe(true);
         expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(false);
 
@@ -106,6 +114,11 @@ describe("memory source changes during indexing", () => {
           ).toBeUndefined();
         } else {
           expect(indexedText()).toContain("Latest alpha source");
+          expect(
+            db
+              .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = ?")
+              .get(hashText(latestContent)),
+          ).toEqual({ hash: hashText(latestContent) });
         }
         expect(fixture.provider.providerRuntimeBatchCalls.flat().join("\n")).not.toContain(
           "beta sibling",

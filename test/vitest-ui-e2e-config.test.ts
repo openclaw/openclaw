@@ -113,6 +113,7 @@ const realGatewayFiles = [
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-stop-finished-run.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
@@ -122,6 +123,7 @@ const realGatewayFiles = [
   "device-platform-family.real-gateway",
   "logs-lifecycle",
   "mcp-app-conformance",
+  "model-api-keys.real-gateway",
   "model-picker-search.real-gateway",
   "profile-page.real-gateway",
   "session-progress-hovercard.real-gateway",
@@ -539,6 +541,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -568,6 +577,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: mcpFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

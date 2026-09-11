@@ -24,7 +24,7 @@ const gitRepository = {
 };
 
 suite.define(() => {
-  it("spaces destination section headings consistently", async () => {
+  it("lists Local, devices, then Cloud with Auto outside the destination list", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -53,20 +53,21 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
 
-      const headings = page.locator(
-        ".new-session-page__where-popover .new-session-page__menu-title",
-      );
+      const picker = page.locator(".new-session-page__where-popover");
+      const destinations = picker.locator(".new-session-page__environment-list");
       await expect
-        .poll(() => headings.allTextContents())
-        .toEqual(["Environments", "Your devices", "Cloud"]);
-      const spacing = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--space-2").trim(),
-      );
-      expect(
-        await headings.evaluateAll((elements) =>
-          elements.map((element) => getComputedStyle(element).marginTop),
-        ),
-      ).toEqual(["0px", spacing, spacing]);
+        .poll(() =>
+          destinations
+            .locator("[data-value]")
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("data-value")),
+            ),
+        )
+        .toEqual(["gateway", "device:paired-runner", "cloud:aws"]);
+      expect(await picker.locator(".new-session-page__menu-title").count()).toBe(0);
+      const auto = picker.getByRole("switch", { name: "Choose a device automatically" });
+      expect(await auto.getAttribute("aria-checked")).toBe("false");
+      expect(await destinations.getByRole("switch").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -239,8 +240,9 @@ suite.define(() => {
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
-        expect(await automaticDevice.isDisabled()).toBe(true);
-        expect(await localDevice.isEnabled()).toBe(true);
+        // Active Auto remains switchable off even when its inventory is unavailable.
+        expect(await automaticDevice.isEnabled()).toBe(value === "auto-device");
+        expect(await localDevice.isDisabled()).toBe(value === "auto-device");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.deferNext("environments.list");
@@ -262,7 +264,7 @@ suite.define(() => {
         });
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 2 });
         await expect.poll(() => start.isEnabled()).toBe(true);
-        expect(await selectedDevice.isEnabled()).toBe(true);
+        expect(await selectedDevice.isDisabled()).toBe(value === "auto-device");
         expect(await automaticDevice.isEnabled()).toBe(true);
       } finally {
         await context.close();
@@ -411,7 +413,7 @@ suite.define(() => {
       reason: "No worker slots are available",
     },
   ])(
-    "keeps a remembered $name blocked until Local is explicitly selected",
+    "keeps a remembered $name blocked until the user explicitly switches to Local",
     async ({ preference, status, availableSlots, attribute, value, reason }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -468,7 +470,18 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await where.click();
-        await page.locator('[data-value="gateway"]').click();
+        const local = page.locator('[data-value="gateway"]');
+        if (preference.kind === "auto-device") {
+          expect(await local.isDisabled()).toBe(true);
+          const auto = page.getByRole("switch", { name: "Choose a device automatically" });
+          expect(await auto.getAttribute("aria-checked")).toBe("true");
+          await auto.click();
+          await expect.poll(() => auto.getAttribute("aria-checked")).toBe("false");
+          await expect.poll(() => local.getAttribute("aria-pressed")).toBe("true");
+          await page.keyboard.press("Escape");
+        } else {
+          await local.click();
+        }
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
         await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({

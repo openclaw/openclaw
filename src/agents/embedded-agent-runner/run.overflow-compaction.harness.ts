@@ -128,6 +128,7 @@ type MockAgentDiscoveryStores = {
 
 type MockResolveModelResult = MockAgentDiscoveryStores & {
   model: MockResolvedModel;
+  logicalRef: { provider: string; model: string };
   error: null;
 };
 
@@ -237,6 +238,7 @@ function createMockResolvedModel(
   )?.models?.providers?.[provider];
   const usesOpenAITransport = provider === "openai" || provider === "codex";
   return {
+    logicalRef: { provider, model: modelId },
     model: {
       id: modelId,
       provider,

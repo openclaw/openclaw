@@ -3,10 +3,11 @@ import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatDurationCompact, formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
+import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
   taskDetail,
+  taskFinishedDuration,
   taskRuntimeLabel,
   taskTimestampMs,
   taskTitle,
@@ -27,13 +28,9 @@ type TaskDisplayFacts = {
 function taskDisplayFacts(task: TaskSummary): TaskDisplayFacts {
   const active = isActiveTask(task);
   const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
-  const endedMs = taskTimestampMs(task.endedAt);
   return {
     active,
-    finishedDuration:
-      !active && endedMs > startedMs && startedMs > 0
-        ? formatDurationCompact(endedMs - startedMs)
-        : undefined,
+    finishedDuration: taskFinishedDuration(task),
     startedMs,
     timestamp: taskTimestampMs(task.updatedAt ?? task.createdAt),
     title: taskTitle(task),

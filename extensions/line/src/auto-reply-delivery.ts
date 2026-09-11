@@ -15,6 +15,12 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
+import {
+  applyLineQuoteToken,
+  canCarryLineQuoteToken,
+  reportLineQuoteCarrierMissing,
+  resolveLineQuoteToken,
+} from "./quote-tokens.js";
 import { createLineQuickReply } from "./rich-messages.js";
 import {
   explainLineRefusal,
@@ -335,9 +341,21 @@ export async function deliverLineAutoReply(params: {
 
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
-  const messages = hasQuickReplies
+  const ordered = hasQuickReplies
     ? [...richMediaMessages, ...(orderedDeliveryMessages ?? textMessages)]
     : [...(orderedDeliveryMessages ?? textMessages), ...richMediaMessages];
+  // The token rides on the message rather than on a request so it survives the
+  // reply-token batch splitting into pushes and the reply-to-push fallback.
+  const replyQuoteToken = resolveLineQuoteToken({
+    cfg: params.cfg,
+    accountId,
+    chatId: to,
+    messageId: payload.replyToId,
+  });
+  if (replyQuoteToken && !ordered.some(canCarryLineQuoteToken)) {
+    reportLineQuoteCarrierMissing(to);
+  }
+  const messages = applyLineQuoteToken(ordered, replyQuoteToken);
   try {
     // A reply token carries five messages without consuming push quota. The
     // canonical batcher owns overflow and reply failure fallback for every payload.
@@ -376,6 +394,9 @@ export async function deliverLineAutoReply(params: {
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.
+      // These messages may still carry the quote token attached above; the send
+      // primitives drop it and retry once on their own if LINE refuses it, so a
+      // rejected quote is answered there rather than by another arm here.
       const lastRetryMessage = retryMessages.at(-1);
       if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
         lastRetryMessage.quickReply = createLineQuickReply(quickReplyItems);

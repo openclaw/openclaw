@@ -30,6 +30,13 @@ import {
 import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progress-gate.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
+function allowsMatrixQaTopLevelFinalAfterProgress(params: {
+  allowFinalBeforeProgress?: boolean;
+  allowTopLevelFinalWithProgress?: boolean;
+}) {
+  return params.allowTopLevelFinalWithProgress === true || params.allowFinalBeforeProgress === true;
+}
+
 async function runMatrixToolProgressScenario(
   context: MatrixQaScenarioContext,
   params: {
@@ -48,6 +55,7 @@ async function runMatrixToolProgressScenario(
     triggerBodyBuilder: (sutUserId: string, finalText: string) => string;
   },
 ) {
+  const allowTopLevelFinalWithProgress = allowsMatrixQaTopLevelFinalAfterProgress(params);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
   await writeMatrixToolProgressTaskFile(context, params.finalText);
@@ -243,7 +251,7 @@ async function runMatrixToolProgressScenario(
           isProgressProofForPreview(event) ||
           (params.allowFinalReplacementAsCompletion === true &&
             isFinalReplacement(event, previewRootEventId)) ||
-          (params.allowTopLevelFinalWithProgress === true && isFinalReply(event)),
+          (allowTopLevelFinalWithProgress && isFinalReply(event)),
         roomId: context.roomId,
         since: preview.since,
         timeoutMs: context.timeoutMs,
@@ -255,7 +263,7 @@ async function runMatrixToolProgressScenario(
     ) {
       finalReplacementBeforeProgress = progressOrFinal;
       progress = progressOrFinal;
-    } else if (isFinalReply(progressOrFinal.event)) {
+    } else if (allowTopLevelFinalWithProgress && isFinalReply(progressOrFinal.event)) {
       topLevelFinalBeforeProgress = progressOrFinal;
       progress = await client
         .waitForRoomEvent({
@@ -296,7 +304,7 @@ async function runMatrixToolProgressScenario(
           isMatrixQaMessageLikeKind(event.kind) &&
           doesMatrixQaReplyBodyMatchToken(event, params.finalText) &&
           (event.replacesEventId === previewRootEventId ||
-            (params.allowTopLevelFinalWithProgress === true &&
+            (allowTopLevelFinalWithProgress &&
               event.replacesEventId === undefined &&
               event.relatesTo === undefined)),
         roomId: context.roomId,

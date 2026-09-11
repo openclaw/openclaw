@@ -379,16 +379,3 @@ it("surfaces partial ClawHub failures on the Featured shelf", async () => {
 
   expect(controller.featuredError).toBe("ClawHub is unavailable; local plugins remain available.");
 });
-
-it("clears cached catalog attribution when discovery ownership changes", async () => {
-  const attributed = entry(1);
-  attributed.local.pluginId = "local-plugin";
-  attributed.catalog.author = "first-gateway";
-  const { controller } = setup([{ items: [attributed] }]);
-  await controller.refresh();
-  expect(controller.attributions.get("local-plugin")?.author).toBe("first-gateway");
-
-  controller.invalidate();
-
-  expect(controller.attributions.size).toBe(0);
-});

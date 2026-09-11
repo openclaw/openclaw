@@ -112,7 +112,7 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
     () => moduleLoader(modulePath) as ProviderDiscoveryModule,
   );
   return normalizeDiscoveryModule(loaded).map((provider) =>
-    Object.assign({}, provider, { pluginId: manifest.id }),
+    Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
   );
 }
 

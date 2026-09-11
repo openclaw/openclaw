@@ -189,9 +189,34 @@ exit 97
       for (const dimensions of ["1440x2560", "454x454"]) {
         const input = path.join(root, `input ${dimensions}.png`);
         const output = path.join(root, `output ${dimensions}.jpg`);
+        const [width, height] = dimensions.split("x");
         const fixture = spawnSync(
           IMAGEMAGICK_CONVERT,
-          ["-size", dimensions, "xc:rgba(24,120,200,0.5)", input],
+          [
+            "(",
+            "-size",
+            dimensions,
+            "gradient:#000000-#ff0000",
+            ")",
+            "(",
+            "-size",
+            `${height}x${width}`,
+            "gradient:#000000-#00ff00",
+            "-transpose",
+            ")",
+            "-compose",
+            "plus",
+            "-composite",
+            "-alpha",
+            "set",
+            "-channel",
+            "A",
+            "-evaluate",
+            "set",
+            "60%",
+            "+channel",
+            input,
+          ],
           { encoding: "utf8" },
         );
         expect(fixture.status, fixture.stderr).toBe(0);
@@ -211,7 +236,7 @@ exit 97
 
         const description = spawnSync(
           IMAGEMAGICK_IDENTIFY,
-          ["-ping", "-format", "%m|%wx%h|%[colorspace]|%[type]|%[channels]|%Q", output],
+          ["+ping", "-format", "%m|%wx%h|%[colorspace]|%[type]|%[channels]|%Q", output],
           { encoding: "utf8" },
         );
         expect(description.status, description.stderr).toBe(0);

@@ -56,7 +56,9 @@ describe("chat transcript rendering", () => {
       props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
       props.assistantAvatar = avatar;
       props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
-      props.avatarPlacement = avatarPlacement === "none" ? "none" : undefined;
+      if (avatarPlacement === "none") {
+        props.sessionKey = "agent:main:subagent:avatar-test";
+      }
       props.stream = "Reply in progress";
       props.streamStartedAt = 5_000;
       props.runActive = true;

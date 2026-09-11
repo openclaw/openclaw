@@ -10,11 +10,10 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  buildSourceModelFields,
   mergeProviders,
   mergeWithExistingProviderSecrets,
-  normalizeProviderMapKeys,
   type ExistingProviderConfig,
-  type SourceModelFields,
 } from "./models-config.merge.js";
 import {
   enforceSourceManagedProviderSecrets,
@@ -105,22 +104,6 @@ function buildPluginCatalogWrites(
       encodePluginModelCatalogRelativePath(pluginId),
       `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }, null, 2)}\n`,
     ]),
-  );
-}
-
-function buildSourceModelFields(
-  sourceProviders: Record<string, ProviderConfig> | undefined,
-): SourceModelFields {
-  return new Map(
-    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
-      (provider.models ?? []).map(
-        (model) =>
-          [
-            JSON.stringify([providerId, model.id.trim()]),
-            { inputOmitted: !Object.hasOwn(model, "input"), cost: model.cost },
-          ] as const,
-      ),
-    ),
   );
 }
 

@@ -14,8 +14,8 @@ OpenClaw stores control-plane state in the shared state database and agent data 
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the
 Swift and TypeScript state-database contracts declare different schema versions.
-`openclaw doctor --fix` owns file-to-SQLite migrations and records a receipt for
-each one in the shared `migration_runs` and `migration_sources` tables.
+[`openclaw doctor --fix`](/cli/doctor) owns file-to-SQLite migrations and records a
+receipt for each one in the shared `migration_runs` and `migration_sources` tables.
 
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and stay there.
@@ -35,6 +35,8 @@ reader job. Open the page that matches your task and stay there.
 - [Backups](/install/backups) — archives, per-database snapshots, scheduling, and offsite copies for the databases described here
 - [Updating](/install/updating) — updating safely, including the verified backup to take before a schema bump, and the rollback strategy
 - [Doctor](/gateway/doctor) — the repair and migration tool that fixes stale config/state and reports health problems
+- [`openclaw doctor`](/cli/doctor) — CLI reference for the command that runs those migrations
+- [`openclaw update`](/cli/update) — CLI reference for the updater that preflights schema support
 
 ## Where each section moved
 

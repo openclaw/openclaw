@@ -2,8 +2,17 @@
 // virtualizer host owned by ChatTranscriptController.
 import type { TemplateResult } from "lit";
 import type { AssistantMessageExpansionState } from "../chat-thread.ts";
+import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+
+/** A reader-position restoration that is waiting for stable transcript geometry. */
+export type ChatTranscriptPendingScrollOffset = {
+  offset: number;
+  stableFrames: number;
+  zeroMaxFrames: number;
+  onSettled?: (position: ChatSessionScrollPosition) => void;
+};
 
 export type TranscriptCallbacks = {
   onViewportResize?: () => void;
@@ -37,11 +46,36 @@ export type ChatTranscriptSession = {
     overlay?: unknown,
     header?: TranscriptHeader | null,
   ): TemplateResult;
-  syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void;
+  syncMessageRows(
+    messageRowKeysById: ReadonlyMap<string, string>,
+    messageRowsByKey: ReadonlyMap<string, string>,
+  ): void;
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
+};
+
+/** Presentation contract produced by the chat-item projection. */
+export type ChatTranscriptProjection = {
+  positionMessages: readonly unknown[];
+  isDirectThread: boolean;
+  isEmpty: boolean;
+  showLoadingSkeleton: boolean;
+  searchOpen: boolean;
+  renderRows: (overlay?: unknown, header?: TranscriptHeader | null) => TemplateResult;
+};
+
+/** Rows and lookup identities that must be promoted as one rendered projection. */
+export type TranscriptRenderSnapshot<T> = {
+  rows: readonly TranscriptRow<T>[];
+  renderRow: (row: TranscriptRow<T>) => unknown;
+  announcement: TranscriptAnnouncement | null;
+  announce: boolean;
+  overlay: unknown;
+  header: TranscriptHeader | null;
+  messageRows: ReadonlyMap<string, string>;
+  renderKeyRows: ReadonlyMap<string, string>;
 };

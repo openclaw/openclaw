@@ -5,6 +5,7 @@ import {
   type DiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../run-termination.js";
@@ -111,7 +112,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
         ? createAgentRunRestartAbortError()
         : reason === "superseded"
           ? createAgentRunSupersededAbortError()
-          : undefined,
+          : createAgentRunDirectAbortError(),
     );
   };
   let cliOwner: EmbeddedAgentQueueHandle | undefined;

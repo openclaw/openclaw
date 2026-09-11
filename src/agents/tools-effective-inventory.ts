@@ -3,16 +3,16 @@
  *
  * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
-import { findConfiguredProviderModel } from "../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
@@ -171,7 +171,7 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
     normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );
@@ -312,7 +312,7 @@ export function resolveConfiguredModelCompat(params: {
   if (!provider || !modelId) {
     return undefined;
   }
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
   const match = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
     normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );

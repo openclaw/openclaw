@@ -115,21 +115,6 @@ function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
   return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
 }
 
-function emitDeviceSecurityEvent(params: {
-  action: string;
-  outcome: DiagnosticSecurityEventInput["outcome"];
-  severity: DiagnosticSecurityEventInput["severity"];
-  authz: DeviceSessionAuthz;
-  targetDeviceId?: string;
-  policyId: string;
-  decision: NonNullable<DiagnosticSecurityEventInput["policy"]>["decision"];
-  controlId: string;
-  reason?: string;
-  attributes?: Record<string, string | number | boolean>;
-}) {
-  emitDeviceManagementSecurityEvent(params);
-}
-
 function emitDevicePairingDeniedSecurityEvent(params: {
   authz: DeviceSessionAuthz;
   targetDeviceId?: string;
@@ -137,7 +122,7 @@ function emitDevicePairingDeniedSecurityEvent(params: {
   reason: string;
   severity?: DiagnosticSecurityEventInput["severity"];
 }) {
-  emitDeviceSecurityEvent({
+  emitDeviceManagementSecurityEvent({
     action: "device.pairing.denied",
     outcome: "denied",
     severity: params.severity ?? "medium",
@@ -162,7 +147,7 @@ function emitDevicePairingLifecycleSecurityEvent(params: {
   controlId: string;
   attributes?: Record<string, string | number | boolean>;
 }) {
-  emitDeviceSecurityEvent({
+  emitDeviceManagementSecurityEvent({
     action: params.action,
     outcome: "success",
     severity: params.severity,
@@ -183,7 +168,7 @@ function emitDeviceTokenDeniedSecurityEvent(params: {
   reason: string;
   role: string;
 }) {
-  emitDeviceSecurityEvent({
+  emitDeviceManagementSecurityEvent({
     action: params.action,
     outcome: "denied",
     severity: "medium",
@@ -206,7 +191,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
   role: string;
   scopeCount?: number;
 }) {
-  emitDeviceSecurityEvent({
+  emitDeviceManagementSecurityEvent({
     action: params.action,
     outcome: "success",
     severity: params.severity,

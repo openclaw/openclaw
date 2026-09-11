@@ -7380,7 +7380,9 @@ server.listen(0, "127.0.0.1", () => {
     for (const pipeline of pipelines) {
       // Each profile starts independently; a slow/full declaration build cannot hold up UI readers.
       expect(pipeline.needs).toBe("validate_selected_ref");
-      expect(pipeline.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+      expect(pipeline.if).toBe(
+        "(!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''",
+      );
       expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
       expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
       expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
@@ -13370,6 +13372,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
@@ -13378,6 +13381,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
+      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",

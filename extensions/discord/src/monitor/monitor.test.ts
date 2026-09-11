@@ -416,6 +416,7 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    expect(lastDispatchCtx?.CommandSource).toBe("text");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     const dispatchParams = firstMockArg(dispatchReplyMock, "dispatchReplyMock") as
       | DispatchParams
@@ -455,42 +456,31 @@ describe("discord component interactions", () => {
     expect(recordParams.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {
-    registerDiscordComponentEntries({
-      entries: [createButtonEntry({ callbackData: "/codex_resume --browse-projects" })],
-      modals: [],
-    });
+  it.each([
+    [undefined, "text", "text-slash", "/login choice token 0"],
+    ["command", "native", "native", "/login choice token 0"],
+    ["callback", "text", "text-slash", 'Clicked "Approve".'],
+  ] as const)(
+    "routes %s callbacks with text commands disabled",
+    async (callbackDataKind, source, kind, body) => {
+      const entry = createButtonEntry({ callbackData: "/login choice token 0", callbackDataKind });
+      registerDiscordComponentEntries({ entries: [entry], modals: [] });
+      const ctx = createComponentContext();
+      ctx.cfg.commands = { text: false };
+      const button = createDiscordComponentButton(ctx);
+      const { interaction, reply } = createComponentButtonInteraction();
 
-    const button = createDiscordComponentButton(createComponentContext());
-    const { interaction, reply } = createComponentButtonInteraction();
+      await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not execute opaque callback actions as built-in fallback commands", async () => {
-    registerDiscordComponentEntries({
-      entries: [
-        createButtonEntry({
-          callbackData: "/codex permissions yolo",
-          callbackDataKind: "callback",
-        }),
-      ],
-      modals: [],
-    });
-
-    const button = createDiscordComponentButton(createComponentContext());
-    const { interaction, reply } = createComponentButtonInteraction();
-
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-  });
+      expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+      expect(lastDispatchCtx).toMatchObject({
+        BodyForAgent: body,
+        CommandSource: source,
+        CommandTurn: { kind, source, body },
+      });
+      expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("preserves selected values for select fallback when no plugin handler matches", async () => {
     registerDiscordComponentEntries({
@@ -549,6 +539,7 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe("/codex permissions yolo");
+    expect(lastDispatchCtx?.CommandSource).toBe("native");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 

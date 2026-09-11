@@ -107,6 +107,7 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
+  beforePersistentEffect?: () => void | Promise<void>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -289,6 +290,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
+    beforePersistentEffect: params.beforePersistentEffect,
     ...capabilityConsent,
   });
   for (const change of convergence.changes) {
@@ -366,6 +368,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     // Installed plugin metadata can own migrations that this process has not loaded yet.
     // Finalization runs fresh doctor plus strict validation before the update can complete.
     await commitPluginInstallRecordsWithConfig({
+      beforePersistentEffect: params.beforePersistentEffect,
       previousInstallRecords: pluginInstallRecords,
       nextInstallRecords,
       nextConfig,
@@ -376,6 +379,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         skipPluginValidation: true,
       },
     });
+    await params.beforePersistentEffect?.();
     await refreshPluginRegistryAfterConfigMutation({
       configPath: params.configSnapshot.path,
       reason: "source-changed",

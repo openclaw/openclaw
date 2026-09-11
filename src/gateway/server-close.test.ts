@@ -30,6 +30,7 @@ import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
@@ -650,22 +651,44 @@ describe("createGatewayCloseHandler", () => {
     expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
   });
 
-  it.skipIf(process.platform === "win32")(
-    "terminates supervised process trees before Gateway close returns",
-    async () => {
+  it.skipIf(process.platform === "win32").each([
+    { restart: false, ignoreTerm: false },
+    { restart: true, ignoreTerm: true },
+  ])(
+    "terminates supervised process trees before Gateway close returns (restart=$restart, ignores TERM=$ignoreTerm)",
+    async ({ restart, ignoreTerm }) => {
       const previousServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
       process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
       const supervisor = getProcessSupervisor();
       let output = "";
       let run: ManagedRun | undefined;
+      let replacementRun: ManagedRun | undefined;
+      let rootPid: number | undefined;
+      let descendantPid: number | undefined;
 
       try {
+        // Readiness follows TERM handler installation and closure of inherited descriptors.
+        const descendantScript = `
+          ${ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}
+          setInterval(() => {}, 1_000);
+          process.send("ready", () => process.disconnect());
+        `;
         run = await supervisor.spawn({
           mode: "child",
           argv: [
-            "/bin/sh",
-            "-c",
-            'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+            process.execPath,
+            "-e",
+            `
+              const { spawn } = require("node:child_process");
+              const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
+                stdio: ["ignore", "ignore", "ignore", "ipc"],
+              });
+              child.once("message", () => {
+                child.once("disconnect", () => {
+                  process.stdout.write(process.pid + " " + child.pid + "\\n");
+                });
+              });
+            `,
           ],
           stdinMode: "pipe-closed",
           onStdout: (chunk) => {
@@ -674,24 +697,44 @@ describe("createGatewayCloseHandler", () => {
         });
         await vi.waitFor(() => expect(output).toMatch(/^\d+ \d+/u));
         const match = /^(\d+) (\d+)/u.exec(output);
-        const rootPid = Number(match?.[1]);
-        const descendantPid = Number(match?.[2]);
+        rootPid = Number(match?.[1]);
+        descendantPid = Number(match?.[2]);
         expect(isProcessAlive(rootPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
-        await close({ reason: "test" });
+        await close({
+          reason: restart ? "gateway restarting" : "gateway stopping",
+          ...(restart ? { restartExpectedMs: 1500, drainTimeoutMs: 0 } : {}),
+        });
 
+        // Do not poll after close: returning while either process lives is the regression.
         expect(isProcessAlive(rootPid)).toBe(false);
         expect(isProcessAlive(descendantPid)).toBe(false);
-        expect(getProcessSupervisor()).not.toBe(supervisor);
+        await expect(run.waitForExtinction!()).resolves.toBeUndefined();
+        const nextSupervisor = getProcessSupervisor();
+        expect(nextSupervisor).not.toBe(supervisor);
+        replacementRun = await nextSupervisor.spawn({
+          mode: "child",
+          argv: [process.execPath, "-e", ""],
+          exactEnv: true,
+          stdinMode: "pipe-closed",
+        });
+        await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
       } finally {
-        run?.cancel();
-        await run?.waitForExtinction?.().catch(() => undefined);
-        if (previousServiceMarker === undefined) {
-          delete process.env.OPENCLAW_SERVICE_MARKER;
-        } else {
-          process.env.OPENCLAW_SERVICE_MARKER = previousServiceMarker;
+        try {
+          run?.cancel();
+          replacementRun?.cancel();
+          killPidIfAlive(rootPid);
+          killPidIfAlive(descendantPid);
+          await run?.waitForExtinction?.().catch(() => undefined);
+          await replacementRun?.wait().catch(() => undefined);
+        } finally {
+          if (previousServiceMarker === undefined) {
+            delete process.env.OPENCLAW_SERVICE_MARKER;
+          } else {
+            process.env.OPENCLAW_SERVICE_MARKER = previousServiceMarker;
+          }
         }
       }
     },

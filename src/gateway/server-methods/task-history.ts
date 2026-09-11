@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   errorShape,
   validateTasksHistoryParams,
+  type ErrorCode,
   type TasksHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -58,6 +59,8 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
   if (!assertValidParams(params, validateTasksHistoryParams, "tasks.history", respond)) {
     return;
   }
+  const fail = (message: string, code: ErrorCode = ErrorCodes.UNAVAILABLE) =>
+    respond(false, undefined, errorShape(code, message));
   const task = getTaskById(params.taskId);
   const allowed = (value: TaskRecord | undefined): value is TaskRecord =>
     Boolean(
@@ -69,22 +72,25 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
       }),
     );
   if (!allowed(task)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Task not found."));
+    fail("Task not found.", ErrorCodes.INVALID_REQUEST);
     return;
   }
   const binding = historyBinding(task);
+  const sessionKey = taskTranscriptSessionKey(task);
   let cursor: string | undefined;
+  let offset = 0;
   try {
     cursor = decodeCursor(params.cursor, binding);
+    if (sessionKey && cursor !== undefined) {
+      offset = Number(cursor);
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new Error("Invalid task history offset");
+      }
+    }
   } catch {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Invalid task history cursor. Refresh the task."),
-    );
+    fail("Invalid task history cursor. Refresh the task.", ErrorCodes.INVALID_REQUEST);
     return;
   }
-  const sessionKey = taskTranscriptSessionKey(task);
   const harness = resolveTaskHistoryHarness(task);
   let active = true;
   const assertCurrent = () => {
@@ -122,15 +128,6 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
   try {
     const limit = params.limit ?? 100;
     if (sessionKey) {
-      const offset = cursor === undefined ? 0 : Number(cursor);
-      if (!Number.isSafeInteger(offset) || offset < 0) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Invalid task history cursor. Refresh the task."),
-        );
-        return;
-      }
       const { chatHistoryHandlers } = await import("./chat-history-handler.js");
       assertCurrent();
       const childAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? task.agentId;
@@ -175,21 +172,10 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
         }),
       );
     } else {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "This task has no readable transcript."),
-      );
+      fail("This task has no readable transcript.");
     }
   } catch {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "Unable to load this task's transcript. Refresh the task and try again.",
-      ),
-    );
+    fail("Unable to load this task's transcript. Refresh the task and try again.");
   } finally {
     active = false;
   }

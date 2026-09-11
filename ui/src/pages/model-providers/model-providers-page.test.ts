@@ -9,12 +9,14 @@ import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import {
   appendPage,
+  createApiKeyProviderData,
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
   deferred,
   publishableGateway,
   requestCount,
+  saveKey,
   type AgentSelectElement,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
@@ -444,24 +446,65 @@ describe("ModelProvidersPage agent scope", () => {
     ).toBe(true);
     expect(page.textContent).not.toContain("operator.admin access");
   });
-  it("keeps a committed provider-key save successful when config refresh fails", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after provider-key commit";
-    });
+  it.each(["config", "providers"])("keeps saved-key warnings after %s failure", async (source) => {
+    const { context, runtimeConfig, request } = createHarness("main");
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
-    page.keyEditorProvider = "openai";
-    page.keyDraft = "replacement";
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.authSetApiKey") {
+        return { profileId: "openai:key", warning: "Authentication refresh failed." };
+      }
+      if (source === "providers" && method === "models.authStatus") {
+        throw new Error("Provider refresh failed.");
+      }
+      return originalRequest(method);
+    });
+    if (source === "config") {
+      runtimeConfig.refresh.mockImplementationOnce(async () => {
+        runtimeConfig.state.lastError = "Config refresh failed.";
+      });
+    }
+    await saveKey(page, "replacement");
+    await waitForFast(() => expect(page.messages.openai?.kind).toBe("success"));
 
-    await page.saveKey("openai", "openai");
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.keyEditorProvider).toBeNull();
     expect(page.messages.openai).toEqual({
       kind: "success",
       text: "Secret saved.",
-      warning: "config.get failed after provider-key commit",
+      warning:
+        source === "config"
+          ? "Authentication refresh failed. Config refresh failed."
+          : "Authentication refresh failed. Provider refresh failed.",
+    });
+    await page.updateComplete;
+    expect(page.textContent).toContain(page.messages.openai?.warning);
+  });
+
+  it("removes stored API keys through the rendered action and retains its warning", async () => {
+    const { context, request, runtimeConfig } = createHarness("main");
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = createApiKeyProviderData();
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.authLogout"
+        ? { removedProfiles: ["openai:key"], warning: "Authentication refresh failed." }
+        : originalRequest(method),
+    );
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".model-providers__card-actions .danger")!.click();
+    await waitForFast(() => expect(page.messages.openai?.kind).toBe("success"));
+    expect(request).toHaveBeenCalledWith("models.authLogout", {
+      provider: "openai",
+      agentId: "main",
+      credentialType: "api_key",
+    });
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(page.messages.openai).toMatchObject({
+      text: "Saved API keys removed.",
+      warning: "Authentication refresh failed.",
     });
   });
 
@@ -479,7 +522,7 @@ describe("ModelProvidersPage agent scope", () => {
     await page.addProvider();
     await page.updateComplete;
 
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);
     expect(page.addProviderKey).toBe("");
     const form = page.querySelector(".model-providers__add-form")?.parentElement;
@@ -540,17 +583,15 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.messages.defaults).toBeUndefined();
   });
 
-  it("keeps global provider writes without clearing a replacement agent's credential draft", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig } = createHarness("main");
+  it("cancels a queued key save when the selected agent changes", async () => {
+    const { agentSelection, context, notifySelection, runtimeConfig, request } =
+      createHarness("main");
     const gate = deferred<void>();
-    runtimeConfig.ensureLoaded.mockImplementationOnce(async () => gate.promise);
+    runtimeConfig.beforeExternalDispatch.mockImplementationOnce(() => gate.promise);
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
-    page.keyEditorProvider = "openai";
-    page.keyDraft = "main-agent-key";
-
-    const saving = page.saveKey("openai", "openai");
-    await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
+    await saveKey(page, "main-agent-key");
+    await waitForFast(() => expect(runtimeConfig.beforeExternalDispatch).toHaveBeenCalledOnce());
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
@@ -558,23 +599,22 @@ describe("ModelProvidersPage agent scope", () => {
     page.keyEditorProvider = "anthropic";
     page.keyDraft = "writer-agent-unsaved-key";
     gate.resolve();
-    await saving;
+    await runtimeConfig.runExternalMutation.mock.results[0]?.value;
 
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(runtimeConfig.patch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        raw: { models: { providers: { openai: { apiKey: "main-agent-key" } } } },
-      }),
-    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("models.authSetApiKey");
     expect(page.keyEditorProvider).toBe("anthropic");
     expect(page.keyDraft).toBe("writer-agent-unsaved-key");
     expect(page.messages.openai).toBeUndefined();
   });
 
-  it("keeps a replacement agent's matching add-provider draft after a global write", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig } = createHarness("main");
-    const gate = deferred<void>();
-    runtimeConfig.ensureLoaded.mockImplementationOnce(async () => gate.promise);
+  it("keeps a replacement agent's matching add-provider draft after a saved key response", async () => {
+    const { agentSelection, context, notifySelection, runtimeConfig, request } =
+      createHarness("main");
+    const gate = deferred<unknown>();
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation((method) =>
+      method === "models.authSetApiKey" ? gate.promise : originalRequest(method),
+    );
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
     page.addProviderOpen = true;
@@ -582,7 +622,13 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderKey = "shared-provider-key";
 
     const adding = page.addProvider();
-    await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("models.authSetApiKey", {
+        provider: "anthropic",
+        agentId: "main",
+        apiKey: "shared-provider-key",
+      }),
+    );
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
@@ -590,10 +636,10 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderOpen = true;
     page.addProviderId = "anthropic";
     page.addProviderKey = "shared-provider-key";
-    gate.resolve();
+    gate.resolve({ profileId: "anthropic:manual-api-key" });
     await adding;
 
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);
     expect(page.addProviderId).toBe("anthropic");
     expect(page.addProviderKey).toBe("shared-provider-key");

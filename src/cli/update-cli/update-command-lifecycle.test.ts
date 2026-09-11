@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -175,7 +176,6 @@ import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 

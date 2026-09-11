@@ -12,31 +12,26 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
-import { applyMergePatch } from "../config/merge-patch.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
+  assertSetupTarget,
   projectDefaultInferenceRoute,
+  sameSetupConfiguredRoute,
+  sameSetupInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
-import {
-  assertSetupTarget,
-  sameSetupConfiguredRoute,
-  sameSetupInferenceRoute,
-} from "./setup-inference-route-guard.js";
-import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
- * the conversation and this applies model + workspace + quickstart gateway
+ * the conversation and this applies workspace + quickstart gateway
  * defaults, seeds workspace bootstrap files, and (on the CLI surface) optionally installs
  * and starts the gateway service. No interactive prompts may occur here —
  * everything uses quickstart defaults, so the conversation stays the only UI.
@@ -47,10 +42,6 @@ export type SystemAgentSetupApplyParams = {
   firstAgent?: FirstOnboardingAgent;
   /** Explicit interactive approval to replace an existing fleet workspace root. */
   allowWorkspaceChange?: boolean;
-  model?: string;
-  agentRuntimeId?: string;
-  /** Pin the selected model to the exact credential that passed inference. */
-  authProfileId?: string;
   /** Exact default-agent route whose inference passed the setup gate. */
   expectedInferenceRoute?: DefaultInferenceRouteProjection;
   /** Live-probe target; setup aborts if another process switches the default agent. */
@@ -61,14 +52,8 @@ export type SystemAgentSetupApplyParams = {
   expectedModelRef?: string;
   /** Full config revision used by the live probe; null means the file was absent. */
   expectedConfigHash?: string | null;
-  /** Provider-auth config produced in the isolated manual-key flow. */
-  configPatch?: unknown;
   /** Success-gated final normalization against the config held by the write lock. */
   finalizeConfig?: (config: OpenClawConfig, sourceConfig: OpenClawConfig) => OpenClawConfig;
-  /** Plugin whose enablement belongs to the successful setup transaction. */
-  enablePluginId?: string;
-  /** Refresh an installed plugin after its success-gated enablement commits. */
-  refreshPluginRegistry?: boolean;
   /** Synchronous cross-store guard receives authored config under the final write lock. */
   assertCommitPreconditions?: (sourceConfig: OpenClawConfig) => void;
   /** Resume an interrupted local installation without restarting a running Gateway. */
@@ -147,17 +132,11 @@ export async function applySystemAgentSetup(
 ): Promise<SystemAgentSetupApplyResult> {
   const {
     workspace,
-    model,
-    agentRuntimeId,
-    authProfileId,
     expectedAgentId,
     expectedAgentDir,
     expectedModelRef,
     expectedConfigHash,
-    configPatch,
     finalizeConfig,
-    enablePluginId,
-    refreshPluginRegistry,
     assertCommitPreconditions,
     surface,
     runtime,
@@ -322,16 +301,6 @@ export async function applySystemAgentSetup(
     const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0;
     const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
-    if (enablePluginId) {
-      const enabled = enablePluginInConfig(setupBaseConfig, enablePluginId);
-      if (!enabled.enabled) {
-        throw new Error(`Provider plugin ${enablePluginId} is ${enabled.reason}.`);
-      }
-      setupBaseConfig = enabled.config;
-    }
-    if (configPatch !== undefined) {
-      setupBaseConfig = applyMergePatch(setupBaseConfig, configPatch) as OpenClawConfig;
-    }
     if (currentHasRoster) {
       const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
@@ -361,16 +330,6 @@ export async function applySystemAgentSetup(
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
     });
-    if (model) {
-      const targetAgentId = candidate.agents?.defaults?.systemAgent?.agentId;
-      candidate = await applySystemAgentModelSelection({
-        config: candidate,
-        model,
-        ...(targetAgentId ? { targetAgentId } : {}),
-        ...(agentRuntimeId ? { agentRuntimeId } : {}),
-        ...(authProfileId ? { authProfileId } : {}),
-      });
-    }
     candidate = applySecurityAcknowledgement(candidate);
     const gateway = await configureGatewayForSetup({
       flow: "quickstart",
@@ -491,8 +450,7 @@ export async function applySystemAgentSetup(
   const lines: string[] = [
     ...sessionMigrationWarnings,
     `Workspace: ${shortenHomePath(effectiveWorkspace)}`,
-    model ? `Default model: ${model}` : undefined,
-  ].filter((line): line is string => line !== undefined);
+  ];
 
   const runCommittedFollowUp = async <T>(
     effect: () => Promise<T>,
@@ -546,25 +504,6 @@ export async function applySystemAgentSetup(
         `OpenClaw exec approval: ${formatErrorMessage(error)}; local model harnesses may ask again.`,
       ),
   );
-
-  if (refreshPluginRegistry && enablePluginId) {
-    await runCommittedFollowUp(
-      async () => {
-        const { refreshPluginRegistryAfterConfigMutation } =
-          await import("../plugins/registry-refresh.js");
-        beforePersistentApply?.();
-        await refreshPluginRegistryAfterConfigMutation({
-          configPath: committed.path,
-          reason: "source-changed",
-          traceCommand: "openclaw-setup",
-          logger: {
-            warn: (message) => lines.push(message),
-          },
-        });
-      },
-      (error) => lines.push(`Plugin registry refresh failed: ${formatErrorMessage(error)}`),
-    );
-  }
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
   if (surface === "cli") {

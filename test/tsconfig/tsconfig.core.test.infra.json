@@ -6,5 +6,11 @@
   "include": [
     "../../src/infra/**/*.test.ts",
     "../../src/infra/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/infra/outbound/**"
   ]
 }

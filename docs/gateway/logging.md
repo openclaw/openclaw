@@ -45,6 +45,8 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI d
 openclaw logs --follow
 ```
 
+If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail; filesystem read errors remain visible.
+
 ### Verbose vs. log levels
 
 - **File logs** are controlled exclusively by `logging.level`.

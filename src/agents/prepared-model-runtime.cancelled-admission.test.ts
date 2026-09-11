@@ -79,7 +79,10 @@ const coldAdmissionCases: Array<{
   {
     name: "ephemeral",
     acquire: async (input, signal) =>
-      await acquireReadOnlyPreparedModelRuntime(input, signal, "static"),
+      await acquireReadOnlyPreparedModelRuntime(input, {
+        abortSignal: signal,
+        catalogMode: "static",
+      }),
   },
 ];
 

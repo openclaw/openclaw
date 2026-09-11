@@ -483,6 +483,7 @@ async function resolveApprovedModel(params: {
         provider: resolved.ref.provider,
         modelId: resolved.ref.model,
         agentDir,
+        modelIdSource: "selected",
         ...(selectedProfileId ? { profileId: selectedProfileId } : {}),
         ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
         ...(selectedProfileId ? { bindAuthOwner: true } : {}),
