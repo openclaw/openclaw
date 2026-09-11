@@ -24,6 +24,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
+import { saveSetupCredential } from "./setup-inference-credentials.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
@@ -475,6 +476,58 @@ describe("setup activation credentials and configuration", () => {
       ).toEqual(originalCredential);
     },
   );
+
+  it("activates saved sparse model settings without treating runtime defaults as a changed connection", async () => {
+    const setup = await fixture();
+    const configured: OpenClawConfig = {
+      ...setup.config,
+      agents: {
+        ...setup.config.agents,
+        defaults: { ...setup.config.agents?.defaults, model: `${modelRef}@openai:original` },
+      },
+    };
+    await persistProviderAuthProfilesAfterLogin({
+      config: configured,
+      agentDir: setup.agentDir,
+      profiles: [
+        { profileId: "openai:original", credential: { ...credential, key: "original-key" } },
+      ],
+    });
+    await fs.writeFile(setup.configPath, JSON.stringify(configured));
+    clearConfigCache();
+    const saved = await saveSetupCredential({
+      profile: { profileId: "openai:replacement", credential },
+      config: {
+        ...configured,
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://provider.example/v1",
+              api: "openai-responses",
+              models: [{ id: "gpt-4.1-mini", name: "Sparse saved model" }],
+            },
+          },
+        },
+      },
+      baseConfig: configured,
+      agentDir: setup.agentDir,
+      modelRef,
+      authChoice: "fixture-login",
+      pluginId: "openai",
+    });
+
+    const result = await setup.activate(
+      `saved-auth:${encodeURIComponent(saved.profile.profileId)}`,
+      true,
+    );
+
+    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+    expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
+    const snapshot = await readConfigFileSnapshot();
+    expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
+      { id: "gpt-4.1-mini", name: "Sparse saved model" },
+    ]);
+  });
 
   it("preserves an unrelated config edit when selecting the verified model", async () => {
     const setup = await fixture();
