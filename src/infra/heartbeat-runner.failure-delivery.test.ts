@@ -120,6 +120,38 @@ describe("runHeartbeatOnce failure delivery", () => {
       : heartbeatPayload;
   }
 
+  it.each(["isError", "agent-tool-failure", "agent-runner-failure"] as const)(
+    "preserves %s text ending in a standalone silent line",
+    async (failure) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig({ tmpDir, storePath });
+        await seedTelegramSession(storePath, cfg);
+        const text = "Check failed: service unavailable.\n\nNO_REPLY";
+        replySpy.mockImplementation(async (_ctx, options) => {
+          if (failure === "agent-runner-failure") {
+            setHeartbeatAgentTurnStatus(options, "failed");
+            return { text };
+          }
+          if (failure === "agent-tool-failure") {
+            return setReplyPayloadMetadata(
+              { text },
+              {
+                heartbeatTerminalToolFailure: { toolName: "message" },
+              },
+            );
+          }
+          return { text, isError: true };
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+        const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+        expectTelegramSend(sendTelegram, { text, cfg });
+        if (failure !== "isError") {
+          expect(result).toMatchObject({ status: "failed", reason: failure });
+        }
+      });
+    },
+  );
+
   it("reports a quiet terminal tool failure without external delivery for target none", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath, target: "none" });

@@ -328,6 +328,32 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
     });
   });
 
+  it.each(["media", "presentation"] as const)(
+    "keeps %s deliverable alongside a silent-line acknowledgement",
+    async (kind) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig(tmpDir, storePath);
+        await seedTelegramSession(storePath, cfg);
+        const mediaUrl = "https://example.test/report.png";
+        replySpy.mockResolvedValue({
+          text: "Nothing requires attention.\n\nNO_REPLY",
+          ...(kind === "media"
+            ? { mediaUrl }
+            : { presentation: { blocks: [{ type: "text", text: "Report available." }] } }),
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+        await runHeartbeat(cfg, replySpy, sendTelegram);
+        expect(sendTelegram).toHaveBeenCalledOnce();
+        expect(sendTelegram.mock.calls[0]?.[1]).not.toContain("NO_REPLY");
+        if (kind === "media") {
+          expect(sendTelegram.mock.calls[0]?.[2]).toMatchObject({ mediaUrl });
+        } else {
+          expect(sendTelegram.mock.calls[0]?.[1]).toContain("Report available.");
+        }
+      });
+    },
+  );
+
   it("delivers presentation-only heartbeat replies with their button fallback", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig(tmpDir, storePath);
