@@ -13,6 +13,10 @@ and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Dashboard → Settings → This Mac → App**.
 
+Use the green window button to enter native full screen. The Dashboard's sidebar
+and chat controls remain available at the top of the window. Leaving full screen
+restores the normal titlebar and window controls.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
