@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { z } from "zod";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import {
   withExistingSqliteRollbackDatabase,
   type ExistingSqliteTransaction,
@@ -60,7 +62,7 @@ const PackageActivationDescriptorSchema = z.strictObject({
     )
     .max(64),
 });
-type PackageActivationDescriptor = z.infer<typeof PackageActivationDescriptorSchema>;
+export type PackageActivationDescriptor = z.infer<typeof PackageActivationDescriptorSchema>;
 const PackageActivationPhaseSchema = z.enum([
   "prepared",
   "publishing",
@@ -71,7 +73,7 @@ const PackageActivationPhaseSchema = z.enum([
   "retiring",
   "retired",
 ]);
-type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
+export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema>;
 const intentSchema = z
   .union([
     z.strictObject({ kind: z.enum(["displace", "publish"]) }),
@@ -91,8 +93,8 @@ const intentSchema = z
     }),
   ])
   .nullable();
-type PackageActivationIntent = z.infer<typeof intentSchema>;
-type PackageActivationRecord = {
+export type PackageActivationIntent = z.infer<typeof intentSchema>;
+export type PackageActivationRecord = {
   revision: number;
   phase: PackageActivationPhase;
   intent: PackageActivationIntent;
@@ -110,7 +112,7 @@ type ActivationRow = {
 const queries = (db: DatabaseSync) =>
   getNodeSqliteKysely<{ package_activation: ActivationRow }>(db);
 
-function packageActivationIdentity(file: string, directory: boolean | "launcher"): string {
+export function packageActivationIdentity(file: string, directory: boolean | "launcher"): string {
   const stat = fs.lstatSync(file, { bigint: true });
   if (
     stat.ino === 0n ||
@@ -138,6 +140,14 @@ function assertPrivate(file: string, directory: boolean): string {
     throw new Error("Package publication recovery permissions are unsafe");
   }
   return value;
+}
+
+function descriptorJson(descriptor: PackageActivationDescriptor): string {
+  const encoded = JSON.stringify(PackageActivationDescriptorSchema.parse(descriptor));
+  if (Buffer.byteLength(encoded) > MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES) {
+    throw new Error("Package publication descriptor exceeds 1 MiB");
+  }
+  return encoded;
 }
 
 /** An existing operation is never bootstrapped, migrated, or repaired on open. */
@@ -248,7 +258,106 @@ export function openPackageActivationJournal(anchor: string) {
     return rows[0];
   };
   const read = () => withDatabase(false, (db) => decode(readRow(db)));
+  const assertRecord = (expected: PackageActivationRecord, actual: PackageActivationRecord) => {
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      throw new Error("Package publication intent is no longer current");
+    }
+  };
   return {
     read,
+    assertCurrent(expected: PackageActivationRecord) {
+      assertRecord(expected, read());
+    },
+    transition(
+      expected: PackageActivationRecord,
+      phase: PackageActivationPhase,
+      intent: PackageActivationIntent,
+      assertCurrent: () => void,
+      publications = expected.publications,
+    ): PackageActivationRecord {
+      const intentJson = JSON.stringify(intentSchema.parse(intent));
+      PackageActivationPhaseSchema.parse(phase);
+      return withDatabase(true, (db, transact) => {
+        assertCurrent();
+        return transact(
+          () => {
+            assertFiles();
+            assertCurrent();
+            assertRecord(expected, decode(readRow(db)));
+            executeSqliteQuerySync(
+              db,
+              queries(db)
+                .updateTable("package_activation")
+                .set({
+                  revision: expected.revision + 1,
+                  phase,
+                  intent_json: intentJson,
+                  publications_json: JSON.stringify(publications),
+                })
+                .where("slot", "=", 1)
+                .where("revision", "=", expected.revision),
+            );
+            return decode(readRow(db));
+          },
+          {
+            withCommit: (commit) => {
+              assertFiles();
+              assertCurrent();
+              commit();
+            },
+          },
+        );
+      });
+    },
   };
+}
+export type PackageActivationJournal = ReturnType<typeof openPackageActivationJournal>;
+
+/** Only the original admitted producer may create the one-operation database. */
+export function createPackageActivationJournal(
+  anchor: string,
+  descriptor: Omit<PackageActivationDescriptor, "journalIdentity">,
+  assertCurrent: () => void,
+): PackageActivationJournal {
+  assertCurrent();
+  assertPrivate(anchor, true);
+  descriptorJson({ ...descriptor, journalIdentity: "0:0" });
+  const journalPath = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
+  const fd = fs.openSync(journalPath, "wx", 0o600);
+  fs.closeSync(fd);
+  const journalIdentity = assertPrivate(journalPath, false);
+  const encoded = descriptorJson({ ...descriptor, journalIdentity });
+  const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(journalPath));
+  try {
+    assertCurrent();
+    executeSqliteQuerySync(
+      db,
+      queries(db)
+        .schema.createTable("package_activation")
+        .addColumn("slot", "integer", (column) => column.primaryKey().notNull())
+        .addColumn("revision", "integer", (column) => column.notNull())
+        .addColumn("phase", "text", (column) => column.notNull())
+        .addColumn("descriptor_json", "text", (column) => column.notNull())
+        .addColumn("intent_json", "text", (column) => column.notNull())
+        .addColumn("publications_json", "text", (column) => column.notNull())
+        .modifyEnd(sql`STRICT`),
+    );
+    assertCurrent();
+    executeSqliteQuerySync(
+      db,
+      queries(db).insertInto("package_activation").values({
+        slot: 1,
+        revision: 0,
+        phase: "prepared",
+        descriptor_json: encoded,
+        intent_json: "null",
+        publications_json: "[]",
+      }),
+    );
+  } finally {
+    if (db.isOpen) {
+      db.close();
+    }
+  }
+  return openPackageActivationJournal(anchor);
 }

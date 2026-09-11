@@ -698,6 +698,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  activation?: import("./package-update-activation.js").PackageActivationOptions;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
 }): Promise<PackageUpdateStepsResult> {
@@ -1206,6 +1207,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
+          activation: params.activation,
         });
         steps.push(swap.step);
         if (swap.postVerifyStep) {

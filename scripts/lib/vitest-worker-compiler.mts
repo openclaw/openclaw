@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import {
   sharedRuntimeProcessBuildEntries,
   standaloneRuntimeProcessBuildEntries,
@@ -151,15 +151,17 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     entry: standaloneRuntimeProcessBuildEntries,
     outputOptions: { codeSplitting: false },
   });
-  await build({
-    ...createManagedHandoffBuildConfig(),
-    config: false,
-    cwd: root,
-    outDir,
-    clean: false,
-    logLevel: config.logLevel,
-    plugins: config.plugins,
-  });
+  for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+    await build({
+      ...sealedConfig,
+      config: false,
+      cwd: root,
+      outDir,
+      clean: false,
+      logLevel: config.logLevel,
+      plugins: config.plugins,
+    });
+  }
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
   }

@@ -222,6 +222,7 @@ export type PackageInstallUpdateParams = {
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
+  activation?: import("../../infra/package-update-activation.js").PackageActivationOptions;
 };
 
 export async function runPackageInstallUpdate(
@@ -273,6 +274,7 @@ export async function runPackageInstallUpdate(
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
+    activation: params.activation,
     installTarget,
     installSpec,
     packageName,
