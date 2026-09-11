@@ -291,7 +291,6 @@ async function updateCommandInternal(
   if (updateInstallKind !== "git") {
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-    packageInstallEnv = await createGlobalInstallEnv();
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
@@ -337,6 +336,7 @@ async function updateCommandInternal(
         return;
       }
     }
+    packageInstallEnv = await createGlobalInstallEnv();
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = await readPackageVersion(root);
