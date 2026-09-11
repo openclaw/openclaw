@@ -115,10 +115,10 @@ function cloneGit(
     });
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
-      output += chunk;
+      output += chunk.toString("utf8");
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      output += chunk;
+      output += chunk.toString("utf8");
     });
     const deadline = setTimeout(() => child.kill(), 60_000);
     child.once("error", () => {
