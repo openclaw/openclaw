@@ -31,7 +31,11 @@ it.each(
     { message: "/stop after the next turn", action: "blocked" },
     { message: "/stop", action: "goal" },
   ].flatMap((test) =>
-    (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({ ...test, hydrated })),
+    (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({
+      message: test.message,
+      action: test.action,
+      hydrated,
+    })),
   ),
 )(
   "keeps $action admission separate from initial history (run hydrated: $hydrated)",

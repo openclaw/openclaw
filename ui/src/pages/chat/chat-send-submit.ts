@@ -58,6 +58,7 @@ import {
   chatSendHoldReason,
   formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  prependReplyQuote,
 } from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
@@ -745,16 +746,4 @@ export async function handleSendChat(
   };
   await withChatSubmitGuard(host, submitKey, submitMessage, submissionAction);
   return accepted;
-}
-
-function prependReplyQuote(
-  message: string,
-  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
-): string {
-  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
-  const text = replyTarget.text.trim();
-  if (!text.includes("\n")) {
-    return `> **${label}:** ${text}\n\n${message}`;
-  }
-  return `> **${label}:**\n> ${text.replaceAll("\n", "\n> ")}\n\n${message}`;
 }
