@@ -35,7 +35,9 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
           location: match.location,
           routeFailed: match.status === "error" || match.status === "notFound",
         }
-      : {}),
+      : routerState.status === "notFound"
+        ? { routeFailed: true }
+        : {}),
     ...(committedMatch
       ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
       : {}),
