@@ -264,6 +264,58 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ).toHaveLength(1);
   });
 
+  it("preserves an explicitly supplied zero offset as a single page", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--offset", "0", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      offset: number;
+      total: number;
+      hasMore: boolean;
+    };
+    // A zero offset still selects single-page mode: exactly one bounded page is
+    // returned instead of walking the full 201-job inventory.
+    expect(result.jobs).toHaveLength(50);
+    expect(result.jobs[0].id).toBe("job-000");
+    expect(result.offset).toBe(0);
+    expect(result.total).toBe(201);
+    expect(result.hasMore).toBe(true);
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a legacy single-page total unknown instead of fabricating one", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        // Protocol-v4 legacy page: jobs and cursor, but no total/snapshot/offset/limit.
+        return {
+          jobs: response.jobs,
+          hasMore: response.hasMore,
+          nextOffset: response.nextOffset,
+          deliveryPreviews: response.deliveryPreviews,
+        };
+      },
+    });
+    disableCronGetForProtocolV4Gateway();
+
+    await runCron(["list", "--json", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      total?: number;
+      hasMore: boolean;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(result.hasMore).toBe(true);
+    // The legacy page advertises no total; the CLI must not invent a per-page
+    // row count as the inventory size.
+    expect(result.total).toBeUndefined();
+  });
+
   it("rejects a non-numeric --limit", async () => {
     installRealCronGateway([]);
 

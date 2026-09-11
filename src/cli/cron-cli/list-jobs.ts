@@ -63,20 +63,6 @@ export async function listCronJobsFromGateway(
         offset,
       })) as GatewayCronListPage | null;
 
-      // In single-page mode, return just this page with its metadata
-      if (singlePage && pageNumber === 0 && page) {
-        return {
-          jobs: page.jobs ?? [],
-          deliveryPreviews: page.deliveryPreviews,
-          snapshotRevision: page.snapshotRevision,
-          total: page.total ?? page.jobs?.length ?? 0,
-          offset: page.offset ?? offset,
-          limit: page.limit ?? userLimit ?? CRON_LIST_PAGE_SIZE,
-          hasMore: page.hasMore ?? false,
-          nextOffset: page.nextOffset ?? null,
-        };
-      }
-
       const hasCanonicalMetadata =
         page !== null &&
         typeof page === "object" &&
@@ -137,6 +123,27 @@ export async function listCronJobsFromGateway(
 
       if (page.offset !== undefined && page.offset !== offset) {
         throw new Error("cron.list returned an invalid inventory page");
+      }
+
+      if (singlePage) {
+        // Single-page mode returns the one validated page without walking the
+        // rest of the snapshot. Preserve the page's own metadata only when the
+        // Gateway actually supplied it: a legacy page has no `total`, so we must
+        // not fabricate one from the row count or fabricated totals would mislead
+        // scripts that compute completion from the advertised inventory size.
+        return {
+          jobs: page.jobs,
+          ...(page.deliveryPreviews ? { deliveryPreviews: page.deliveryPreviews } : {}),
+          ...(page.snapshotRevision !== undefined
+            ? { snapshotRevision: page.snapshotRevision }
+            : {}),
+          ...(page.total !== undefined ? { total: page.total } : {}),
+          ...(page.offset !== undefined ? { offset: page.offset } : { offset }),
+          ...(page.limit !== undefined ? { limit: page.limit } : {}),
+          ...(page.hasMore !== undefined
+            ? { hasMore: page.hasMore, nextOffset: page.nextOffset ?? null }
+            : {}),
+        };
       }
 
       if (!hasCanonicalMetadata && !allowLegacyUnversionedPagination) {

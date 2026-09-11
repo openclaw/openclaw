@@ -81,9 +81,10 @@ export function registerCronListCommand(cron: Command) {
             if (offset === undefined) {
               throw new Error("Invalid --offset (must be a non-negative integer).");
             }
-            if (offset > 0) {
-              listParams.offset = offset;
-            }
+            // Preserve an explicitly supplied zero offset: it still selects
+            // single-page mode, so `--offset 0 --json` must not fall back to
+            // the full-inventory walk.
+            listParams.offset = offset;
           }
           if (opts.limit !== undefined) {
             const limit = parseStrictPositiveInteger(opts.limit);
