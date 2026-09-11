@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  readSqliteInspectionSizeBytes,
+  resolveAggregateSqliteInspectionTimeoutMs,
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerSync,
@@ -70,6 +72,37 @@ describe("resolveSqliteInspectionBudget", () => {
       resolveSqliteInspectionBudget("read-only snapshot", "source.sqlite", sizeBytes).timeoutMs,
     ).toBe(expected);
   });
+});
+
+it("sums serial size-aware schema inspection budgets without giant fixtures", () => {
+  expect(
+    resolveAggregateSqliteInspectionTimeoutMs("state schema inspection", [
+      { path: "large.sqlite", sizeBytes: 3_489_660_928n },
+      { path: "second.sqlite", sizeBytes: 64n * 1024n * 1024n },
+    ]),
+  ).toBe(166_000);
+  expect(resolveAggregateSqliteInspectionTimeoutMs("state schema inspection", [])).toBe(30_000);
+  expect(
+    resolveAggregateSqliteInspectionTimeoutMs(
+      "state schema inspection",
+      Array.from({ length: 2_000 }, (_, index) => ({
+        path: `database-${index}.sqlite`,
+        sizeBytes: BigInt(Number.MAX_SAFE_INTEGER),
+      })),
+    ),
+  ).toBe(2_147_483_647);
+});
+
+it("includes WAL and rollback-journal sidecars in inspection size", () => {
+  const source = path.join(tempDirs.make("openclaw-snapshot-size-"), "source.sqlite");
+  fs.writeFileSync(source, "");
+  fs.writeFileSync(`${source}-wal`, "");
+  fs.writeFileSync(`${source}-journal`, "");
+  fs.truncateSync(source, 64 * 1024 * 1024);
+  fs.truncateSync(`${source}-wal`, 3_489_660_928);
+  fs.truncateSync(`${source}-journal`, 4 * 1024);
+
+  expect(readSqliteInspectionSizeBytes(source)).toBe(3_556_773_888n);
 });
 
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {

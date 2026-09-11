@@ -3,11 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import {
+  discoverUpdateStateSchemaInspectionInProcess,
+  readUpdateStateSchemaVersions,
+} from "./update-candidate-state.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let root: string;
@@ -17,6 +22,16 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
+
+async function createDatabase(file: string, sql = ""): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const db = openNodeSqliteDatabase(file);
+  try {
+    db.exec(`PRAGMA user_version = 3; ${sql}`);
+  } finally {
+    db.close();
+  }
+}
 
 const cases = [
   { cleanup: "healthy", readError: false },
@@ -182,4 +197,150 @@ it.each(
     }
   },
   30_000,
+);
+
+it("releases the shared discovery snapshot before agent inspection", async () => {
+  const stateDir = path.join(root, "discovery-owner");
+  const shared = path.join(stateDir, "state", "openclaw.sqlite");
+  const agent = path.join(stateDir, "agents", "registered.sqlite");
+  const stagingRoot = path.join(root, "discovery-staging");
+  await createDatabase(
+    shared,
+    `CREATE TABLE agent_databases (path TEXT); INSERT INTO agent_databases VALUES ('${agent.replaceAll("'", "''")}');`,
+  );
+  await createDatabase(agent);
+  await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+
+  await expect(
+    discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
+  ).resolves.toMatchObject({
+    files: expect.arrayContaining([
+      [shared, { spellings: [shared] }],
+      [agent, { spellings: [agent] }],
+    ]),
+    sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },
+  });
+  expect(await fs.readdir(stagingRoot)).toEqual([]);
+});
+
+it("falls back to a legacy candidate worker that only accepts versions mode", async () => {
+  const stateDir = path.join(root, "state-owner");
+  const shared = path.join(stateDir, "state", "openclaw.sqlite");
+  await createDatabase(shared);
+  const candidateRoot = path.join(root, "candidate-package");
+  const workerFile = path.join(candidateRoot, "dist/infra/update-candidate-state.worker.js");
+  await fs.mkdir(path.dirname(workerFile), { recursive: true });
+  await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}');
+  await fs.writeFile(
+    workerFile,
+    `
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+const parsed = JSON.parse(input);
+if (parsed.mode !== "versions") {
+  console.error("Unknown update state inspection mode");
+  process.exitCode = 1;
+} else {
+  const file = path.join(parsed.stateDir, "state", "openclaw.sqlite");
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    console.log(JSON.stringify([{ path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version }]));
+  } finally {
+    db.close();
+  }
+}
+`,
+  );
+
+  await expect(
+    readUpdateStateSchemaVersions({ stateDir, config: {}, root: candidateRoot }),
+  ).resolves.toEqual([{ path: shared, userVersion: 3 }]);
+});
+
+it.each([false, true])(
+  "removes parent-owned schema staging after worker settlement (readError=%s)",
+  async (readError) => {
+    const cache = path.join(root, "inspection-cache");
+    const cacheOwner = path.join(cache, "openclaw");
+    const stateDir = path.join(root, `cleanup-${readError}`);
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(cacheOwner, { recursive: true, mode: 0o700 });
+    await createDatabase(shared, readError ? "CREATE TABLE agent_databases (not_path TEXT);" : "");
+    const previousCache = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cache;
+    try {
+      const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
+      if (readError) {
+        await expect(operation).rejects.toThrow('no such column: "path"');
+      } else {
+        await expect(operation).resolves.toContainEqual({
+          path: shared,
+          userVersion: 3,
+          contentVersion: 3,
+        });
+      }
+      expect(await fs.readdir(cacheOwner)).toEqual([]);
+    } finally {
+      if (previousCache === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = previousCache;
+      }
+    }
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "kills a cancelled schema worker before removing its parent-owned staging root",
+  async () => {
+    const cache = path.join(root, "kill-cache");
+    const cacheOwner = path.join(cache, "openclaw");
+    const pidPath = path.join(root, "hung-worker.pid");
+    const stagingPath = path.join(root, "hung-worker-staging.txt");
+    const runner = path.join(root, "hung-worker.mjs");
+    await fs.mkdir(cacheOwner, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      runner,
+      `#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+const { stagingRoot } = JSON.parse(input);
+fs.mkdirSync(path.join(stagingRoot, "partial"), { recursive: true });
+fs.writeFileSync(path.join(stagingRoot, "partial", "database.sqlite"), "partial");
+fs.writeFileSync(${JSON.stringify(stagingPath)}, stagingRoot);
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 60_000);
+`,
+      { mode: 0o755 },
+    );
+    const previousCache = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cache;
+    const controller = new AbortController();
+    try {
+      const operation = readUpdateStateSchemaVersions({
+        stateDir: path.join(root, "unused-state"),
+        config: {},
+        nodeRunner: runner,
+        signal: controller.signal,
+      });
+      const pid = await waitForPidFile(pidPath, 5_000);
+      controller.abort(new Error("test cancellation"));
+      await expect(operation).rejects.toThrow(/signal SIGKILL/u);
+      await waitForDead(pid, 5_000);
+      const stagingRoot = await fs.readFile(stagingPath, "utf8");
+      await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readdir(cacheOwner)).toEqual([]);
+    } finally {
+      if (previousCache === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = previousCache;
+      }
+    }
+  },
 );

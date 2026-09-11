@@ -236,10 +236,14 @@ it("inspects with the installed candidate and selected Node after the old packag
     import { DatabaseSync } from "node:sqlite";
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
-    const file = path.join(JSON.parse(input).stateDir, "state", "openclaw.sqlite");
+    const parsed = JSON.parse(input);
+    const file = path.join(parsed.stateDir, "state", "openclaw.sqlite");
     const db = new DatabaseSync(file, { readOnly: true });
     try {
-      console.log(JSON.stringify([{ path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version }]));
+      const sharedVersion = { path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version };
+      if (parsed.mode !== "discover" && parsed.mode !== "versions") throw new Error("Unknown update state inspection mode");
+      const result = parsed.mode === "discover" ? { files: [[file, { spellings: [file] }]], sharedVersion } : [sharedVersion];
+      console.log(JSON.stringify(result));
     } finally {
       db.close();
     }
