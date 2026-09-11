@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
@@ -63,7 +64,7 @@ async function runReleasedParentRepair(params: UpdateRepairParams): Promise<Upda
         if (code === 0 && result && !failure) {
           resolve(result);
         } else {
-          reject(failure ?? new Error(`Released-parent worker exited ${code}.`));
+          reject(toErrorObject(failure, `Released-parent worker exited ${code}.`));
         }
       });
       child.on("message", (raw) => {

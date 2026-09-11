@@ -199,7 +199,7 @@ describe("staged CLI repair isolation", () => {
                   code: "ENOENT",
                 });
                 for (const { file, identity } of before.filter(
-                  ({ file }) => file !== state.configPath,
+                  ({ file: liveFile }) => liveFile !== state.configPath,
                 )) {
                   expect(await fileIdentity(file)).toEqual(identity);
                 }
