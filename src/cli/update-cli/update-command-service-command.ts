@@ -88,7 +88,11 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   return (
     check.code === 0 &&
     check.termination === "exit" &&
-    check.cleanup === "normal" &&
+    check.signal === null &&
+    !check.killed &&
+    // The child wrapper has joined the complete process tree before returning.
+    // Graceful descendant settlement is not an unsupported target capability.
+    (check.cleanup === "normal" || check.cleanup === "cooperative") &&
     !check.stdoutTruncatedBytes &&
     !check.outputLimitExceeded &&
     !check.outputErrorStream &&

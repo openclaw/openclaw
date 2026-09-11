@@ -14,12 +14,17 @@ import {
   isChildProcessTreeAlive,
   shouldDetachChildForProcessTree,
 } from "../../process/child-process-tree.js";
+import * as execCommands from "../../process/exec.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import {
   withUpdateCommandExecutorChild,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import {
+  isUpdatedInstallGatewayExecutorSupported,
+  runUpdatedInstallGatewayCommand,
+} from "./update-command-service-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -279,4 +284,82 @@ it.each([false, true])(
     await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
     expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
   },
+);
+
+it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)(
+  "capability probe admits only successful settled cleanup: %s",
+  async (cleanup) => {
+    const scratch = fsSync.realpathSync(dirs.make("native-probe-settlement-"));
+    const root = fsSync.realpathSync(process.cwd());
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+    const entrypoint = path.join(scratch, "probe.mjs");
+    const receipt = path.join(scratch, "probe-pids.json");
+    const stopped = path.join(scratch, "descendant-stopped");
+    const descendant = `
+      const fs = require("node:fs");
+      process.on("SIGTERM", () => {
+        if (${JSON.stringify(cleanup)} === "cooperative") {
+          fs.writeFileSync(${JSON.stringify(stopped)}, "settled");
+          process.exit(0);
+        }
+      });
+      setInterval(() => {}, 1000);
+      process.send("ready");
+    `;
+    await fs.writeFile(
+      entrypoint,
+      `
+      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
+      const { runGatewayServiceUpdateCommand } = await import(${JSON.stringify(new URL("../daemon-cli/update-executor.ts", import.meta.url).href)});
+      const { spawn } = await import("node:child_process");
+      const fs = await import("node:fs");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      await new Promise(resolve => child.once("message", resolve));
+      fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ root: process.pid, child: child.pid }));
+      await runGatewayServiceUpdateCommand("check", "install", async () => {
+        throw new Error("Capability probe must not enter the mutation callback");
+      });
+      child.disconnect();
+      child.unref();
+    `,
+    );
+    vi.spyOn(entrypoints, "resolveGatewayInstallEntrypoint").mockResolvedValue(entrypoint);
+    const observed: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
+    const actualRun = execCommands.runCommandWithTimeout;
+    vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+      const result = await actualRun(...args);
+      observed.push(result);
+      return result;
+    });
+    try {
+      const supported = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root);
+        const capabilitySupported = await isUpdatedInstallGatewayExecutorSupported({
+          root,
+          env: process.env,
+          executor: fence,
+        });
+        fence.assertCurrent();
+        const pids = JSON.parse(await fs.readFile(receipt, "utf8"));
+        expect(isChildProcessTreeAlive({ pid: pids.root })).toBe(false);
+        expect(isPidAlive(pids.child)).toBe(false);
+        return capabilitySupported;
+      });
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({ code: 0, termination: "exit", cleanup });
+      expect(fsSync.existsSync(stopped)).toBe(cleanup === "cooperative");
+      expect(supported).toBe(cleanup === "cooperative");
+      expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+    } finally {
+      if (fsSync.existsSync(receipt)) {
+        const pids = JSON.parse(fsSync.readFileSync(receipt, "utf8"));
+        if (isChildProcessTreeAlive({ pid: pids.root })) {
+          process.kill(-pids.root, "SIGKILL");
+        }
+      }
+    }
+  },
+  60000,
 );
