@@ -3132,7 +3132,7 @@ src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
 src/media-understanding/runner.entries.ts	7
-src/media-understanding/runner.ts	2
+src/media-understanding/runner.ts	1
 src/media-understanding/runtime.ts	2
 src/media-understanding/shared.ts	2
 src/media/audio-transcode.ts	1

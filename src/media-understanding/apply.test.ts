@@ -36,7 +36,6 @@ const runExecMock = vi.hoisted(() => vi.fn());
 const extractFileContentFromBufferMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderCoreMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
@@ -400,7 +399,6 @@ describe("applyMediaUnderstanding", () => {
       };
     });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
-    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.test-support.js"));
 
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
@@ -917,7 +915,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("auto-detects sherpa for audio when binary and model files are available", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "sherpa-onnx-offline");
@@ -953,7 +950,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("skips auto-detected sherpa audio when structured output has empty text", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "sherpa-onnx-offline");
@@ -984,7 +980,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("auto-detects whisper-cli when sherpa is unavailable", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "whisper-cli");
@@ -1029,7 +1024,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "whisper-cli");
@@ -1094,7 +1088,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const emptyBinDir = await createTempMediaDir();
     const isolatedAgentDir = await createTempMediaDir();
     const ctx = await createAudioCtx({
@@ -1127,7 +1120,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("does not probe Gemini CLI during media auto-detect", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const isolatedAgentDir = await createTempMediaDir();
     await createMockExecutable(binDir, "gemini");
@@ -1161,7 +1153,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("does not auto-detect Antigravity CLI for images", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     await createMockExecutable(binDir, "agy");
     const imagePath = await createTempMediaFile({
@@ -1190,7 +1181,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("suppresses markers only for images the ACP caller actually delivers", async () => {
-    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     await createMockExecutable(binDir, "agy");
     const deliveredPath = await createTempMediaFile({

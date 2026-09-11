@@ -3,7 +3,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildMediaUnderstandingRegistry } from "./provider-registry.js";
 import { resolveAutoImageModel, runCapability } from "./runner.js";
-import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -35,13 +34,11 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 beforeEach(() => {
   selection.providers.length = 0;
   selection.auth.mockReset().mockResolvedValue(true);
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 afterEach(() => {
   selection.providers.length = 0;
   selection.auth.mockReset();
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 describe("automatic media selection", () => {
