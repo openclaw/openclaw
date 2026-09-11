@@ -235,14 +235,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                           }),
                         onInstall: actions.installCatalogEntry,
                         onRetry: () => void discovery.refresh(),
-                        onRetryGrouped: () => {
-                          void Promise.all([
-                            discovery.refresh(),
-                            discovery.refreshFeatured(),
-                            discovery.refreshTrending(),
-                          ]);
-                        },
-                        onRetryCategories: () => void discovery.refreshCategories(),
+                        onRetryGrouped: () => void discovery.refresh(),
+                        onRetryCategories: () => void discovery.refresh(),
                       }),
                       { wide: true, carapace: true },
                     )

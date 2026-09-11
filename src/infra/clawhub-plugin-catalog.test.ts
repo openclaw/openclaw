@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { jsonResponse, requestUrl } from "../test-helpers/http.js";
 import {
-  fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
+  fetchClawHubPluginOverview,
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
@@ -24,54 +24,39 @@ const remotePlugin = {
 };
 
 describe("ClawHub plugin catalog client", () => {
-  it("reads every official page for bundled publication classification", async () => {
-    const requestedUrls: string[] = [];
+  it("reads the bounded plugin overview in one request", async () => {
+    let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(requestUrl(input));
-      requestedUrls.push(`${url.pathname}${url.search}`);
-      return jsonResponse(
-        url.searchParams.has("cursor")
-          ? { items: [{ ...remotePlugin, name: "memory-next" }] }
-          : { items: [remotePlugin], nextCursor: "official-next" },
-      );
+      requestedUrl = requestUrl(input);
+      return jsonResponse({
+        categories: [
+          {
+            slug: "memory",
+            label: "Memory",
+            description: "Long-term memory.",
+            icon: "database",
+            order: 0,
+          },
+        ],
+        items: [{ ...remotePlugin, featured: true, trending: true }],
+      });
     });
 
-    const result = await fetchAllOfficialClawHubPlugins({
+    const result = await fetchClawHubPluginOverview({
       baseUrl: "https://example.com",
       fetchImpl,
     });
 
-    expect(result.map((item) => item.packageName)).toEqual(["memory-plus", "memory-next"]);
-    expect(requestedUrls).toEqual([
-      "/api/v1/plugins?isOfficial=true&officialFirst=true&sort=downloads&limit=100",
-      "/api/v1/plugins?cursor=official-next&isOfficial=true&officialFirst=true&sort=downloads&limit=100",
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/plugins/overview");
+    expect(result.categories.map((category) => category.slug)).toEqual(["memory"]);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        packageName: "memory-plus",
+        featured: true,
+        trending: true,
+      }),
     ]);
-  });
-
-  it("rejects a repeated official pagination cursor", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], nextCursor: "stalled" }));
-
-    await expect(
-      fetchAllOfficialClawHubPlugins({ baseUrl: "https://example.com", fetchImpl }),
-    ).rejects.toThrow("repeated a pagination cursor");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses the complete official catalog across default-client searches", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ items: [remotePlugin] }));
-    vi.stubGlobal("fetch", fetchImpl);
-
-    try {
-      const first = await fetchAllOfficialClawHubPlugins();
-      const second = await fetchAllOfficialClawHubPlugins();
-
-      expect(first.map((item) => item.packageName)).toEqual(["memory-plus"]);
-      expect(second).toEqual(first);
-      expect(second).not.toBe(first);
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("browses the combined plugin endpoint with an opaque cursor", async () => {

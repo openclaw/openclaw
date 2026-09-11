@@ -33,6 +33,8 @@ export type ClawHubPluginCatalogEntry = {
   downloads?: number;
   installs?: number;
   verificationTier?: string;
+  featured?: boolean;
+  trending?: boolean;
 };
 
 export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
@@ -111,14 +113,6 @@ type ClawHubReadOptions = {
   fetchImpl?: ClawHubFetch;
 };
 
-const OFFICIAL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
-let officialCatalogCache:
-  | {
-      expiresAt: number;
-      value: Promise<ClawHubPluginCatalogEntry[]>;
-    }
-  | undefined;
-
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const PLUGIN_CATEGORY_ICON_KEYS = new Set([
   "activity",
@@ -150,6 +144,21 @@ function readOptionalNonNegativeNumber(
   return candidate;
 }
 
+function readOptionalBoolean(
+  value: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean | undefined {
+  const candidate = value[field];
+  if (candidate === undefined || candidate === null) {
+    return undefined;
+  }
+  if (typeof candidate !== "boolean") {
+    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be boolean.`);
+  }
+  return candidate;
+}
+
 function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCatalogEntry {
   if (!isRecord(value)) {
     throw new Error(`Malformed ClawHub ${context}: expected package to be an object.`);
@@ -168,6 +177,8 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
   const runtimeId = readClawHubStringField(value, "runtimeId", context);
   const iconUrl = readClawHubStringField(value, "icon", context);
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
+  const featured = readOptionalBoolean(value, "featured", context);
+  const trending = readOptionalBoolean(value, "trending", context);
   const downloads = stats
     ? readOptionalNonNegativeNumber(stats, "downloads", `${context} stats`)
     : undefined;
@@ -186,9 +197,45 @@ function parseCatalogPackage(value: unknown, context: string): ClawHubPluginCata
     ...(runtimeId ? { runtimeId } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     ...(verificationTier ? { verificationTier } : {}),
+    ...(featured !== undefined ? { featured } : {}),
+    ...(trending !== undefined ? { trending } : {}),
     ...(downloads !== undefined ? { downloads } : {}),
     ...(installs !== undefined ? { installs } : {}),
   };
+}
+
+function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
+  if (!isRecord(value) || !Array.isArray(value.categories)) {
+    throw new Error(
+      "Malformed ClawHub plugin categories response: expected categories to be an array.",
+    );
+  }
+  const seenSlugs = new Set<string>();
+  const seenOrders = new Set<number>();
+  const categories = value.categories.map((entry, index): ClawHubPluginCategory => {
+    if (!isRecord(entry)) {
+      throw new Error(`Malformed ClawHub plugin category ${index}: expected an object.`);
+    }
+    const slug = readRequiredClawHubStringField(entry, "slug", `plugin category ${index}`);
+    const icon = readRequiredClawHubStringField(entry, "icon", `plugin category ${index}`);
+    const order = readRequiredClawHubNumberField(entry, "order", `plugin category ${index}`);
+    if (!BARE_ICON_KEY.test(icon)) {
+      throw new Error(`Malformed ClawHub plugin category ${slug}: invalid icon key.`);
+    }
+    if (!Number.isInteger(order) || order < 0 || seenSlugs.has(slug) || seenOrders.has(order)) {
+      throw new Error(`Malformed ClawHub plugin category ${slug}: duplicate or invalid ordering.`);
+    }
+    seenSlugs.add(slug);
+    seenOrders.add(order);
+    return {
+      slug,
+      label: readRequiredClawHubStringField(entry, "label", `plugin category ${slug}`),
+      description: readRequiredClawHubStringField(entry, "description", `plugin category ${slug}`),
+      icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
+      order,
+    };
+  });
+  return categories.toSorted((left, right) => left.order - right.order);
 }
 
 function parseCatalogList(value: unknown): {
@@ -471,57 +518,22 @@ export async function fetchClawHubPluginCatalog(
   return parseCatalogList(value);
 }
 
-/** Reads the complete official plugin identity set used to classify bundled-only entries. */
-export async function fetchAllOfficialClawHubPlugins(
+export async function fetchClawHubPluginOverview(
   options: ClawHubReadOptions = {},
-): Promise<ClawHubPluginCatalogEntry[]> {
-  const usesDefaultClient = Object.values(options).every((value) => value === undefined);
-  const now = Date.now();
-  if (usesDefaultClient && officialCatalogCache && now < officialCatalogCache.expiresAt) {
-    return [...(await officialCatalogCache.value)];
+): Promise<{ items: ClawHubPluginCatalogEntry[]; categories: ClawHubPluginCategory[] }> {
+  const value = await fetchClawHubJson<unknown>({
+    ...options,
+    path: "/api/v1/plugins/overview",
+  });
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    throw new Error("Malformed ClawHub plugin overview response: expected items to be an array.");
   }
-
-  const read = readAllOfficialClawHubPlugins(options);
-  if (!usesDefaultClient) {
-    return await read;
-  }
-
-  // All-search classification needs the complete official identity set. Keep one bounded,
-  // shared read so repeated keystrokes do not replay every ClawHub pagination request.
-  officialCatalogCache = { expiresAt: now + OFFICIAL_CATALOG_CACHE_TTL_MS, value: read };
-  try {
-    return [...(await read)];
-  } catch (error) {
-    if (officialCatalogCache?.value === read) {
-      officialCatalogCache = undefined;
-    }
-    throw error;
-  }
-}
-
-async function readAllOfficialClawHubPlugins(
-  options: ClawHubReadOptions,
-): Promise<ClawHubPluginCatalogEntry[]> {
-  const items: ClawHubPluginCatalogEntry[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const page = await fetchClawHubPluginCatalog({
-      ...options,
-      intent: "official",
-      ...(cursor ? { cursor } : {}),
-      limit: 100,
-    });
-    items.push(...page.items);
-    cursor = page.nextCursor;
-    if (cursor && seenCursors.has(cursor)) {
-      throw new Error("ClawHub official catalog repeated a pagination cursor");
-    }
-    if (cursor) {
-      seenCursors.add(cursor);
-    }
-  } while (cursor);
-  return items;
+  return {
+    items: value.items.map((item, index) =>
+      parseCatalogPackage(item, `plugin overview item ${index}`),
+    ),
+    categories: parsePluginCategories(value),
+  };
 }
 
 export async function fetchClawHubPluginCategories(
@@ -531,37 +543,7 @@ export async function fetchClawHubPluginCategories(
     ...options,
     path: "/api/v1/plugins/categories",
   });
-  if (!isRecord(value) || !Array.isArray(value.categories)) {
-    throw new Error(
-      "Malformed ClawHub plugin categories response: expected categories to be an array.",
-    );
-  }
-  const seenSlugs = new Set<string>();
-  const seenOrders = new Set<number>();
-  const categories = value.categories.map((entry, index): ClawHubPluginCategory => {
-    if (!isRecord(entry)) {
-      throw new Error(`Malformed ClawHub plugin category ${index}: expected an object.`);
-    }
-    const slug = readRequiredClawHubStringField(entry, "slug", `plugin category ${index}`);
-    const icon = readRequiredClawHubStringField(entry, "icon", `plugin category ${index}`);
-    const order = readRequiredClawHubNumberField(entry, "order", `plugin category ${index}`);
-    if (!BARE_ICON_KEY.test(icon)) {
-      throw new Error(`Malformed ClawHub plugin category ${slug}: invalid icon key.`);
-    }
-    if (!Number.isInteger(order) || order < 0 || seenSlugs.has(slug) || seenOrders.has(order)) {
-      throw new Error(`Malformed ClawHub plugin category ${slug}: duplicate or invalid ordering.`);
-    }
-    seenSlugs.add(slug);
-    seenOrders.add(order);
-    return {
-      slug,
-      label: readRequiredClawHubStringField(entry, "label", `plugin category ${slug}`),
-      description: readRequiredClawHubStringField(entry, "description", `plugin category ${slug}`),
-      icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
-      order,
-    };
-  });
-  return categories.toSorted((left, right) => left.order - right.order);
+  return parsePluginCategories(value);
 }
 
 /** Read effective categories for exact installed ClawHub package versions in one request. */

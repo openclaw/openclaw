@@ -363,6 +363,8 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   downloads: Type.Optional(Type.Number({ minimum: 0 })),
   installs: Type.Optional(Type.Number({ minimum: 0 })),
   verificationTier: Type.Optional(NonEmptyString),
+  featured: Type.Optional(Type.Boolean()),
+  trending: Type.Optional(Type.Boolean()),
   publishedToClawHub: Type.Optional(Type.Boolean()),
 });
 
@@ -404,6 +406,7 @@ export const PluginsCatalogBrowseParamsSchema = closedObject({
 
 export const PluginsCatalogBrowseResultSchema = closedObject({
   items: Type.Array(PluginDiscoveryEntrySchema),
+  categories: Type.Optional(Type.Array(PluginDiscoveryCategorySchema)),
   nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
   remoteError: Type.Optional(Type.String()),
 });

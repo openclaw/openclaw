@@ -9772,6 +9772,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
     public let downloads: Double?
     public let installs: Double?
     public let verificationtier: String?
+    public let featured: Bool?
+    public let trending: Bool?
     public let publishedtoclawhub: Bool?
 
     public init(
@@ -9788,6 +9790,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         downloads: Double? = nil,
         installs: Double? = nil,
         verificationtier: String? = nil,
+        featured: Bool? = nil,
+        trending: Bool? = nil,
         publishedtoclawhub: Bool? = nil)
     {
         self.name = name
@@ -9803,6 +9807,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         self.downloads = downloads
         self.installs = installs
         self.verificationtier = verificationtier
+        self.featured = featured
+        self.trending = trending
         self.publishedtoclawhub = publishedtoclawhub
     }
 
@@ -9820,6 +9826,8 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         case downloads
         case installs
         case verificationtier = "verificationTier"
+        case featured
+        case trending
         case publishedtoclawhub = "publishedToClawHub"
     }
 }
@@ -10088,21 +10096,25 @@ public struct PluginsCatalogBrowseParams: Codable, Sendable {
 
 public struct PluginsCatalogBrowseResult: Codable, Sendable {
     public let items: [PluginDiscoveryEntry]
+    public let categories: [PluginDiscoveryCategory]?
     public let nextcursor: String?
     public let remoteerror: String?
 
     public init(
         items: [PluginDiscoveryEntry],
+        categories: [PluginDiscoveryCategory]? = nil,
         nextcursor: String? = nil,
         remoteerror: String? = nil)
     {
         self.items = items
+        self.categories = categories
         self.nextcursor = nextcursor
         self.remoteerror = remoteerror
     }
 
     private enum CodingKeys: String, CodingKey {
         case items
+        case categories
         case nextcursor = "nextCursor"
         case remoteerror = "remoteError"
     }
