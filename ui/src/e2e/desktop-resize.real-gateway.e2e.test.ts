@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { renameSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -36,6 +37,17 @@ declare module "vitest" {
 }
 
 const fixturePath = process.env.OPENCLAW_DESKTOP_REAL_FIXTURE;
+const diagnosticDirectory = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
+function recordPhase(value: DesktopProofPhase) {
+  if (fixturePath && diagnosticDirectory) {
+    const file = path.join(diagnosticDirectory, "desktop-phase.json");
+    // Commit before the next await; interruption during writing retains the prior record.
+    writeFileSync(`${file}.next`, JSON.stringify({ lastObservedPhase: value }), { mode: 0o600 });
+    renameSync(`${file}.next`, file);
+  }
+}
+// Static imports precede this marker; absence does not identify which startup step failed.
+recordPhase("file-loaded");
 let gatewayPort: number;
 const suite = createControlUiE2eSuite({
   name: "Desktop resize real Gateway",
@@ -132,6 +144,7 @@ suite.define(() => {
       const phase = (value: DesktopProofPhase) => {
         // A timed-out callback can continue while the suite joins its cleanup.
         if (!context.signal.aborted) {
+          recordPhase(value);
           context.task.meta.desktopProofPhase = value;
         }
       };

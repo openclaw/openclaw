@@ -11,6 +11,7 @@ import {
   desktopResizeStages,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
+  readDesktopProofPhase,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
@@ -75,6 +76,7 @@ describe("desktop proof identity and public evidence", () => {
       "unknown"
     >;
     expectTypeOf<"node-admission">().toExtend<Phase>();
+    expectTypeOf<"file-loaded">().toExtend<Phase>();
     expectTypeOf<"unknown">().not.toExtend<Phase>();
     expectTypeOf<"misspelled-phase">().not.toExtend<Phase>();
   });
@@ -219,10 +221,13 @@ describe("desktop proof identity and public evidence", () => {
     expect(() => desktopProofTestReport(report)).toThrow();
   });
 
-  it("keeps the original child failure when the private report is missing and export fails", async () => {
+  it("retains the observed phase and child timeout when the terminal report is missing and export fails", async () => {
     const root = dirs.make("desktop-report-failure-");
-    const child = Object.assign(new Error("test-node failed"), { code: "ERR_ASSERTION" });
+    const checkpoint = path.join(root, "desktop-phase.json");
+    await writeFile(checkpoint, JSON.stringify({ lastObservedPhase: "node-admission" }));
+    const child = Object.assign(new Error("test-node failed"), { code: "ETIMEDOUT" });
     const exporting = new Error("export failed");
+    let lastObserved: Awaited<ReturnType<typeof readDesktopProofPhase>> | undefined;
     const recorded: unknown[] = [];
     const record = (error: unknown) => {
       recorded.push(error);
@@ -235,6 +240,7 @@ describe("desktop proof identity and public evidence", () => {
         withDesktopProofCleanup(
           async () => {
             expect(recorded[0]).toBe(child);
+            lastObserved = await readDesktopProofPhase(checkpoint);
             await readDesktopProofTestReport(path.join(root, "missing.json"));
           },
           async () => {
@@ -249,6 +255,38 @@ describe("desktop proof identity and public evidence", () => {
     expect(aggregate.errors[0]).toBe(child);
     expect(aggregate.errors[1].errors[0]).toMatchObject({ code: "ENOENT" });
     expect(aggregate.errors[1].errors[1]).toBe(exporting);
+    expect(lastObserved).toEqual({ status: "available", lastObservedPhase: "node-admission" });
+  });
+
+  it("projects only known phases from bounded regular checkpoints", async () => {
+    const root = dirs.make("desktop-private-phase-");
+    const file = path.join(root, "desktop-phase.json");
+    expect(await readDesktopProofPhase(file)).toEqual({
+      status: "unavailable",
+      lastObservedPhase: null,
+    });
+    await writeFile(file, JSON.stringify({ lastObservedPhase: "file-loaded", secret: "private" }));
+    expect(await readDesktopProofPhase(file)).toEqual({
+      status: "available",
+      lastObservedPhase: "file-loaded",
+    });
+    const link = path.join(root, "linked-phase.json");
+    await symlink(file, link);
+    expect(await readDesktopProofPhase(link)).toEqual({
+      status: "invalid",
+      lastObservedPhase: null,
+    });
+    expect(await readDesktopProofPhase(root)).toEqual({
+      status: "invalid",
+      lastObservedPhase: null,
+    });
+    for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(257)]) {
+      await writeFile(file, content);
+      expect(await readDesktopProofPhase(file)).toEqual({
+        status: "invalid",
+        lastObservedPhase: null,
+      });
+    }
   });
 
   it("accepts only bounded regular reporter files", async () => {

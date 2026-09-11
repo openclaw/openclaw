@@ -13,6 +13,7 @@ import {
   desktopProofSshdFailure,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
+  readDesktopProofPhase,
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
@@ -69,6 +70,7 @@ const receipt = {
     carrier: "node" | "ssh";
     status: "pending" | "available" | "missing" | "invalid";
     report: Awaited<ReturnType<typeof readDesktopProofTestReport>> | null;
+    checkpoint: Awaited<ReturnType<typeof readDesktopProofPhase>>;
   }>,
   cleanup: {
     joined: false,
@@ -537,10 +539,13 @@ async function main() {
       await mkdir(raw);
       const fixtureFile = path.join(privateRoot, `${carrier}.json`);
       const reportFile = path.join(privateRoot, `${carrier}-vitest.json`);
+      const diagnosticDirectory = path.join(privateRoot, `${carrier}-diagnostics`);
+      await mkdir(diagnosticDirectory, { mode: 0o700 });
       const diagnostic: (typeof receipt.testDiagnostics)[number] = {
         carrier,
         status: "pending",
         report: null,
+        checkpoint: { status: "unavailable", lastObservedPhase: null },
       };
       receipt.testDiagnostics.push(diagnostic);
       await writeFile(fixtureFile, JSON.stringify({ ...fixture, carrier }), { mode: 0o600 });
@@ -567,7 +572,7 @@ async function main() {
               env: {
                 OPENCLAW_DESKTOP_REAL_FIXTURE: fixtureFile,
                 OPENCLAW_UI_E2E_ARTIFACT_DIR: raw,
-                OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: path.join(privateRoot, `${carrier}-diagnostics`),
+                OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: diagnosticDirectory,
               },
             },
           );
@@ -575,6 +580,10 @@ async function main() {
         () =>
           withDesktopProofCleanup(
             async () => {
+              // Terminal JSON may be absent after process termination; collect this independently.
+              diagnostic.checkpoint = await readDesktopProofPhase(
+                path.join(diagnosticDirectory, "desktop-phase.json"),
+              );
               try {
                 diagnostic.report = await readDesktopProofTestReport(reportFile);
                 diagnostic.status = "available";
@@ -585,6 +594,7 @@ async function main() {
                     : "invalid";
                 throw error;
               }
+              assert.equal(diagnostic.checkpoint.status, "available");
             },
             async () => {
               const exported = await exportDesktopResizeProof(

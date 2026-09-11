@@ -13,6 +13,7 @@ export const desktopResizeStages = [
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const desktopProofTestPhases = [
+  "file-loaded",
   "fixture",
   "gateway-config",
   "gateway-start",
@@ -141,6 +142,33 @@ export async function readDesktopProofTestReport(file: string) {
     throw new Error("Desktop test report must be a bounded regular file");
   }
   return desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
+}
+
+/** The joined child's last observed phase is evidence, not a completion or stall verdict. */
+export async function readDesktopProofPhase(file: string) {
+  try {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.size > 256) {
+      return { status: "invalid" as const, lastObservedPhase: null };
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(await readFile(file, "utf8"));
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        return { status: "invalid" as const, lastObservedPhase: null };
+      }
+      throw error;
+    }
+    const phase = isRecord(value)
+      ? desktopProofTestPhases.find((candidate) => candidate === value.lastObservedPhase)
+      : undefined;
+    return phase
+      ? { status: "available" as const, lastObservedPhase: phase }
+      : { status: "invalid" as const, lastObservedPhase: null };
+  } catch {
+    return { status: "unavailable" as const, lastObservedPhase: null };
+  }
 }
 
 export async function inspectDesktopSshdRuntimeDirectory(directory: string) {
