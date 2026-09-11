@@ -213,7 +213,10 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Strict direct-listener and locator publication result. */
   ready: Promise<void>;
+  /** Requires current foreground authority; direct publication may use the Gateway fallback. */
+  prepareInvocation: () => Promise<void>;
   /** Joins accepted publication, renewal and cleanup without retiring retained children. */
   drain: () => Promise<void>;
 };

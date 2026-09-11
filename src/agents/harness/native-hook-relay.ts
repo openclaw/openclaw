@@ -11,7 +11,6 @@ import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-appr
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
   clearNativeHookRelayBridgesForTests,
-  drainNativeHookRelayBridge,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
@@ -66,6 +65,7 @@ import {
   readNonEmptyString,
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
+import { drainNativeHookRelayWork } from "./native-hook-relay-work.js";
 export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 export type {
@@ -254,26 +254,19 @@ function registerNativeHookRelayInternal(
       ...registration,
       ...buildNativeHookRelayCommandPlan({ ...params, relayId, generation }),
       ready: bridge.ready,
-      drain: async () => {
-        let renewal: Promise<void>;
-        let failure: { error: unknown } | undefined;
-        do {
-          renewal = pendingRenewal;
-          try {
-            await renewal;
-          } catch (error) {
-            failure ??= { error };
-          }
-          try {
-            await drainNativeHookRelayBridge(bridge);
-          } catch (error) {
-            failure ??= { error };
-          }
-        } while (renewal !== pendingRenewal);
-        if (failure) {
-          throw failure.error;
+      prepareInvocation: async () => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
         }
+        const foregroundToken = lifetime.foregroundToken;
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
+        // A failed direct locator can still use the CLI's Gateway route. Keep
+        // its strict result on ready and revalidate admission after it settles.
+        await bridge.ready.catch(() => undefined);
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
       },
+      drain: () => drainNativeHookRelayWork({ bridge, readRenewal: () => pendingRenewal }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {
@@ -287,23 +280,25 @@ function registerNativeHookRelayInternal(
           if (relays.get(relayId) !== current) {
             return;
           }
-          try {
-            const renewal = await renewNativeHookRelayBridgeRecord(
-              current,
-              bridge,
-              renewedExpiresAtMs,
-            );
-            if (renewal === "unavailable") {
+          if (bridge.server.listening) {
+            try {
+              const renewal = await renewNativeHookRelayBridgeRecord(
+                current,
+                bridge,
+                renewedExpiresAtMs,
+              );
+              if (renewal === "unavailable") {
+                return;
+              }
+              if (renewal === "ownership-changed") {
+                log.debug("native hook relay bridge record ownership changed", { relayId });
+                unregisterNativeHookRelay(relayId, current);
+                return;
+              }
+            } catch (error) {
+              log.debug("failed to renew native hook relay bridge record", { error, relayId });
               return;
             }
-            if (renewal === "ownership-changed") {
-              log.debug("native hook relay bridge record ownership changed", { relayId });
-              unregisterNativeHookRelay(relayId, current);
-              return;
-            }
-          } catch (error) {
-            log.debug("failed to renew native hook relay bridge record", { error, relayId });
-            return;
           }
           if (relays.get(relayId) !== current) {
             return;
@@ -463,20 +458,24 @@ async function resolveNativeHookRelayInvocationBinding(
     throw new Error("native hook relay foreground invocation not allowed");
   }
   const foregroundToken = lifetime.foregroundToken;
-  const assertActive = () => {
-    if (
-      relays.get(registration.relayId) !== registration ||
-      Date.now() > registration.expiresAtMs
-    ) {
-      throw new Error("native hook relay registration is inactive");
-    }
-    registration.signal?.throwIfAborted();
-    registration.assertActive?.();
-    if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
-      throw new Error("native hook relay foreground invocation not allowed");
-    }
-  };
+  const assertActive = () =>
+    assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
   return { ...registration, assertActive };
+}
+
+function assertNativeHookRelayForegroundCurrent(
+  registration: ActiveNativeHookRelayRegistration,
+  lifetime: RelayLifetime,
+  foregroundToken: symbol,
+): void {
+  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+    throw new Error("native hook relay registration is inactive");
+  }
+  registration.signal?.throwIfAborted();
+  registration.assertActive?.();
+  if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
+    throw new Error("native hook relay foreground invocation not allowed");
+  }
 }
 
 function normalizeRelayKey(

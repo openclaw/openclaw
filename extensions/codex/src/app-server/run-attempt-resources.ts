@@ -327,7 +327,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         }
       },
     });
-    await state.nativeHookRelay?.ready;
+    await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();
     return {
       configPatch: state.nativeHookRelay

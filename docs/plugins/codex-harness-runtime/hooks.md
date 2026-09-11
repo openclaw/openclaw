@@ -62,8 +62,11 @@ per-thread Codex config for `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 and `Stop`.
 
 Before starting or resuming a thread, OpenClaw waits for the native relay's
-SQLite locator to be published. Renewal extends the visible expiry only after
-the stored locator is updated. Unregistering invalidates foreground access
+direct publication attempt and rechecks the current run's authority. If the
+listener or SQLite locator is unavailable, hook commands can use the existing
+Gateway fallback. A relay without a listening direct bridge can still renew its
+logical expiry; a listening bridge updates its stored locator before extending
+the visible expiry. Unregistering invalidates foreground access
 immediately. Cleanup drains accepted locator writes and, once the relay is
 retired, listener closure. Existing grace windows for late hooks and direct
 children retained after a successful yield are preserved; draining pending

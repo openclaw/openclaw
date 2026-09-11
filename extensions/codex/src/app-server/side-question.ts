@@ -718,7 +718,7 @@ export async function runCodexAppServerSideQuestion(
           },
         })
       : undefined;
-    await nativeHookRelay?.ready;
+    await nativeHookRelay?.prepareInvocation();
     assertCurrent();
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
