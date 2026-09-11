@@ -328,7 +328,14 @@ export function isChannelProgressPriorityLine(line: string | ChannelProgressDraf
   );
 }
 
-const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
+type ProgressDraftLineMetadata = {
+  correlationKey?: string;
+  commandDetailCandidate?: string;
+};
+const progressDraftLineMetadata = new WeakMap<
+  ChannelProgressDraftLine,
+  ProgressDraftLineMetadata
+>();
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
   return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
@@ -352,6 +359,7 @@ function buildNamedProgressLine(
   options?: ChannelProgressLineOptions,
   fields?: {
     correlationKey?: string;
+    commandDetailCandidate?: string;
     id?: string;
     status?: string;
   },
@@ -376,18 +384,34 @@ function buildNamedProgressLine(
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
   };
-  setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
+  setProgressDraftLineMetadata(line, fields?.correlationKey, fields?.commandDetailCandidate);
   return line;
 }
 
-function setProgressDraftLineCorrelationKey(
+function setProgressDraftLineMetadata(
   line: ChannelProgressDraftLine,
   correlationKey: string | undefined,
+  commandDetailCandidate?: string,
 ): void {
   const normalized = correlationKey?.trim();
-  if (normalized) {
-    progressDraftLineCorrelationKeys.set(line, normalized);
+  if (normalized || commandDetailCandidate) {
+    progressDraftLineMetadata.set(line, { correlationKey: normalized, commandDetailCandidate });
   }
+}
+
+function copyProgressDraftLineMetadata(
+  source: ChannelProgressDraftLine,
+  target: ChannelProgressDraftLine,
+  previous?: ChannelProgressDraftLine,
+): void {
+  const metadata = progressDraftLineMetadata.get(source);
+  // Only correlation may fall back: the candidate belongs to the incoming output.
+  setProgressDraftLineMetadata(
+    target,
+    metadata?.correlationKey ??
+      (previous && progressDraftLineMetadata.get(previous)?.correlationKey),
+    metadata?.commandDetailCandidate,
+  );
 }
 
 function itemKindToToolName(kind: string | undefined): string | undefined {
@@ -472,8 +496,15 @@ function buildCommandOutputProgressLine(
   const name = input.name ?? "exec";
   const correlationKey = resolveCommandProgressCorrelationKey(input);
   const detail = options?.commandText === "raw" ? compactStrings([input.title]) : [];
+  // Compare a possible restatement before the formatter moves flags or adds Markdown.
+  // Keep the actual title intact unless it matches an already displayed command.
+  const commandMeta = detail[0]?.match(/^command\s+(.+)$/i)?.[1];
+  const commandDetailCandidate = commandMeta
+    ? formatToolAggregateParts(name, [commandMeta], { markdown: options?.markdown }).detail
+    : undefined;
   const line = buildNamedProgressLine(input.event, name, detail, options, {
     correlationKey,
+    commandDetailCandidate,
     id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
     status,
   });
@@ -489,14 +520,14 @@ function buildCommandOutputProgressLine(
       detail: status,
       text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
     };
-    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+    copyProgressDraftLineMetadata(line, statusLine);
     return statusLine;
   }
   const statusLine = {
     ...line,
     text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
   };
-  setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+  copyProgressDraftLineMetadata(line, statusLine);
   return statusLine;
 }
 
@@ -623,7 +654,7 @@ export function buildChannelProgressDraftLine(
         label: input.title?.trim() || input.itemKind?.trim() || "Update",
         ...(input.status ? { status: input.status } : {}),
       };
-      setProgressDraftLineCorrelationKey(line, correlationKey);
+      setProgressDraftLineMetadata(line, correlationKey);
       return line;
     }
     case "plan": {
@@ -1315,22 +1346,8 @@ function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine
     .toReversed();
 }
 
-/**
- * Command output reports the outcome of the command the line already shows.
- * With command text on, its own detail is the agent's item title ("command
- * <meta>"), a restatement of the detail the tool line carries, so the detail
- * the reader has been watching stays and the status carries the result. The
- * shown detail is kept only when the incoming detail is such a restatement:
- * empty, the line's own status, the shown detail itself, or the shown detail
- * behind a "command" prefix (whitespace collapsed, prefix case-insensitive).
- * Any other incoming detail replaces the shown one, so a command-output line
- * that ever carries real output or a different description is not discarded
- * here. A line that already ended (a failed nested command) is replaced whole
- * when the output names no command, so a recovered run does not keep the
- * stale failure text; the embedded producer ends the command item before its
- * output arrives, and that output names the shown command, so the shown
- * detail stays through the terminal item.
- */
+// Preserve a matching command description, including after its terminal item.
+// Titleless recovery must still replace terminal failure text rather than retain it.
 function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
   previous: TLine,
   line: TLine,
@@ -1342,15 +1359,17 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     return line;
   }
   const previousDetail = previous.detail?.trim();
+  const incomingDetail = line.detail?.trim();
   if (
     !previousDetail ||
     previousDetail === previous.status ||
-    line.detail?.trim() === previousDetail ||
-    !isRestatedCommandDetail(line.detail, previousDetail, line.status)
+    incomingDetail === previousDetail ||
+    (incomingDetail &&
+      incomingDetail !== line.status &&
+      progressDraftLineMetadata.get(line)?.commandDetailCandidate !== previousDetail)
   ) {
     return line;
   }
-  const incomingDetail = line.detail?.trim();
   if (
     isTerminalProgressStatus(previous.status) &&
     (!incomingDetail || incomingDetail === line.status)
@@ -1362,33 +1381,8 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     detail: previousDetail,
   };
   replacement.text = getProgressDraftLineText(replacement);
-  setProgressDraftLineCorrelationKey(
-    replacement,
-    progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
-  );
+  copyProgressDraftLineMetadata(line, replacement, previous);
   return replacement;
-}
-
-/**
- * True when a command-output line's detail only restates the detail the line
- * already shows: it is empty, it is the line's own status, or after collapsing
- * whitespace it equals the shown detail with or without a leading "command".
- */
-function isRestatedCommandDetail(
-  detail: string | undefined,
-  shownDetail: string,
-  status: string,
-): boolean {
-  const incoming = detail?.replace(/\s+/g, " ").trim();
-  if (!incoming || incoming === status) {
-    return true;
-  }
-  const shown = shownDetail.replace(/\s+/g, " ").trim();
-  if (incoming === shown) {
-    return true;
-  }
-  const prefix = incoming.slice(0, "command ".length);
-  return prefix.toLowerCase() === "command " && incoming.slice(prefix.length) === shown;
 }
 
 /**
@@ -1410,11 +1404,7 @@ function keepProgressDraftLineId<TLine extends string | ChannelProgressDraftLine
     return replacement;
   }
   const kept = { ...replacement, id: previousId };
-  setProgressDraftLineCorrelationKey(
-    kept,
-    progressDraftLineCorrelationKeys.get(replacement) ??
-      progressDraftLineCorrelationKeys.get(previous),
-  );
+  copyProgressDraftLineMetadata(replacement, kept, previous);
   return kept;
 }
 
@@ -1422,7 +1412,7 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
   if (typeof line !== "object") {
     return [];
   }
-  const keys = [progressDraftLineCorrelationKeys.get(line), line.id]
+  const keys = [progressDraftLineMetadata.get(line)?.correlationKey, line.id]
     .map((key) => key?.trim())
     .filter((key): key is string => Boolean(key));
   return [...new Set(keys)];

@@ -129,6 +129,99 @@ describe("channel-streaming embedded command items", () => {
     },
   );
 
+  describe.each([false, true])("flagged command descriptions (markdown=%s)", (markdown) => {
+    it.each([
+      { flags: ["pty"], exitCode: 0 },
+      { flags: ["elevated"], exitCode: 1 },
+      { flags: ["pty", "elevated"], exitCode: 0 },
+      { flags: ["pty", "elevated"], exitCode: 1 },
+    ])("keeps $flags through terminal items and exit $exitCode", ({ flags, exitCode }) => {
+      const meta = ["run tests", ...flags].join(" · ");
+      const detail = [...flags, markdown ? "`run tests`" : "run tests"].join(" · ");
+      const options = { commandText: "raw" as const, markdown };
+      const common = { toolCallId: "flagged-call", name: "exec" };
+      const inputs: Parameters<typeof buildChannelProgressDraftLine>[0][] = [
+        {
+          event: "item",
+          ...common,
+          itemId: "tool:flagged-call",
+          itemKind: "tool",
+          phase: "start",
+          status: "running",
+          meta,
+        },
+        {
+          event: "item",
+          ...common,
+          itemId: "command:flagged-call",
+          itemKind: "command",
+          phase: "end",
+          status: exitCode === 0 ? "completed" : "failed",
+          meta,
+        },
+        {
+          event: "command-output",
+          ...common,
+          itemId: "command:flagged-call",
+          phase: "end",
+          title: "command " + meta,
+          exitCode,
+        },
+      ];
+      let lines: ChannelProgressDraftLine[] = [];
+      for (const input of inputs) {
+        const line = buildChannelProgressDraftLine(input, options);
+        if (!line) {
+          throw new Error("expected flagged command progress");
+        }
+        lines = mergeChannelProgressDraftLine(lines, line, { maxLines: 4 });
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatchObject({ id: "tool:flagged-call", detail });
+      }
+      expect(lines[0]).toMatchObject({
+        kind: "command-output",
+        status: exitCode === 0 ? "completed" : "exit 1",
+        text: "🛠️ " + (exitCode === 0 ? "" : "exit 1; ") + detail,
+      });
+    });
+  });
+
+  it("keeps a flagged output title when it describes different work", () => {
+    const previous = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "command:other",
+        toolCallId: "other",
+        itemKind: "command",
+        name: "exec",
+        status: "running",
+        meta: "inspect files · pty",
+      },
+      { commandText: "raw" },
+    );
+    const output = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        itemId: "command:other",
+        toolCallId: "other",
+        name: "exec",
+        phase: "end",
+        title: "command run tests · pty",
+        exitCode: 0,
+      },
+      { commandText: "raw" },
+    );
+    if (!previous || !output) {
+      throw new Error("expected command progress");
+    }
+    expect(mergeChannelProgressDraftLine([previous], output, { maxLines: 4 })[0]?.detail).toBe(
+      "pty · command run tests",
+    );
+    expect(mergeChannelProgressDraftLine([], output, { maxLines: 4 })[0]?.detail).toBe(
+      "pty · command run tests",
+    );
+  });
+
   it("still replaces an ended line whole when the output names no command", () => {
     // A recovered run reports its outcome without a title; the stale failure
     // text of the ended line must not survive as the recovered line's detail.

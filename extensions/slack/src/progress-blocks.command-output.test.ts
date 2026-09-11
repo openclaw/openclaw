@@ -79,6 +79,60 @@ describe("native Slack progress command output details", () => {
     expect(rows.every((row) => row.details?.rendered === "run tests")).toBe(true);
   });
 
+  it.each([
+    { flags: ["pty"], exitCode: 0 },
+    { flags: ["elevated"], exitCode: 1 },
+    { flags: ["pty", "elevated"], exitCode: 0 },
+  ])("does not append flagged details for $flags on exit $exitCode", ({ flags, exitCode }) => {
+    const meta = ["run tests", ...flags].join(" · ");
+    const detail = [...flags, "run tests"].join(" · ");
+    // Item metadata includes the execution flags before completion arrives.
+    const start = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "tool:flagged",
+        toolCallId: "flagged",
+        itemKind: "tool",
+        name: "exec",
+        phase: "start",
+        status: "running",
+        meta,
+      },
+      { commandText: "raw" },
+    );
+    const output = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        itemId: "command:flagged",
+        toolCallId: "flagged",
+        name: "exec",
+        phase: "end",
+        title: "command " + meta,
+        exitCode,
+      },
+      { commandText: "raw" },
+    );
+    if (!start || !output) {
+      throw new Error("expected flagged command progress");
+    }
+    const first = reconcileSlackNativeTaskChunks({
+      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+      chunks: buildSlackProgressStreamChunks({ lines: [start] }),
+    });
+    const finished = reconcileSlackNativeTaskChunks({
+      previous: first.snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        lines: mergeChannelProgressDraftLine([start], output, { maxLines: 8 }),
+      }),
+    });
+    expect(finished.snapshot.tasks.size).toBe(1);
+    expect([...finished.snapshot.tasks.values()][0]?.details?.rendered).toBe(detail);
+    const update = finished.chunks?.find((chunk) => chunk.type === "task_update");
+    expect(update).toMatchObject({ status: exitCode === 0 ? "complete" : "error" });
+    expect(update).not.toHaveProperty("details");
+    expect(finished.chunks?.some((chunk) => chunk.type === "plan_update")).toBe(false);
+  });
+
   it("sends the command output detail when the row showed none", () => {
     const start = buildChannelProgressDraftLine(
       { event: "tool", toolCallId: "call-1", name: "exec", phase: "start" },
