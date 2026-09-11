@@ -28,7 +28,8 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     },
     freshness: {
       type: "string",
-      description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
+      description:
+        "Filter by time: 'day' (24h), 'week', 'month', or 'year'; choose this or a date range.",
     },
   };
 

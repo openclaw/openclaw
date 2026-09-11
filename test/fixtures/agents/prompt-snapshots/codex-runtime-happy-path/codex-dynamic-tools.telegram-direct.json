@@ -1307,7 +1307,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter). Perplexity time filters are mutually exclusive.",
         "inputSchema": {
           "properties": {
             "count": {
@@ -1336,7 +1336,7 @@
               "type": "array"
             },
             "freshness": {
-              "description": "Time filter: day/week/month/year.",
+              "description": "Time filter: day/week/month/year (Perplexity: choose this or a date range).",
               "type": "string"
             },
             "language": {
