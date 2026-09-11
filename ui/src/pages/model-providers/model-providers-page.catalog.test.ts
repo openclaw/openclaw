@@ -341,7 +341,8 @@ describe("ModelProvidersPage catalog discovery", () => {
   ])(
     "discovers the full catalog when the $picker picker opens and merges it without clearing saved state",
     async ({ index: firstPicker }) => {
-      const { context, request, discover, readPublished, runtimeConfig } = createCatalogHarness();
+      const { context, request, discover, readPublished, runtimeConfig, publishEvent } =
+        createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       discover.mockReturnValue(pending.promise);
       const discovered: ModelCatalogResult = {
@@ -408,7 +409,11 @@ describe("ModelProvidersPage catalog discovery", () => {
       readPublished.mockReturnValue(published);
       await openModelPicker(page, 1);
       await drainPageUpdates(page);
-      expect(page.data?.models).toEqual(published.models);
+      expect(page.data?.models).toEqual(discovered.models);
+      expect(readPublished).toHaveBeenCalledOnce();
+      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForFast(() => expect(page.data?.models).toEqual(published.models));
+      await drainPageUpdates(page);
       expect(
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
@@ -529,12 +534,12 @@ describe("ModelProvidersPage catalog discovery", () => {
   it.each([
     { replacement: "core refresh", catalogRequests: 3, discoveries: 3, publicationReads: 1 },
     { replacement: "route data", catalogRequests: 2, discoveries: 2, publicationReads: 1 },
-    { replacement: "config.changed", catalogRequests: 3, discoveries: 1, publicationReads: 3 },
+    { replacement: "config.changed", catalogRequests: 3, discoveries: 1, publicationReads: 2 },
     {
       replacement: "chat.metadata.changed",
       catalogRequests: 3,
       discoveries: 1,
-      publicationReads: 3,
+      publicationReads: 2,
     },
   ])(
     "keeps newer $replacement after an older picker response settles",
@@ -553,7 +558,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       await openModelPicker(page);
       expect(discover).toHaveBeenCalledOnce();
 
-      // Replacing page data retires its request; direct reads have no cache to invalidate.
+      // Page replacement retires its request; publication also retires the shared cache.
       if (replacement === "core refresh") {
         page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       } else if (replacement === "route data") {
