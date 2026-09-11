@@ -111,13 +111,16 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: string[
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Discover one projection identity per database. An in-root extended-length
-    // \\?\ alias dedupes against the plain spelling directory discovery already
-    // listed, because projection rebases both to the same candidate path. External
-    // locators keep their raw spelling so the copy and the registry rebound write
-    // share one hashed destination.
+    // Discover one projection identity per database, using the same raw
+    // eligibility as resolveUpdateCandidateStatePath: a canonically spelled
+    // in-root extended-length \\?\ alias dedupes against the plain spelling
+    // directory discovery already listed, because projection rebases both to
+    // the same candidate path. External and non-canonical locators keep their
+    // raw spelling so the copy and the registry rebound write share one
+    // destination.
     const discovered =
       process.platform === "win32" &&
+      path.normalize(source) === source &&
       isPathInside(resolveOpenClawStateDirForDatabasePath(shared), source)
         ? normalizeWindowsPathPreservingCase(source)
         : source;

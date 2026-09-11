@@ -150,3 +150,43 @@ it.skipIf(process.platform !== "win32")(
     copied.close();
   },
 );
+
+// A noncanonical in-root registration (dot segments) is not eligible for
+// rebasing: the copy and the rebound registry entry must keep the raw
+// locator's hashed candidate-external destination.
+it.skipIf(process.platform !== "win32")(
+  "keeps a noncanonical in-root registered database on its raw projection identity",
+  async () => {
+    const source = path.join(root, "source");
+    const target = path.join(root, "copy");
+    const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createDatabase(canonical);
+    const noncanonical =
+      source + path.sep + ["agents", "main", ".", "agent", "openclaw-agent.sqlite"].join(path.sep);
+    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    registry
+      .prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
+      )
+      .run("main", noncanonical);
+    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    await runSnapshotWorker({
+      stateDir: source,
+      targetStateDir: target,
+      config: {},
+    });
+    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
+    const rebound = copiedRegistry
+      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
+      .get() as { path: string };
+    copiedRegistry.close();
+    expect(path.isAbsolute(rebound.path)).toBe(false);
+    expect(rebound.path).toMatch(/^candidate-external/);
+    // The rebound registry entry must name the database the snapshot copied.
+    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
+    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
+      value: "preserved",
+    });
+    copied.close();
+  },
+);
