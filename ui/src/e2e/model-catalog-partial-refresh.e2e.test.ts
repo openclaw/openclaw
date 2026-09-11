@@ -40,8 +40,8 @@ const catalog: ModelCatalogResult = {
   ],
 };
 
-async function captureControls(page: Page, stage: string) {
-  const controls = await page
+function readControls(page: Page) {
+  return page
     .locator(".agent-chat__input")
     .first()
     .evaluate((composer) => {
@@ -61,6 +61,10 @@ async function captureControls(page: Page, stage: string) {
           : null,
       };
     });
+}
+
+async function captureControls(page: Page, stage: string) {
+  const controls = await readControls(page);
   await writeFile(path.join(suite.artifactDir, `${stage}.json`), JSON.stringify(controls, null, 2));
   await page.screenshot({
     path: path.join(suite.artifactDir, `${stage}.png`),
@@ -291,25 +295,19 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("[data-chat-model-catalog-state]").isVisible())
           .toBe(true);
-        const effort = page.locator(".chat-controls__effort-picker");
         await expect
-          .poll(
-            async () =>
-              (await effort.count()) === 0 ||
-              (await effort.getAttribute("aria-hidden")) === "true" ||
-              (await page.locator("[data-chat-thinking-select]").getAttribute("aria-disabled")) ===
-                "true",
-          )
+          .poll(async () => {
+            const { effort } = await readControls(page);
+            return !effort || effort.reserved === "true" || effort.disabled === "true";
+          })
           .toBe(true);
         await captureControls(page, `${condition}-open`);
         await model.click();
         await expect
-          .poll(
-            async () =>
-              (await effort.count()) === 0 ||
-              (await page.locator("[data-chat-thinking-select]").getAttribute("aria-disabled")) ===
-                "true",
-          )
+          .poll(async () => {
+            const { effort } = await readControls(page);
+            return !effort || effort.disabled === "true";
+          })
           .toBe(true);
         await captureControls(page, `${condition}-closed`);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);

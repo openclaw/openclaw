@@ -382,8 +382,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   );
   const hasResolvableModel =
     managedCatalog.status === "ready" &&
-    activeModelOption !== undefined &&
-    !activeModelOption.disabled;
+    activeModelOption?.disabled !== true &&
+    modelOptions.some((option) => !option.disabled);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
