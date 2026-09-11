@@ -10,7 +10,7 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { nextWorkboardCardPosition, setWorkboardCards } from "../../lib/workboard/card-state.ts";
+import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
 import {
   createGatewaySession,
