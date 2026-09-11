@@ -24,11 +24,14 @@ afterEach(() => {
 });
 
 it("updates idle card times at their boundaries without replacing focused controls", () => {
-  const part = render(html`
-    <input aria-label="Draft" value="Keep editing" />
-    <time>${cardRelativeTime(now - 10_000, now)}</time>
-    <time>${cardRelativeTime(now - 20_000, now)}</time>
-  `, container);
+  const part = render(
+    html`
+      <input aria-label="Draft" value="Keep editing" />
+      <time>${cardRelativeTime(now - 10_000, now)}</time>
+      <time>${cardRelativeTime(now - 20_000, now)}</time>
+    `,
+    container,
+  );
   expect(vi.getTimerCount()).toBe(1);
   const input = expectDefined(container.querySelector("input"));
   input.focus();
