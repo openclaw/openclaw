@@ -20,9 +20,12 @@ type PreparedTerminal = {
 // existing stream alive until its page takes ownership, without persisting input.
 const prepared = new Set<PreparedTerminal>();
 
+// An unclaimed start has no UI owner, so close the PTY instead of leaving the
+// native CLI running headless on the Gateway.
 function discard(terminal: PreparedTerminal): void {
   prepared.delete(terminal);
   clearTimeout(terminal.expiry);
+  void terminal.connection.close(terminal.result.sessionId);
   terminal.connection.dispose();
 }
 
