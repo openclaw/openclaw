@@ -69,6 +69,34 @@ describe("active-memory doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("inventories toggle source and archive without importing or creating plugin state", async () => {
+    const source = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, '{"sessions":{"retained":{"disabled":true}}}');
+    const before = await fs.readdir(stateDir, { recursive: true });
+    const migration = expectDefined(stateMigrations[0], "Active Memory toggle migration");
+    const resources = expectDefined(
+      await migration.collectBackupResources?.({
+        config: {},
+        env,
+        stateDir,
+        requireLocalResources: true,
+      }),
+      "Active Memory toggle inventory",
+    );
+    for (const target of [source, `${source}.migrated`]) {
+      expect(
+        resources.some(
+          (resource) =>
+            resource.path === target ||
+            (resource.kind === "directory" && target.startsWith(`${resource.path}${path.sep}`)),
+        ),
+      ).toBe(true);
+    }
+    expect(await fs.readdir(stateDir, { recursive: true })).toEqual(before);
+    expect(await fs.readFile(source, "utf8")).toBe('{"sessions":{"retained":{"disabled":true}}}');
+  });
+
   it("preserves oversized legacy opt-outs without writing or archiving on repeated repairs", async () => {
     const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });

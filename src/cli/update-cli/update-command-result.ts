@@ -13,6 +13,7 @@ import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
+  resolveManagedServiceUpdateFailureExitCode,
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
@@ -52,12 +53,28 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
+  unchangedCore?: FinishUpdateParams["unchangedCore"];
+  updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  candidateUpdateRecovery?: "parent-v1";
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
   activationConfig?: UpdateConfigSnapshot;
 };
+
+export function resolveCompletedUpdateResult(
+  params: Pick<FinishUpdateParams, "startedAt" | "rollbackBlockedReason" | "updateRecoveryBackup">,
+  result: UpdateRunResult,
+): UpdateRunResult {
+  return {
+    ...result,
+    ...(result.status === "error" && params.rollbackBlockedReason && !params.updateRecoveryBackup
+      ? { reason: params.rollbackBlockedReason }
+      : {}),
+    durationMs: Math.max(0, Date.now() - params.startedAt),
+  };
+}
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(
@@ -111,16 +128,12 @@ export class UpdateCommandFailure extends Error {
 /** A conservative pending outcome, never a grant of recovery or mutation authority. */
 export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
   constructor(result: UpdateRunResult, detail?: string, options?: ErrorOptions) {
-    super(
-      {
-        ...result,
-        status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
-      1,
-      detail,
-      options,
-    );
+    const unsafeResult: UpdateRunResult = {
+      ...result,
+      status: "error",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    };
+    super(unsafeResult, resolveManagedServiceUpdateFailureExitCode(unsafeResult), detail, options);
     this.name = "UpdateCommandPendingRecoveryFailure";
   }
 }
@@ -142,7 +155,7 @@ export function reportUpdateCommandPendingRecovery(
 /** Reporting-only marker: the outcome was recorded and printed; no follow-up triage. */
 export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
   constructor(result: UpdateRunResult) {
-    super(result, 1);
+    super(result, resolveManagedServiceUpdateFailureExitCode(result));
   }
 }
 

@@ -141,6 +141,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "zalouser-credentials-json-to-plugin-state",
     label: "Zalo Personal credentials",
+    collectBackupResources({ env }) {
+      return [{ path: resolveLegacyZalouserCredentialsDir(env), kind: "directory" }];
+    },
     async detectLegacyState(params) {
       const sources = await collectLegacyZalouserCredentialSources(params.env);
       return sources.length > 0
@@ -232,6 +235,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "zalouser-direct-session-keys",
     label: "Zalo Personal direct-message sessions",
+    // Session-entry mutations use the host's configured per-agent databases.
+    collectBackupResources: () => [],
     async detectLegacyState({ config, env }) {
       // A never-configured channel cannot own legacy DMs, so do not scan every agent DB at startup.
       // Removed config defers leftover-row detection until zalouser is configured again.

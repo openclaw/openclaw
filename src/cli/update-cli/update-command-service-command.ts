@@ -4,6 +4,7 @@ import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-au
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { retireCommandProcessJobForHandoff } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
@@ -130,6 +131,8 @@ export async function runUpdatedInstallGatewayCommand(
     executor?.assertCurrent();
     params.assertCurrent?.();
   };
+  assertCurrent();
+  await retireCommandProcessJobForHandoff();
   assertCurrent();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);

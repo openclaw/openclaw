@@ -27,6 +27,7 @@ import {
   resolveUpdateInstallRoot,
   updateInstallRootsMatch,
 } from "../../infra/update-install-root.js";
+import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -52,11 +53,13 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
@@ -490,6 +493,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   }
   opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
+    await retainCliProcessJobUntilExit();
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       recoverOrphanedSidecars: false,
@@ -524,4 +528,20 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     installKind,
     servicePlan,
   };
+}
+
+/** Mutable setup follows target admission under the current install executor. */
+export async function prepareMutableUpdateHousekeeping(assertCurrent: () => void) {
+  assertCurrent();
+  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+  assertCurrent();
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
+  assertCurrent();
+  await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+  assertCurrent();
+  const records = await loadInstalledPluginIndexInstallRecords();
+  assertCurrent();
+  return records;
 }

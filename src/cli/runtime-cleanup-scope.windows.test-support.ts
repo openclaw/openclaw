@@ -1,18 +1,75 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { writeSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { launchFallbackTaskScript } from "../daemon/schtasks-runtime.js";
+import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
 import {
   retainCliProcessJobUntilExit,
   withCliCommandCleanup,
   withCliProcessScope,
 } from "./runtime-cleanup-scope.js";
 
-const [role, ownership, inherited, requestedCode] = process.argv.slice(2);
+const [role, ownership, inherited, requestedCode, descendants, markerPath] = process.argv.slice(2);
 const fixture = fileURLToPath(import.meta.url);
 const args = [...process.execArgv, fixture];
 
-if (role === "launcher") {
+if (role === "handoff-candidate") {
+  if (!markerPath) {
+    throw new Error("Fallback fixture requires its isolated marker path");
+  }
+  await withCliProcessScope(retainCliProcessJobUntilExit);
+  const launchMutator = async () => {
+    const child = spawnCommand([process.execPath, ...args, "launcher"], {
+      stdio: ["ignore", "ignore", "inherit"],
+      ipc: true,
+    });
+    const [message] = await once(child.nodeChildProcess, "message");
+    await child;
+    return Number(message.descendantPid);
+  };
+  let descendantPid: number | undefined;
+  let settlement = "settled";
+  let fallbackPid: number | undefined;
+  if (ownership === "busy") {
+    descendantPid = await launchMutator();
+  }
+  try {
+    await launchFallbackTaskScript(
+      { OPENCLAW_TASK_SCRIPT: path.join(path.dirname(markerPath), "gateway.cmd") },
+      {
+        programArguments: [
+          process.execPath,
+          "-e",
+          `require('node:fs').writeFileSync(${JSON.stringify(markerPath)},String(process.pid));setInterval(()=>{},1000);`,
+        ],
+      },
+    );
+    const deadline = Date.now() + 3_000;
+    while (!existsSync(markerPath)) {
+      if (Date.now() >= deadline) {
+        throw new Error("Fallback did not publish its PID");
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+    }
+    fallbackPid = Number(readFileSync(markerPath, "utf8"));
+    if (ownership === "rearm") {
+      await withCommandProcessScope(async () => {
+        descendantPid = await launchMutator();
+      });
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "CommandProcessScopeUnsettledError") {
+      throw error;
+    }
+    settlement = error.name;
+  }
+  writeSync(1, `${JSON.stringify({ descendantPid, fallbackPid, settlement })}\n`);
+  process.exit(0);
+} else if (role === "launcher") {
   const child = spawn(
     process.execPath,
     ["-e", "setTimeout(()=>process.exit(0),30000);process.send('ready');process.disconnect();"],
@@ -40,16 +97,30 @@ if (role === "launcher") {
       withCliCommandCleanup(ownership === "gateway", retainCliProcessJobUntilExit),
     );
   }
-  const launcher = spawn(process.execPath, [...args, "launcher"], {
-    stdio: ["ignore", "ignore", "inherit", "ipc"],
-    windowsHide: true,
-  });
-  const exited = once(launcher, "exit");
-  const [message] = await once(launcher, "message");
-  await exited;
+  let message: { descendantPid?: number } = {};
+  let settlement = "settled";
+  try {
+    await withCommandProcessScope(async () => {
+      const launcher = spawnCommand(
+        descendants === "false"
+          ? [process.execPath, "-e", "process.exit(0)"]
+          : [process.execPath, ...args, "launcher"],
+        { stdio: ["ignore", "ignore", "inherit"], ipc: true },
+      );
+      if (descendants !== "false") {
+        [message] = await once(launcher.nodeChildProcess, "message");
+      }
+      await launcher;
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "CommandProcessScopeUnsettledError") {
+      throw error;
+    }
+    settlement = error.name;
+  }
   writeSync(
     1,
-    `${JSON.stringify({ ...message, inheritedJob: wasInJob[0] === 1, launcherExited: true })}\n`,
+    `${JSON.stringify({ ...message, settlement, inheritedJob: wasInJob[0] === 1, launcherExited: true })}\n`,
   );
   process.exit(Number(requestedCode));
 } else {
@@ -58,7 +129,15 @@ if (role === "launcher") {
   }
   const candidate = spawn(
     process.execPath,
-    [...args, "candidate", ownership!, inherited!, requestedCode!],
+    [
+      ...args,
+      role === "handoff-harness" ? "handoff-candidate" : "candidate",
+      ownership!,
+      inherited!,
+      requestedCode!,
+      descendants!,
+      ...(markerPath ? [markerPath] : []),
+    ],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
   let stdout = "";

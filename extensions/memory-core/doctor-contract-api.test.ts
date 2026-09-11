@@ -515,6 +515,31 @@ describe("memory-core doctor dreaming migration", () => {
     };
   }
 
+  it.each([
+    { name: "host events", migration: hostEventsMigration, filename: "events.jsonl" },
+    { name: "dreaming", migration: dreamingStateMigration, filename: "daily-ingestion.json" },
+  ])(
+    "declares $name source and archive ownership without mutation",
+    async ({ migration, filename }) => {
+      workspaceDir = await fs.realpath(workspaceDir);
+      const directory = path.join(workspaceDir, "memory", ".dreams");
+      const source = path.join(directory, filename);
+      const archive = `${source}.migrated`;
+      await fs.writeFile(source, "{}\n");
+      await fs.writeFile(archive, "retained historical bytes\n");
+      const before = await fs.readdir(directory);
+      expect(await migration().collectBackupResources?.(migrationParams())).toEqual([
+        { path: directory, kind: "directory" },
+      ]);
+      expect(await fs.readdir(directory)).toEqual(before);
+      expect(await fs.readFile(source, "utf8")).toBe("{}\n");
+      expect(await fs.readFile(archive, "utf8")).toBe("retained historical bytes\n");
+      await fs.rm(source);
+      await fs.rm(archive);
+      expect(await migration().collectBackupResources?.(migrationParams())).toEqual([]);
+    },
+  );
+
   it("treats a missing legacy host event directory as no state", async () => {
     await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
     const migration = hostEventsMigration();
@@ -1751,6 +1776,54 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${legacyPath}.migrated`);
   });
 
+  it("inventories external legacy databases and absent migration targets without changing state", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(rootDir, "external", "index.db");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    const config = {
+      memory: { search: { store: { path: legacyPath, vector: { enabled: false } } } },
+      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+    };
+    const before = await fs.readFile(legacyPath);
+
+    const resources = await legacyMemoryIndexMigration().collectBackupResources?.({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(resources ?? []).toEqual(
+      expect.arrayContaining([
+        { path: legacyPath, kind: "sqlite" },
+        { path: agentPath, kind: "sqlite" },
+        { path: `${legacyPath}.migrated`, kind: "file" },
+        { path: `${legacyPath}-wal.migrated`, kind: "file" },
+      ]),
+    );
+    expect(await fs.readFile(legacyPath)).toEqual(before);
+    await expect(fs.stat(agentPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a recovery inventory when an external database cannot be inspected", async () => {
+    const legacyPath = path.join(rootDir, "loop.db");
+    await fs.symlink(legacyPath, legacyPath);
+    const config = {
+      memory: { search: { store: { path: legacyPath, vector: { enabled: false } } } },
+      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+    };
+    await expect(
+      Promise.resolve(
+        legacyMemoryIndexMigration().collectBackupResources?.({
+          config,
+          env,
+          stateDir: path.join(rootDir, "state"),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "ELOOP" });
+  });
+
   it("migrates retired configured legacy memory sidecar paths", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
@@ -2806,6 +2879,9 @@ describe("memory-core doctor dreaming migration", () => {
 
     const migration = qmdWorkspaceMigration();
     expect(migration.doctorOnly).toBe(true);
+    expect(await migration.collectBackupResources?.(migrationParams())).toEqual([
+      { path: qmdHome, kind: "directory" },
+    ]);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
       preview: [
         `- Retired Memory Core QMD workspace: ${qmdHome} -> remove derived index, config, cache, and session-export artifacts`,
@@ -2852,6 +2928,10 @@ describe("memory-core doctor dreaming migration", () => {
     }
 
     const migration = qmdFileLockMigration();
+    expect(await migration.collectBackupResources?.(migrationParams())).toEqual([
+      { path: globalLockPath, kind: "file" },
+      { path: agentLockPath, kind: "file" },
+    ]);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
       preview: [
         `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,

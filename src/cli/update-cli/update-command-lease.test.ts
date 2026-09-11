@@ -79,6 +79,8 @@ beforeEach(async () => {
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {
+      // Doctor's source descendants inherit the synthetic install cwd.
+      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
       OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: undefined,
       OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: undefined,
@@ -119,9 +121,14 @@ afterEach(async () => {
 
 async function writeScenario(
   lane: Lane,
-  scenario: Omit<LeaseScenario, "lane"> = {},
+  scenario: Omit<LeaseScenario, "lane" | "installRoot"> = {},
 ): Promise<void> {
-  await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
+  await state.writeJson("scenario.json", {
+    pluginUpdate: pluginResult,
+    ...scenario,
+    lane,
+    installRoot: await fs.realpath(state.root),
+  });
 }
 
 async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promise<void> {
@@ -642,6 +649,7 @@ describe("update orchestration lifecycle ownership", () => {
         update: { channel: "stable" },
         gateway: { port: valid ? 19004 : -1 },
       });
+      const originalConfig = await fs.readFile(state.configPath, "utf8");
       await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
 
       if (lane === "resume") {
@@ -660,15 +668,38 @@ describe("update orchestration lifecycle ownership", () => {
           },
         });
       }
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
+      const persistedRaw = await fs.readFile(state.configPath, "utf8");
+      const persisted = JSON.parse(persistedRaw) as OpenClawConfig;
       expect(persisted.update?.channel).toBe("stable");
       const startupBlock = resolveFutureConfigActionBlock({
         action: "start gateway service",
         config: persisted,
         env: {},
       });
-      expect(startupBlock === null).toBe(valid);
+      if (lane === "repair") {
+        // Protected repair restores the original bytes, including their version guard.
+        expect(persistedRaw).toBe(originalConfig);
+        expect(persisted.meta?.lastTouchedVersion).toBe(futureVersion);
+        expect(startupBlock).not.toBeNull();
+        expect(mocks.restart).not.toHaveBeenCalled();
+        const { inspectUpdateRecoveryBackups, verifyUpdateRecoveryBackup } =
+          await import("../../infra/update-recovery-backup.js");
+        const captures = await inspectUpdateRecoveryBackups({ installRoot: state.root });
+        expect(captures).toHaveLength(1);
+        const [capture] = captures;
+        if (!capture) {
+          throw new Error("Expected the failed repair's retained recovery capture");
+        }
+        expect(capture.terminalOutcome).toBe("restored");
+        const manifest = await verifyUpdateRecoveryBackup(capture.ref);
+        expect(getUpdateRun(manifest.runId)).toMatchObject({
+          status: "failed",
+          origin: { updateRecoveryCapture: { restored: true } },
+        });
+      } else {
+        expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
+        expect(startupBlock === null).toBe(valid);
+      }
       expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
         lane === "resume"
           ? []

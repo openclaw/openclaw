@@ -64,6 +64,12 @@ function describeMatrixAccountStateMigration(
 export const matrixAccountStateSchemaMigration: PluginDoctorStateMigration = {
   id: "matrix-account-sqlite-schema",
   label: "Matrix account SQLite schemas",
+  async collectBackupResources({ stateDir }) {
+    return (await collectMatrixAccountStateRoots(stateDir)).map((root) => ({
+      path: path.join(root, "state", STATE_DATABASE_FILENAME),
+      kind: "sqlite" as const,
+    }));
+  },
   async detectLegacyState(params) {
     const preview: string[] = [];
     for (const storageRootDir of await collectMatrixAccountStateRoots(params.stateDir)) {

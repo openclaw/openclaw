@@ -1,0 +1,543 @@
+import type { Stats } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveBackupPlanFromDisk } from "../commands/backup-shared.js";
+import {
+  parseUpdateRecoveryBackupManifest,
+  type UpdateRecoveryBackupManifest,
+} from "../commands/backup-verify-manifest.js";
+import { collectDoctorSkillWorkshopBackupResources } from "../commands/doctor-skill-workshop-readonly.js";
+import { resolveStartupConfigSnapshot } from "../commands/doctor/shared/automatic-startup-config-repair.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import { collectPluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
+import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { copyFileHandle, sameFileMutationFingerprint } from "./file-descriptor.js";
+import { root as safeRoot } from "./fs-safe.js";
+import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { assertNotUpdateCapturePath, isUpdateCapturePath } from "./update-capture-paths.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "./update-capture-privacy-marker.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
+import {
+  backupStore,
+  canonicalEntryPath,
+  captureDirectory,
+  digest,
+  fileDigest,
+  MAX_MANIFEST_BYTES,
+  statOrMissing,
+} from "./update-recovery-backup-files.js";
+import { assertUpdateRecoveryCapacity } from "./update-recovery-capacity.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+
+function within(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+  );
+}
+
+function included(
+  manifest: Pick<UpdateRecoveryBackupManifest, "stateDir" | "excludedRoots" | "protectedPaths">,
+  pathname: string,
+): boolean {
+  const excluded = manifest.excludedRoots.find((root) => within(pathname, root));
+  if (
+    excluded &&
+    !manifest.protectedPaths.some((root) => within(pathname, root) && within(root, excluded))
+  ) {
+    return false;
+  }
+  const protectedPath = manifest.protectedPaths.some((root) => within(pathname, root));
+  return protectedPath || !isVolatileBackupPath(pathname, { stateDirs: [manifest.stateDir] });
+}
+
+function traversable(
+  manifest: Pick<UpdateRecoveryBackupManifest, "stateDir" | "excludedRoots" | "protectedPaths">,
+  pathname: string,
+): boolean {
+  return (
+    included(manifest, pathname) || manifest.protectedPaths.some((root) => within(root, pathname))
+  );
+}
+
+async function writePrivacyMarker(directory: string): Promise<void> {
+  const marker = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
+  const existing = await statOrMissing(marker);
+  if (existing) {
+    if (
+      !existing.isFile() ||
+      existing.size !== Buffer.byteLength(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT) ||
+      (process.platform !== "win32" && (existing.mode & 0o077) !== 0)
+    ) {
+      throw new Error(`Invalid private update capture marker: ${marker}`);
+    }
+    const source = await (
+      await safeRoot(directory)
+    ).open(UPDATE_CAPTURE_PRIVACY_MARKER, {
+      symlinks: "reject",
+      hardlinks: "reject",
+    });
+    try {
+      if ((await source.handle.readFile("utf8")) !== UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT) {
+        throw new Error(`Invalid private update capture marker: ${marker}`);
+      }
+    } finally {
+      await source.handle.close();
+    }
+  } else {
+    const output = await fs.open(marker, "wx", 0o600);
+    try {
+      await output.writeFile(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
+      await output.sync();
+    } finally {
+      await output.close();
+    }
+  }
+  requireDirectorySync(await syncDirectory(directory), "Update capture privacy marker");
+}
+
+type CaptureParams = {
+  assertOwned: () => void;
+  runId: string;
+  installRoot: string;
+  drivers?: UpdateRunDriver[];
+};
+
+async function inspectUpdateRecoveryBackup(params: CaptureParams) {
+  params.assertOwned();
+  const creator = readUpdateRunDriver();
+  if (!creator) {
+    throw new Error(
+      "Cannot identify the update backup creator; stop the Gateway and retry from a supported host.",
+    );
+  }
+  if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
+    throw new Error("Invalid update recovery run id.");
+  }
+  const plan = await resolveBackupPlanFromDisk({ includeWorkspace: false });
+  if (plan.skipped.some((entry) => entry.reason === "unresolved")) {
+    throw new Error(
+      "Cannot create a complete update recovery backup while config ownership is unresolved. Run npx openclaw@latest doctor --fix, then retry the update.",
+    );
+  }
+  const config = await readConfigFileSnapshot({ observe: false });
+  const stateDir = resolvePathViaExistingAncestorSync(plan.stateDir);
+  const installRoot = path.resolve(params.installRoot);
+  const directory = captureDirectory(params.runId, stateDir);
+  const registry = inspectOpenClawRegisteredAgentDatabases({
+    includeIncompatibleSchemaVersions: true,
+  });
+  const discoveryConfig = (resolveStartupConfigSnapshot(config) ?? config).config;
+  const configuredDatabases = resolveConfiguredAgentDatabaseTargets(discoveryConfig, {
+    env: process.env,
+    registeredDatabases: registry,
+  });
+  const resourceConfig =
+    config.sourceConfigBeforeMigrations ?? config.sourceConfig ?? discoveryConfig;
+  const resources = (
+    await Promise.all([
+      collectPluginDoctorMigrationBackupResources({
+        config: resourceConfig,
+        env: process.env,
+        stateDir,
+      }),
+      collectDoctorSkillWorkshopBackupResources({ config: resourceConfig, env: process.env }),
+    ])
+  ).flat();
+  const declaredKinds = new Map(
+    resources.map((resource) => [canonicalEntryPath(resource.path), resource.kind]),
+  );
+  const resourcePaths = [...declaredKinds.keys()];
+  const directoryResources = [...declaredKinds].flatMap(([pathname, kind]) =>
+    kind === "directory" ? [pathname] : [],
+  );
+  const databaseOwners = new Map<string, { role: "global" } | { role: "agent"; agentId: string }>();
+  databaseOwners.set(canonicalEntryPath(resolveOpenClawStateSqlitePath()), { role: "global" });
+  for (const database of [
+    ...registry,
+    ...configuredDatabases,
+    ...plan.inventory.agentRoots.map((root) => ({
+      agentId: root.agentId,
+      path: root.databasePath,
+    })),
+  ]) {
+    const pathname = canonicalEntryPath(database.path);
+    const previous = databaseOwners.get(pathname);
+    if (previous && (previous.role !== "agent" || previous.agentId !== database.agentId)) {
+      throw new Error(`Update recovery database has conflicting owners: ${pathname}`);
+    }
+    databaseOwners.set(pathname, { role: "agent", agentId: database.agentId });
+  }
+  for (const pathname of databaseOwners.keys()) {
+    declaredKinds.set(pathname, "sqlite");
+  }
+  const includePaths = (config.includeProvenance ?? []).flatMap(
+    (owner) => owner.targetPaths ?? (owner.targetPath ? [owner.targetPath] : []),
+  );
+  const explicitPaths = [
+    plan.configPath,
+    ...includePaths,
+    resolveOpenClawStateSqlitePath(),
+    ...plan.inventory.agentRoots.map((root) => root.databasePath),
+    ...registry.map((database) => database.path),
+    ...configuredDatabases.map((database) => database.path),
+    ...resources.map((resource) => resource.path),
+  ].map(canonicalEntryPath);
+  const configFiles = new Set([plan.configPath, ...includePaths].map(canonicalEntryPath));
+  const rawFiles = new Set([
+    ...configFiles,
+    ...resources
+      .filter((resource) => resource.kind === "file")
+      .map((resource) => canonicalEntryPath(resource.path)),
+  ]);
+  const roots = [...new Set(explicitPaths)]
+    .toSorted((a, b) => a.length - b.length)
+    .filter((root, index, all) => !all.slice(0, index).some((other) => within(root, other)));
+  const scanRoots = [
+    ...new Set([stateDir, ...plan.inventory.agentRoots.map((root) => root.sourcePath), ...roots]),
+  ];
+  if (roots.some((root) => root === path.parse(root).root || within(root, backupStore(stateDir)))) {
+    throw new Error(
+      "Update recovery cannot capture a filesystem root or a root containing its backup store.",
+    );
+  }
+  for (const root of roots) {
+    assertNotUpdateCapturePath(root, stateDir);
+  }
+  const manifest: UpdateRecoveryBackupManifest = {
+    schemaVersion: 1,
+    kind: "update-recovery",
+    runId: params.runId,
+    installRoot,
+    stateDir,
+    configPath: canonicalEntryPath(plan.configPath),
+    configPaths: [...configFiles],
+    creator,
+    drivers: params.drivers ?? [],
+    createdAt: new Date().toISOString(),
+    roots,
+    excludedRoots: [
+      ...plan.inventory.regenerableRoots.map((root) => root.sourcePath),
+      backupStore(stateDir),
+      resolvePathViaExistingAncestorSync(resolveGatewayLockDir(stateDir)),
+      ...[plan.configPath, ...includePaths].map((pathname) =>
+        canonicalEntryPath(`${pathname}.lock`),
+      ),
+    ],
+    protectedPaths: [
+      ...new Set([
+        ...explicitPaths,
+        ...plan.included.filter((asset) => asset.kind !== "state").map((asset) => asset.sourcePath),
+      ]),
+    ],
+    entries: [],
+  };
+  const seen = new Set<string>();
+  const rootStates = new Map(
+    await Promise.all(
+      roots.map(async (pathname) => [pathname, await statOrMissing(pathname)] as const),
+    ),
+  );
+  const files: { pathname: string; before: Stats; sqlite: boolean }[] = [];
+  const visit = async (pathname: string): Promise<void> => {
+    if (seen.has(pathname) || !traversable(manifest, pathname)) {
+      return;
+    }
+    if (isUpdateCapturePath(pathname, stateDir)) {
+      // Restore must preserve the same private capture roots that inventory omits.
+      manifest.excludedRoots.push(pathname);
+      return;
+    }
+    const declaredPath =
+      explicitPaths.includes(pathname) ||
+      resourcePaths.some((resource) => within(pathname, resource) || within(resource, pathname));
+    if (!plan.inventory.isTraversable(pathname) && !declaredPath) {
+      return;
+    }
+    if (seen.size >= 1_000_000) {
+      throw new Error("Update recovery inventory exceeds one million entries.");
+    }
+    seen.add(pathname);
+    params.assertOwned();
+    const before = rootStates.has(pathname)
+      ? rootStates.get(pathname)
+      : await statOrMissing(pathname);
+    if (!before) {
+      if (!explicitPaths.includes(pathname)) {
+        return;
+      }
+      if (declaredKinds.get(pathname) === "sqlite") {
+        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+          if (await statOrMissing(`${pathname}${suffix}`)) {
+            throw new Error(`SQLite database has an orphaned sidecar: ${pathname}${suffix}`);
+          }
+        }
+      }
+      manifest.entries.push({
+        kind: "missing",
+        sourcePath: pathname,
+        sqlite: declaredKinds.get(pathname) === "sqlite",
+        directory: declaredKinds.get(pathname) === "directory",
+      });
+      return;
+    }
+    if (before.isDirectory()) {
+      if (directoryResources.some((resource) => within(pathname, resource))) {
+        manifest.entries.push({
+          kind: "directory",
+          sourcePath: pathname,
+          mode: before.mode & 0o777,
+        });
+      }
+      for (const name of (await fs.readdir(pathname)).toSorted()) {
+        const child = path.join(pathname, name);
+        const declaredResource = resourcePaths.some(
+          (resource) => within(child, resource) || within(resource, child),
+        );
+        if (plan.inventory.isPackageContent(child) && !declaredResource) {
+          manifest.excludedRoots.push(child);
+          continue;
+        }
+        await visit(child);
+      }
+      return;
+    }
+    if (!included(manifest, pathname)) {
+      return;
+    }
+    if (before.isSymbolicLink()) {
+      const sqliteLink = declaredKinds.get(pathname) === "sqlite" || pathname.endsWith(".sqlite");
+      if (
+        !sqliteLink &&
+        !rawFiles.has(pathname) &&
+        !directoryResources.some((resource) => within(pathname, resource))
+      ) {
+        return;
+      }
+      if (!manifest.roots.some((root) => within(pathname, root))) {
+        manifest.roots.push(pathname);
+      }
+      const link: Extract<UpdateRecoveryBackupManifest["entries"][number], { kind: "symlink" }> = {
+        kind: "symlink",
+        sourcePath: pathname,
+        target: await fs.readlink(pathname),
+      };
+      manifest.entries.push(link);
+      if (sqliteLink || configFiles.has(pathname) || declaredKinds.get(pathname) === "directory") {
+        const target = await fs.realpath(pathname);
+        assertNotUpdateCapturePath(target, stateDir);
+        if (sqliteLink) {
+          declaredKinds.set(target, "sqlite");
+        } else if (configFiles.has(pathname)) {
+          link.contentPath = target;
+          configFiles.add(target);
+          rawFiles.add(target);
+        } else {
+          declaredKinds.set(target, "directory");
+          directoryResources.push(target);
+          resourcePaths.push(target);
+        }
+        explicitPaths.push(target);
+        const owner = databaseOwners.get(pathname);
+        if (owner) {
+          databaseOwners.set(target, owner);
+        }
+        if (!manifest.roots.some((root) => within(target, root))) {
+          manifest.roots.push(target);
+          manifest.protectedPaths.push(target);
+        }
+        await visit(target);
+      }
+      return;
+    }
+    if (!before.isFile()) {
+      manifest.excludedRoots.push(pathname);
+      return;
+    }
+    const declaredKind = declaredKinds.get(pathname);
+    const sidecarSuffix = SQLITE_SIDECAR_SUFFIXES.find((suffix) => pathname.endsWith(suffix));
+    if (declaredKind !== "file" && sidecarSuffix) {
+      const databasePath = pathname.slice(0, -sidecarSuffix.length);
+      const database = await statOrMissing(databasePath);
+      const sqliteOwner =
+        declaredKinds.get(databasePath) === "sqlite" ||
+        databasePath.endsWith(".sqlite") ||
+        (database?.isFile() && (await isSqliteSnapshotFile(databasePath)));
+      if (sqliteOwner) {
+        if (!database) {
+          throw new Error(`SQLite database has an orphaned sidecar: ${pathname}`);
+        }
+        return;
+      }
+    }
+    const sqlite =
+      declaredKind === "sqlite" ||
+      (declaredKind !== "file" && (await isSqliteSnapshotFile(pathname)));
+    if (
+      !sqlite &&
+      !rawFiles.has(pathname) &&
+      !directoryResources.some((resource) => within(pathname, resource))
+    ) {
+      return;
+    }
+    if (!manifest.roots.some((root) => within(pathname, root))) {
+      manifest.roots.push(pathname);
+    }
+    files.push({ pathname, before, sqlite });
+  };
+  for (const root of scanRoots) {
+    await visit(root);
+  }
+  // Missing configured databases must remain absent after rolling back their first migration.
+  for (const pathname of explicitPaths) {
+    if (!seen.has(pathname)) {
+      await visit(pathname);
+    }
+  }
+  await assertUpdateRecoveryCapacity({
+    directory,
+    installRoot,
+    files: files.map(({ pathname, before, sqlite }) => ({ pathname, size: before.size, sqlite })),
+  });
+  params.assertOwned();
+  return { manifest, directory, stateDir, files, databaseOwners, configFiles };
+}
+
+/** Read-only admission precedes service shutdown; capture repeats it under maintenance. */
+export async function preflightUpdateRecoveryBackup(params: CaptureParams): Promise<void> {
+  await inspectUpdateRecoveryBackup(params);
+}
+
+export async function captureUpdateRecoveryBackup(
+  params: CaptureParams,
+): Promise<UpdateRecoveryBackupRef> {
+  const { manifest, directory, stateDir, files, databaseOwners, configFiles } =
+    await inspectUpdateRecoveryBackup(params);
+  params.assertOwned();
+  const store = backupStore(stateDir);
+  await ensurePrivateSnapshotRepositoryRoot(store);
+  params.assertOwned();
+  await writePrivacyMarker(store);
+  params.assertOwned();
+  await createPrivateSqliteDirectory(directory);
+  params.assertOwned();
+  await writePrivacyMarker(directory);
+  requireDirectorySync(await syncDirectory(store), "Update capture root");
+  const directoryPin = await pinDirectory(directory);
+  try {
+    await createPrivateSqliteDirectory(path.join(directory, "payload"));
+    for (const { pathname, before, sqlite } of files) {
+      const archivePath = `payload/${manifest.entries.length}`;
+      const targetPath = path.join(directory, archivePath);
+      params.assertOwned();
+      await directoryPin.assertCurrent();
+      if (sqlite) {
+        const owner = databaseOwners.get(pathname);
+        await createVerifiedSqliteSnapshot({
+          sourcePath: pathname,
+          targetPath,
+          preserveRowIds: true,
+          sourceStagingRoot: directory,
+          beforePublish: params.assertOwned,
+          validate:
+            owner?.role === "global"
+              ? (database, label) => assertOpenClawStateDatabaseOwner(database, { pathname: label })
+              : owner?.role === "agent"
+                ? (database, label) => {
+                    assertOpenClawAgentDatabaseOwner(database, {
+                      agentId: owner.agentId,
+                      pathname: label,
+                    });
+                  }
+                : undefined,
+        });
+      } else {
+        const source = await (
+          await safeRoot(path.dirname(pathname))
+        ).open(path.basename(pathname), { symlinks: "reject", hardlinks: "allow" });
+        const output = await fs.open(targetPath, "wx+", 0o600);
+        try {
+          if (before.dev !== source.stat.dev || before.ino !== source.stat.ino) {
+            throw new Error(`Update recovery input changed before backup: ${pathname}`);
+          }
+          const opened = await source.handle.stat({ bigint: true });
+          await copyFileHandle(source.handle, output, {
+            noProgressMessage: "Update recovery input copy made no progress.",
+          });
+          if (!sameFileMutationFingerprint(opened, await source.handle.stat({ bigint: true }))) {
+            throw new Error(`Update recovery input changed during backup: ${pathname}`);
+          }
+          await output.sync();
+        } finally {
+          await output.close();
+          await source.handle.close();
+        }
+        const after = await fs.lstat(pathname);
+        if (
+          before.dev !== after.dev ||
+          before.ino !== after.ino ||
+          before.size !== after.size ||
+          before.mtimeMs !== after.mtimeMs ||
+          before.ctimeMs !== after.ctimeMs
+        ) {
+          throw new Error(`Update recovery input changed during backup: ${pathname}`);
+        }
+      }
+      const content = await fileDigest(targetPath);
+      manifest.entries.push({
+        kind: "file",
+        sourcePath: pathname,
+        archivePath,
+        ...content,
+        sqlite,
+        mode: before.mode & 0o777,
+      });
+    }
+    manifest.configPaths = [...configFiles].toSorted();
+    const raw = `${JSON.stringify(manifest)}\n`;
+    if (Buffer.byteLength(raw) > MAX_MANIFEST_BYTES) {
+      throw new Error("Update recovery inventory exceeds its manifest size bound.");
+    }
+    parseUpdateRecoveryBackupManifest(raw);
+    const manifestPath = path.join(directory, "manifest.json");
+    params.assertOwned();
+    await directoryPin.assertCurrent();
+    const output = await fs.open(manifestPath, "wx", 0o600);
+    try {
+      await output.writeFile(raw);
+      await output.sync();
+    } finally {
+      await output.close();
+    }
+    requireDirectorySync(
+      await syncDirectory(path.join(directory, "payload")),
+      "Update recovery payload",
+    );
+    requireDirectorySync(await directoryPin.sync(), "Update recovery backup");
+    const ref = { directory, manifestPath, manifestSha256: digest(raw) };
+    return ref;
+  } catch (error) {
+    throw new Error(
+      `Update recovery backup failed before migrations; retained partial backup: ${directory}`,
+      { cause: error },
+    );
+  } finally {
+    await directoryPin.close();
+  }
+}

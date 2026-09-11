@@ -3,6 +3,7 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-steps.
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -10,6 +11,11 @@ import type { UpdateRestartParams } from "./update-command-service-context-types
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  preparePersistentMutation?: () => Promise<UpdateRecoveryBackupRef>;
+  unchangedCore?: {
+    root: string;
+    fingerprint: import("../../infra/package-update-integrity.js").PackageIntegrityFingerprint;
+  };
   serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;
@@ -27,6 +33,9 @@ export type FinishUpdateParams = UpdateRestartParams & {
   startedAt: number;
   packageUpdateNodeRunner?: string;
   packageTransaction?: PackageUpdateTransaction;
+  updateRecoveryBackup?: UpdateRecoveryBackupRef;
+  candidateUpdateRecovery?: "parent-v1";
+  deferFailureRecoveryToParent?: boolean;
   schemaVersions?: UpdateStateSchemaVersion[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;

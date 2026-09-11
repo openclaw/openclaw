@@ -136,6 +136,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "nostr-bus-state-json-to-plugin-state",
     label: "Nostr bus state",
+    collectBackupResources({ stateDir }) {
+      return [{ path: path.join(stateDir, "nostr"), kind: "directory" }];
+    },
     async detectLegacyState(params) {
       const files = await listLegacyFiles({
         stateDir: params.stateDir,
@@ -198,6 +201,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "nostr-profile-state-json-to-plugin-state",
     label: "Nostr profile state",
+    collectBackupResources({ stateDir }) {
+      return [{ path: path.join(stateDir, "nostr"), kind: "directory" }];
+    },
     async detectLegacyState(params) {
       const files = await listLegacyFiles({
         stateDir: params.stateDir,

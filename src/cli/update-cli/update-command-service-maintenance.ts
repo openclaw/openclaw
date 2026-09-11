@@ -267,6 +267,7 @@ export function createWindowsTaskAutoStartGuard(params: {
 
 async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   serviceEnv: NodeJS.ProcessEnv | undefined;
+  restoreOnFailure?: false;
   assertCurrentService?: () => Promise<void>;
   assertCurrent?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -329,9 +330,11 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
 type ManagedServiceStopParams = {
   recovery?: unknown;
   updateRun?: UpdateCommandOptions["run"];
+  deferLedgerWrites?: boolean;
   updateInstallKind: "git" | "package";
   root: string;
   shouldRestart: boolean;
+  restoreWindowsTaskOnFailure?: false;
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
@@ -527,6 +530,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   const suspendTask = async () => {
     return await maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
+      restoreOnFailure: params.restoreWindowsTaskOnFailure,
       updateRun,
       assertCurrentService: createWindowsTaskAutoStartGuard({
         root: params.root,
@@ -538,7 +542,10 @@ async function stopManagedServiceBeforeMutableUpdate(
             // Recovery outlives this preparation callback. Its later task
             // operations acquire their own native lock, but retain this executor.
             assertExecutor();
-            if (getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running") {
+            if (
+              !params.deferLedgerWrites &&
+              getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running"
+            ) {
               throw new Error("Update run no longer owns Windows task activation.");
             }
           }
@@ -601,9 +608,11 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     stoppedAtMs = Date.now();
     if (params.updateRun) {
-      recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
-        env: params.updateRun.env,
-      });
+      if (!params.deferLedgerWrites) {
+        recordUpdateRunPhase(params.updateRun.runId, "activating", undefined, {
+          env: params.updateRun.env,
+        });
+      }
     }
     await service.stop({
       env: currentState.env,

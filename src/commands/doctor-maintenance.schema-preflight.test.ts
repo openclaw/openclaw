@@ -28,6 +28,27 @@ beforeEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
+it("closes stores reopened after restoration while maintenance remains held", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const maintenance = await beginDoctorMaintenance({
+      options: { repair: true },
+      root: null,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    expect(maintenance).toBeDefined();
+    try {
+      const beforeRestore = openOpenClawStateDatabase({ env: state.env });
+      await maintenance?.closeStores();
+      expect(beforeRestore.db.isOpen).toBe(false);
+      const afterRestore = openOpenClawStateDatabase({ env: state.env });
+      await maintenance?.closeStores();
+      expect(afterRestore.db.isOpen).toBe(false);
+    } finally {
+      await maintenance?.release();
+    }
+  });
+});
+
 function createLegacyRegistryFixture() {
   const root = tempDirs.make("openclaw-doctor-legacy-registry-");
   const stateDir = path.join(root, "state");

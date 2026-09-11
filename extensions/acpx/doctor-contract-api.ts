@@ -96,6 +96,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "acpx-runtime-state-to-plugin-state",
     label: "ACPX runtime state",
+    collectBackupResources({ stateDir }) {
+      return [
+        resolveLegacyGatewayInstancePath(stateDir),
+        resolveLegacyProcessLeasePath(stateDir),
+      ].flatMap((filePath) => [
+        { path: filePath, kind: "file" as const },
+        { path: `${filePath}.migrated`, kind: "file" as const },
+      ]);
+    },
     async detectLegacyState(params) {
       const gatewayInstanceId = await readLegacyGatewayInstanceId(
         resolveLegacyGatewayInstancePath(params.stateDir),
@@ -225,6 +234,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "ACP session owners",
     doctorOnly: true,
     phase: "after-session-repair",
+    async collectBackupResources(input) {
+      const { acpxSessionOwnerMigration } = await import("./src/session-owner-migration.js");
+      return acpxSessionOwnerMigration.collectBackupResources({
+        ...input,
+        config: normalizeCompatibilityConfig({ cfg: input.config }).config,
+      });
+    },
     async detectLegacyState(input) {
       return (
         await import("./src/session-owner-migration.js")

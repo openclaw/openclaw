@@ -1,5 +1,5 @@
-// Child fixture: keep registration, finalization, JSON routing, and terminal writers real;
-// replace filesystem/plugin work and emit synthetic Doctor and fresh-triage diagnostics.
+// Keep registration, finalization, capture reads, JSON routing, and terminal writers real;
+// substitute plugin work and emit synthetic Doctor and fresh-triage diagnostics.
 import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -102,11 +102,6 @@ try {
 }
 `,
 );
-const snapshotSource = `
-const config = { update: { channel: 'dev' }, plugins: { enabled: false } };
-export const readConfigFileSnapshot = async () => ({ valid: true, config, sourceConfig: config, parsed: config });
-export const assertConfigWriteAllowedInCurrentMode = () => {};
-`;
 const stubs = new Map<string, string>([
   // Forward prepared locations, not currentModuleUrl as an import: builds may
   // place that URL in a shared chunk. Workers still execute their real compiled code.
@@ -116,11 +111,6 @@ const stubs = new Map<string, string>([
 export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)};`,
   ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
-  [sourceUrl("../config/config.ts"), snapshotSource],
-  [
-    sourceUrl("../plugins/installed-plugin-index-records.ts"),
-    "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
-  ],
   [
     sourceUrl("../plugins/plugin-lifecycle-lease.ts"),
     "export const withPluginLifecycleLease = async (_options, run) => await run();",

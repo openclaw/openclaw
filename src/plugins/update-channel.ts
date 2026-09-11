@@ -76,10 +76,14 @@ export async function syncPluginsForUpdateChannel(params: {
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
-  const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
+  const consent = capturePluginCapabilityConsentHandlerErrors(
+    params.onCapabilityConsent,
+    params.beforePersistentEffect,
+  );
   const summary: PluginChannelSyncSummary = {
     switchedToBundled: [],
     switchedToClawHub: [],
@@ -223,6 +227,7 @@ export async function syncPluginsForUpdateChannel(params: {
           previousRecords: installs,
           expectedIntegrity,
           onCapabilityConsent: consent.onCapabilityConsent,
+          beforePersistentEffect: consent.beforePersistentEffect,
         });
         const options = {
           spec,

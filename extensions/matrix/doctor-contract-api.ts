@@ -47,6 +47,10 @@ import {
   type MatrixLegacyCryptoMigrationState,
 } from "./src/matrix/crypto-state-store.js";
 import {
+  collectLegacyMatrixStateRoots,
+  collectLegacyMatrixBackupResources,
+} from "./src/matrix/doctor-state-paths.js";
+import {
   collectMatrixInboundDedupeSources,
   hasCompletedMatrixInboundDedupeMigration,
   importNewestInboundDedupeMarkers,
@@ -61,10 +65,7 @@ import {
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import {
-  resolveMatrixCredentialsDir,
-  resolveMatrixStateLayoutChildDepth,
-} from "./src/storage-paths.js";
+import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
@@ -138,44 +139,6 @@ async function readLegacyMatrixCredentials(
   }
 }
 
-async function collectLegacyMatrixStateRoots(
-  stateDir: string,
-  filename: string,
-  options?: { includeMatrixRoot?: boolean },
-): Promise<string[]> {
-  const matrixRoot = path.join(stateDir, "matrix");
-  const roots: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
-      if (isStorageRoot && entry.isFile() && entry.name === filename) {
-        roots.push(dir);
-        continue;
-      }
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      // Only enter owned layout containers; archived and arbitrary descendants
-      // must never become migration roots just because they contain a known file.
-      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
-      if (childDepth !== null) {
-        await visit(entryPath, childDepth);
-      }
-    }
-  }
-  await visit(matrixRoot, 0);
-  return roots
-    .filter((root) => options?.includeMatrixRoot || path.resolve(root) !== path.resolve(matrixRoot))
-    .toSorted();
-}
-
 async function* readLegacyMatrixSyncCaches(stateDir: string) {
   for (const storageRootDir of await collectLegacyMatrixStateRoots(
     stateDir,
@@ -242,6 +205,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-credentials-json-to-plugin-state",
     label: "Matrix credentials",
+    collectBackupResources: ({ stateDir }) => [
+      { path: resolveMatrixCredentialsDir(stateDir), kind: "directory" },
+    ],
     async detectLegacyState(params) {
       const sources = await collectLegacyMatrixCredentialSources(params);
       return sources.length > 0
@@ -334,6 +300,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
+    async collectBackupResources({ stateDir }) {
+      const sources = await collectMatrixInboundDedupeSources(stateDir);
+      if (sources.status === "incomplete") {
+        throw new Error(
+          `Matrix inbound dedupe inventory is incomplete: ${sources.warnings.join("; ")}`,
+        );
+      }
+      return [...new Set([...sources.sqliteRoots, ...sources.jsonRoots])]
+        .toSorted()
+        .map((root) => ({ path: root, kind: "directory" as const }));
+    },
     async detectLegacyState(params) {
       return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
         ? null
@@ -468,6 +445,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-storage-meta-json-to-plugin-state",
     label: "Matrix storage metadata",
+    collectBackupResources: ({ stateDir }) =>
+      collectLegacyMatrixBackupResources(stateDir, [MATRIX_STORAGE_META_FILENAME]),
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
@@ -524,6 +503,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-sync-cache-json-to-plugin-state",
     label: "Matrix sync cache",
+    collectBackupResources: ({ stateDir }) =>
+      collectLegacyMatrixBackupResources(stateDir, [MATRIX_SYNC_CACHE_FILENAME]),
     async detectLegacyState(params) {
       const previews: string[] = [];
       for await (const { storageRootDir } of readLegacyMatrixSyncCaches(params.stateDir)) {
@@ -565,6 +546,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-recovery-key-json-to-plugin-state",
     label: "Matrix recovery key",
+    collectBackupResources: ({ stateDir }) =>
+      collectLegacyMatrixBackupResources(stateDir, [MATRIX_RECOVERY_KEY_FILENAME]),
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
@@ -621,6 +604,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-legacy-crypto-migration-json-to-plugin-state",
     label: "Matrix legacy crypto state",
+    collectBackupResources: ({ stateDir }) =>
+      collectLegacyMatrixBackupResources(
+        stateDir,
+        [MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME, MATRIX_IDB_SNAPSHOT_FILENAME],
+        { includeMatrixRoot: true },
+      ),
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(

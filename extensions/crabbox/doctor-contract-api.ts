@@ -146,6 +146,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "crabbox-warm-profile-v3",
     label: "Crabbox warm profiles",
     doctorOnly: true,
+    // This repair changes only the shared plugin-state rows already captured by core.
+    collectBackupResources: () => [],
     async detectLegacyState({ context, env }) {
       const { WARM_IMAGE_MAX_ENTRIES, listCrabboxLegacyWarmLeases } =
         await import("./src/crabbox-worker-warm-image-store.js");

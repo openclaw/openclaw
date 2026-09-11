@@ -1,5 +1,6 @@
 // Builds restart sentinel payloads for update handoff reporting.
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
+import type { UpdateInstallSurface } from "./update-runner-types.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Update restart sentinel payloads carry update result details across a process
@@ -94,4 +95,23 @@ export function buildUpdateRestartSentinelPayload(params: {
       durationMs: result.durationMs,
     },
   };
+}
+
+export function createControlPlaneUpdateRefusal(
+  install: Pick<UpdateInstallSurface, "mode" | "root">,
+) {
+  const root = install.root;
+  return (
+    outcome: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status: outcome,
+    mode: install.mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
 }

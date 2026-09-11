@@ -36,6 +36,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "canvas-custom-root-documents-to-core",
     label: "Canvas documents in a custom host root",
+    collectBackupResources(params) {
+      const legacyDir = resolveLegacyCanvasDocumentsDir(params);
+      return legacyDir
+        ? [
+            { path: legacyDir, kind: "directory" },
+            { path: path.resolve(params.stateDir, "canvas", "documents"), kind: "directory" },
+          ]
+        : [];
+    },
     async detectLegacyState(params) {
       const legacyDir = resolveLegacyCanvasDocumentsDir(params);
       if (!legacyDir) {

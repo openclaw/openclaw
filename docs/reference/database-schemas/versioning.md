@@ -133,7 +133,9 @@ publication alone does not trigger schema repair or require stopping the Gateway
 A subsequent update can run during this window. Its migration verification and
 rollback checks compare applied content versions from private database snapshots.
 Publishing already-applied content is not another migration; applying new content
-still blocks rollback even when the published number has not changed. Managed
+requires restoration of a verified pre-migration recovery set before an older
+package can run, even when the published number has not changed. Without that
+set, changed content still blocks package-only rollback. Managed
 service stop, activation, and Doctor maintenance keep their normal ownership rules.
 
 Publication waits until **every** update row whose `before.version` identifies
@@ -169,12 +171,73 @@ Update-time Doctor checks shared and registered agent databases before other
 repairs. A state-only migration proceeds with deferred publication and reports
 `schema content applied; version publication deferred until update run <id> finishes`.
 Publication still observes the five-minute grace after that run finishes.
-Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
-cover a pending agent-database migration, the required `config_machine_state`
-table is missing, or the state-content migration fails. A failed content
-transaction rolls back. The refusal includes the database versions, driving
+Without a verified update-recovery set, Doctor keeps the typed
+`update-schema-bump-unfenced` refusal for a pending agent-database migration or a
+shared-state migration whose database lacks the required `config_machine_state`
+table. A failed content transaction rolls back. The refusal includes the database versions, driving
 updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
-Package rollback cannot reverse a migration that already happened.
+Package replacement alone cannot reverse a migration that already happened.
+
+Before migrations, the current updater captures and verifies an unsanitized
+`update-recovery` set covering inventoried local files and SQLite databases.
+SQLite online backup preserves committed WAL content without migrating the
+source, applying snapshot sanitizers, or pruning delivery and TTL records. The
+manifest records file sizes and SHA-256 hashes. A protected rollback restores
+the package and this set, including the original published and applied schema
+markers, then verifies the previous managed Gateway. Missing or invalid recovery
+data remains a hard failure, never evidence that a downgrade is safe. See
+[Update recovery sets](/cli/backup#update-recovery-sets) for inventory and lifecycle.
+
+Protected already-current updates and standalone finalization capture before
+config or plugin writes as well as Doctor migrations. An unchanged core uses
+state-only restoration; package replacement is not required to restore the
+set. Mutating children must settle before restoration. Successful standalone
+repair retains its capture because it does not start or verify the Gateway.
+A true no-op does not capture or stop the Gateway.
+
+This adds one recovery-set kind, not a SQLite schema or protocol change.
+Captures live at the private sibling
+`<stateDir>.update-captures/<captureId>/`, carry the shared privacy marker, and
+are excluded from ordinary backups and support exports. The immutable manifest
+binds numbered resources by size and SHA-256. Mutable config write receipts,
+verified restoration facts, and pending or failed-restoration status live in the existing run's
+`origin.updateRecoveryCapture` metadata; terminal `outcome.json` is a separate
+write-once file. Restore verifies the manifest and resource identities first.
+
+After raw restoration, the shared database's `state_leases` and
+`agent_database_leases` are cleared before writers resume. Restored process
+leases would otherwise appear held by processes whose state no longer exists.
+This uses the same lease-clearing owner as snapshot sanitization and candidate
+rehearsal; captured resources and their immutable manifest remain unchanged.
+
+Capture retirement uses the existing update lifecycle after durable terminal
+success, runtime/data validation bound to the installed artifact, settled
+mutating children, and no remaining recovery dependency. There is no count,
+age, or capacity-pressure pruning. Unresolved captures block another protected
+mutation and remain inspection-only until explicit Doctor recovery resolves
+them. Capacity admission refuses rather than deleting recovery data. These
+rules implement the accepted [lossless-capture decision](https://github.com/openclaw/openclaw/issues/140339#issuecomment-5614409997)
+and its [maintainer confirmation](https://github.com/openclaw/openclaw/issues/140339#issuecomment-5614508856).
+
+The target Doctor recognizes the current updater's explicit recovery marker.
+Without it, update-time Doctor binds the same verified set to the sole admitted
+updater run and restores it if its own migration or verification fails before
+returning. In the 2026.9.2
+case, package rollback still leaves the Gateway stopped; the failure message
+names `openclaw gateway start` to resume the old release and
+`npx openclaw@latest doctor --fix` to continue with a compatible newer binary.
+A successful Doctor records completion on the parent run without finalizing
+that run or retiring its capture; it cannot establish whole-update success.
+Failures after a successful Doctor invocation remain outside that old-driver
+protection. Recovery backups do not change the deferred-publication rules above
+or make older readers safe against migrated feature tables.
+
+Unsupervised Git updates initiated inside the serving Gateway explicitly record
+that they are unprotected. Only that declared live run and its bound finalizer
+and Doctor children can use the exception; it grants no general maintenance or
+schema bypass. The result and update status direct operators to terminal
+`openclaw update` for capture protection. The remaining handoff work is tracked
+in [#144422](https://github.com/openclaw/openclaw/issues/144422).
 
 The driver check requires a valid semantic version and includes 2026.9.2
 rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal

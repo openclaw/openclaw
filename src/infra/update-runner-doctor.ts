@@ -1,4 +1,20 @@
 import { compareSemverStrings } from "./update-check.js";
+import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
+
+export function buildUpdateRecoveryDoctorArgs(
+  backup?: UpdateRecoveryBackupRef,
+  owner?: "unprotected",
+): string[] {
+  if (owner === "unprotected") {
+    if (backup) {
+      throw new Error("An unprotected update cannot supply a recovery capture.");
+    }
+    return ["--update-recovery-owner=unprotected"];
+  }
+  return backup
+    ? ["--update-recovery-owner=driver", `--update-recovery-backup=${JSON.stringify(backup)}`]
+    : [];
+}
 
 const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";

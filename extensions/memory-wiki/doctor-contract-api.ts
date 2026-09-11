@@ -149,6 +149,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-compiled-cache-file-cleanup",
     label: "Memory Wiki compiled cache files",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).flatMap((vaultRoot) =>
+        LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS.map((relativePath) => ({
+          path: path.join(vaultRoot, relativePath),
+          kind: "file" as const,
+        })),
+      );
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const vaultRoot of resolveConfiguredVaultRoots({
@@ -211,6 +219,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-source-sync-json-to-plugin-state",
     label: "Memory Wiki source sync state",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).map((vaultRoot) => ({
+        path: resolveMemoryWikiSourceSyncStatePath(vaultRoot),
+        kind: "file" as const,
+      }));
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const vaultRoot of resolveConfiguredVaultRoots({
@@ -281,6 +295,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-import-runs-json-to-plugin-state",
     label: "Memory Wiki import run records",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).map((vaultRoot) => ({
+        path: resolveMemoryWikiImportRunsDir(vaultRoot),
+        kind: "directory" as const,
+      }));
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const vaultRoot of resolveConfiguredVaultRoots({

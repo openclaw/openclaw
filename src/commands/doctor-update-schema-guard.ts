@@ -48,14 +48,22 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   schemas?: OpenClawDatabaseSchemaPreflight;
   runtime: RuntimeEnv;
   json?: boolean;
+  statePublicationOnly?: boolean;
 }): Promise<void> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return;
   }
+  const { getDoctorUpdateRecoveryMode } = await import("./doctor-update-recovery.js");
+  const recoveryMode = getDoctorUpdateRecoveryMode();
+  if (recoveryMode === "legacy-rehearsal") {
+    return;
+  }
+  const recoveryProtected = recoveryMode === "capture";
   const schemas =
     options.schemas ??
     (await preflightOpenClawDatabaseSchemas({
       env: process.env,
+      ...(options.statePublicationOnly ? { scope: "state" as const } : {}),
       supportedVersions: {
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -73,8 +81,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   if (!updater) {
     return;
   }
-  const blockedMigrations = schemas.pendingMigrations.filter(
-    (database) => database.kind === "agent" || !updater.canDeferStateSchema,
+  const blockedMigrations = schemas.pendingMigrations.filter((database) =>
+    database.kind === "agent"
+      ? !options.statePublicationOnly && !recoveryProtected
+      : !updater.canDeferStateSchema,
   );
   if (blockedMigrations.length === 0) {
     return;

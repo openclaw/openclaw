@@ -11,7 +11,10 @@ import * as gatewayService from "../../daemon/service.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+} from "../../infra/update-control-plane-sentinel.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -82,6 +85,7 @@ function pendingPackageInvocation(
     manager?: "npm" | "pnpm" | "bun";
     profile?: string;
     readOnlyConfig?: boolean;
+    handoff?: boolean;
   } = {},
 ) {
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
@@ -115,7 +119,7 @@ function pendingPackageInvocation(
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_PROFILE", params.profile);
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", params.readOnlyConfig ? "1" : undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", params.handoff === false ? undefined : "1");
   vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metaPath);
   if (params.existingRun) {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", createUpdateRun({ trigger: "cli" }).runId);
@@ -198,6 +202,7 @@ function pendingPackageInvocation(
 describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
   it.each([
     { name: "source with absent history" },
+    { name: "ordinary CLI source", handoff: false },
     { name: "canonical source behind an alias", alias: true },
     { name: "redirected service target", redirected: true, existingRun: true },
     {
@@ -214,7 +219,9 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       const opts: UpdateCommandOptions = { json: true, yes: true };
       f.addPending();
       const before = materialSnapshot(f.home);
-      await expect(updateCommand(opts)).rejects.toMatchObject({ code: 1 });
+      await expect(updateCommand(opts)).rejects.toMatchObject({
+        code: params.handoff === false ? 1 : MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+      });
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "error",
@@ -280,7 +287,9 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         ),
     );
     try {
-      await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
+      await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({
+        code: MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
+      });
       expect(anchor).toBeDefined();
       expect(record).toMatchObject({ status: "running" });
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(

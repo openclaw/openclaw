@@ -47,10 +47,8 @@ export function recordPluginUpdateFailure(params: {
       message,
       ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
     });
-    return {
-      config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
-      changed: true,
-    };
+    const config = disablePluginAfterUpdateFailure(params.config, params.pluginId);
+    return { config, changed: config !== params.config };
   }
   params.outcomes.push({
     pluginId: params.pluginId,
@@ -92,6 +90,7 @@ export async function finalizePluginUpdateSummary(params: {
   ranNpmInstaller: boolean;
   logger: PluginUpdateLogger;
   transactionState: ReturnType<typeof createPluginUpdateTransactionState>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<PluginUpdateSummary> {
   let changed = params.changed;
   if (params.ranNpmInstaller) {
@@ -100,6 +99,7 @@ export async function finalizePluginUpdateSummary(params: {
         (await repairOpenClawPeerLinksForNpmInstalls({
           config: params.config,
           logger: params.logger,
+          beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     } catch (error) {
       await settlePluginInstallTransactions(params.transactionState.transactions, "rollback");

@@ -825,6 +825,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-app-server-sidecars-to-plugin-state",
     label: "Codex app-server thread bindings",
+    async collectBackupResources(params) {
+      const { sources } = await collectLegacyBindingSources(params);
+      return sources.map(({ sidecarPath }) => ({ path: sidecarPath, kind: "file" as const }));
+    },
     async detectLegacyState(params) {
       const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
       return sources.length > 0

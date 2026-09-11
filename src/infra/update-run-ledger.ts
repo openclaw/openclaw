@@ -22,6 +22,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
+  mergeUpdateRecoveryCaptureState,
+  type UpdateRecoveryCaptureState,
+} from "./update-recovery-backup-contract.js";
+import {
   isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
@@ -29,10 +33,11 @@ import {
 import {
   decodeRun,
   encodeRun,
-  isRetainedStep,
   type UpdateRunLedgerOptions as LedgerOptions,
 } from "./update-run-codec.js";
 import {
+  declareUnprotectedGatewayUpdateRecord,
+  bindUnprotectedGatewayUpdateFinalizerRecord,
   inspectUpdateRunDriver,
   readUpdateRunDriver,
   sameUpdateRunDriver,
@@ -40,8 +45,8 @@ import {
 } from "./update-run-driver.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import {
+  canReconcileCandidates,
   inspectUpdateRunReconciliation,
-  listUpdateRuns,
   readUpdateRunReconciliationCandidates,
   readUpdateRunRecord as readRun,
   type UpdateRunReconciliationCandidate,
@@ -49,6 +54,7 @@ import {
 } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
+  upsertUpdateRunStep,
   type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
@@ -58,6 +64,8 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 
 export {
+  findActiveUpdateRun,
+  getUpdateRun,
   getLatestUpdateFetchFailure,
   getUpdateRunAsync,
   listUpdateRuns,
@@ -215,7 +223,7 @@ export function createUpdateRun(
         !hasStoredUpdateRecovery(db, previous.runId) &&
         isStaleIdentitylessUpdateRun(previous)
       ) {
-        upsertStep(previous, {
+        upsertUpdateRunStep(previous, {
           step: "reconcile:superseded",
           status: "failed",
           endedAtMs: now,
@@ -233,20 +241,17 @@ export function createUpdateRun(
   }, options);
 }
 
-function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
-  const index = record.steps.findIndex((existing) => existing.step === step.step);
-  if (index >= 0) {
-    record.steps[index] = { ...record.steps[index], ...step };
-  } else {
-    record.steps.push(step);
-  }
-  while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
-    if (disposable < 0) {
-      throw new Error("Update run retained steps exceed the step limit");
-    }
-    record.steps.splice(disposable, 1);
-  }
+/** Commit the RPC driver's explicit policy under the existing run transaction. */
+export function declareUnprotectedGatewayUpdate(runId: string, options: LedgerOptions = {}): void {
+  mutateRun(runId, declareUnprotectedGatewayUpdateRecord, options);
+}
+
+export function bindUnprotectedGatewayUpdateDriver(
+  runId: string,
+  options: LedgerOptions = {},
+): void {
+  mutateRun(runId, bindUnprotectedGatewayUpdateFinalizerRecord, options);
+  adoptUpdateRun(runId, options);
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
@@ -262,7 +267,7 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
       if (!driver) {
         if (!record.steps.some((step) => step.step === "driver:identity-unavailable")) {
           // Retain known parents, but their death cannot prove this adopter exited.
-          upsertStep(record, {
+          upsertUpdateRunStep(record, {
             step: "driver:identity-unavailable",
             status: "completed",
             endedAtMs: Date.now(),
@@ -301,7 +306,11 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
       }
       record.origin.driver = driver;
       record.origin.previousDrivers = previousDrivers.length ? previousDrivers : undefined;
-      upsertStep(record, { step: "driver:adopted", status: "completed", endedAtMs: Date.now() });
+      upsertUpdateRunStep(record, {
+        step: "driver:adopted",
+        status: "completed",
+        endedAtMs: Date.now(),
+      });
     },
     options,
   );
@@ -345,7 +354,7 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
         isAbandonedUpdateRun(record) &&
         !record.steps.some((step) => step.step === "reconcile:acknowledged")
       ) {
-        upsertStep(record, {
+        upsertUpdateRunStep(record, {
           step: "reconcile:acknowledged",
           status: "completed",
           endedAtMs: Date.now(),
@@ -353,18 +362,6 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
       }
     },
     options,
-  );
-}
-
-function canReconcileCandidates(
-  candidates: UpdateRunReconciliationCandidate[],
-  input: UpdateRunReconciliationInput,
-): boolean {
-  return (
-    candidates.some(
-      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
-    ) &&
-    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
   );
 }
 
@@ -462,7 +459,7 @@ function reconcileCandidates(
           if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
             return record;
           }
-          upsertStep(record, {
+          upsertUpdateRunStep(record, {
             step: "reconcile:abandoned",
             status: "failed",
             endedAtMs: Date.now(),
@@ -522,9 +519,9 @@ export function recordUpdateRunPhase(
         (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
       ) {
         const now = Date.now();
-        upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
+        upsertUpdateRunStep(record, { step: record.phase, status: "completed", endedAtMs: now });
         record.phase = phase;
-        upsertStep(record, {
+        upsertUpdateRunStep(record, {
           step: phase,
           status: "in_progress",
           startedAtMs: now,
@@ -532,7 +529,7 @@ export function recordUpdateRunPhase(
         });
       }
       if (patch.step) {
-        upsertStep(record, patch.step);
+        upsertUpdateRunStep(record, patch.step);
       }
     },
     options,
@@ -548,8 +545,28 @@ export function recordUpdateRunStep(
     runId,
     (record) => {
       if (record.status === "running") {
-        upsertStep(record, step);
+        upsertUpdateRunStep(record, step);
       }
+    },
+    options,
+  );
+}
+
+/** Exact recovery receipts share the existing run owner, outside diagnostic eviction. */
+export function recordUpdateRunRecoveryCapture(
+  runId: string,
+  patch: Pick<UpdateRecoveryCaptureState, "manifestSha256"> & Partial<UpdateRecoveryCaptureState>,
+  assertCurrent: () => void,
+  options: LedgerOptions = {},
+): UpdateRunRecord {
+  return mutateRun(
+    runId,
+    (record) => {
+      assertCurrent();
+      record.origin.updateRecoveryCapture = mergeUpdateRecoveryCaptureState(
+        record.origin.updateRecoveryCapture,
+        patch,
+      );
     },
     options,
   );
@@ -564,7 +581,7 @@ export function recordUpdateRunDiagnostic(
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
+      upsertUpdateRunStep(record, {
         step: "finalize:exit",
         status: "completed",
         endedAtMs: Date.now(),
@@ -724,20 +741,4 @@ export function recordUpdateRunRepairAttempt(
     },
     options,
   );
-}
-
-export function getUpdateRun(
-  runId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
-    options,
-  );
-}
-
-export function findActiveUpdateRun(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord | undefined {
-  return listUpdateRuns({ limit: 1, active: true }, options)[0];
 }

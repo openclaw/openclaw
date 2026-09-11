@@ -6,6 +6,7 @@ read_when:
   - You want scheduled, versioned database backups in an operator-owned Git repository
   - You want to preview which paths would be included before reset or uninstall
   - You want to restore from a `.tar.gz` archive previously created by `openclaw backup`
+  - You need to locate the state backup retained by a failed update
 title: "Backup"
 ---
 
@@ -51,6 +52,108 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
+
+## Update recovery sets
+
+Before protected update-time config, plugin, or Doctor mutations, the current updater creates and verifies
+an `update-recovery` set at `<stateDir>.update-captures/<captureId>/`. The update
+run records its manifest path. The sibling root, capture directory, and private
+ancestors use owner-only permissions; capture files use `0600`. Each movable
+capture carries the [private capture marker](#private-update-captures). Ordinary
+backups, Doctor archives, and support exports exclude these sets, including
+when a selected workspace contains or is nested inside one.
+
+This also covers updates whose core is already current but whose config or
+plugins need changes. A true no-op creates no capture and does not stop the
+Gateway. Standalone `openclaw update repair` captures before requested channel
+changes and uses the same set for both Doctor phases and plugin convergence.
+
+This internal backup kind reuses the existing backup inventory and SQLite
+snapshot machinery. It does not change the commands, archive layout, or
+sanitization behavior of `openclaw backup`.
+
+The inventory covers the active config and its `$include` files, shared state,
+configured and registered per-agent databases, Skill Workshop state, and local
+resources declared by plugin Doctor migrations, including memory databases. It
+also retains inventoried workspace and migration-input files. SQLite files use
+the online backup API so committed WAL contents are included. Recovery copies
+are unsanitized: delivery rows, TTL records, original row IDs, and other database
+contents are preserved without snapshot pruning or `VACUUM`. No migration is
+required before capturing an older database.
+
+Each set has one immutable manifest and numbered resource files. The manifest
+records every inventoried file with its size and SHA-256, along with directory,
+symbolic-link, and missing-path entries needed for restoration. The updater
+verifies the manifest and resource identities before migrations proceed and
+again before restoring. A missing or mismatched payload is a hard failure.
+These sets can contain original credentials and private state.
+
+After verifying and restoring the raw resources, OpenClaw clears process
+coordination leases from the restored shared database before writers resume.
+Those leases belong to the source processes and cannot own a restored copy.
+The retained recovery set stays unchanged.
+
+Restoring a declared database directory removes migration-created files inside
+that directory before restoring the captured files. This includes newer
+version manifests used by directory databases such as LanceDB. Files outside
+the declared directory remain untouched; directory replacement or alias changes
+refuse restoration.
+
+Before the protected mutation, capacity admission accounts for the capture,
+verification and restore staging, package staging, migration growth, and a
+reserve. Insufficient or unobservable capacity refuses the mutation while
+preserving live data and earlier sets. Free unrelated space and retry; the
+updater never removes recovery data or disables protection to make room.
+
+Retirement belongs to the capture's own update transaction. The update must
+persist terminal success after validating the running artifact's identity,
+Gateway readiness, and data compatibility, settle every mutating child, and
+have no remaining recovery dependency before retiring its set. The terminal
+outcome is a separate write-once file. There is no count, age, or disk-pressure
+pruning. Pending, failed-restoration, and crash-left captures stay retained;
+process exit does not resolve them. Deliberate backups, manually retained
+captures, and historical recovery evidence are never cleanup targets.
+
+Successful standalone repair does not start the Gateway or establish runtime
+health, so it retains its set for explicit Doctor resolution. A repair failure
+can restore the captured state without a package rollback, after all mutating
+children have settled. It never treats an uncertain child exit as permission to
+restore over a possible writer.
+
+A retained set blocks another protected update over the same state unless
+Doctor's existing reconciliation owner can prove the original update completed
+successfully from its durable verification and runtime identity. Update admission
+then records the outcome and retires that set before proceeding. A missing outcome
+alone never proves success; unfinished and failed recovery remains protected.
+Admission runs before stopping the Gateway, and a later refusal before mutation
+restores the previously running service. Inspect a retained set
+and resolve it explicitly with the same profile and state/config selection:
+
+```bash
+openclaw update status --json
+npx openclaw@latest doctor --fix
+```
+
+Before manual restoration, Doctor reconciles the set with its exact update
+run. A completed update or recorded state restoration makes the set stale;
+Doctor reports it and preserves newer data instead of restoring the old copy.
+Missing or unreadable history, a nonterminal run, or competing sets refuses
+restoration and names the inspection command. Successful explicit Doctor repair
+can resolve and retire an eligible retained set. It never automatically adopts
+an unresolved capture as the recovery point for a new update.
+
+Coverage is limited to the local resources in the manifest. Remote stores and
+plugin resources outside the declared inventory need their own recovery
+procedure. Keep an independent backup for long-term recovery; update captures
+are transaction recovery points, not a disaster-recovery history.
+
+The current updater restores the set together with the previous package and
+verifies the previous managed Gateway before reporting `rolled-back`. A failed
+update retains its set, even after successful rollback. If restore fails,
+preserve the named set, keep the Gateway stopped, and run
+`npx openclaw@latest doctor --fix` from the same installation environment after
+the update processes exit. See [Rollback and recovery](/install/updating/rollback-and-recovery#full-state-recovery-requires-a-backup)
+for older-updater behavior and manual recovery.
 
 ## Restore a full archive
 

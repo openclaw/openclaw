@@ -4,6 +4,8 @@ import { tryParsePersistedExecApprovals } from "../infra/exec-approvals-config.j
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { projectionValues } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { clearOpenClawStateCopyLeases } from "./openclaw-state-copy-leases.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 type SnapshotSanitizerDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
@@ -19,25 +21,11 @@ const FAIL_CLOSED_EXEC_APPROVALS: ExecApprovalsFile = {
   agents: {},
 };
 
-function tableExists(database: DatabaseSync, tableName: string): boolean {
-  const row = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-/** Remove coordination rows that must never survive restore. */
-export function sanitizeOpenClawStateLeaseRows(database: DatabaseSync): void {
-  if (tableExists(database, "state_leases")) {
-    database.prepare("DELETE FROM state_leases").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
-  }
-}
-
 /** Remove transient rows whose restoration would replay work or extend private-data retention. */
 export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): void {
   // Archive backup can encounter an older database shape, so each optional
   // table is detected before applying the current sanitizer contract.
-  sanitizeOpenClawStateLeaseRows(database);
+  clearOpenClawStateCopyLeases(database);
   if (tableExists(database, "delivery_queue_entries")) {
     database.prepare("DELETE FROM delivery_queue_entries").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
   }

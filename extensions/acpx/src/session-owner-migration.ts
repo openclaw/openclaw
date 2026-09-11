@@ -20,10 +20,24 @@ type Claim = Awaited<
   ReturnType<NonNullable<MigrationInput["context"]["inspectAcpSessionClaims"]>>
 >["claims"][number];
 
-function sessionDirectory(input: MigrationInput): string {
+function sessionDirectory(
+  input: Pick<MigrationInput, "config" | "serviceWorkspaceDir"> & {
+    requireLocalResources?: boolean;
+  },
+): string {
   if (!input.serviceWorkspaceDir) {
     throw new Error(
       "ACP ownership repair requires the Gateway service workspace; upgrade OpenClaw Doctor.",
+    );
+  }
+  const configuredStateDir = asObjectRecord(input.config.plugins?.entries?.acpx?.config)?.stateDir;
+  if (
+    input.requireLocalResources &&
+    typeof configuredStateDir === "string" &&
+    /^[a-z][a-z0-9+.-]*:\/\//iu.test(configuredStateDir.trim())
+  ) {
+    throw new Error(
+      "ACP session migration cannot inventory remote state for an isolated rehearsal.",
     );
   }
   return path.join(
@@ -325,11 +339,14 @@ async function migrateRecord(
   }
 }
 
-export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
+export const acpxSessionOwnerMigration = {
   id: "acpx-session-owner-resources",
   label: "ACP session owners",
   doctorOnly: true,
   phase: "after-session-repair",
+  collectBackupResources(input) {
+    return [{ path: sessionDirectory(input), kind: "directory" }];
+  },
   async detectLegacyState(input) {
     const { ids } = await legacyRecords(input);
     return ids.length
@@ -372,4 +389,4 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
     }
     return { changes, warnings };
   },
-};
+} satisfies PluginDoctorStateMigration;

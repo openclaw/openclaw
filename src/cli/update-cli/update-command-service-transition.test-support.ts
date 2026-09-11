@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import { runExec } from "../../process/exec.js";
+import * as commandExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
@@ -489,7 +489,15 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
       );
 
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
-      vi.mocked(runExec).mockResolvedValueOnce({ stdout: "", stderr: "" });
+      const doctorChild = vi.spyOn(commandExec, "runUtf8CommandWithTimeout").mockResolvedValueOnce({
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+        cleanup: "normal",
+      });
       await runUpdateFinalizationDoctorInFreshProcess({
         root,
         phase: "post-plugin",
@@ -497,9 +505,9 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
         json: true,
         timeoutMs: 1000,
       });
-      expect(runExec).toHaveBeenLastCalledWith(
-        process.execPath,
+      expect(doctorChild).toHaveBeenCalledExactlyOnceWith(
         [
+          process.execPath,
           path.join(root, "dist", "index.js"),
           "doctor",
           "--repair",
@@ -507,7 +515,17 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
           "--no-workspace-suggestions",
           "--yes",
         ],
-        expect.objectContaining({ cwd: root }),
+        expect.objectContaining({
+          cwd: root,
+          timeoutMs: 1000,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          env: expect.objectContaining({
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+          }),
+        }),
       );
       // Delegation must leave the stale parent's destructive-action guard intact.
       await expect(service.stop({ env: state.env, stdout: process.stdout })).rejects.toThrow(

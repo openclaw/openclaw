@@ -20,6 +20,34 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
 }));
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 
+it.each([
+  { restoreOnFailure: undefined, verified: false, enables: 1 },
+  { restoreOnFailure: false as const, verified: false, enables: 0 },
+  { restoreOnFailure: false as const, verified: true, enables: 1 },
+])(
+  "gates task restoration after suspension (compensation=$restoreOnFailure, verified=$verified)",
+  async ({ restoreOnFailure, verified, enables }) => {
+    vi.mocked(suspendScheduledTaskAutoStartForUpdate).mockReset().mockResolvedValueOnce(true);
+    vi.mocked(resumeScheduledTaskAutoStartAfterUpdate)
+      .mockReset()
+      .mockImplementationOnce(async (_env, options) => {
+        await options?.beforeMutation?.();
+        return true;
+      });
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: {}, restoreOnFailure });
+    try {
+      await recovery.suspended;
+      expect(
+        vi.mocked(suspendScheduledTaskAutoStartForUpdate).mock.calls[0]?.[1]?.restoreOnFailure,
+      ).toBe(restoreOnFailure);
+      await recovery.restore(verified ? true : undefined);
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(enables);
+    } finally {
+      await recovery.complete();
+    }
+  },
+);
+
 it("revokes restoration while its ownership inspection is pending", async () => {
   const inspected = createDeferred();
   const releaseInspection = createDeferred();
@@ -89,7 +117,10 @@ it("drains a dispatched enable before compensating failed verification", async (
 });
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 it("refuses native compensation after its original live executor changes during inspection", async () => {
   const root = dirs.make("windows-compensation-owner-");

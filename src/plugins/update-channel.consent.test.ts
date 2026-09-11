@@ -28,10 +28,12 @@ afterEach(() => {
 describe("channel migration artifact consent", () => {
   it.each(
     (["npm", "clawhub", "fallback"] as const).flatMap((source) =>
-      (["absent", "accept", "stale", "replaced", "throw"] as const).map((review) => ({
-        source,
-        review,
-      })),
+      (["absent", "accept", "stale", "replaced", "throw", "guard-refuse"] as const).map(
+        (review) => ({
+          source,
+          review,
+        }),
+      ),
     ),
   )("$source with $review consent protects payload and acceptance", async ({ source, review }) => {
     const root = makeTrackedTempDir("openclaw-channel-consent", tempDirs);
@@ -89,12 +91,19 @@ describe("channel migration artifact consent", () => {
     const install = async (options: {
       onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
     }) => {
-      await options.onBeforePluginArtifactCommit?.({
-        pluginId,
-        stagedArtifactDir: stagedDir,
-        currentArtifactDir: installedDir,
-        mode: "update",
-      });
+      try {
+        await options.onBeforePluginArtifactCommit?.({
+          pluginId,
+          stagedArtifactDir: stagedDir,
+          currentArtifactDir: installedDir,
+          mode: "update",
+        });
+      } catch (error) {
+        if (review === "guard-refuse") {
+          return { ok: false as const, error: String(error) };
+        }
+        throw error;
+      }
       fs.cpSync(stagedDir, installedDir, { recursive: true });
       committed = true;
       return {
@@ -127,6 +136,13 @@ describe("channel migration artifact consent", () => {
       });
     }
     const callbackError = new Error("operator review failed");
+    const captureError = new Error("recovery capture refused");
+    const beforePersistentEffect = vi.fn(async () => {
+      expect(fs.readFileSync(path.join(installedDir, "index.js"), "utf8")).toBe(oldBytes);
+      if (review === "guard-refuse") {
+        throw captureError;
+      }
+    });
     const onCapabilityConsent = vi.fn(async (details: { reviewToken: string }) => {
       if (review === "throw") {
         throw callbackError;
@@ -152,13 +168,18 @@ describe("channel migration artifact consent", () => {
         },
       ],
       onCapabilityConsent: review === "absent" ? undefined : onCapabilityConsent,
+      beforePersistentEffect,
     });
-    if (review === "throw") {
+    if (review === "guard-refuse") {
+      await expect(operation).rejects.toBe(captureError);
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    } else if (review === "throw") {
       await expect(operation).rejects.toBe(callbackError);
     } else {
       const result = await operation;
       expect(result.changed).toBe(review === "accept");
       if (review === "accept") {
+        expect(beforePersistentEffect).toHaveBeenCalledOnce();
         const declared = resolvePluginArtifactDeclaredSurface(installedDir, env);
         expect(declared.providers).toEqual(["existing-provider", "new-provider"]);
         expect(result.config.plugins?.installs?.[pluginId]).toMatchObject({

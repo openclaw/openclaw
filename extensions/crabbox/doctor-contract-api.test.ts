@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginStateKeyedStoreForTests,
@@ -58,6 +59,19 @@ function input(
 }
 
 describe("Crabbox warm-profile Doctor migration", () => {
+  it("declares shared-state-only migration without opening stores or contacting providers", async () => {
+    const before = await fs.readdir(stateDir, { recursive: true });
+    expect(
+      await migration.collectBackupResources?.({
+        config: {},
+        env,
+        stateDir,
+        requireLocalResources: true,
+      }),
+    ).toEqual([]);
+    expect(await fs.readdir(stateDir, { recursive: true })).toEqual(before);
+  });
+
   it.each<{ name: string; record: typeof image & { operation?: unknown } }>([
     { name: "available image", record: image },
     {

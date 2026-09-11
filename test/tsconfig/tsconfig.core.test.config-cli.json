@@ -13,6 +13,7 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
-    "../../src/cli/daemon-cli/**"
+    "../../src/cli/daemon-cli/**",
+    "../../src/cli/update-cli/**"
   ]
 }

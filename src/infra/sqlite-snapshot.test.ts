@@ -7,6 +7,8 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
+import * as stateDatabaseCoordinator from "./state-database-coordinator.js";
 
 const durabilityTestState = vi.hoisted(() => ({
   publicationSyncUnsupported: false,
@@ -333,14 +335,54 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "snapshots committed state from a hot rollback journal without recovering the source",
-    async () => {
+  it("refuses caller staging before invoking an active mutation owner's snapshot provider", async () => {
+    vi.spyOn(stateDatabaseCoordinator, "prepareStateDatabaseCanonicalMutation").mockReturnValue(
+      () => {},
+    );
+    const snapshot = vi.spyOn(stateDatabaseCoordinator, "prepareStateDatabaseMutationSnapshot");
+    await expect(
+      prepareSqliteReadOnlyLocation(sourcePath, { stagingRoot: tempDir }),
+    ).rejects.toThrow(
+      "Caller-owned SQLite snapshot staging requires a drained canonical mutation owner",
+    );
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32").each(["default", "caller-owned"])(
+    "snapshots committed hot-journal state without recovering the source (%s staging)",
+    async (staging) => {
       createHotRollbackJournal(sourcePath);
       const sourceBefore = await fs.readFile(sourcePath);
       const journalBefore = await fs.readFile(`${sourcePath}-journal`);
-
-      await expectSnapshotSuccess({ sourcePath, targetPath });
+      const sourceStagingRoot =
+        staging === "caller-owned" ? path.join(tempDir, "capture") : undefined;
+      if (sourceStagingRoot) {
+        await createPrivateSqliteDirectory(sourceStagingRoot);
+      }
+      let sourceInspected = false;
+      await expectSnapshotSuccess({
+        sourcePath,
+        targetPath,
+        sourceStagingRoot,
+        validate(database) {
+          if (sourceInspected || !sourceStagingRoot) {
+            return;
+          }
+          sourceInspected = true;
+          const file = database.prepare("PRAGMA database_list").get()?.file;
+          expect(typeof file).toBe("string");
+          if (typeof file !== "string") {
+            throw new Error("SQLite source path was not reported");
+          }
+          const relative = path.relative(fsSync.realpathSync(sourceStagingRoot), file);
+          expect(relative.startsWith(`..${path.sep}`)).toBe(false);
+          expect(path.isAbsolute(relative)).toBe(false);
+        },
+      });
+      if (sourceStagingRoot) {
+        expect(sourceInspected).toBe(true);
+        expect(await fs.readdir(sourceStagingRoot)).toEqual([]);
+      }
 
       expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
         true,

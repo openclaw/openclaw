@@ -10,12 +10,13 @@ import type {
   PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isSimpleCommandHelpInvocation } from "./argv.js";
+import { getFlagValue, isSimpleCommandHelpInvocation } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import { hasMachineOutputOption } from "./machine-output-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
@@ -25,6 +26,37 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+
+/** Only repair-capable Doctor routes may acquire update recovery or writable bootstrap state. */
+export function isDoctorStateMutationInvocation(argv: string[], runtimeSupported = true): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (
+    !runtimeSupported ||
+    invocation.primary !== "doctor" ||
+    invocation.hasHelpOrVersion ||
+    hasMachineOutputOption(argv, "--version") ||
+    hasMachineOutputOption(argv, "-V") ||
+    hasMachineOutputOption(argv, "-v") ||
+    hasMachineOutputOption(argv, "--lint") ||
+    hasMachineOutputOption(argv, "--post-upgrade")
+  ) {
+    return false;
+  }
+  const stateMode = getFlagValue(argv, "--state-sqlite");
+  const sessionMode = getFlagValue(argv, "--session-sqlite");
+  if (stateMode !== undefined) {
+    return stateMode === "compact" && sessionMode === undefined;
+  }
+  if (sessionMode !== undefined) {
+    return (
+      sessionMode === "import" ||
+      sessionMode === "compact" ||
+      sessionMode === "restore" ||
+      sessionMode === "recover"
+    );
+  }
+  return !hasMachineOutputOption(argv, "--json");
+}
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);

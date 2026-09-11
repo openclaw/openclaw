@@ -306,11 +306,12 @@ function removeManagedNpmPackageLockDependency(params: {
 }
 
 /** Removes managed npm packages that shadow current bundled plugins when repair is enabled. */
-export function maybeRepairStaleManagedNpmBundledPlugins(
+export async function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams & {
     installRecords?: Record<string, PluginInstallRecord>;
+    beforePersistentEffect?: () => void | Promise<void>;
   },
-): StaleManagedNpmBundledPluginRepairResult | null {
+): Promise<StaleManagedNpmBundledPluginRepairResult | null> {
   const stale = listStaleManagedNpmBundledPlugins(params);
   if (stale.length === 0) {
     return null;
@@ -340,6 +341,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   for (const pluginId of removedPluginIds) {
     installRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
   }
+  await params.beforePersistentEffect?.();
   for (const plugin of stale) {
     removeManagedNpmDependency(plugin);
   }
@@ -629,7 +631,7 @@ export async function maybeRepairPluginRegistryState(
     ...params,
     config: params.config,
   };
-  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
+  const staleManagedNpmBundledPluginRepair = await maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
   await maybeRepairStaleManagedNpmInstallGenerations(params);

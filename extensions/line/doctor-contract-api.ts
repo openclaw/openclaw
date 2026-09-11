@@ -29,6 +29,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "line-pre-drain-spool-rows",
     label: "LINE pre-drain webhook spool rows",
+    // Queue rows are stored in the host's shared database.
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
       const spool = lineSpoolQueueAccess(params.context);
       const preview: string[] = [];

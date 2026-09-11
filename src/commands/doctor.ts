@@ -161,8 +161,13 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     const hasError = report.findings.some((f) => f.level === "error");
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
-  const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options);
+  const { withDoctorUpdateRecovery, prepareDoctorUpdateRecovery, doctorUpdateRecoveryRuntime } =
+    await import("./doctor-update-recovery.js");
+  await withDoctorUpdateRecovery(outputRuntime, async () => {
+    await prepareDoctorUpdateRecovery(options);
+    const doctorHealth = await import("../flows/doctor-health.js");
+    await doctorHealth.runDoctorHealthFlow(doctorUpdateRecoveryRuntime(outputRuntime), options);
+  });
 }
 
 async function maybeCreateSessionSqliteGithubIssue(

@@ -16,6 +16,7 @@ import {
   canResolveRegistryVersionForPackageTarget,
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -41,6 +42,11 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
+import {
+  assertUpdateCommandBackupRecovery,
+  createUpdateCommandBackup,
+  preflightUpdateCommandBackup,
+} from "./update-command-backup-lifecycle.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
@@ -141,8 +147,14 @@ export async function executeMutableUpdate(
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
+  let unchangedCore: MutableUpdateExecutionResult["unchangedCore"];
+  let updateRecoveryBackup: UpdateRecoveryBackupRef | undefined;
+  const doctorEnv = () => ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
   let schemaVersions: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>> | undefined;
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let candidateUpdateRecovery: "parent-v1" | undefined;
+  const doctorRecoveryBackup = () =>
+    candidateUpdateRecovery === "parent-v1" ? updateRecoveryBackup : undefined;
   let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
   let activationConfig: MutableUpdateExecutionResult["activationConfig"];
@@ -157,6 +169,7 @@ export async function executeMutableUpdate(
       : verifyPackageUpdateRecovery(params.root);
   const recoverStoppedService = async () =>
     maybeRestartServiceAfterFailedMutableUpdate({
+      updateRun: opts.run,
       recovery: await originalRecovery(),
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),
@@ -395,6 +408,7 @@ export async function executeMutableUpdate(
       if (validation.status === "ok") {
         validatedConfigSnapshot = snapshot;
         candidateSchemaVersions = validation.candidateSchemaVersions;
+        candidateUpdateRecovery = validation.candidateUpdateRecovery;
       }
       return validation;
     };
@@ -531,10 +545,22 @@ export async function executeMutableUpdate(
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, {
         env: opts.run.env,
       });
+      await preflightUpdateCommandBackup({ opts, root: params.root, env });
     }
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertUpdateCommandRecovery(opts);
+    if (opts.run) {
+      try {
+        updateRecoveryBackup = await createUpdateCommandBackup({ opts, root: params.root, env });
+      } catch (cause) {
+        assertUpdateCommandRecovery(opts);
+        throw new UpdatePreMutationError("update-capture-failed", formatErrorMessage(cause), {
+          cause,
+        });
+      }
+      assertUpdateCommandRecovery(opts);
+    }
     // Git owns this fence after its post-stop schema check completes.
     if (params.updateInstallKind === "package") {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
@@ -555,6 +581,11 @@ export async function executeMutableUpdate(
         legacyConfigPlan: params.legacyConfigPlan,
       });
     }
+    await assertUpdateCommandBackupRecovery({
+      opts,
+      root: params.root,
+      env: admission?.managedEnv ?? opts.run?.env ?? process.env,
+    });
     if (params.updateInstallKind === "package") {
       if (!stagedPluginAdmission) {
         await preflightPlugins(params.packageTargetVersion ?? null);
@@ -582,7 +613,10 @@ export async function executeMutableUpdate(
         installTarget: params.packageInstallTarget,
         validateCandidate,
         beforeActivate,
-        managedServiceEnv: preManagedServiceStop?.serviceEnv,
+        managedServiceEnv: preManagedServiceStop?.serviceEnv ?? opts.run?.env,
+        get updateRecoveryBackup() {
+          return doctorRecoveryBackup();
+        },
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
@@ -619,9 +653,13 @@ export async function executeMutableUpdate(
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onUnchangedCore: (core) => {
+          unchangedCore = core;
+        },
         onConfigSnapshot,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
-        getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
+        getManagedServiceEnv: doctorEnv,
+        getUpdateRecoveryBackup: doctorRecoveryBackup,
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {
@@ -703,8 +741,11 @@ export async function executeMutableUpdate(
     ownedManagedUpdateContext,
     recoveryEnv,
     packageTransaction,
+    unchangedCore,
+    updateRecoveryBackup,
     schemaVersions,
     candidateSchemaVersions,
+    candidateUpdateRecovery,
     previousSchemaVersions,
     previousVerified,
     activationConfig,

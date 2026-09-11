@@ -3,7 +3,7 @@ import { once } from "node:events";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
 import * as processIdentity from "../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 
 type ScopeCase = {
@@ -30,7 +30,7 @@ endings.push(
   {
     name: "preserves a retained group when an exited root has a different identity",
     exitParent: true,
-    completion: "explicit",
+    completion: "reject",
     identity: "reused-after-exit",
   },
 );
@@ -44,6 +44,7 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
     let child: ChildProcess | undefined;
     let childResult: Promise<unknown> | undefined;
     let descendantPid: number | undefined;
+    let childSettled = false;
     const failure = new Error("scope fixture failure");
     const identityProbe = vi.spyOn(processIdentity, "getFileLockProcessStartTime");
     if (identity === "initially-missing") {
@@ -68,6 +69,9 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         );
         child = command.nodeChildProcess;
         childResult = command;
+        void command.then(() => {
+          childSettled = true;
+        });
         const [message] = await once(child, "message", {
           signal: AbortSignal.timeout(3_000),
         });
@@ -90,15 +94,21 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
           throw failure;
         }
       });
-      if (completion === "reject") {
+      if (identity === "reused-after-exit") {
+        await expect(running).rejects.toMatchObject({
+          name: "CommandProcessScopeUnsettledError",
+          cause: failure,
+        });
+      } else if (completion === "reject") {
         await expect(running).rejects.toBe(failure);
       } else {
         await running;
       }
+      expect(childSettled).toBe(true);
       if (descendantPid === undefined) {
         throw new Error("Scope did not receive its descendant PID");
       }
-      expect(await waitForPidToExit(descendantPid)).toBe(identity !== "reused-after-exit");
+      expect(processIdentity.isPidAlive(descendantPid)).toBe(identity === "reused-after-exit");
       await childResult;
       expect(processIdentity.isPidAlive(unrelated.pid!)).toBe(true);
     } finally {
@@ -108,6 +118,34 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
       killPidIfAlive(unrelated.pid);
       await childResult;
       await unrelated;
+    }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("nested command process ownership", () => {
+  it("stops and joins nested children when the outer deadline fires", async () => {
+    let child: ChildProcess | undefined;
+    let childResult: Promise<unknown> | undefined;
+    try {
+      await withCommandProcessScope(async (stop) => {
+        await withCommandProcessScope(async () => {
+          const command = spawnCommand(
+            [process.execPath, "-e", "setInterval(()=>{},1000);process.send('ready')"],
+            { stdio: ["ignore", "pipe", "pipe"], ipc: true, reject: false },
+          );
+          child = command.nodeChildProcess;
+          childResult = command;
+          await once(child, "message", { signal: AbortSignal.timeout(3_000) });
+          stop();
+          expect(() => spawnCommand([process.execPath, "-e", ""])).toThrow(
+            "Command process scope is closed",
+          );
+        });
+        expect(processIdentity.isPidAlive(child!.pid!)).toBe(false);
+      });
+    } finally {
+      killPidIfAlive(child?.pid);
+      await childResult;
     }
   });
 });

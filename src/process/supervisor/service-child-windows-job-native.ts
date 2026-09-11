@@ -9,14 +9,26 @@ const FILE_SHARE_READ = 0x0000_0001;
 const FILE_SHARE_WRITE = 0x0000_0002;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x0000_0080;
-let retainedProcessJob: NativeHandle | undefined;
+let retainedProcessJobBindings: ReturnType<typeof createWindowsJobBindings> | undefined;
+let retainedProcessJob:
+  | { handle: NativeHandle; bindings: ReturnType<typeof createWindowsJobBindings> }
+  | undefined;
 
 /** The executable caller keeps this non-inheritable Job handle until OS exit. */
 export function retainWindowsProcessJobUntilExit(koffi: typeof import("koffi").default): void {
   if (retainedProcessJob !== undefined) {
     return;
   }
-  const bindings = createWindowsJobBindings(koffi);
+  retainedProcessJobBindings ??= createWindowsJobBindings(koffi);
+  rearmRetainedWindowsProcessJob();
+}
+
+/** Reuse the executable's admission after a settled service or worker handoff. */
+export function rearmRetainedWindowsProcessJob(): void {
+  const bindings = retainedProcessJobBindings;
+  if (retainedProcessJob || !bindings) {
+    return;
+  }
   bindings.assertLayouts();
   const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
   try {
@@ -32,7 +44,55 @@ export function retainWindowsProcessJobUntilExit(koffi: typeof import("koffi").d
   }
   // Closing this handle would terminate the caller before it can flush terminal
   // JSON. OS exit closes it and kills descendants even after their launcher exits.
-  retainedProcessJob = job;
+  retainedProcessJob = { handle: job, bindings };
+}
+
+/** Intentional workers and services must not inherit the retired operation's exit kill. */
+export function retireRetainedWindowsProcessJob(): void {
+  const current = retainedProcessJob;
+  if (!current) {
+    return;
+  }
+  if (!areRetainedWindowsProcessJobChildrenSettled()) {
+    throw new Error("Windows command Job still owns live or unverified children");
+  }
+  const { handle, bindings } = current;
+  if (
+    !bindings.SetExtendedLimits(
+      handle,
+      9,
+      { BasicLimitInformation: { LimitFlags: 0 } },
+      bindings.extendedLimitsSize,
+    )
+  ) {
+    throw bindings.lastError("SetInformationJobObject(retire command Job)");
+  }
+  retainedProcessJob = undefined;
+  if (!bindings.CloseHandle(handle)) {
+    throw bindings.lastError("CloseHandle(retired command Job)");
+  }
+}
+
+/** The caller itself stays in the Job; every other member must leave before state restore. */
+export function areRetainedWindowsProcessJobChildrenSettled(): boolean {
+  if (!retainedProcessJob) {
+    return false;
+  }
+  const { handle, bindings } = retainedProcessJob;
+  const accounting: { ActiveProcesses?: unknown } = {};
+  try {
+    return Boolean(
+      bindings.QueryInformationJobObject(
+        handle,
+        1,
+        accounting,
+        bindings.basicAccountingSize,
+        null,
+      ) && accounting.ActiveProcesses === 1,
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The caller supplies a pinned live launcher process, which becomes the last Job handle owner. */

@@ -1027,6 +1027,16 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
       reviewRetryStage: true,
     },
+    {
+      label: "preserves persistent-effect refusal instead of disabling the installed plugin",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "persistent-throw",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+      disableOnFailure: true,
+    },
     ...(["throw", "throw-undefined"] as const).map((review) => ({
       label: `preserves the original consent callback failure (${review})`,
       nextProviders: ["existing-child-provider", "new-child-provider"],
@@ -1158,7 +1168,11 @@ describe("updateNpmInstalledPlugins", () => {
 
       const callbackFailure =
         review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
-      const beforePersistentEffect = vi.fn();
+      const beforePersistentEffect = vi.fn(async () => {
+        if (review === "persistent-throw") {
+          throw new Error("recovery capture refused");
+        }
+      });
       let reviewed = false;
       const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
         review === "none"
@@ -1190,6 +1204,13 @@ describe("updateNpmInstalledPlugins", () => {
         disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
+      if (review === "persistent-throw") {
+        await expect(pendingUpdate).rejects.toThrow("recovery capture refused");
+        expect(beforePersistentEffect).toHaveBeenCalledOnce();
+        expect(fs.readFileSync(childManifestPath, "utf8")).toBe(previousChildManifest);
+        expect(config.plugins.entries[rootPluginId].enabled).toBe(ownerEnabled);
+        return;
+      }
       if (omitStageReview) {
         await expect(pendingUpdate).rejects.toThrow("did not expose its verified artifact");
         return;
@@ -3839,6 +3860,75 @@ describe("updateNpmInstalledPlugins", () => {
         status: "skipped",
         message,
       },
+    ]);
+  });
+
+  it.each<{
+    name: string;
+    slots?: NonNullable<OpenClawConfig["plugins"]>["slots"];
+    expectedSlots?: NonNullable<OpenClawConfig["plugins"]>["slots"];
+    entryId?: string;
+    enabled?: boolean;
+    changed: boolean;
+  }>([
+    { name: "already disabled without slots", changed: false },
+    {
+      name: "already disabled with unrelated slots",
+      slots: { memory: "other" },
+      expectedSlots: { memory: "other" },
+      changed: false,
+    },
+    {
+      name: "already disabled with a slot to reset",
+      slots: { memory: "feishu", contextEngine: "other" },
+      expectedSlots: { contextEngine: "other" },
+      changed: true,
+    },
+    { name: "already disabled with an alias to normalize", entryId: "FEISHU", changed: true },
+    { name: "enabled before the failed update", enabled: true, changed: true },
+  ])("reports actual mutation after incompatible update: $name", async (scenario) => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/feishu",
+      version: "2026.9.3",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/feishu", version: "2026.9.4" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      code: "incompatible_plugin_api",
+      error: "plugin API requires a newer OpenClaw runtime",
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          [scenario.entryId ?? "feishu"]: {
+            enabled: scenario.enabled ?? false,
+            config: { preserved: true },
+          },
+        },
+        ...(scenario.slots ? { slots: scenario.slots } : {}),
+        installs: {
+          feishu: { source: "npm", spec: "@openclaw/feishu@beta", installPath },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledOnce();
+    expect(result.changed).toBe(scenario.changed);
+    expect(result.config === config).toBe(!scenario.changed);
+    expect(result.config.plugins?.entries).toEqual({
+      feishu: { enabled: false, config: { preserved: true } },
+    });
+    expect(result.config.plugins?.slots).toEqual(scenario.expectedSlots);
+    expect(result.config.plugins?.installs).toEqual(config.plugins?.installs);
+    expect(result.outcomes).toMatchObject([
+      { pluginId: "feishu", status: "skipped", message: expect.stringContaining("plugin API") },
     ]);
   });
 

@@ -30,7 +30,10 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+  UPDATE_RUN_ID_ENV,
+} from "../../infra/update-control-plane-sentinel.js";
 import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
@@ -47,12 +50,14 @@ import {
 } from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
+  createControlPlaneUpdateRefusal,
   normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  declareUnprotectedGatewayUpdate,
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
@@ -60,7 +65,10 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
+import {
+  summarizeUpdateStepFailure,
+  withUnprotectedGatewayUpdateAdvisory,
+} from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
@@ -162,6 +170,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     wakeUpdateRunWatcher();
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
+    let unprotectedGatewayUpdate = false;
     let handoff:
       | { status: "started"; pid?: number; command: string }
       | { status: "already-running" | "unavailable"; command: string; message: string }
@@ -224,19 +233,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         timeoutMs,
       });
       const installRoot = installSurface.root;
-      const refusedUpdate = (
-        outcome: "error" | "skipped",
-        reason: string,
-        beforeVersion?: string | null,
-      ): Awaited<ReturnType<typeof runGatewayUpdate>> => ({
-        status: outcome,
-        mode: installSurface.mode,
-        ...(installRoot ? { root: installRoot } : {}),
-        ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-        reason,
-        steps: [],
-        durationMs: 0,
-      });
+      const refusedUpdate = createControlPlaneUpdateRefusal(installSurface);
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
@@ -506,9 +503,17 @@ export const updateHandlers: GatewayRequestHandlers = {
           return;
         }
         const driver = adoptUpdateRun(runId).origin.driver;
+        if (installSurface.kind === "git") {
+          declareUnprotectedGatewayUpdate(runId);
+          unprotectedGatewayUpdate = true;
+        }
         recordUpdateRunPhase(runId, "staging");
         result = await runGatewayUpdate({
           runId,
+          updateRecoveryOwner: unprotectedGatewayUpdate ? "unprotected" : undefined,
+          getDoctorEnv: unprotectedGatewayUpdate
+            ? () => ({ [UPDATE_RUN_ID_ENV]: runId })
+            : undefined,
           progress: {
             onHeartbeat: () => heartbeatUpdateRun(runId, driver),
             onStepStart: (step) =>
@@ -540,6 +545,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         recordUpdateRunPhase(runId, "validating");
         const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
           result,
+          ...(unprotectedGatewayUpdate
+            ? { env: { ...process.env, [UPDATE_RUN_ID_ENV]: runId } }
+            : {}),
           channel: configChannel ?? undefined,
           serviceRepairPolicy: "external",
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -562,6 +570,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       };
     }
 
+    if (unprotectedGatewayUpdate) {
+      result = withUnprotectedGatewayUpdateAdvisory(result);
+    }
     result = normalizeControlPlaneUpdateResult(result);
     if (result.status === "ok") {
       const activating = recordUpdateRunPhase(runId, "activating", {

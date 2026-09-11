@@ -1,12 +1,128 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { z } from "zod";
 import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
 } from "../infra/backup-archive-path-policy.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { UpdateRunRecordSchema } from "../infra/update-run-schema.js";
 import { isRecord } from "../utils.js";
+
+const recoveryPath = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes("\0") && path.resolve(value) === value);
+const recoveryDigest = z.string().regex(/^[a-f0-9]{64}$/u);
+const recoveryEntry = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("file"),
+      sourcePath: recoveryPath,
+      archivePath: z.string().regex(/^payload\/\d+$/u),
+      size: z.number().int().nonnegative(),
+      sha256: recoveryDigest,
+      sqlite: z.boolean(),
+      mode: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("directory"),
+      sourcePath: recoveryPath,
+      mode: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("symlink"),
+      sourcePath: recoveryPath,
+      target: z.string().refine((value) => !value.includes("\0")),
+      contentPath: recoveryPath.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("missing"),
+      sourcePath: recoveryPath,
+      sqlite: z.boolean(),
+      directory: z.boolean(),
+    })
+    .strict(),
+]);
+
+const updateRecoveryManifestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("update-recovery"),
+    runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u),
+    installRoot: recoveryPath,
+    stateDir: recoveryPath,
+    configPath: recoveryPath,
+    configPaths: z.array(recoveryPath).min(1).max(512),
+    creator: UpdateRunRecordSchema.shape.origin.shape.driver.unwrap(),
+    drivers: z.array(UpdateRunRecordSchema.shape.origin.shape.driver.unwrap()).max(32),
+    createdAt: z.string().datetime(),
+    roots: z.array(recoveryPath).min(1),
+    excludedRoots: z.array(recoveryPath),
+    protectedPaths: z.array(recoveryPath),
+    entries: z.array(recoveryEntry).max(1_000_000),
+  })
+  .strict();
+
+export type UpdateRecoveryBackupManifest = z.infer<typeof updateRecoveryManifestSchema>;
+
+/** Update recovery binds every payload; ordinary archive manifests retain their existing contract. */
+export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBackupManifest {
+  const manifest = updateRecoveryManifestSchema.parse(JSON.parse(raw));
+  const sources = new Set<string>();
+  const payloads = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (
+      sources.has(entry.sourcePath) ||
+      !manifest.roots.some((root) => {
+        const relative = path.relative(root, entry.sourcePath);
+        return (
+          relative === "" ||
+          (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+        );
+      })
+    ) {
+      throw new Error(`Invalid update recovery source: ${entry.sourcePath}`);
+    }
+    sources.add(entry.sourcePath);
+    if (entry.kind === "file") {
+      if (payloads.has(entry.archivePath)) {
+        throw new Error(`Duplicate update recovery payload: ${entry.archivePath}`);
+      }
+      payloads.add(entry.archivePath);
+    }
+  }
+  if (manifest.roots.some((root) => !sources.has(root))) {
+    throw new Error("Update recovery manifest is missing a root entry.");
+  }
+  if (
+    !manifest.configPaths.includes(manifest.configPath) ||
+    new Set(manifest.configPaths).size !== manifest.configPaths.length
+  ) {
+    throw new Error("Update recovery manifest is missing its configuration inventory.");
+  }
+  for (const pathname of manifest.configPaths) {
+    const config = manifest.entries.find((entry) => entry.sourcePath === pathname);
+    if (
+      !config ||
+      config.kind === "directory" ||
+      (config.kind === "file" && config.sqlite) ||
+      (config.kind === "missing" && (config.directory || config.sqlite)) ||
+      (config.kind === "symlink" &&
+        (!config.contentPath || !manifest.configPaths.includes(config.contentPath)))
+    ) {
+      throw new Error("Update recovery manifest is missing its configuration inventory.");
+    }
+  }
+  return manifest;
+}
 
 export type BackupManifest = {
   schemaVersion: number;

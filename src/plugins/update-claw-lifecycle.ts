@@ -33,11 +33,13 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
   clawhubPackage?: string;
   dryRun: boolean;
   run: () => Promise<T>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<T | { kind: "exception"; message: string; error: unknown }> {
   try {
     if (!params.clawhubPackage || params.dryRun) {
       return await params.run();
     }
+    await params.beforePersistentEffect?.();
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {

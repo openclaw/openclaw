@@ -22,7 +22,11 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
-import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
+import {
+  ConfigRuntimeRefreshError,
+  configWritePostCommitCapture,
+  configWritePostCommitRollback,
+} from "./io.types.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -49,6 +53,7 @@ import {
   getRuntimeConfigWriteApplication,
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import { getConfigFileWriteCapture } from "./write-capture.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 export { createConfigIO };
@@ -317,9 +322,17 @@ export async function writeConfigFile(
       // Finalization outlives the nested factory lock. Its compensation keeps
       // this original outer owner, never the closed factory scope or a later owner.
       const assertPostCommitCurrent = captureConfigWriteLockGuard(io.configPath);
+      let recordCommittedWrite: (() => void) | undefined;
       const writeResult = await io.writeConfigFile(nextCfg, {
         // Preserve caller policy and provenance; runtime-owned fields take precedence below.
         ...options,
+        ...(getConfigFileWriteCapture()
+          ? {
+              [configWritePostCommitCapture]: (record: () => void) => {
+                recordCommittedWrite = record;
+              },
+            }
+          : {}),
         baseSnapshot,
         basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
         envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
@@ -361,12 +374,13 @@ export async function writeConfigFile(
         !hadRuntimeSnapshot &&
         !getRuntimeConfigSnapshotRefreshHandler()
       ) {
+        recordCommittedWrite?.();
         return writeResult;
       }
       if (deferRuntimeActivation) {
         replaceEnvSnapshot(io.env, createManagedRuntimeEnvBase());
       }
-      return await finalizeCommittedConfigWrite({
+      const finalized = await finalizeCommittedConfigWrite({
         io,
         options,
         nextCfg,
@@ -382,6 +396,8 @@ export async function writeConfigFile(
           assertPostCommitCurrent?.(),
         ),
       });
+      recordCommittedWrite?.();
+      return finalized;
     },
     processIo.env,
     options.assertCurrent,

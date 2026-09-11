@@ -1,7 +1,6 @@
 // Main update orchestration for source checkouts and package installs.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   channelToNpmTag,
@@ -24,14 +23,11 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
@@ -60,6 +56,7 @@ import {
   createUpdateRunProgress,
   failUpdateCommandRun,
   prepareUpdateCommand,
+  prepareMutableUpdateHousekeeping,
   readDevUpdateTarget,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
@@ -192,8 +189,7 @@ async function updateCommandInternal(
     });
 
   if (requestedChannel === "extended-stable" && installKind === "git") {
-    await refuseUpdate("unsupported_git_channel");
-    return;
+    return await refuseUpdate("unsupported_git_channel");
   }
 
   const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
@@ -404,10 +400,12 @@ async function updateCommandInternal(
         );
         return;
       }
-      packageTargetSchemaVersions = targetMetadata.schemaVersions;
-      // Runtime and schema checks must use the same exact package that will be
-      // installed; rereading a mutable dist-tag can inspect a different release.
-      packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
+      if (!packageAlreadyCurrent) {
+        packageTargetSchemaVersions = targetMetadata.schemaVersions;
+        // Runtime and schema checks must use the same exact package that will be
+        // installed; rereading a mutable dist-tag can inspect a different release.
+        packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
+      }
       // Always install the exact inspected version: a dist-tag can move between
       // this lookup and the install, and an uninspected version would bypass
       // the schema and runtime decisions made here. Missing schema metadata
@@ -448,6 +446,7 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageAlreadyCurrent,
     packageTargetVersion: targetVersion ?? undefined,
     packageInstallSpec,
     opts,
@@ -600,16 +599,13 @@ async function updateCommandInternal(
     assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey);
     // Cleanup, state-write admission and updater autostart belong after complete target admission.
     await withOwnedManagedUpdateEnv(env, async () => {
-      await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+      const { assertUpdateCommandBackupRecovery } =
+        await import("./update-command-backup-lifecycle.js");
+      await assertUpdateCommandBackupRecovery({ opts, root, env: process.env });
       fence.assertCurrent();
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: resolveOpenClawStateSqlitePath(process.env),
-      });
-      fence.assertCurrent();
-      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-      fence.assertCurrent();
-      preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-      fence.assertCurrent();
+      preUpdatePluginInstallRecords = await prepareMutableUpdateHousekeeping(() =>
+        fence.assertCurrent(),
+      );
     });
     mutableUpdatePrepared = true;
   };
@@ -655,6 +651,10 @@ async function updateCommandInternal(
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
+    // Git no-ops skip mutable preparation; plugin finalization still needs
+    // the same preflight owner that package updates already hold.
+    run.executorFence ??= await executor.enter(result.root ?? root, { preflight: true });
+    run.executorFence.assertCurrent();
     await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
@@ -706,9 +706,13 @@ async function updateCommandInternal(
         env: ownedManagedUpdateContext?.env ?? run.env,
       });
   run.executorFence?.assertCurrent();
-  if (opts.recovery || rollbackBlockedReason) {
-    // A migrated database belongs to the candidate runtime. The old process
-    // must not reopen it, including during error reporting or outer cleanup.
+  if (
+    opts.recovery ||
+    rollbackBlockedReason ||
+    (finalization.updateRecoveryBackup && finalization.candidateUpdateRecovery === "parent-v1")
+  ) {
+    // The target runtime owns protected convergence even when schemas did not change.
+    // The parent retains capture restoration until that mutating child has settled.
     recoveryState.ledgerHandoffOwned = true;
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },

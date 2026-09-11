@@ -59,7 +59,15 @@ export async function beginDoctorMaintenance(params: {
   options: DoctorOptions;
   root: string | null;
   runtime: RuntimeEnv;
-}): Promise<{ release(): Promise<void>; finish(cfg: OpenClawConfig): Promise<void> } | undefined> {
+}): Promise<
+  | {
+      assertCurrent(): void;
+      closeStores(): Promise<void>;
+      release(): Promise<void>;
+      finish(cfg: OpenClawConfig): Promise<void>;
+    }
+  | undefined
+> {
   if (!(params.options.repair === true || params.options.yes === true)) {
     return undefined;
   }
@@ -75,21 +83,24 @@ export async function beginDoctorMaintenance(params: {
     | undefined;
   const coordinators: Array<{ release(): void }> = [];
   let repairStoresMayBeOpen = false;
+  const closeStores = async () => {
+    if (!repairStoresMayBeOpen) {
+      return;
+    }
+    const [{ closeOpenClawAgentDatabasesAsync }, { closeOpenClawStateDatabaseByPath }] =
+      await Promise.all([
+        import("../state/openclaw-agent-db.js"),
+        import("../state/openclaw-state-db.js"),
+      ]);
+    // Agent handles release leases through shared state, so close them first.
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+  };
   const release = async () => {
     try {
-      if (repairStoresMayBeOpen) {
-        repairStoresMayBeOpen = false;
-        const [{ closeOpenClawAgentDatabasesAsync }, { closeOpenClawStateDatabaseByPath }] =
-          await Promise.all([
-            import("../state/openclaw-agent-db.js"),
-            import("../state/openclaw-state-db.js"),
-          ]);
-        // Agent handles release leases through shared state. Close them before
-        // handing off the coordinators, or the restarted Gateway sees Doctor as a writer.
-        await closeOpenClawAgentDatabasesAsync();
-        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
-      }
+      await closeStores();
     } finally {
+      repairStoresMayBeOpen = false;
       for (const coordinator of coordinators.splice(0).toReversed()) {
         coordinator.release();
       }
@@ -200,6 +211,12 @@ export async function beginDoctorMaintenance(params: {
     );
   }
   return {
+    assertCurrent() {
+      if (coordinators.length !== 2) {
+        throw new Error("Doctor maintenance authority has expired.");
+      }
+    },
+    closeStores,
     release,
     async finish(cfg) {
       await release();

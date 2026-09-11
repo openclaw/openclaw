@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { retireVerifiedUpdateCommandCapture } from "../cli/update-cli/update-command-backup-lifecycle.js";
 import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import type { UpdateCaptureRetirementInput } from "../cli/update-cli/update-command-migrated-types.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
@@ -20,7 +22,11 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { formatErrorMessage } from "./errors.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { readPackageVersion } from "./package-json.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -35,6 +41,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        updateRecovery: "parent-v1",
+        captureRetirement: "settled-v1",
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -49,9 +57,52 @@ async function finalizeMigratedUpdate(): Promise<void> {
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const input = JSON.parse(
-    Buffer.concat(chunks).toString("utf8"),
-  ) as MigratedUpdateFinalizationInput; // SAFETY: Only the typed parent continuation serializes this private input.
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (process.argv[2] === "--retire-capture") {
+    const retirementInput: UpdateCaptureRetirementInput = JSON.parse(raw);
+    const runtimeRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    if (
+      !runtimeRoot ||
+      !retirementInput.result.root ||
+      (await fs.realpath(retirementInput.result.root)) !== retirementInput.runtimeRoot ||
+      (await fs.realpath(runtimeRoot)) !== retirementInput.runtimeRoot ||
+      (await readPackageVersion(runtimeRoot)) !== retirementInput.result.after?.version ||
+      (await readBuiltGatewayBuildId(runtimeRoot)) !== retirementInput.runtimeBuildId ||
+      (retirementInput.result.after?.buildId &&
+        retirementInput.result.after.buildId !== retirementInput.runtimeBuildId)
+    ) {
+      throw new Error("Capture retirement runtime no longer matches the verified target.");
+    }
+    const retire = (executorFence?: UpdateRecoveryFence) =>
+      retireVerifiedUpdateCommandCapture(
+        {
+          backup: retirementInput.backup,
+          root: retirementInput.root,
+          run: { runId: retirementInput.runId, env: { ...process.env } },
+          env: { ...process.env },
+          executorFence,
+        },
+        retirementInput.result,
+      );
+    const warning = retirementInput.executor
+      ? await withDelegatedUpdateCommandExecutor(
+          retirementInput.executor,
+          retirementInput.runId,
+          retirementInput.runtimeRoot,
+          retire,
+        )
+      : await retire();
+    process.stdout.write(
+      JSON.stringify({
+        retired: true,
+        runId: retirementInput.runId,
+        manifestSha256: retirementInput.backup.manifestSha256,
+        warning,
+      }),
+    );
+    return;
+  }
+  const input = JSON.parse(raw) as MigratedUpdateFinalizationInput; // SAFETY: Only the typed parent continuation serializes this private input.
   if (input.recoveryHandoff) {
     throw new Error(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
@@ -161,16 +212,48 @@ async function finalizeInput(
         : {}),
     });
   } catch (error) {
-    if (!(error instanceof UpdateCommandFailure)) {
+    if (error instanceof UpdateCommandFailure) {
+      result = error.result;
+      exitCode = error.exitCode;
+      automaticTriage = error.automaticTriage;
+    } else if (input.params.updateRecoveryBackup) {
+      result = {
+        ...input.params.result,
+        status: "error" as const,
+        reason: "post-update-failed",
+        steps: [
+          ...input.params.result.steps,
+          {
+            name: "candidate finalization",
+            command: "openclaw update",
+            cwd: input.params.result.root ?? input.params.root,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: formatErrorMessage(error),
+          },
+        ],
+      };
+      exitCode = 1;
+    } else {
       throw error;
     }
-    result = error.result;
-    exitCode = error.exitCode;
-    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(result?.status === "ok");
   }
   executorFence?.assertCurrent();
+  if (input.params.updateRecoveryBackup && result.status === "error") {
+    // The parent owns the package transaction. Return before a terminal write
+    // so it can restore both package and state after this process has exited.
+    const response: MigratedUpdateFinalizationResult = {
+      result: { ...result, runId: run.runId },
+      exitCode: exitCode || 1,
+      recoveryRequired: true,
+      ...(executorFence ? { executorDelegation: "pid-start-v1" as const } : {}),
+    };
+    await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+    executorFence?.assertCurrent();
+    return;
+  }
   const terminal = getUpdateRun(run.runId, { env: run.env });
   if (!terminal || terminal.status === "running") {
     throw new Error("Candidate finalization left the update run nonterminal.");
