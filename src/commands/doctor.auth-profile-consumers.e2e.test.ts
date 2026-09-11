@@ -59,11 +59,21 @@ afterEach(() => {
 
 describe("doctor auth-profile consumers", () => {
   it.each([
-    { name: "unoccupied destination", occupied: false, renamed: "anthropic:work" },
-    { name: "occupied destination", occupied: true, renamed: "anthropic:cli-work" },
+    {
+      name: "unoccupied destination and padded references",
+      occupied: false,
+      renamed: "anthropic:work",
+      reference: " claude-cli:work ",
+    },
+    {
+      name: "occupied destination",
+      occupied: true,
+      renamed: "anthropic:cli-work",
+      reference: "claude-cli:work",
+    },
   ])(
     "preserves selected accounts with an $name, an older installed plugin, and on repeat",
-    async ({ occupied, renamed }) => {
+    async ({ occupied, renamed, reference }) => {
       await withOpenClawTestState(
         {
           prefix: "openclaw-doctor-auth-consumers-",
@@ -139,7 +149,7 @@ describe("doctor auth-profile consumers", () => {
                 anthropic: {
                   baseUrl: "http://127.0.0.1:1",
                   api: "anthropic-messages",
-                  apiKey: "claude-cli:work",
+                  apiKey: reference,
                   models: [
                     {
                       id: "test-model",
@@ -180,7 +190,7 @@ describe("doctor auth-profile consumers", () => {
                   transport: "streamable-http",
                   url: "http://127.0.0.1:1/mcp",
                   auth: "oauth",
-                  oauth: { authProfileId: "claude-cli:work" },
+                  oauth: { authProfileId: reference },
                 },
               },
             },
@@ -193,8 +203,8 @@ describe("doctor auth-profile consumers", () => {
                   enabled: true,
                   llm: { allowModelOverride: true, allowAuthProfileOverride: true },
                   config: {
-                    defaultAuthProfileId: "claude-cli:work",
-                    authProfileId: "claude-cli:work",
+                    defaultAuthProfileId: reference,
+                    authProfileId: reference,
                   },
                 },
               },

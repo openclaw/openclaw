@@ -38,7 +38,8 @@ both. One declaration covers the complete config-repair artifact.
 When Doctor renames saved credentials, it updates exact `authProfileId` and
 `defaultAuthProfileId` references inside plugin config and channel config. This
 preserves the shipped `authProfileId` migration and also covers defaults such as
-LLM Task's `defaultAuthProfileId`, including older installed plugins. Unmapped
+LLM Task's `defaultAuthProfileId`, including older installed plugins. Reference
+lookup trims surrounding whitespace, as the credential reader does. Unmapped
 values and literal strings elsewhere remain unchanged. Plugins do not need to
 implement the host's credential rename in their compatibility callbacks.
 

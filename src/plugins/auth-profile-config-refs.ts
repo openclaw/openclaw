@@ -21,7 +21,7 @@ export function rewritePluginAuthProfileRefs(
         (key === "authProfileId" || key === "defaultAuthProfileId") &&
         typeof entry === "string"
       ) {
-        const replacement = profileIdMap.get(entry);
+        const replacement = profileIdMap.get(entry.trim());
         if (replacement && replacement !== entry) {
           value[key] = replacement;
           changed = true;

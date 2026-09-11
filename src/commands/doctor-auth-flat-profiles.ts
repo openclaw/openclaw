@@ -70,6 +70,7 @@ import { rewritePluginAuthProfileRefs } from "../plugins/auth-profile-config-ref
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { renameUserProfileAuthLinks } from "../state/user-model-accounts.js";
 import { shortenHomePath } from "../utils.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import {
   listAuthProfileRepairCandidates,
   resolveLegacyAuthProfilesPath as resolveAuthStorePath,
@@ -1587,7 +1588,13 @@ function rewriteMappedAuthProfileRefs(
     if (!isRecord(owner) || typeof owner[key] !== "string") {
       return;
     }
-    const replacement = profileIdMap.get(owner[key]);
+    let profileId = owner[key];
+    if (key === "apiKey") {
+      profileId = normalizeSecretInput(profileId);
+    } else if (key === "authProfileId") {
+      profileId = profileId.trim();
+    }
+    const replacement = profileIdMap.get(profileId);
     if (replacement && replacement !== owner[key]) {
       owner[key] = replacement;
       changed = true;
