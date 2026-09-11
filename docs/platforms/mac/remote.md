@@ -107,7 +107,8 @@ The Mac app's node combines native capabilities with system, browser, plugin, sk
 
 In **Connection… → Connection**, with **Remote** selected, turn on **Also run a
 Gateway on this Mac**. The app starts and supervises the local Gateway through
-its usual launchd agent. **This Mac** appears after the primary in the Gateways
+its usual launchd agent. Launch-agent management for the hosted Gateway always runs
+on this Mac, even when the primary uses SSH. **This Mac** appears after the primary in the Gateways
 menu, dashboard Gateway picker, **File → New Gateway Window**, and
 `openclaw-mac gateway list`. Open dashboard and chat windows on either Gateway.
 The hosted local entry cannot become primary from the catalog.

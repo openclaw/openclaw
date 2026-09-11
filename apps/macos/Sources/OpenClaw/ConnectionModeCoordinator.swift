@@ -134,6 +134,7 @@ final class ConnectionModeCoordinator {
             guard self.transition.isCurrent(generation, mode: mode) else { return }
         } else {
             GatewayProcessManager.shared.stop()
+            await GatewayProcessManager.shared.waitForStartupAttempt()
         }
     }
 }
