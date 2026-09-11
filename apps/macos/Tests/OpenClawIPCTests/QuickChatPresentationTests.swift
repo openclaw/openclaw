@@ -32,6 +32,7 @@ final class QuickChatPresentationTests: XCTestCase {
         controller.start()
         controller.setEnabled(true)
         application.deactivate()
+        try await self.waitUntil { !application.isActive }
         try XCTUnwrap(shortcut)()
 
         try await self.waitUntil { controller.isVisible && !model.isLoadingModelControls }
@@ -42,7 +43,7 @@ final class QuickChatPresentationTests: XCTestCase {
         XCTAssertFalse(panel.hidesOnDeactivate)
         try await self.waitUntil { panel.firstResponder is NSTextView }
         XCTAssertTrue(panel.firstResponder is NSTextView)
-        print("Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow)")
+        print("Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow), editorReady=\(panel.firstResponder is NSTextView)")
 
         let content = try XCTUnwrap(panel.contentView)
         content.layoutSubtreeIfNeeded()
@@ -58,9 +59,11 @@ final class QuickChatPresentationTests: XCTestCase {
         try XCTUnwrap(shortcut)()
         try await self.waitUntil { controller.isVisible }
         XCTAssertTrue(panel.isVisible)
+        print("Quick Chat reopened: visible=\(panel.isVisible)")
         controller.setEnabled(false)
         XCTAssertFalse(controller.isVisible)
         XCTAssertNil(shortcut)
+        print("Quick Chat disabled: visible=\(controller.isVisible), shortcutRegistered=\(shortcut != nil)")
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

@@ -146,6 +146,7 @@ final class QuickChatModel {
     typealias TextContextCaptureProvider = @MainActor () async -> QuickChatTextContextCaptureOutcome
     typealias ModelControlsProvider = @MainActor (
         QuickChatRoutingTarget) async throws -> QuickChatModelControlSnapshot
+    typealias ModelCatalogEventsProvider = @MainActor () async -> AsyncStream<GatewayConnection.PushDelivery>
     typealias ModelPatchProvider = @MainActor (
         QuickChatRoutingTarget,
         String?) async throws -> OpenClawChatModelPatchResult?
@@ -211,6 +212,7 @@ final class QuickChatModel {
     @ObservationIgnored private let frontmostAppNameProvider: FrontmostAppNameProvider
     @ObservationIgnored private let textContextCaptureProvider: TextContextCaptureProvider
     @ObservationIgnored private let modelControlsProvider: ModelControlsProvider
+    @ObservationIgnored private let modelCatalogEventsProvider: ModelCatalogEventsProvider
     @ObservationIgnored private let modelPatchProvider: ModelPatchProvider
     /// Invoked with the snapshotted route just before a send is dispatched, for every
     /// send path (text and capture); wires the reply consumer's pre-bind.
@@ -228,6 +230,7 @@ final class QuickChatModel {
     @ObservationIgnored private var textContextCaptureTask: Task<Void, Never>?
     @ObservationIgnored private var dictationTextSession: QuickChatDictationTextSession?
     @ObservationIgnored private var modelControlsTask: Task<Void, Never>?
+    @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
     @ObservationIgnored private var modelControlsRequestID = UUID()
     @ObservationIgnored private var modelPatchSettlementsByTarget: [QuickChatRoutingTarget: ModelPatchSettlement] = [:]
     @ObservationIgnored private var appliedModelSelections: [QuickChatRoutingTarget: String] = [:]
@@ -293,6 +296,9 @@ final class QuickChatModel {
             snapshot.catalogRefreshFailed = modelCatalog.refreshFailed
             return snapshot
         },
+        modelCatalogEventsProvider: @escaping ModelCatalogEventsProvider = {
+            await GatewayConnection.shared.subscribe()
+        },
         modelPatchProvider: @escaping ModelPatchProvider = { target, model in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
             return try await transport.patchSessionSettings(
@@ -311,7 +317,12 @@ final class QuickChatModel {
         self.frontmostAppNameProvider = frontmostAppNameProvider
         self.textContextCaptureProvider = textContextCaptureProvider
         self.modelControlsProvider = modelControlsProvider
+        self.modelCatalogEventsProvider = modelCatalogEventsProvider
         self.modelPatchProvider = modelPatchProvider
+    }
+
+    deinit {
+        self.modelCatalogEventsTask?.cancel()
     }
 
     var connectionGate: QuickChatConnectionGate {
@@ -420,6 +431,7 @@ final class QuickChatModel {
         self.agentsMainKey = nil
         if self.sendTask == nil { self.sendState = .idle }
         self.startPermissionPolling(id: self.presentationID)
+        self.startModelCatalogEvents(id: self.presentationID)
         return self.presentationID
     }
 
@@ -747,6 +759,7 @@ final class QuickChatModel {
     }
 
     func endPresentation() {
+        self.cancelModelCatalogEvents()
         self.isPresentationActive = false
         self.presentationID = UUID()
         // A quick bar target is presentation-scoped. Never carry a stale recent session
@@ -775,6 +788,7 @@ final class QuickChatModel {
     }
 
     func cancelAllTasks() {
+        self.cancelModelCatalogEvents()
         self.sendTask?.cancel()
         self.sendTask = nil
         self.retryIdentity = nil
@@ -1079,6 +1093,39 @@ extension QuickChatModel {
             ?? self.displayedThinkingLevel
             ?? automatic
         return "\(model) · \(thinking)"
+    }
+
+    private func startModelCatalogEvents(id: UUID) {
+        self.cancelModelCatalogEvents()
+        let eventsProvider = self.modelCatalogEventsProvider
+        self.modelCatalogEventsTask = Task { [weak self] in
+            let events = await eventsProvider()
+            guard !Task.isCancelled else { return }
+            for await delivery in events {
+                guard !Task.isCancelled, let self else { return }
+                await self.handleModelCatalogDelivery(delivery, presentationID: id)
+            }
+        }
+    }
+
+    private func cancelModelCatalogEvents() {
+        self.modelCatalogEventsTask?.cancel()
+        self.modelCatalogEventsTask = nil
+    }
+
+    private func handleModelCatalogDelivery(_ delivery: GatewayConnection.PushDelivery, presentationID: UUID) async {
+        guard delivery.isCurrent, let push = delivery.push else { return }
+        guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
+        switch push {
+        case let .event(event):
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
+        case .snapshot, .seqGap:
+            break
+        }
+        await self.awaitModelPatchSettlement(for: target)
+        guard !Task.isCancelled, delivery.isCurrent,
+              self.isCurrentPresentation(presentationID), self.routingTarget == target else { return }
+        self.refreshModelControls(for: target)
     }
 
     private func refreshModelControls(for target: QuickChatRoutingTarget) {
