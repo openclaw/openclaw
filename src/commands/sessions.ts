@@ -191,13 +191,6 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
   }).path;
 }
 
-function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "displayModelRef" | "runtimeLabel"> {
-  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
-  void displayModelRef;
-  void runtimeLabel;
-  return jsonRow;
-}
-
 function stripChannelRecipientPrefix(
   value: string | undefined,
   channel: string | undefined,
@@ -430,8 +423,8 @@ export async function sessionsCommand(
       hasMore,
       activeMinutes: activeMinutes ?? null,
       sessions: rows.map((row) => {
-        const r = toJsonSessionRow(row);
-        const modelRef = row.displayModelRef;
+        const { displayModelRef: modelRef, runtimeLabel, ...r } = row;
+        void runtimeLabel;
         return {
           ...r,
           totalTokens: resolveSessionTotalTokens(r) ?? null,
