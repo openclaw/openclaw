@@ -6464,7 +6464,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         const before = seed.prepare("PRAGMA foreign_key_check").all();
         const result = repairOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: stateDir } });
         expect(result.changes).toEqual([]);
-        expect(result.warnings.join("\n")).toMatch(/refused (unrelated|an unrecognized)/);
+        expect(result.warnings.join("\n")).toMatch(
+          variant === "unrelated foreign key"
+            ? /foreign_key_check failed/
+            : /refused an unrecognized/,
+        );
         expect(
           seed
             .prepare(
@@ -6499,8 +6503,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         );
         if (variant === "export failure") {
           fileOpen.mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-            if (String(args[0]).endsWith("orphan-rows.jsonl"))
+            if (String(args[0]).endsWith("orphan-rows.jsonl")) {
               throw new Error("ENOSPC: synthetic export failure");
+            }
             return openSync(...args);
           });
         } else {
