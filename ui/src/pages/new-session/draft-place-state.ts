@@ -658,7 +658,6 @@ export class DraftPlaceState {
       projectId: this.browser.projectId,
       worktree: true,
     });
-    this.browser.close();
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }

@@ -3,23 +3,33 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { icons } from "../../components/icons.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 function hoverDetails(row: Element | null | undefined) {
+  if (row?.getAttribute("data-value") === "auto-device") {
+    return (
+      row
+        .closest(".new-session-page__auto-device")
+        ?.querySelector("openclaw-tooltip")
+        ?.getAttribute("content") ?? ""
+    );
+  }
   return [
     ...(row
       ?.closest("openclaw-tooltip")
-      ?.querySelectorAll('[slot="content"] dd, [slot="content"] > div') ?? []),
+      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? []),
   ]
     .map((detail) => detail.textContent?.trim())
     .join(" · ");
 }
 
-function hoverDetail(row: Element | null | undefined, label: string) {
-  return [...(row?.closest("openclaw-tooltip")?.querySelectorAll("dt") ?? [])]
-    .find((term) => term.textContent?.trim() === label)
-    ?.nextElementSibling?.textContent?.trim();
+function capacityCaption(row: Element | null | undefined) {
+  return row
+    ?.closest("openclaw-tooltip")
+    ?.querySelector(".new-session-page__capacity-caption")
+    ?.textContent?.trim();
 }
 
 function renderPicker(
@@ -167,12 +177,12 @@ describe("Where chip", () => {
       if (value === "gateway") {
         expect(
           container.querySelector(".new-session-page__trigger-label")?.textContent?.trim(),
-        ).toBe("Gateway Mac Studio");
+        ).toBe("Local");
         expect(
           container
             .querySelector('[data-value="gateway"] .session-menu__text')
             ?.textContent?.trim(),
-        ).toBe("Gateway Mac Studio");
+        ).toBe("Local");
       }
       const expected = document.createElement("div");
       render(icon, expected);
@@ -221,6 +231,23 @@ describe("Where chip", () => {
     ).toEqual(expected);
   });
 
+  it("keeps automatic-selection help available on touch", () => {
+    const container = renderPicker(true);
+    expect(
+      container
+        .querySelector(".new-session-page__auto-info")
+        ?.closest("openclaw-tooltip")
+        ?.hasAttribute("open-on-click"),
+    ).toBe(true);
+  });
+
+  it("explains the checkout requirement instead of provider details", () => {
+    const container = renderPicker(true, undefined, {}, { worktreeAvailable: false });
+    expect(hoverDetails(container.querySelector('[data-value="cloud:aws"]'))).toBe(
+      "Cloud needs a Git checkout",
+    );
+  });
+
   it("keeps matching Local, Devices and Cloud in order with device facts searchable", () => {
     const container = renderPicker(
       true,
@@ -256,9 +283,7 @@ describe("Where chip", () => {
         (row) => row.getAttribute("data-value"),
       ),
     ).toEqual(["gateway", "device:alpha", "device:zulu", "cloud:linux-worker"]);
-    expect(
-      hoverDetail(container.querySelector('[data-value="device:alpha"]'), "Operating system"),
-    ).toBe("Linux");
+    expect(hoverDetails(container.querySelector('[data-value="device:alpha"]'))).toContain("Linux");
   });
 
   it("keeps Auto and Connect outside search results and reports an empty search", () => {
@@ -303,9 +328,9 @@ describe("Where chip", () => {
     const selected = container.querySelector('[data-value="device:runner"]');
     const unselected = container.querySelector('[data-value="device:alpha-device"]');
 
-    expect(hoverDetail(selected, "Concurrent sessions")).toBe("1 running / 2 maximum");
+    expect(capacityCaption(selected)).toBe("1 of 2 session slots in use");
     expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
-    expect(hoverDetail(unselected, "Concurrent sessions")).toBe("0 running / 1 maximum");
+    expect(capacityCaption(unselected)).toBe("0 of 1 session slots in use");
     expect(unselected?.querySelector(".session-menu__check")).not.toBeNull();
     expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
   });
@@ -323,7 +348,7 @@ describe("Where chip", () => {
 
     expect(automatic.getAttribute("role")).toBe("switch");
     expect(automatic.getAttribute("aria-checked")).toBe(String(autoDevice));
-    expect(hoverDetails(automatic)).toContain("Connected devices only");
+    expect(hoverDetails(automatic)).toContain("Chooses the least-busy connected device");
     expect(automatic.querySelector(".session-menu__description")).toBeNull();
     automatic.click();
 
@@ -354,9 +379,9 @@ describe("Where chip", () => {
     expect(onSelectDevice).not.toHaveBeenCalled();
     expect(onSelectCloudProfile).not.toHaveBeenCalled();
 
-    expect(
-      hoverDetail(container.querySelector('[data-value="device:runner"]'), "Concurrent sessions"),
-    ).toBe("1 running / 2 maximum");
+    expect(capacityCaption(container.querySelector('[data-value="device:runner"]'))).toBe(
+      "1 of 2 session slots in use",
+    );
 
     const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search.disabled).toBe(false);
@@ -406,14 +431,18 @@ describe("Where chip", () => {
     );
 
     for (const value of ["gateway", "device:ready", "cloud:aws"]) {
-      expect(container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)?.disabled).toBe(
-        autoDevice,
-      );
+      expect(
+        container
+          .querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
+          ?.matches(':disabled, [aria-disabled="true"]'),
+      ).toBe(autoDevice);
     }
     for (const value of ["device:offline", "cloud:blocked"]) {
-      expect(container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)?.disabled).toBe(
-        true,
-      );
+      expect(
+        container
+          .querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
+          ?.matches(':disabled, [aria-disabled="true"]'),
+      ).toBe(true);
     }
     expect(container.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
       String(!autoDevice),
@@ -459,35 +488,35 @@ describe("Where chip", () => {
         },
       ]),
     });
-    expect(container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')?.disabled).toBe(
-      false,
+    const picker = [...container.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (item) => item.params.label === "Operating system",
     );
+    expect(picker?.params.options.find((option) => option.value === "linux")?.disabled).toBe(false);
     for (const os of ["macos", "windows/wsl2"]) {
-      const row = container.querySelector<HTMLButtonElement>(`[data-value="os:${os}"]`);
-      expect(row?.disabled).toBe(true);
-      expect(hoverDetails(row)).toBe(reason);
-      expect(row?.querySelector(".session-menu__description")).toBeNull();
+      const option = picker?.params.options.find((option) => option.value === os);
+      expect(option?.disabled).toBe(true);
+      expect(option?.description).toBe(reason);
     }
   });
 
   it.each([
     { os: undefined, machineClass: undefined, label: "aws", machine: "Tiny Linux" },
-    { os: "linux", machineClass: "tiny", label: "aws · Tiny Linux", machine: "Tiny Linux" },
+    { os: "linux", machineClass: "tiny", label: "aws", machine: "Tiny Linux" },
     {
       os: "windows/wsl2",
       machineClass: undefined,
-      label: "aws · Windows (WSL2)",
+      label: "aws",
       machine: "Tiny Windows",
     },
     {
       os: "windows/wsl2",
       machineClass: "tiny",
-      label: "aws · Windows (WSL2) · Tiny Windows",
+      label: "aws",
       machine: "Tiny Windows",
     },
   ])(
-    "keeps OS and class choices for $label during environment search",
-    ({ os, machineClass, label, machine }) => {
+    "preserves $label while filtering its cloud card from search",
+    ({ os, machineClass, label }) => {
       const container = renderPicker(
         true,
         undefined,
@@ -515,21 +544,11 @@ describe("Where chip", () => {
       );
       expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
       expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
-      expect(container.querySelectorAll('[data-value="machine:tiny"]')).toHaveLength(1);
-      expect(container.querySelector('[data-value="machine:tiny"]')?.textContent).toContain(
-        machine,
-      );
-      expect(container.querySelector('[data-value="machine:custom"]')).not.toBeNull();
-      const osRow = container.querySelector('[data-value="os:linux"]');
-      expect(hoverDetails(osRow)).toContain("Default");
-      expect(osRow?.hasAttribute("data-popover")).toBe(false);
-      expect(
-        osRow?.compareDocumentPosition(container.querySelector('[data-value="machine:tiny"]')!),
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(container.querySelector("openclaw-select-picker")).toBeNull();
     },
   );
 
-  it("keeps capacity structured and exposes busy slots without an ambiguous visible fraction", () => {
+  it("shows a session-slot caption without capacity bars", () => {
     const state = resolveWhereChip({
       environments: [
         {
@@ -549,7 +568,7 @@ describe("Where chip", () => {
     expect(state.kind).toBe("device");
     expect(state.label).toBe("Build runner");
     const row = renderPicker(false).querySelector('[data-value="device:runner"]');
-    expect(hoverDetail(row, "Concurrent sessions")).toBe("1 running / 2 maximum");
+    expect(capacityCaption(row)).toBe("1 of 2 session slots in use");
     expect(row?.textContent).not.toContain("Worker slots");
     expect(state.devices[0]?.workerSlots).toEqual({ total: 2, available: 1 });
     expect(state.devices[0]?.facts).toEqual([]);
@@ -558,13 +577,13 @@ describe("Where chip", () => {
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
-    expect(autoRow?.textContent).toContain("Choose a device automatically");
+    expect(autoRow?.getAttribute("aria-label")).toBe("Choose a device automatically");
     expect(autoRow?.getAttribute("role")).toBe("switch");
     expect(autoRow?.getAttribute("aria-checked")).toBe("false");
-    expect(hoverDetails(autoRow)).toContain("Least-busy device");
+    expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
     const remoteExec = renderPicker(false, "eligible-order");
     expect(hoverDetails(remoteExec.querySelector('[data-value="auto-device"]'))).toContain(
-      "First eligible device",
+      "Chooses the first eligible connected device",
     );
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
@@ -629,10 +648,10 @@ describe("Where chip", () => {
     );
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
-    expect(device?.disabled).toBe(true);
+    expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
     expect(device?.querySelector(".session-menu__description")).toBeNull();
-    // Unavailable capacity stays distinct from the actionable disabled reason.
-    expect(hoverDetail(device, "Concurrent sessions")).toBe("Slot utilization unavailable");
+    // Unavailable cards show only the actionable reason.
+    expect(capacityCaption(device)).toBeUndefined();
     expect(hoverDetails(device)).toContain("This runtime does not support paired devices");
   });
 
@@ -750,7 +769,7 @@ describe("Where chip", () => {
       invocableCommands: ["codex.exec-server.stdio.v1"],
       commandState: "invocable" as const,
       disabled: false,
-      label: "1 running / 1 maximum",
+      label: "1 of 1 session slots in use",
     },
     {
       name: "shows slot-less remote execution without a capacity claim",
@@ -762,7 +781,7 @@ describe("Where chip", () => {
       invocableCommands: ["codex.exec-server.stdio.v1"],
       commandState: "invocable" as const,
       disabled: false,
-      label: "Codex exec",
+      label: undefined,
     },
     {
       name: "keeps worker execution capacity-gated",
@@ -853,8 +872,8 @@ describe("Where chip", () => {
       );
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
-      expect(device?.disabled).toBe(disabled);
-      expect(hoverDetail(device, "Concurrent sessions")).toBe(label);
+      expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
+      expect(capacityCaption(device)).toBe(disabled ? undefined : label);
       if (reason) {
         expect(hoverDetails(device)).toContain(reason);
       }

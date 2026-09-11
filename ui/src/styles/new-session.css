@@ -872,6 +872,8 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__auto-switch {
+  margin-left: auto;
+  border: 0;
   flex: 0 0 28px;
   width: 28px;
   height: 16px;
@@ -889,11 +891,11 @@ wa-popover.new-session-page__where-popover::part(body) {
   content: "";
 }
 
-.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch {
+.new-session-page__auto-switch[aria-checked="true"] {
   background: var(--accent);
 }
 
-.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch::after {
+.new-session-page__auto-switch[aria-checked="true"]::after {
   transform: translateX(12px);
 }
 
@@ -1405,7 +1407,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__environment-details {
   --openclaw-tooltip-padding: 12px;
-  --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
 }
 
 .new-session-page__environment-card {
@@ -1422,18 +1424,64 @@ wa-popover.new-session-page__where-popover::part(body) {
   font-weight: 600;
 }
 
-.new-session-page__environment-card dl {
+.new-session-page__card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-session-page__card-icon {
+  display: inline-flex;
+  flex: 0 0 14px;
+}
+
+.new-session-page__card-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__auto-device .session-menu__text {
+  flex: 0 1 auto;
+}
+
+.new-session-page__auto-info {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.new-session-page__auto-info svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-card code {
+  font-family: var(--mono);
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+
+.new-session-page__environment-card .new-session-page__command {
+  display: block;
+  margin-block: 6px;
+}
+
+.new-session-page__environment-option[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.new-session-page__card-fields {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 16px;
-  margin: 0;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 10px;
 }
-
-.new-session-page__environment-card dt,
-.new-session-page__environment-card dd {
-  margin: 0;
-}
-
-.new-session-page__environment-card dd {
-  color: var(--text);
+.new-session-page__card-field {
+  display: grid;
+  gap: 4px;
 }

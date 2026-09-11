@@ -1,8 +1,10 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { toolIcons } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { renderPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import type {
   DraftCloudProfile,
@@ -10,7 +12,12 @@ import type {
   DraftMachineOption,
   DraftOperatingSystem,
 } from "./discovery.ts";
-import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
+import {
+  cloudMachinesForOs,
+  defaultCloudOs,
+  readDraftCloudProfiles,
+  readDraftEnvironments,
+} from "./discovery.ts";
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
@@ -38,12 +45,48 @@ type SessionMenuItemOptions = {
   title?: string;
   keepOpen?: boolean;
   compact?: boolean;
-  details?: readonly { label: string; value: string }[];
+  capacityLabel?: string;
+  platform?: string;
+  summary?: string;
+  capabilityLabels?: readonly string[];
+  hardware?: string;
+  osControl?: TemplateResult;
+  machineControl?: TemplateResult;
+  interactive?: boolean;
+  hideDetails?: boolean;
+  remediation?: "enable-session-hosting" | "update-device";
+  provider?: string;
+  trust?: "persistent" | "disposable";
   onSelect: () => void;
 };
 
+function formatUnavailableReason(
+  reason: string,
+  remediation: SessionMenuItemOptions["remediation"],
+) {
+  if (remediation === "enable-session-hosting") {
+    return html`<div>${t("newSession.sessionHostingAction")}</div>
+      <code class="new-session-page__command">openclaw connect --service --session-host</code>`;
+  }
+  if (remediation === "update-device") {
+    return html`<div>${t("newSession.updateAction")}</div>
+      <code class="new-session-page__command">openclaw update</code>
+      <div>${t("newSession.reconnectAction")}</div>
+      <code class="new-session-page__command">openclaw node restart</code>`;
+  }
+  return reason;
+}
+
+function detailRow(icon: TemplateResult, text: string) {
+  return html`<div class="new-session-page__card-row">
+    <span class="new-session-page__card-icon" aria-hidden="true">${icon}</span><span>${text}</span>
+  </div>`;
+}
+
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
+  const unavailableReason = params.disabled ? params.title || params.description : undefined;
   const description = params.compact ? undefined : params.description;
+  const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
   const row = html`
     <button
       type="button"
@@ -51,11 +94,19 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         description ? "session-menu__item--described" : ""
       } ${params.compact ? "new-session-page__environment-option" : ""}"
       data-value=${params.value}
-      data-popover=${params.keepOpen ? nothing : "close"}
+      data-popover=${params.keepOpen || accessibleBlocker ? nothing : "close"}
       aria-pressed=${String(params.checked)}
       title=${params.compact ? nothing : (params.title ?? nothing)}
-      ?disabled=${submitting || (params.disabled ?? false)}
-      @click=${params.onSelect}
+      ?disabled=${submitting || (Boolean(params.disabled) && !accessibleBlocker)}
+      aria-disabled=${accessibleBlocker ? "true" : nothing}
+      @click=${(event: MouseEvent) => {
+        if (params.disabled) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        params.onSelect();
+      }}
     >
       ${
         params.icon
@@ -90,34 +141,37 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
           ? html`<span class="session-menu__sub">${params.sub}</span>`
           : nothing
       }
+
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
     </button>
   `;
-  return params.compact
-    ? html`<openclaw-tooltip class="new-session-page__environment-details" placement="right-start">
+  return params.compact && !params.hideDetails
+    ? html`<openclaw-tooltip
+        class="new-session-page__environment-details"
+        placement="right-start"
+        ?open-on-click=${accessibleBlocker || params.interactive}
+      >
         ${row}
         <div slot="content" class="new-session-page__environment-card">
-          <strong>${params.label}</strong>
-          <dl>
-            ${params.details?.map(
-              (detail) =>
-                html`<dt>${detail.label}</dt>
-                  <dd>${detail.value}</dd>`,
-            )}
-            ${[
-              ...new Set(
-                [params.description, params.sub, ...(params.facts ?? []), params.title].filter(
-                  Boolean,
-                ),
-              ),
-            ].map(
-              (detail) =>
-                html`<dt>${t("newSession.environmentDetails")}</dt>
-                  <dd>${detail}</dd>`,
-            )}
-          </dl>
+          ${
+            unavailableReason
+              ? html`<span>${formatUnavailableReason(unavailableReason, params.remediation)}</span>`
+              : html`
+                  <strong>${params.label}</strong>
+                  ${params.summary ? detailRow(icons.info, params.summary) : nothing}
+                  ${!params.osControl && params.platform ? detailRow(icons.layers, params.platform) : nothing}
+                  ${params.sub ? detailRow(icons.info, params.sub) : nothing}
+                  ${params.capabilityLabels?.length ? detailRow(toolIcons.puzzle, params.capabilityLabels.join(", ")) : nothing}
+                  ${params.trust ? detailRow(params.trust === "persistent" ? icons.repeat : icons.clock, t(params.trust === "persistent" ? "newSession.persistentEnvironmentHint" : "newSession.disposableEnvironmentHint")) : nothing}
+                  ${params.provider ? detailRow(icons.server, params.provider) : nothing}
+                  ${!params.machineControl && params.hardware ? detailRow(toolIcons.cpu, params.hardware) : nothing}
+                  ${[...new Set([params.description, ...(params.facts ?? []), params.provider && !params.disabled ? undefined : params.title].filter(Boolean))].map((detail) => detailRow(icons.info, detail!))}
+                  ${params.osControl || params.machineControl ? html`<div class="new-session-page__card-fields">${params.osControl ?? nothing}${params.machineControl ?? nothing}</div>` : nothing}
+                  ${params.capacityLabel ? html`<div class="new-session-page__card-row"><span class="new-session-page__card-icon" aria-hidden="true">${icons.activity}</span><span class="new-session-page__capacity-caption">${params.capacityLabel}</span></div>` : nothing}
+                `
+          }
         </div>
       </openclaw-tooltip>`
     : row;
@@ -143,6 +197,10 @@ export function renderConnectMachineMenuItem(params: { disabled: boolean; onSele
 export function renderCloudProfileMenuItems(params: {
   profiles: readonly DraftCloudProfile[];
   selectedId: string;
+  selectedOs?: string;
+  selectedMachine?: string;
+  onSelectOs?: (osId: string) => void;
+  onSelectMachine?: (machineId: string) => void;
   submitting: boolean;
   icon?: unknown;
   disabled?: boolean;
@@ -153,6 +211,15 @@ export function renderCloudProfileMenuItems(params: {
 }) {
   return params.profiles.map((profile) => {
     const profileDisabledReason = params.profileDisabledReason?.(profile);
+    const selected = params.selectedId === profile.id;
+    const osId = (selected ? params.selectedOs : undefined) || defaultCloudOs(profile);
+    const os = profile.operatingSystems?.find((option) => option.id === osId);
+    const machines = cloudMachinesForOs(profile, osId);
+    const machine =
+      (selected && params.selectedMachine
+        ? machines.find((option) => option.id === params.selectedMachine)
+        : undefined) ?? machines.find((option) => option.default);
+
     return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
@@ -160,11 +227,35 @@ export function renderCloudProfileMenuItems(params: {
         icon: params.icon,
         compact: params.compact,
         facts:
-          profile.trust === "disposable"
+          !params.compact && profile.trust === "disposable"
             ? [t("newSession.environmentDisposable")]
-            : profile.trust === "persistent"
+            : !params.compact && profile.trust === "persistent"
               ? [t("newSession.environmentPersistent")]
               : undefined,
+        trust: params.compact ? profile.trust : undefined,
+        provider: params.compact ? profile.providerId : undefined,
+        platform: params.compact ? os?.label : undefined,
+        hardware: params.compact && machine ? machineShapeText(machine) : undefined,
+        osControl:
+          params.compact && selected && (profile.operatingSystems?.length ?? 0) >= 2
+            ? renderCloudOsSelect({
+                operatingSystems: profile.operatingSystems ?? [],
+                selectedId: osId,
+                submitting: params.submitting,
+                onSelect: params.onSelectOs ?? (() => undefined),
+              })
+            : undefined,
+        machineControl:
+          params.compact && selected && machines.length > 0
+            ? renderCloudMachineSelect({
+                machines,
+                selectedId: machine?.id ?? "",
+                submitting: params.submitting,
+                onSelect: params.onSelectMachine ?? (() => undefined),
+              })
+            : undefined,
+        interactive: params.compact,
+        keepOpen: params.compact,
         checked: params.selectedId === profile.id,
         disabled: params.disabled || Boolean(profileDisabledReason),
         title:
@@ -190,6 +281,31 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
   return memory ? t("newSession.machineMemory", { memory }) : undefined;
 }
 
+export function renderCloudMachineSelect(params: {
+  machines: readonly DraftMachineOption[];
+  selectedId: string;
+  submitting: boolean;
+  onSelect: (machineId: string) => void;
+}) {
+  return html`<div class="new-session-page__card-field">
+    <span>${t("newSession.machine")}</span
+    >${renderPicker({ label: t("newSession.machine"), value: params.selectedId, disabled: params.submitting, options: params.machines.map((machine) => ({ value: machine.id, label: machineShapeText(machine) ?? machine.label })), onChange: params.onSelect })}
+  </div>`;
+}
+
+export function renderCloudOsSelect(params: {
+  operatingSystems: readonly DraftOperatingSystem[];
+  selectedId: string;
+  submitting: boolean;
+  onSelect: (osId: string) => void;
+}) {
+  return html`<div class="new-session-page__card-field">
+    <span>${t("newSession.operatingSystem")}</span
+    >${renderPicker({ label: t("newSession.operatingSystem"), value: params.selectedId, disabled: params.submitting, options: params.operatingSystems.map((os) => ({ value: os.id, label: os.label, disabled: Boolean(os.disabledReason), description: os.disabledReason })), onChange: params.onSelect })}
+  </div>`;
+}
+
+// The move-session dialog retains its existing menu-based choices.
 export function renderCloudMachineMenuItems(params: {
   machines: readonly DraftMachineOption[];
   selectedId: string;
@@ -200,7 +316,6 @@ export function renderCloudMachineMenuItems(params: {
     renderSessionMenuItem(
       {
         value: `machine:${machine.id}`,
-        compact: true,
         label: machine.label,
         sub: machineShapeText(machine),
         facts: machine.default ? [t("newSession.machineDefault")] : undefined,
@@ -223,7 +338,6 @@ export function renderCloudOsMenuItems(params: {
     renderSessionMenuItem(
       {
         value: `os:${os.id}`,
-        compact: true,
         label: os.label,
         description: os.disabledReason,
         disabled: Boolean(os.disabledReason),
