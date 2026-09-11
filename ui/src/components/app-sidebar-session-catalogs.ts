@@ -65,6 +65,7 @@ export function findCatalogSessionHovercardRow(params: {
         // itself prove repository identity; only projected Git facts do that.
         return {
           ...params.liveRow,
+          hasActiveRun: params.liveRow?.hasActiveRun === true,
           hasAutomation: params.liveRow?.hasAutomation === true,
           label: params.liveRow?.label ?? (session.name || session.threadId),
           // Once adopted, even an unset live color overrides stale catalog metadata.
@@ -144,6 +145,7 @@ export function visibleCatalogHosts(
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenuOpen: boolean;
+  catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
@@ -155,6 +157,8 @@ export type CatalogSessionMenuRequest = {
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
+  canDelete: boolean;
+  name: string;
   meta: string;
 };
 

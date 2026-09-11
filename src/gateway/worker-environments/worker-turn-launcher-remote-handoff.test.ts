@@ -3,6 +3,7 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
@@ -87,14 +88,7 @@ describe("worker turn launcher remote handoff", () => {
     );
     manager.appendCustomMessageEntry("context", "Custom durable context", true, {});
     manager.appendCompaction("Compacted durable context", earlierRequestId, 100);
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 12,
-    });
+    manager.appendMessage(makeTextToolResult("call-1", "read", "result", false, 12));
     let descriptor: WorkerLaunchDescriptor | undefined;
     const environment = browserEnvironment();
     const bootstrapReceipt = environment.bootstrapReceipt;
@@ -104,12 +98,15 @@ describe("worker turn launcher remote handoff", () => {
     const acknowledgeCredentialDelivery = vi.fn(() => true);
     const reconcileWorkspace = vi.fn(
       async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-        expect(request.stagedResult).toBeDefined();
-        request.stagedResult!.record(request.stagedResult!.ref);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        expect(request.source.stagedResult).toBeDefined();
+        request.source.stagedResult!.record(request.source.stagedResult!.ref);
         expect(placements.listPendingWorkspaceResults()).toMatchObject([
-          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
+          { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
-        request.journal.commit(MANIFEST_REF);
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
@@ -217,11 +214,11 @@ describe("worker turn launcher remote handoff", () => {
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
     };
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      resolveWorkspacePath,
+      resolveWorkspace,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     const onAgentEvent = vi.fn(() => {
@@ -246,12 +243,14 @@ describe("worker turn launcher remote handoff", () => {
     );
 
     expect(runLocal).not.toHaveBeenCalled();
-    expect(resolveWorkspacePath).toHaveBeenCalledWith({
+    expect(resolveWorkspace).toHaveBeenCalledWith({
       sessionId: SESSION_ID,
       sessionKey: sessionTarget.sessionKey,
       agentId: sessionTarget.agentId,
     });
-    expect(reconcileWorkspace).toHaveBeenCalledWith(expect.objectContaining({ localPath: root }));
+    expect(reconcileWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ kind: "local", path: root }) }),
+    );
     const conflictSummary =
       "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
     expect(result.payloads).toEqual([
@@ -384,14 +383,9 @@ describe("worker turn launcher remote handoff", () => {
     const firstKeptEntryId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Discarded owner result" }],
-      isError: false,
-      timestamp: 18,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Discarded owner result", false, 18),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
@@ -399,14 +393,9 @@ describe("worker turn launcher remote handoff", () => {
         timestamp: 19,
       }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Kept owner result" }],
-      isError: false,
-      timestamp: 20,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Kept owner result", false, 20),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Earlier reply" }],
@@ -471,7 +460,10 @@ describe("worker turn launcher remote handoff", () => {
         throw new Error("unexpected workspace sync");
       }),
       reconcileWorkspace: vi.fn(async (request) => {
-        request.journal.commit(MANIFEST_REF);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,

@@ -14,6 +14,7 @@ import { listSessionStateEventsSince } from "../../sessions/session-state-events
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
+  installMutableAcpSessionMetaUpsert,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -388,6 +389,7 @@ describe("AcpSessionManager", () => {
       },
       { interval: 1 },
     );
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(1);
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -398,9 +400,11 @@ describe("AcpSessionManager", () => {
     });
     await flushMicrotasks();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
@@ -675,6 +679,7 @@ describe("AcpSessionManager", () => {
       }),
     ]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn?.();
     await first;
     await vi.waitFor(
@@ -1204,40 +1209,26 @@ describe("AcpSessionManager", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = readySessionMeta({
-      agent: "claude",
-      identity: {
-        state: "pending",
-        acpxRecordId: sessionKey,
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-    });
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: readySessionMeta({
+        agent: "claude",
+        identity: {
+          state: "pending",
+          acpxRecordId: sessionKey,
+          source: "status",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await expect(

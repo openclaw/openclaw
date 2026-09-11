@@ -1,8 +1,10 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -16,7 +18,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -72,20 +74,7 @@ describe("SessionManager.open", () => {
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     });
@@ -308,11 +297,7 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toBeUndefined();
     const manager = SessionManager.open(scope, dir);
     expect(loadSessionEntry(scope)).toBeUndefined();
-    const messageId = manager.appendMessage({
-      role: "user",
-      content: "first message",
-      timestamp: 1,
-    });
+    const messageId = manager.appendMessage(makeUserMessage("first message", 1));
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({
@@ -587,14 +572,7 @@ describe("SessionManager.open", () => {
         api: "openai-responses",
         provider: "openai",
         model: "gpt-5.5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: Date.now(),
       }),
@@ -720,12 +698,31 @@ describe("SessionManager.open", () => {
     ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
   });
 
-  it("normalizes session names to one line", () => {
+  it.each([
+    { label: "missing", names: [], expected: undefined, rewind: false },
+    {
+      label: "single-line normalized",
+      names: ["  first\nsecond\r\nthird  "],
+      expected: "first second third",
+      rewind: false,
+    },
+    { label: "cleared", names: ["old name", "  "], expected: undefined, rewind: false },
+    {
+      label: "off-branch latest",
+      names: ["old name", "latest name"],
+      expected: "latest name",
+      rewind: true,
+    },
+  ])("reads $label session names", ({ names, expected, rewind }) => {
     const manager = SessionManager.inMemory();
-
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-
-    expect(manager.getSessionName()).toBe("first second third");
+    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    for (const name of names) {
+      manager.appendSessionInfo(name);
+    }
+    if (rewind) {
+      manager.branch(root);
+    }
+    expect(manager.getSessionName()).toBe(expected);
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
@@ -926,14 +923,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };

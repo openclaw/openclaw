@@ -122,7 +122,12 @@ describe("node worker transfer client", () => {
           environmentId: "environment-windows-executable",
           workspaceDir,
           manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: manifestRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
+          },
         });
         expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
         expect(JSON.parse(uploadedRaw!)).toMatchObject({
@@ -349,6 +354,7 @@ describe("node worker transfer client", () => {
             direction: "upload",
             token: "upload-token",
             baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
           },
         }),
       ).resolves.toBe(uploadManifestRef);
@@ -605,6 +611,56 @@ describe("node worker transfer client", () => {
     },
   );
 
+  it("preserves upload stage and nested transport diagnostics", async () => {
+    const root = tempDirs.make("node-worker-transfer-diagnostics-");
+    const workspaceDir = path.join(root, "workspace");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    await fs.mkdir(workspaceDir);
+    await fs.mkdir(path.join(root, ".openclaw-worker", "manifests"), { recursive: true });
+    await fs.writeFile(
+      path.join(
+        root,
+        ".openclaw-worker",
+        "manifests",
+        `${manifestRef.slice("sha256:".length)}.json`,
+      ),
+      rawManifest,
+    );
+    const server = createHttpServer((req) => req.socket.destroy());
+    const gatewayUrl = await listen(server);
+    try {
+      await expect(
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          environmentId: "environment-diagnostics",
+          workspaceDir,
+          manifestHome: root,
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
+          },
+        }),
+      ).rejects.toMatchObject({
+        message: "workspace-transfer-failed: transfer did not complete",
+        operation: "upload",
+        stage: "reconcile",
+        cause: expect.objectContaining({ code: "ECONNRESET" }),
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("uploads the captured snapshot when the live workspace changes before transmission", async () => {
     const root = tempDirs.make("node-worker-transfer-snapshot-");
     const workspaceDir = path.join(root, "workspace");
@@ -709,7 +765,12 @@ describe("node worker transfer client", () => {
           environmentId: "environment-snapshot",
           workspaceDir,
           manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: baseRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: baseRef,
+            referenceManifestRef: baseRef,
+          },
         }),
       ).resolves.toBe(currentRef);
       expect(mutated).toBe(true);
@@ -818,6 +879,7 @@ describe("node worker transfer client", () => {
             direction: "upload",
             token: "upload-token",
             baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
           },
         }),
       ).resolves.toBe(uploadManifestRef);

@@ -44,7 +44,7 @@ Quick rule:
 
 ## Known limitations
 
-- `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices.
+- `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices. Replay history is bounded by session, event, and retained-content limits; the default byte budget is 16 MiB of UTF-8 text plus row overhead. Truncated history also uses transcript fallback. See [ACP replay accounting](/reference/database-schemas#acp-replay-accounting).
 - If multiple ACP clients share the same Gateway session key, event and cancel routing are best-effort rather than strictly isolated per client. Prefer the default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local turns.
 - Gateway stop states translate into ACP stop reasons, but that mapping is less expressive than a fully ACP-native runtime.
 - Session controls surface a focused subset of Gateway knobs: thought level, tool verbosity, reasoning, usage detail, and elevated actions. Model selection and exec-host controls are not exposed as ACP config options.
@@ -176,9 +176,15 @@ If you want ACPX-backed sessions to see OpenClaw plugin tools or selected built-
 
 If you want a coding agent such as Codex or Claude Code to talk to your OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
 
+`acpx` here is the separate `acpx` CLI from npm, installed on the machine that
+runs the coding agent. It is not the same thing as the `@openclaw/acpx` OpenClaw
+plugin described in [ACP Agents](/tools/acp-agents-setup#plugin-setup-for-acpx-backend),
+which embeds the ACP runtime in the Gateway and installs no `acpx` binary.
+
 Typical flow:
 
-1. Run the Gateway and make sure the ACP bridge can reach it.
+1. Install the `acpx` CLI on the coding agent's machine and run the Gateway,
+   making sure the ACP bridge can reach it.
 2. Point `acpx openclaw` at `openclaw acp`.
 3. Target the OpenClaw session key you want the coding agent to use.
 

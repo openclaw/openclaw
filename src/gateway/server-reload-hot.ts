@@ -1,4 +1,4 @@
-import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -43,7 +43,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
-  resetPreparedModelRuntimeStateForHotReload,
   revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
@@ -61,6 +60,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
+    getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,
   } = createGatewayActiveWorkTracker({ params, myGeneration });
 
@@ -104,10 +104,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
-
-    // Revalidate auth on demand, as startup does. A broad sweep prepares plugin
-    // auth in this thread before its worker starts and can starve config RPCs.
-    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
@@ -173,6 +169,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
     const isLifecycleReloadAborted = () => isGatewayReloadGenerationAborted(myGeneration);
+    const ownsCron = () =>
+      isCurrentGatewayReloadGeneration(myGeneration) &&
+      !isLifecycleReloadAborted() &&
+      !isRestartRetryStopped() &&
+      params.getState().cronState === nextState.cronState;
     const isPluginReloadAborted = () =>
       pluginReloadAborted || !isCurrent() || isLifecycleReloadAborted();
     let runtimeCommitted = false;
@@ -203,15 +204,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         return;
       }
       const commit = async () => {
-        if (plan.reconcileSystemJobs) {
-          // Runtime publication promises that durable monitor rows reflect this config.
-          // A retrying or superseded pass leaves the previous generation authoritative.
-          const reconciliation = await nextState.cronState.reconcileSystemJobs(nextConfig);
-          assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
-          if (reconciliation !== "converged") {
-            throw new GatewayHotReloadRecoveryError("cron monitor");
-          }
-        }
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
@@ -233,10 +225,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         runtimeCommitted = true;
         onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
-        if (plan.restartCron) {
-          params.cronReconciliation.invalidate();
-          params.onCronRestart?.();
-          if (cronExitWatcherHandoff) {
+      };
+      try {
+        await (publication ? publication.publish(commit, () => runtimeCommitted) : commit());
+      } finally {
+        // Commit removes the predecessor from runtime state. Drain it even if
+        // later publication fails or the replacement loses lifecycle ownership.
+        if (runtimeCommitted && plan.restartCron) {
+          if (ownsCron()) {
+            params.cronReconciliation.invalidate();
+            params.onCronRestart?.();
+          }
+          if (cronExitWatcherHandoff && ownsCron()) {
             await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
             await cronExitWatcherHandoff.previous.stopOwner();
           } else if (state.cronState.cron.stopAndDrain) {
@@ -245,38 +245,42 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             state.cronState.cron.stop();
             await state.cronState.stopStreamWatchers();
           }
-          startGatewayCronWithLogging({
-            cronState: nextState.cronState,
-            cronReconciliation: params.cronReconciliation,
-            reason: "reload",
-            config: nextConfig,
-            afterStart: async () => {
-              await Promise.all([
-                nextState.cronState.reconcileExitWatchers(),
-                nextState.cronState.reconcileStreamWatchers(),
-              ]);
-            },
-            logCron: params.logCron,
-            onStartError: (err) => {
-              if (
-                !isCurrentGatewayReloadGeneration(myGeneration) ||
-                params.getState().cronState !== nextState.cronState
-              ) {
-                return;
-              }
-              try {
-                scheduleRecoveryRestart("cron reload", err);
-              } catch (recoveryError) {
-                params.logCron.error(formatErrorMessage(recoveryError));
-              }
-            },
-          });
         }
-      };
-      if (publication) {
-        await publication.publish(commit, () => runtimeCommitted);
-      } else {
-        await commit();
+      }
+      if (!ownsCron()) {
+        return;
+      }
+      // Only accepted runtime state may own monitor writes and emitted events.
+      if (
+        plan.reconcileSystemJobs &&
+        (await nextState.cronState.reconcileSystemJobs()) === "retry-scheduled"
+      ) {
+        throw new GatewayHotReloadRecoveryError("cron monitor");
+      }
+      if (plan.restartCron && ownsCron()) {
+        startGatewayCronWithLogging({
+          cronState: nextState.cronState,
+          cronReconciliation: params.cronReconciliation,
+          reason: "reload",
+          config: nextConfig,
+          afterStart: async () => {
+            await Promise.all([
+              nextState.cronState.reconcileExitWatchers(),
+              nextState.cronState.reconcileStreamWatchers(),
+            ]);
+          },
+          logCron: params.logCron,
+          onStartError: (err) => {
+            if (!ownsCron()) {
+              return;
+            }
+            try {
+              scheduleRecoveryRestart("cron reload", err);
+            } catch (recoveryError) {
+              params.logCron.error(formatErrorMessage(recoveryError));
+            }
+          },
+        });
       }
     };
     const settleRecoveryRestart = (
@@ -381,6 +385,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const rollbackStoppedPluginTargets = (reason: string) =>
         rollbackStoppedGatewayChannels(params, channelsStoppedBeforePluginReload, reason);
       const failPluginChannelRollback = (reason: string, failures: string[]): never => {
+        for (const channel of channelsStoppedBeforePluginReload) {
+          params.releaseChannelRouteHandoffs(channel);
+        }
         const error = new Error(
           `plugin reload cancellation rollback failed for: ${failures.join(", ")}`,
         );
@@ -395,7 +402,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (targets.size === 0 || shouldSkipChannelRestart) {
           return;
         }
-        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent)) {
+        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent, !runtimeCommitted)) {
           params.logChannels.info(
             "channel reload before plugin replace cancelled by config supersession or restart",
           );
@@ -414,7 +421,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
-            await params.stopChannel(channel, undefined, { manual: false });
+            await params.stopChannel(channel, undefined, { manual: false, routeHandoff: true });
             pluginReloadAborted = isPluginReloadAborted();
           },
           onFailure: (channel, err) => {
@@ -488,7 +495,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
           // Only a successfully published replacement can authoritatively retire channel owners.
           params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
-          resetPreparedModelRuntimeStateForHotReload();
         } else {
           pluginReloadAborted = true;
         }
@@ -502,7 +508,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // Newly activated channels can follow plugin services that already admitted agent work.
     // Recheck before their startup; existing channels were drained before registry replacement.
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
-      const waitCancelled = await waitForActiveWorkBeforeChannelReload(channelTargets, isCurrent);
+      const waitCancelled = await waitForActiveWorkBeforeChannelReload(
+        channelTargets,
+        isCurrent,
+        !runtimeCommitted,
+      );
       // A committed owner must finish its model/channel tail before the next config runs.
       // Supersession ends this wait: a newer writer may itself be awaiting that next reload.
       pluginReloadAborted =
@@ -510,6 +520,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         (!runtimeCommitted || isRestartRetryStopped() || isLifecycleReloadAborted());
     }
     if (pluginReloadAborted) {
+      for (const channel of channelsStoppedBeforePluginReload) {
+        params.releaseChannelRouteHandoffs(channel);
+      }
       // Only an uncommitted reload can transfer its receipt to the watcher. After
       // commit, same-content replay may be a no-op and cannot finish the interrupted tail.
       const error = createReloadCancellationError(
@@ -530,6 +543,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
+    if (!plan.reloadPlugins && plan.restartServices?.size) {
+      try {
+        if (!params.reloadPluginServices) {
+          throw new Error("Plugin service reload owner is unavailable");
+        }
+        await params.reloadPluginServices(nextConfig, plan.restartServices);
+      } catch (err) {
+        scheduleRecoveryRestart("plugin services reload", err);
+        return "applied-restart-required";
+      }
+    }
+
     try {
       await mrReload.refreshModelRuntimeAfterHotReload({
         config: nextConfig,
@@ -543,7 +568,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.disposeMcpRuntimes) {
       await disposeMcpRuntimesWithTimeout({
-        dispose: disposeAllSessionMcpRuntimes,
+        dispose: () =>
+          reloadSessionMcpRuntimes({
+            cfg: nextConfig,
+            manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+            reloadPlugins: plan.reloadPlugins,
+          }),
         timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
         onWarn: params.logReload.warn,
         label: "bundle-mcp runtime disposal during config reload",
@@ -619,6 +649,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   return {
     applyHotReload,
+    getDeferredChannelReloads,
     acceptRestartConfig,
     publishAppliedConfigHash,
     publishDeferredAppliedConfigHash,

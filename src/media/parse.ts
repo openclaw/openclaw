@@ -16,7 +16,7 @@ import {
   findMarkdownImageSpans,
   type MarkdownImageSpan as MarkdownImageMatch,
 } from "../../packages/markdown-core/src/image-spans.js";
-import { parseAudioTag } from "./audio-tags.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
@@ -444,8 +444,8 @@ export function splitMediaFromOutput(
       continue;
     }
 
-    const trimmedStart = line.trimStart();
-    if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    const linePrefix = line.trimStart().slice(0, "MEDIA:".length);
+    if (!extractMediaDirectives || !linePrefix.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({
             line,
@@ -599,7 +599,7 @@ export function splitMediaFromOutput(
   const audioTagResult =
     options.extractAudioDirectives === false
       ? { text: visibleText, audioAsVoice: false }
-      : parseAudioTag(visibleText);
+      : parseInlineDirectives(visibleText, { stripReplyTags: false });
   const cleanedText = audioTagResult.text.trimEnd();
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
 

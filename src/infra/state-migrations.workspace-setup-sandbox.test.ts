@@ -160,7 +160,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: {
         bootstrapSeededAt: "2026-07-20T00:00:00.000Z",
       },
@@ -231,7 +231,7 @@ describe("sandbox workspace Doctor migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(fs.existsSync(setupPath)).toBe(false);
-      expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
         setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
         setupExists: true,
       });
@@ -296,7 +296,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
       setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
       setupExists: true,
     });
@@ -778,7 +778,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
       setupExists: true,
     });
@@ -913,7 +913,7 @@ describe("sandbox workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(setupPath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(sandboxLayout.sandboxWorkspaceDir)).toMatchObject({
       setup: {
         bootstrapSeededAt: "2026-07-20T00:00:00.000Z",
       },

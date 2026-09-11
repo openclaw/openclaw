@@ -1,5 +1,8 @@
 {
   "id": "workboard",
+  "categories": [
+    "productivity"
+  ],
   "cliCommands": [
     {
       "name": "workboard",
@@ -8,7 +11,11 @@
     }
   ],
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
   },
   "enabledByDefault": false,
   "activation": {
@@ -216,9 +223,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/845630f00a44fda43f9829e33f881e961f3eab7c13eb81037919492d94669eca/index.js",
+    "entry": "dist/control-ui/97b95a0030f4b0cf166009d1ee126d45a86f2a11930eee5d4f6dcbe9400474ab/index.js",
     "styles": [
-      "dist/control-ui/845630f00a44fda43f9829e33f881e961f3eab7c13eb81037919492d94669eca/index.css"
+      "dist/control-ui/97b95a0030f4b0cf166009d1ee126d45a86f2a11930eee5d4f6dcbe9400474ab/index.css"
     ]
   }
 }

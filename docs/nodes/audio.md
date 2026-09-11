@@ -20,6 +20,14 @@ When audio understanding is enabled (or auto-detected), OpenClaw:
 
 When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcript so slash commands still work. With `--verbose`, logs show when transcription runs and when it replaces the body.
 
+For plugin callers, file transcription returns `decision.attachmentProcessing`,
+keyed by attachment index. `"completed"` means a CLI or provider completed input
+processing, including successful empty output; `"omitted"` means none completed.
+This fact is separate from usable transcript text and attachment display markers.
+An absent field in an older SDK result means processing is unknown. For Discord
+batch voice, known omitted input prevents a partial utterance from becoming a
+conversation command or active-run control; valid captured notes remain saved.
+
 ## Auto-detection (default)
 
 If you have not configured models and `tools.media.audio.enabled` is not `false`, OpenClaw auto-detects in this order and stops at the first working option:
@@ -125,7 +133,7 @@ installation, run them once for that agent.
          models: [
            {
              provider: "openai",
-             model: "gpt-transcribe",
+             model: "gpt-4o-transcribe",
              profile: "openai:audio",
              baseUrl: "https://api.openai.com/v1",
              capabilities: ["audio"],
@@ -258,7 +266,7 @@ provider-wide rather than scoped to the audio model entry.
 
 ### Resident local STT
 
-Auto-detected local STT remains process-per-request. OpenClaw does not currently manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
+Auto-detected local STT remains process-per-request. OpenClaw does not manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
 
 ### Proxy environment support
 
@@ -306,3 +314,4 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 - [Media understanding](/nodes/media-understanding)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)
+- [Media overview](/tools/media-overview) — how the media tools fit together

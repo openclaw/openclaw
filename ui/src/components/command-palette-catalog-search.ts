@@ -1,11 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  AgentsListResult,
-  CronJobsListResult,
-  ModelCatalogEntry,
-  SkillStatusReport,
-} from "../api/types.ts";
+import type { AgentsListResult, CronJobsListResult, SkillStatusReport } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
@@ -15,7 +10,9 @@ import {
 import type { RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
 
 type CommandPaletteCatalogCategory =
@@ -33,6 +30,8 @@ type CommandPaletteCatalogItem = {
   icon: IconName;
   category: CommandPaletteCatalogCategory;
   routeId: RouteId;
+  search?: string;
+  hash?: string;
   agentId?: string;
   description?: string;
   searchText?: string;
@@ -92,6 +91,14 @@ function getCommandPaletteBaseItems(
       action: "nav:sessions",
     },
     {
+      id: "nav-meetings",
+      label: t("tabs.meetings"),
+      description: t("subtitles.meetings"),
+      icon: "book",
+      category: "navigation",
+      action: "nav:meetings",
+    },
+    {
       id: "nav-cron",
       label: t("palette.items.scheduled"),
       icon: "scrollText",
@@ -108,7 +115,7 @@ function getCommandPaletteBaseItems(
     {
       id: "nav-plugins",
       label: t("palette.items.plugins"),
-      icon: "puzzle",
+      icon: "plug",
       category: "navigation",
       action: "nav:plugins",
     },
@@ -217,6 +224,8 @@ export function toCommandPaletteItems(
     icon: item.icon,
     category: item.category,
     action: `nav:${item.routeId}`,
+    search: item.search,
+    hash: item.hash,
     agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
@@ -260,7 +269,25 @@ export function getStaticCommandPaletteCatalogItems(
     description: t(`appsPage.cards.${card}.desc`),
     searchText: card,
   }));
-  return [...settings, ...apps];
+  const capture = SETTINGS_SEARCH_TARGETS.meetingCapture;
+  return [
+    ...settings,
+    ...(canAdmin
+      ? [
+          {
+            id: "settings-meeting-capture",
+            label: t(capture.labelKey),
+            icon: "settings" as const,
+            category: "settings" as const,
+            routeId: capture.routeId,
+            search: capture.search,
+            hash: capture.hash,
+            searchText: capture.aliases,
+          },
+        ]
+      : []),
+    ...apps,
+  ];
 }
 
 export async function loadCommandPaletteCatalogItems(params: {
@@ -268,7 +295,11 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<CommandPaletteCatalogItem[]> {
+}): Promise<{
+  items: CommandPaletteCatalogItem[];
+  modelRequestFailed: boolean;
+  modelSearchError: string | null;
+}> {
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -288,14 +319,10 @@ export async function loadCommandPaletteCatalogItems(params: {
     }),
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    requestIfAvailable<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-      agentId: params.agentId,
-      preparedOnly: true,
-    }),
+    loadModelCatalog(params.client, { agentId: params.agentId }).catch(() => null),
   ]);
 
-  return [
+  const items: CommandPaletteCatalogItem[] = [
     ...(agents?.agents ?? []).map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.identity?.name ?? agent.name ?? agent.id,
@@ -329,7 +356,7 @@ export async function loadCommandPaletteCatalogItems(params: {
     ...(plugins?.plugins ?? []).map((plugin) => ({
       id: `plugin-${plugin.id}`,
       label: plugin.name,
-      icon: "puzzle" as const,
+      icon: "plug" as const,
       category: "plugins" as const,
       routeId: "plugins" as const,
       description: plugin.description,
@@ -350,4 +377,9 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
+  return {
+    items,
+    modelRequestFailed: models === null,
+    modelSearchError: models ? modelCatalogRefreshError(models) : t("palette.modelSearchFailed"),
+  };
 }

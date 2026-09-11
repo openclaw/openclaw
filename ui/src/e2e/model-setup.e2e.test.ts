@@ -1,7 +1,9 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -85,10 +87,10 @@ suite.define(() => {
         const row = page.locator('[data-candidate-kind="codex-cli"]');
         await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "auth-account-desktop.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "auth-account-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+          );
         }
         const detectionCount = (await gateway.getRequests("openclaw.setup.detect")).length;
         await page.getByRole("button", { name: "Check again" }).click();
@@ -98,10 +100,10 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).toContain("API key (usage-billed)");
         expect(await row.textContent()).not.toContain("alex@example.com");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "auth-api-key-desktop.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "auth-api-key-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+          );
         }
       },
     );
@@ -178,6 +180,9 @@ suite.define(() => {
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
         expect(detect.params).toEqual({ agentId: "main" });
+        await page.locator('[data-candidate-kind="openai-api-key"] button').waitFor();
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+        await page.locator('[data-candidate-kind="openai-api-key"] button').click();
         const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
@@ -778,8 +783,11 @@ suite.define(() => {
         await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
         await page.keyboard.press("Home");
         await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
-        await page.keyboard.press("ArrowDown");
-        await page.keyboard.press("ArrowDown");
+        const zaiIndex = providerIds.indexOf("zai-cn");
+        expect(zaiIndex).toBeGreaterThan(0);
+        for (let index = 0; index < zaiIndex; index += 1) {
+          await page.keyboard.press("ArrowDown");
+        }
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
         await armProviderHide();
         await page.keyboard.press("Enter");
@@ -898,107 +906,6 @@ suite.define(() => {
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
-      },
-    );
-  });
-
-  it("verifies the current model connection", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        ...(artifactDir
-          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-          : {}),
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "openclaw.setup.detect",
-            "openclaw.setup.verify",
-          ],
-          methodResponses: {
-            "openclaw.setup.detect": {
-              candidates: [
-                {
-                  kind: "existing-model",
-                  brandId: "openai",
-                  label: "Current model",
-                  detail: "openai/gpt-5 — already configured",
-                  modelRef: "openai/gpt-5",
-                  recommended: false,
-                  credentials: true,
-                },
-                {
-                  kind: "claude-cli",
-                  brandId: "claude",
-                  label: "Claude Code",
-                  detail: "logged in",
-                  modelRef: "claude-cli/claude-opus-5",
-                  recommended: false,
-                  credentials: true,
-                },
-              ],
-              manualProviders: [],
-              workspace: "/tmp/openclaw-e2e",
-              configuredModel: "openai/gpt-5",
-              setupComplete: true,
-            },
-            "openclaw.setup.verify": {
-              ok: true,
-              modelRef: "openai/gpt-5",
-              latencyMs: 1234,
-            },
-          },
-        });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
-        expect(response?.status()).toBe(200);
-        await expect
-          .poll(() => page.locator('[data-candidate-kind="existing-model"]').count())
-          .toBe(0);
-        await expect.poll(() => page.locator('[data-candidate-kind="claude-cli"]').count()).toBe(1);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "configured-route-dedup-desktop.png"),
-          });
-          await page.setViewportSize({ height: 844, width: 390 });
-          await expect
-            .poll(() =>
-              page
-                .locator(".shell-nav.nav-drawer")
-                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
-            )
-            .toBe(false);
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "configured-route-dedup-mobile.png"),
-          });
-          await page.setViewportSize({ height: 900, width: 1280 });
-        }
-        await page.getByRole("button", { name: "Check model" }).click();
-        const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({ agentId: "main" });
-        await page.getByText("Ready · 1234 ms").waitFor();
-        const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
-          .length;
-        const verifyCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.verify"))
-          .length;
-        await page.getByRole("button", { name: "Check again" }).click();
-        await expect
-          .poll(async () => (await gateway.getRequests("openclaw.setup.verify")).length)
-          .toBe(verifyCountBeforeRefresh + 1);
-        expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
-          detectCountBeforeRefresh,
-        );
-        await page.getByRole("button", { name: "Check again" }).waitFor();
-        await page.getByText("Ready · 1234 ms").waitFor();
       },
     );
   });

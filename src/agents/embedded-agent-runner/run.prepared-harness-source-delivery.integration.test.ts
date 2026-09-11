@@ -32,6 +32,7 @@ import {
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -41,7 +42,10 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "../prepared-model-runtime.types.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -610,6 +614,87 @@ describe("prepared harness source delivery", () => {
     }
   });
 
+  it.each([
+    { name: "configured input", selection: {} },
+    { name: "unmarked raw pair", selection: { provider: "openai", model: "legacy-model" } },
+    {
+      name: "marked raw pair",
+      selection: { provider: "openai", model: "legacy-model", requestedRouteResolution: "raw" },
+    },
+    {
+      name: "resolved pair",
+      selection: { provider: "openai", model: "gpt-5.4", requestedRouteResolution: "resolved" },
+    },
+  ] as const)("prepares $name with one manifest normalization pass", async ({ selection }) => {
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+    const metadataSnapshot = {
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "openai",
+            providers: ["openai"],
+            modelIdNormalization: {
+              providers: {
+                openai: {
+                  aliases: { "legacy-model": "gpt-5.4", "gpt-5.4": "unexpected-second-pass" },
+                },
+              },
+            },
+          },
+        ],
+      }),
+      workspaceDir: state.workspaceDir,
+    };
+    const config = { agents: { defaults: { model: { primary: "openai/legacy-model" } } } };
+    const pluginRegistry = createEmptyPluginRegistry();
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
+      agentId: "worker",
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+    });
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
+      ...baseLease,
+      snapshot: {
+        ...baseLease.snapshot,
+        metadataSnapshot,
+        pluginRegistry,
+      },
+    });
+
+    await runEmbeddedAgent({
+      agentId: "worker",
+      sessionId: "manifest-model-preparation",
+      workspaceDir: state.workspaceDir,
+      prompt: "hello",
+      runId: "manifest-model-preparation",
+      timeoutMs: 30_000,
+      modelFallbacksOverride: [],
+      config,
+      pluginGeneration: {
+        pluginMetadataSnapshot: metadataSnapshot,
+        pluginRegistry,
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+      },
+      ...selection,
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.4", agentId: "worker" }],
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
     const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
     registerPreparedAgentHarness({
@@ -797,7 +882,8 @@ describe("prepared harness source delivery", () => {
       let acquisitionSignal: AbortSignal | undefined;
       mockedAcquireAgentRunPreparedModelRuntime.mockClear();
       mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-        async (_input, signal?: AbortSignal) => {
+        async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
+          const signal = options?.abortSignal;
           acquisitionSignal = signal;
           acquisitionStarted.resolve();
           await resumeAcquisition.promise;
@@ -854,8 +940,7 @@ describe("prepared harness source delivery", () => {
         expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
         expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
-          acquisitionSignal,
-          "static",
+          { abortSignal: acquisitionSignal, catalogMode: "static" },
         );
 
         if (outcome === "complete") {

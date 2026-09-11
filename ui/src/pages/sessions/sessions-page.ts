@@ -32,10 +32,10 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
+import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
@@ -55,8 +55,10 @@ import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
@@ -76,7 +78,7 @@ import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
-import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
+import { renderSessions, type SessionsProps } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
@@ -111,6 +113,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
+  @state() private refreshing = false;
   @state() private error: string | null = null;
   @state() private activeMinutes = "";
   @state() private limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
@@ -120,7 +123,6 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private searchQuery = "";
   @state() private transcriptSearchQuery = "";
   @state() private submittedTranscriptSearchQuery = "";
-  @state() private transcriptSearch: TranscriptSearchState = { status: "idle" };
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
@@ -194,43 +196,37 @@ class SessionsPage extends OpenClawLightDomElement {
     invalidateRequests: () => this.invalidatePageWork(),
   });
 
-  private transcriptSearchArgs() {
-    const context = this.context;
-    const snapshot = context?.gateway.snapshot;
-    return [
-      snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
-      this.submittedTranscriptSearchQuery,
-      context ?? null,
-      context?.agentSelection.state.scopeId ?? null,
-      snapshot ? isGatewayMethodAdvertised(snapshot, "sessions.search") === true : false,
-    ] as const;
-  }
-
   private readonly transcriptSearchTask = new Task(this, {
-    args: () => this.transcriptSearchArgs(),
-    task: async ([client, query, context, _agentScope, advertised]) => {
+    args: () => {
+      const context = this.context;
+      const snapshot = context?.gateway.snapshot;
+      return [
+        snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+        this.submittedTranscriptSearchQuery,
+        context ?? null,
+        context?.agentSelection.state.scopeId ?? null,
+        snapshot ? isGatewayMethodAdvertised(snapshot, "sessions.search") === true : false,
+      ] as const;
+    },
+    task: async ([client, query, context, _agentScope, advertised], { signal }) => {
       if (!client || !query || !context || !advertised) {
-        return null;
+        return initialState;
       }
-      const result = await searchVisibleSessionTranscripts({
+      const {
+        results,
+        indexing = false,
+        truncated = false,
+      } = await searchVisibleSessionTranscripts({
         client,
         query,
         listSessions: context.sessions.list,
         listOptions: this.sessionListOptions(context, ""),
+        // Task retirement must stop later RPCs, not only hide their eventual results.
+        isCurrent: () => !signal.aborted,
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
-      return {
-        results: result.results,
-        indexing: result.indexing === true,
-        truncated: result.truncated === true,
-      };
-    },
-    onComplete: (result) => {
-      this.transcriptSearch = result ? { status: "results", ...result } : { status: "idle" };
-    },
-    onError: (error) => {
-      this.transcriptSearch = { status: "error", message: formatUiError(error) };
+      return { results, indexing, truncated };
     },
   });
 
@@ -293,11 +289,10 @@ class SessionsPage extends OpenClawLightDomElement {
     this.pageEpoch += 1;
     this.clearSearchTimer();
     this.listRequest = undefined;
-    this.submittedTranscriptSearchQuery = "";
-    this.transcriptSearch = { status: "idle" };
-    void this.transcriptSearchTask.run(this.transcriptSearchArgs());
+    this.resetTranscriptSearchState(this.transcriptSearchQuery);
     this.resetCheckpointTask();
     this.loading = false;
+    this.refreshing = false;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
     this.closeSessionMenu();
@@ -307,6 +302,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.result = null;
     this.error = null;
     this.loading = false;
+    this.refreshing = false;
     this.resetTranscriptSearchState("");
     this.selectedKeys = new Set();
     this.expandedSessionKey = null;
@@ -574,9 +570,11 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
       this.listRequest = undefined;
+      this.refreshing = false;
       this.bindSessionList();
     });
     this.listRequest = pending;
+    this.refreshing = true;
     start(binding.sessions.refreshList({ ...binding.query, ...options }));
     return pending;
   }
@@ -596,8 +594,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private resetTranscriptSearchState(query: string) {
     this.transcriptSearchQuery = query;
     this.submittedTranscriptSearchQuery = "";
-    this.transcriptSearch = { status: "idle" };
-    void this.transcriptSearchTask.run(this.transcriptSearchArgs());
+    void this.transcriptSearchTask.run();
   }
 
   private updateTranscriptSearchQuery(query: string) {
@@ -609,14 +606,10 @@ class SessionsPage extends OpenClawLightDomElement {
     this.resetTranscriptSearchState(query);
   }
 
-  private clearTranscriptSearch() {
-    this.resetTranscriptSearchState("");
-  }
-
   private async runTranscriptSearch() {
     const query = this.transcriptSearchQuery.trim();
     if (!query) {
-      this.clearTranscriptSearch();
+      this.resetTranscriptSearchState("");
       return;
     }
     const scope = this.captureRequestScope();
@@ -625,8 +618,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     this.transcriptSearchQuery = query;
     this.submittedTranscriptSearchQuery = query;
-    this.transcriptSearch = { status: "loading" };
-    await this.transcriptSearchTask.run(this.transcriptSearchArgs());
+    await this.transcriptSearchTask.run();
   }
 
   private ensureAgentIdentities(result: SessionsListResult | null) {
@@ -1096,21 +1088,30 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async renameSession(row: GatewaySessionRow) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      this.error = t("sessionsView.actionRequiresConnection");
+      return;
+    }
+    const initialValue = resolveSessionRenameValue(row);
+    const requestSignal = this.pluginActionLifetime.signal;
     const value = await this.withDialogLifecycle(async (signal) => {
       const showInputDialog = await this.loadInputDialog();
       return (
         (await showInputDialog?.({
-          signal,
+          signal: AbortSignal.any([signal, requestSignal]),
           title: t("sessionsView.renameSessionPrompt"),
-          defaultValue: normalizeOptionalString(row.label) ?? "",
+          defaultValue: initialValue,
         })) ?? null
       );
     });
-    if (value === null) {
+    if (value === null || !this.isRequestScopeCurrent(scope)) {
       return;
     }
-    const patch = { label: normalizeOptionalString(value) ?? null };
-    void this.patchSession(row.key, patch, undefined, row.sessionId);
+    const patch = resolveSessionRenamePatch(value, initialValue, row.label);
+    if (patch) {
+      await this.patchSession(row.key, patch, scope, row.sessionId);
+    }
   }
 
   private async patchSession(
@@ -1419,7 +1420,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const store = sessionPullRequestsForGateway(scope.context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       row.key,
       this.sessionAgentId(row.key, scope.context),
     );
@@ -1465,12 +1466,14 @@ class SessionsPage extends OpenClawLightDomElement {
       (cloudWorkerStopAction.method !== "sessions.reclaim" || row.hasActiveRun !== true) &&
       isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
     );
+    const pinnable = isPinnableUiSessionRow(row);
     return html`
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
           sessionId: normalizeOptionalString(row.sessionId) ?? null,
           pinned: row.pinned === true,
+          pinnable,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
@@ -1486,7 +1489,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
-          session: row,
+          session: { ...row, pinnable },
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
@@ -1508,6 +1511,7 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "copy-session-id":
             case "copy-session-link":
+            case "copy-session-preview-link":
             case "copy-markdown":
             case "open-new-tab":
             case "open-new-window":
@@ -1596,6 +1600,7 @@ class SessionsPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderSessions({
           loading: this.loading,
+          refreshing: this.refreshing,
           result: this.result,
           error: this.error,
           activeMinutes: this.activeMinutes,
@@ -1613,10 +1618,12 @@ class SessionsPage extends OpenClawLightDomElement {
           transcriptSearchAvailable:
             isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
           transcriptSearchQuery: this.transcriptSearchQuery,
-          transcriptSearch:
-            this.transcriptSearchTask.status === TaskStatus.PENDING
-              ? { status: "loading" }
-              : this.transcriptSearch,
+          transcriptSearch: this.transcriptSearchTask.render({
+            initial: () => ({ status: "idle" }) as const,
+            pending: () => ({ status: "loading" }) as const,
+            complete: (result) => ({ status: "results", ...result }) as const,
+            error: (error) => ({ status: "error", message: formatUiError(error) }) as const,
+          }),
           agentIdentityById: sessionAgentIdentityById(
             this.result,
             (agentId) => context.agentIdentity.get(agentId) ?? undefined,
@@ -1691,7 +1698,7 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
           onTranscriptSearch: () => void this.runTranscriptSearch(),
-          onClearTranscriptSearch: () => this.clearTranscriptSearch(),
+          onClearTranscriptSearch: () => this.resetTranscriptSearchState(""),
           onSortChange: (column, direction) => {
             this.sortColumn = column;
             this.sortDir = direction;

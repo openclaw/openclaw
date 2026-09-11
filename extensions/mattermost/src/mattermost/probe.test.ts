@@ -157,6 +157,29 @@ describe("probeMattermost", () => {
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a string diagnostic without a reflected active credential in an object message", async () => {
+    mockFetchGuard.mockImplementationOnce(async ({ init }: { init: RequestInit }) => {
+      const authorization = new Headers(init.headers).get("Authorization");
+      expect(authorization).toBe("Bearer abcdefghijklmnopqrstuvwxyz");
+      return {
+        response: new Response(
+          JSON.stringify({ message: { context: "retry later", echoed: authorization?.slice(7) } }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+        release: mockRelease,
+      };
+    });
+
+    const result = await probeMattermost("https://mm.example.com", "abcdefghijklmnopqrstuvwxyz");
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 503,
+      error: '{"message":{"context":"retry later","echoed":"***"}}',
+    });
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to statusText when error body is empty", async () => {
     mockFetchGuard.mockResolvedValueOnce({
       response: new Response("", {

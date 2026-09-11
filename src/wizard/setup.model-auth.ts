@@ -141,9 +141,6 @@ export async function runSetupModelAuthStep(params: {
     params.stagedCandidate?.persistAuthProfiles ?? (async () => {});
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | undefined = opts.authChoice;
-  let authStore:
-    | ReturnType<(typeof import("../agents/auth-profiles.runtime.js"))["ensureAuthProfileStore"]>
-    | undefined;
   let promptAuthChoiceGrouped:
     | (typeof import("../commands/auth-choice-prompt.js"))["promptAuthChoiceGrouped"]
     | undefined;
@@ -155,20 +152,14 @@ export async function runSetupModelAuthStep(params: {
   const target = resolveOnboardingSetupTarget(params.config, params.pendingAgent);
   if (authChoiceFromPrompt) {
     const [
-      { ensureAuthProfileStore },
       { promptAuthChoiceGrouped: promptAuthChoice, isKeepCurrentAuthChoice: isKeepCurrentChoice },
       { detectAvailableSetupProviderIds },
     ] = await Promise.all([
-      import("../agents/auth-profiles.runtime.js"),
       import("../commands/auth-choice-prompt.js"),
       import("../plugins/provider-setup-availability.js"),
     ]);
     promptAuthChoiceGrouped = promptAuthChoice;
     isKeepCurrentAuthChoice = isKeepCurrentChoice;
-    authStore = ensureAuthProfileStore(params.agentDir ?? target.agentDir, {
-      allowKeychainPrompt: false,
-      readOnly: true,
-    });
     detectedProviderIds = await detectAvailableSetupProviderIds({
       config: nextConfig,
       workspaceDir: target.workspaceDir,
@@ -179,7 +170,6 @@ export async function runSetupModelAuthStep(params: {
     if (authChoiceFromPrompt) {
       authChoice = await promptAuthChoiceGrouped!({
         prompter,
-        store: authStore!,
         includeSkip: true,
         config: nextConfig,
         workspaceDir: target.workspaceDir,
@@ -200,7 +190,15 @@ export async function runSetupModelAuthStep(params: {
     persistAuthProfiles = async () => {};
 
     if (authChoice === "custom-api-key") {
-      const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+      const [
+        { promptCustomApiConfig },
+        { prepareCustomSetupCredentials },
+        { persistProviderAuthProfileBatch },
+      ] = await Promise.all([
+        import("../commands/onboard-custom.js"),
+        import("../system-agent/setup-inference-custom.js"),
+        import("../plugins/provider-auth-persistence.js"),
+      ]);
       const customResult = await promptCustomApiConfig({
         prompter,
         runtime,
@@ -208,8 +206,19 @@ export async function runSetupModelAuthStep(params: {
         target,
         secretInputMode: opts.secretInputMode,
         setAsPrimary: !params.preserveExistingModelSelection,
+        verification: "deferred",
       });
-      nextConfig = customResult.config;
+      const custom = prepareCustomSetupCredentials(customResult);
+      nextConfig = custom.config;
+      authProfiles = custom.profiles;
+      persistAuthProfiles = async (profiles = custom.profiles) => {
+        await persistProviderAuthProfileBatch({
+          profiles,
+          config: custom.config,
+          agentDir: params.agentDir ?? target.agentDir,
+          stateDir: params.stateDir,
+        });
+      };
       prompter.disableBackNavigation?.();
       break;
     }
@@ -241,7 +250,6 @@ export async function runSetupModelAuthStep(params: {
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
-          validateCatalog: false,
         });
       }
       break;
@@ -337,7 +345,6 @@ export async function runSetupModelAuthStep(params: {
       agentId: target.agentId,
       agentDir: target.agentDir,
       pendingAuthProfiles: authProfiles,
-      validateCatalog: false,
     });
     break;
   }

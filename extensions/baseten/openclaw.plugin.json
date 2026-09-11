@@ -1,5 +1,6 @@
 {
   "id": "baseten",
+  "categories": ["models"],
   "name": "Baseten",
   "description": "OpenClaw Baseten provider plugin.",
   "activation": {
@@ -20,6 +21,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "baseten": "baseten"
+    },
     "providers": {
       "baseten": {
         "baseUrl": "https://inference.baseten.co/v1",

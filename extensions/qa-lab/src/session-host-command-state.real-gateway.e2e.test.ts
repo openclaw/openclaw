@@ -17,6 +17,7 @@ const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const REQUEST_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 180_000;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const helloCounts = new WeakMap<GatewayClient, number>();
 
 const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
@@ -162,7 +163,9 @@ suite.define(() => {
         await suite.withPage(
           {
             locale: "en-US",
-            recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } },
+            ...(captureUiProof
+              ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } } }
+              : {}),
             serviceWorkers: "block",
             viewport: { height: 900, width: 1440 },
           },
@@ -172,33 +175,35 @@ suite.define(() => {
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
             await page.locator("#new-session-where-trigger").click();
             const place = page.locator("wa-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
-            const facts = async (deviceId: string) =>
-              await row(deviceId).locator(".new-session-page__menu-fact").allTextContents();
+            const description = async (deviceId: string) =>
+              await row(deviceId).locator(".session-menu__description").textContent();
 
             await row(undeclaredIdentity.deviceId).waitFor();
-            expect(await facts(undeclaredIdentity.deviceId)).toContain(
+            expect(await description(undeclaredIdentity.deviceId)).toContain(
               `Make ${COMMAND} available on this device, then reconnect, or pick another device.`,
             );
             await expect
-              .poll(() => facts(pendingIdentity.deviceId))
+              .poll(() => description(pendingIdentity.deviceId))
               .toContain(
                 `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
               );
-            // Keep captures at the recorded viewport size: clips and larger full-page
-            // screenshots temporarily resize Chromium's shared screencast surface.
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "00-undeclared.png"),
-            });
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "01-pending-approval.png"),
-            });
+            if (captureUiProof) {
+              // Keep captures at the recorded viewport size: clips and larger full-page
+              // screenshots temporarily resize Chromium's shared screencast surface.
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "00-undeclared.png"),
+              });
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "01-pending-approval.png"),
+              });
+            }
             await page.keyboard.press("Escape");
 
             const beforeConfig = await operator.request<{ hash: string }>("config.get", {});
@@ -225,14 +230,16 @@ suite.define(() => {
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
-              .poll(() => facts(unauthorizedIdentity.deviceId))
+              .poll(() => description(unauthorizedIdentity.deviceId))
               .toContain(
                 `Authorize ${COMMAND} in the Gateway node command policy, or pick another device.`,
               );
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
-            });
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
+              });
+            }
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.keyboard.press("Escape");
 
@@ -262,10 +269,12 @@ suite.define(() => {
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
-            });
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
+              });
+            }
           },
         );
       } finally {

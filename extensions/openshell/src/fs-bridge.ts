@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { isPathInside, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
+  DirectoryEntry,
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
@@ -54,12 +55,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     };
   }
 
-  async readFile(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-    maxBytes?: number;
-  }): Promise<Buffer> {
+  async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
@@ -95,14 +91,23 @@ class OpenShellFsBridge implements SandboxFsBridge {
     }
   }
 
-  async writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async readDirectory(
+    params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
+  ): Promise<DirectoryEntry[]> {
+    const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
+    await assertLocalPathSafety({
+      target,
+      root: target.mountHostRoot,
+      allowMissingLeaf: false,
+      allowFinalSymlinkForUnlink: false,
+    });
+    const root = await fsRoot(target.mountHostRoot);
+    const entries = await root.list(relativeToRoot(target, hostPath), { withFileTypes: true });
+    return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
+  }
+
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
@@ -122,14 +127,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 
-  async createFileExclusive(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<"created" | "exists"> {
+  async createFileExclusive(
+    params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
+  ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create files");
@@ -173,13 +173,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     await mkdirLocalRootPath({ hostPath, target });
   }
 
-  async remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "remove files", params.recursive);
@@ -202,12 +196,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     });
   }
 
-  async rename(params: {
-    from: string;
-    to: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async rename(params: Parameters<SandboxFsBridge["rename"]>[0]): Promise<void> {
     const { from, to } = this.resolveRenameTargets(params);
     const fromHostPath = this.requireHostPath(from);
     const toHostPath = this.requireHostPath(to);
@@ -236,11 +225,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     await moveLocalRootPath({ from, fromHostPath, to, toHostPath });
   }
 
-  async stat(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<SandboxFsStat | null> {
+  async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     const stats = await fsPromises.lstat(hostPath).catch(() => null);

@@ -3,6 +3,9 @@ import {
   type ResponsesInputItem,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
+  buildSlackMpimHistoryBotReply,
   QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BROADCAST_PROMPT_RE,
   QA_WHATSAPP_RUNTIME_AGENT_RE,
@@ -19,11 +22,11 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item?.role !== "user") {
+    if (!item || !isUserTurn(item)) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text && !isInternalRuntimeContextCarrierText(text) && (!matcher || matcher.test(text))) {
+    if (!matcher || matcher.test(text)) {
       return { index, text };
     }
   }
@@ -53,9 +56,7 @@ export function extractMockSubagentContext(input: ResponsesInputItem[]) {
   if (!task) {
     return undefined;
   }
-  const inheritedUserTexts = extractAllUserTexts(input.slice(0, turn.index)).filter(
-    (text) => !isInternalRuntimeContextCarrierText(text),
-  );
+  const inheritedUserTexts = extractUserTurnTexts(input.slice(0, turn.index));
   for (const match of history.matchAll(
     /(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g,
   )) {
@@ -260,7 +261,25 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
     .filter(Boolean);
 }
 
-export function extractSlackMpimRetainedBotNonce(
+export function extractUserTurnTexts(input: ResponsesInputItem[]) {
+  // Runtime carriers are transparent, but empty user turns must fence older scenarios.
+  return input.filter(isUserTurn).map((item) => extractInputText(item.content));
+}
+
+export function buildSlackMpimHistoryReply(prompt: string): string | undefined {
+  const recall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
+  if (recall) {
+    const [, botReplyPrefix, recalledMarker, missingMarker] = recall;
+    const nonce = botReplyPrefix
+      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
+      : undefined;
+    return nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? "");
+  }
+  const seed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
+  return seed ? buildSlackMpimHistoryBotReply(seed) : undefined;
+}
+
+function extractSlackMpimRetainedBotNonce(
   prompt: string,
   botReplyPrefix: string,
 ): string | undefined {

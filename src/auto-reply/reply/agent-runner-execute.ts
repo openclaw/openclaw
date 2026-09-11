@@ -1,12 +1,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -34,6 +32,7 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -187,41 +186,40 @@ export async function executePreparedReplyAgentRun(
 
   await typingSignals.signalRunStart();
 
-  // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
-  // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
-  const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
-    runMemoryFlushIfNeeded({
-      cfg,
-      followupRun,
-      promptForEstimate: followupRun.prompt,
-      sessionCtx,
-      opts,
-      defaultModel,
-      resolvedVerboseLevel,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      sessionKey,
-      runtimePolicySessionKey,
-      storePath,
-      isHeartbeat,
-      replyOperation,
-      onVisibleErrorPayloads: (payloads) => {
-        logVerbose(
-          `memory flush produced ${payloads.length} visible maintenance error payload(s); continuing user reply`,
-        );
-      },
-    }),
+  const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+    followupRun.userTurnTranscriptRecorder,
   );
-  activeSessionEntry = memoryFlushResult.sessionEntry;
-  setActiveSessionEntry(activeSessionEntry);
-
-  if (replyOperation.result?.kind === "aborted") {
-    throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
-  }
+  const checkpointMemory = async (entry: SessionEntry) => {
+    const flushed = await traceAgentPhase("reply.memory_flush", () =>
+      runMemoryFlushIfNeeded({
+        preflightAdmission,
+        cfg,
+        followupRun,
+        promptForEstimate: followupRun.prompt,
+        opts,
+        defaultModel,
+        resolvedVerboseLevel,
+        sessionEntry: entry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        runtimePolicySessionKey,
+        storePath,
+        isHeartbeat,
+        replyOperation,
+      }),
+    );
+    setActiveSessionEntry(flushed.sessionEntry);
+    replyOperation.abortSignal.throwIfAborted();
+    if (flushed.outcome === "exhausted") {
+      await sendDirectCompactionNotice?.("memory_flush_degraded");
+    }
+    return flushed.sessionEntry;
+  };
 
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
+      pendingUserEntryId: preflightAdmission?.entryId,
       cfg,
       followupRun,
       promptForEstimate: followupRun.prompt,
@@ -233,6 +231,7 @@ export async function executePreparedReplyAgentRun(
       storePath,
       isHeartbeat,
       abortSignal: replyOperation.abortSignal,
+      beforeCompaction: checkpointMemory,
       onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
       onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
       onCompactionNotice: sendDirectCompactionNotice,
@@ -241,12 +240,6 @@ export async function executePreparedReplyAgentRun(
   setActiveSessionEntry(activeSessionEntry);
   const preflightCompactionApplied =
     (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-
-  // Optional memory maintenance cannot justify discarding conversation history.
-  // Required compaction failures surface above; otherwise optionally notify and continue.
-  if (memoryFlushResult.outcome === "exhausted") {
-    await sendDirectCompactionNotice?.("memory_flush_degraded");
-  }
 
   const runFollowupTurn = createFollowupRunner({
     resolveGatewayContext: getGatewayContextResolver(replyOperation),
@@ -338,16 +331,8 @@ export async function executePreparedReplyAgentRun(
         return { ...hookResult, reply: hookReply };
       },
     },
-    () => {
-      const gitCoauthorAttribution = prepareGitCoauthorAttribution({
-        agentId: followupRun.run.agentId,
-        config: cfg,
-        currentProfileId: readSessionInputProfileId(sessionCtx),
-        sessionKey,
-        storePath,
-      });
-      const agentTurnOpts = gitCoauthorAttribution ? { ...opts, gitCoauthorAttribution } : opts;
-      return traceAgentPhase("reply.run_agent_turn", () =>
+    () =>
+      traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           commandBody,
           transcriptCommandBody,
@@ -355,7 +340,7 @@ export async function executePreparedReplyAgentRun(
           sessionCtx,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
-          opts: agentTurnOpts,
+          opts,
           resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
           typingSignals,
           blockReplyPipeline,
@@ -378,8 +363,7 @@ export async function executePreparedReplyAgentRun(
           replyMediaContext,
           isRestartRecoveryArmed,
         }),
-      );
-    },
+      ),
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
@@ -558,8 +542,15 @@ export function createReplyAgentRestartRecoveryController(
       : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
+  const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
+    const result = await admitUserTurn(...args);
+    if (result === "admitted" && restartRecoverySourceTurnId) {
+      replyRunRegistry.bindSourceTurnId(replyOperation, restartRecoverySourceTurnId);
+    }
+    return result;
+  };
   return {
-    admitUserTurn,
+    admitUserTurn: admitUserTurnWithSourceBinding,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,

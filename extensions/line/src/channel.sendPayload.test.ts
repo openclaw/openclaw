@@ -8,11 +8,13 @@ import {
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { resolveLineAccount } from "./accounts.js";
 import { linePlugin } from "./channel.js";
 import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
@@ -899,7 +901,7 @@ describe("line outbound sendPayload", () => {
     ).rejects.toThrow(/require previewimageurl/i);
   });
 
-  it("declares message adapter durable text and media with receipt proofs", async () => {
+  it("declares message adapter durable text, media, and reply-to with proofs", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -938,6 +940,29 @@ describe("line outbound sendPayload", () => {
           });
           expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
         },
+        replyTo: async () => {
+          recordLineQuoteToken({
+            accountId: "primary",
+            chatId: "U123",
+            messageId: "m-answered",
+            quoteToken: "q-answered",
+          });
+
+          await linePlugin.message?.send?.text?.({
+            cfg,
+            to: "line:user:U123",
+            text: "answering you",
+            replyToId: "m-answered",
+            accountId: "primary",
+          });
+
+          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "answering you", {
+            verbose: false,
+            accountId: "primary",
+            cfg,
+            quoteToken: "q-answered",
+          });
+        },
         messageSendingHooks: () => {
           expect(linePlugin.message?.send?.text).toBeTypeOf("function");
         },
@@ -946,6 +971,7 @@ describe("line outbound sendPayload", () => {
 
     expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
       "verified",
     );
@@ -970,6 +996,48 @@ describe("line outbound sendPayload", () => {
     );
     expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
       "not_declared",
+    );
+  });
+});
+
+describe("linePlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      line: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { channelAccessToken: "token-alpha" },
+          beta: { channelAccessToken: "token-beta" },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    { name: "the approved account", accountId: "beta", channelAccessToken: "token-beta" },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      channelAccessToken: "token-alpha",
+    },
+  ])("pushes the approval from $name", async ({ accountId, channelAccessToken }) => {
+    const { runtime, mocks } = createRuntime();
+    mocks.resolveLineAccount.mockImplementation(resolveLineAccount);
+    setLineRuntime(runtime);
+
+    await linePlugin.pairing!.notifyApproval!({
+      cfg: pairingCfg,
+      id: "U-paired",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "U-paired",
+      expect.any(String),
+      expect.objectContaining({
+        accountId: accountId ?? "alpha",
+        channelAccessToken,
+      }),
     );
   });
 });

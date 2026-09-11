@@ -464,9 +464,10 @@ function runQaGitCase(profile: QaGitCase, fetchResults: FetchResult[]) {
       step: profile.step,
     },
     fetchResults,
-    // Preserve real 120-second/no-deadline calls and real cleanup; readiness,
-    // not a sleep, ensures every successful Git leader leaves two live writers.
+    // Keep real command deadlines and ready descendant cleanup; these boundary
+    // checks do not need the TERM grace covered by the owner lifecycle tests.
     realClock: true,
+    realDrain: false,
     poisonPython: true,
     env: {
       EXPECTED_SHA: candidate,
@@ -688,110 +689,6 @@ posixIt.each([
   55_000,
 );
 
-const mantisInstallers = [
-  { workflow: "discord-status-reactions", job: "run_status_reactions", fetch: false },
-  { workflow: "discord-thread-attachment", job: "run_thread_attachment", fetch: false },
-  { workflow: "slack-desktop-smoke", job: "run_slack_desktop", fetch: true },
-];
-
-posixIt.each([
-  ...mantisInstallers.map((profile) => ({ ...profile, failure: false })),
-  ...mantisInstallers
-    .filter(({ workflow }) => workflow !== "discord-thread-attachment")
-    .map((profile) => Object.assign({}, profile, { failure: true })),
-])(
-  "Mantis installer Git owner drains before checkout/build/probes: $workflow (cleanup failure=$failure)",
-  async ({ workflow, job, fetch, failure }) => {
-    const result = failure ? "cleanup-failure" : 0;
-    const report = await runCiGitStep({
-      workflow: {
-        file: `.github/workflows/mantis-${workflow}.yml`,
-        job,
-        step: "Install Crabbox CLI",
-      },
-      fetchResults: fetch ? [result] : [],
-      cloneResults: fetch ? [] : [result],
-      realClock: true,
-      realDrain: false,
-      poisonPython: true,
-      env: { CRABBOX_REF: "main" },
-    });
-    expect(report.code, report.output).toBe(failure ? 125 : 0);
-    expect(report.readyAttempts).toEqual([1]);
-    const source = path.join(report.runnerTemp, "crabbox/src");
-    const binary = path.join(report.runnerTemp, "home/.local/bin/crabbox");
-    const gitCommand = (cwd: string, args: string[]) => ({
-      tool: "git",
-      cwd,
-      args,
-      configuration: [],
-    });
-    expect(report.commands.filter(({ tool }) => tool === "git")).toEqual(
-      fetch
-        ? [
-            gitCommand(report.workspace, ["init", source]),
-            gitCommand(source, [
-              "remote",
-              "add",
-              "origin",
-              "https://github.com/openclaw/crabbox.git",
-            ]),
-            gitCommand(source, ["fetch", "--depth", "1", "origin", "main"]),
-            ...(failure ? [] : [gitCommand(source, ["checkout", "--detach", "FETCH_HEAD"])]),
-          ]
-        : [
-            gitCommand(report.workspace, [
-              "clone",
-              "--depth",
-              "1",
-              "https://github.com/openclaw/crabbox.git",
-              source,
-            ]),
-          ],
-    );
-    expect(report.clones).toHaveLength(fetch ? 0 : 1);
-    expect(report.fetches).toHaveLength(fetch ? 1 : 0);
-    expect(report.worktrees).toEqual([]);
-    expect(report.go).toEqual(
-      failure
-        ? []
-        : [
-            {
-              tool: "go",
-              cwd: report.workspace,
-              args: ["build", "-C", source, "-o", binary, "./cmd/crabbox"],
-            },
-          ],
-    );
-    const probes = [
-      ["--version"],
-      ["warmup", "--help"],
-      ...(fetch ? [["media", "preview", "--help"]] : []),
-    ];
-    expect(report.crabbox).toEqual(
-      failure ? [] : probes.map((args) => ({ tool: "crabbox", cwd: report.workspace, args })),
-    );
-    expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual([]);
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
-      ...(fetch ? ["init", "fetch:1"] : ["clone:1"]),
-      ...(failure
-        ? []
-        : [...(fetch ? ["checkout"] : []), "consumer:go", ...probes.map(() => "consumer:crabbox")]),
-      "exit",
-    ]);
-    expect(report.githubPath).toBe(failure ? "" : `${path.dirname(binary)}\n`);
-    expect(report.githubOutput).toBe("");
-    expect(report.githubEnv).toBe("");
-    expect(report.githubSummary).toBe("");
-    if (failure) {
-      expect(report.output).toContain("Git ownership/setup failed");
-    } else {
-      expect(report.output).toContain("crabbox fixture");
-    }
-  },
-  55_000,
-);
-
 const mantisWorktrees = [
   {
     workflow: "discord-status-reactions",
@@ -887,8 +784,6 @@ posixIt.each([
     );
     expect(report.clones).toEqual([]);
     expect(report.fetches).toEqual([]);
-    expect(report.go).toEqual([]);
-    expect(report.crabbox).toEqual([]);
     expect(report.boundaries.map(({ name }) => name)).toEqual([
       ...attempted.map((_, index) => `worktree:${index + 1}`),
       ...(failure
@@ -914,11 +809,23 @@ const show = ["show", sourceObject];
 const rebase = ["rebase", "-X", "theirs", "origin/main"];
 const push = ["push", "origin", "HEAD:main"];
 const abort = ["rebase", "--abort"];
-const diff = ["diff", "--quiet", "--", "docs", ".openclaw-sync"];
+const diff = [
+  "diff",
+  "--quiet",
+  "--",
+  "docs",
+  ".openclaw-sync",
+  "package.json",
+  "package-lock.json",
+];
+const dependencyReads = [
+  ["show", "refs/remotes/origin/main:package.json"],
+  ["show", "refs/remotes/origin/main:package-lock.json"],
+];
 const commit = [
   ["config", "user.name", "openclaw-docs-sync[bot]"],
   ["config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com"],
-  ["add", "docs", ".openclaw-sync"],
+  ["add", "docs", ".openclaw-sync", "package.json", "package-lock.json"],
   ["commit", "-m", `chore(sync): mirror docs from fixture/checkout@${candidate}`],
 ];
 
@@ -986,24 +893,58 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
   async (failure) => {
     const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
     expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([diff, fetch, ...commit, fetch, show, rebase, push]);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      ...commit,
+      fetch,
+      show,
+      rebase,
+      ...dependencyReads,
+      push,
+    ]);
     expect(backoffs(report)).toEqual([]);
-    expect(report.commands.every(({ cwd }) => cwd === path.join(report.workspace, "publish"))).toBe(
-      true,
-    );
+    expect(
+      report.commands.every(
+        ({ tool, args, cwd }) =>
+          cwd ===
+          (tool === "node" && args[0] === "--input-type=module"
+            ? report.workspace
+            : path.join(report.workspace, "publish")),
+      ),
+    ).toBe(true);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(2);
+    expect(report.boundaries.map(({ name }) => name)).toEqual([
+      "diff",
+      "fetch:1",
+      "config",
+      "config",
+      "add",
+      "commit",
+      "fetch:2",
+      `show:${sourceObject}`,
+      "rebase:1",
+      ...dependencyReads.map((args) => `show:${args[1]}`),
+      "consumer:node",
+      "consumer:npm",
+      "consumer:node",
+      "push:1",
+      "exit",
+    ]);
   },
   55_000,
 );
 
 posixIt.each([
-  { operation: "rebase", failure: 23 },
-  { operation: "push", failure: 23 },
-  { operation: "rebase", failure: 125 },
-  { operation: "push", failure: 143 },
+  { operation: "rebase", failure: 23, lockChange: false },
+  { operation: "push", failure: 23, lockChange: true },
+  { operation: "rebase", failure: 125, lockChange: false },
+  { operation: "push", failure: 143, lockChange: false },
 ])(
   "docs publication drains failed $operation ($failure) before abort/next fetch and then succeeds",
-  async ({ operation, failure }) => {
+  async ({ operation, failure, lockChange }) => {
     const report = await runDocs("Commit publish repo sync", {
+      env: lockChange ? { FIXTURE_DOCS_LOCK_AFTER_REBASE: "1" } : {},
       rebaseResults: operation === "rebase" ? [failure, 0] : [],
       pushResults: operation === "push" ? [failure, 0] : [],
     });
@@ -1016,21 +957,40 @@ posixIt.each([
       fetch,
       show,
       rebase,
-      ...(operation === "push" ? [push] : []),
+      ...(operation === "push" ? [...dependencyReads, push] : []),
       abort,
       fetch,
       show,
       rebase,
+      ...dependencyReads,
       push,
     ]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
     expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
+    expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
+    if (operation === "push" && !lockChange) {
+      expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
+    }
   },
   55_000,
 );
 
-posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
+posixIt(
+  "docs publication rejects invalid content introduced by the final rebase",
+  async () => {
+    const report = await runDocs("Commit publish repo sync", {
+      env: { FIXTURE_DOCS_MDX_AFTER_REBASE: "# Rebased page\n\n{unfinished\n" },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(report.output).toContain("Docs MDX check failed");
+    expect(report.pushes).toEqual([]);
+    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
+  },
+  55_000,
+);
+
+posixIt.each(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as const)(
   "docs publication cleanup uncertainty at %s prevents abort/retry/next Git",
   async (operation) => {
     const report = await runDocs("Commit publish repo sync", {
@@ -1042,6 +1002,14 @@ posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
             : [],
       rebaseResults: operation === "rebase" ? ["cleanup-failure"] : [],
       pushResults: operation === "push" ? ["cleanup-failure"] : [],
+      commandResults:
+        operation === "manifest" || operation === "lock"
+          ? {
+              [dependencyReads[operation === "manifest" ? 0 : 1]!.join(" ")]: {
+                code: "cleanup-failure",
+              },
+            }
+          : {},
     });
     expect(report.code, report.output).toBe(125);
     expect(gitArgs(report)).toEqual([
@@ -1055,7 +1023,15 @@ posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
             fetch,
             ...(operation === "fetch"
               ? []
-              : [show, rebase, ...(operation === "push" ? [push] : [])]),
+              : [
+                  show,
+                  rebase,
+                  ...dependencyReads.slice(
+                    0,
+                    operation === "rebase" ? 0 : operation === "manifest" ? 1 : 2,
+                  ),
+                  ...(operation === "push" ? [push] : []),
+                ]),
           ]),
     ]);
     expect(report.rebases.some(({ args }) => args.includes("--abort"))).toBe(false);
@@ -1149,8 +1125,55 @@ posixIt.each([
       show,
       ...staleCheck,
       rebase,
+      ...dependencyReads,
       push,
     ]);
+  },
+  55_000,
+);
+
+posixIt.each([
+  {
+    label: "malformed remote manifest",
+    text: "{",
+    validates: false,
+    error: "Git ownership/setup failed (unknown); refusing reuse or retry",
+  },
+  {
+    label: "unrelated remote dependency update lost during rebase",
+    text: JSON.stringify({
+      name: "docs-fixture",
+      private: true,
+      devDependencies: { "@sindresorhus/slugify": "2.2.0", "markdown-it": "15.0.1" },
+    }),
+    validates: true,
+    error: "docs sync changed unrelated publisher dependencies",
+  },
+])(
+  "docs publication rejects $label before push without Git retries",
+  async ({ text, validates, error }) => {
+    const report = await runDocs("Commit publish repo sync", {
+      objects: {
+        [sourceObject]: { text: JSON.stringify({ sha: candidate }) },
+        [dependencyReads[0]![1]!]: { text },
+      },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      show,
+      ...commit,
+      fetch,
+      show,
+      rebase,
+      ...dependencyReads.slice(0, validates ? 2 : 1),
+    ]);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(validates ? 1 : 0);
+    expect(report.output).toContain(error);
+    expect(report.pushes).toEqual([]);
+    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
+    expect(backoffs(report)).toEqual([]);
   },
   55_000,
 );

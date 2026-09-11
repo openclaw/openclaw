@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -520,7 +521,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typeof requestParams.preview === "string"
         ? {
             ...requestParams,
-            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+            preview: truncateCodePoints(requestParams.preview.trim(), 400),
           }
         : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
@@ -581,10 +582,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
-    if (!params.typing && effectiveTyping) {
-      respond(true, { ok: true, broadcast: false });
-      return;
-    }
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,

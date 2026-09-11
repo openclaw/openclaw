@@ -132,8 +132,13 @@ export function handleMessageUpdate(
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
     // Prefer full partial-message thinking when available; fall back to event payloads.
-    const partialThinking = extractAssistantThinking(msg);
-    ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+    const block =
+      Array.isArray(msg.content) && msg.content.length === 1 ? msg.content[0] : undefined;
+    const nativeThinking = block?.type === "thinking" ? block : undefined;
+    ctx.emitReasoningStream(
+      nativeThinking ?? (extractAssistantThinking(msg) || thinkingContent || thinkingDelta),
+      nativeThinking ? thinkingContent || thinkingDelta : undefined,
+    );
     if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
       // Mirror the open gate above: when message-tool-only delivery has made the
       // reasoning lane private, do not force-open it just to close it — that
@@ -464,15 +469,13 @@ export function handleMessageUpdate(
             ? ctx.consumePartialReplyDirectives("", { final: finalText })
             : null,
         );
-    if (shouldUsePhaseAwareBlockReply || isTerminalSnapshot) {
-      recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
-    }
     const previousCleaned = ctx.state.assistantStream?.text ?? "";
     const {
       text: cleanedText,
       delta: replyDelta,
       replace,
       hasText,
+      replyDirectives,
     } = resolveStreamingReply({
       evtType,
       next,
@@ -482,6 +485,9 @@ export function handleMessageUpdate(
       appendDelta,
       parsedStreamDirectives,
     });
+    if (shouldUsePhaseAwareBlockReply || isTerminalSnapshot) {
+      recordPendingAssistantReplyDirectives(ctx.state, replyDirectives);
+    }
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
     const hasVisibleReply = hasText || hasAudio;

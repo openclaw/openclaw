@@ -3,19 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  markPackagePostInstallDoctorAdvisory,
-  runGlobalPackageUpdateSteps,
-} from "./package-update-steps.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
   createNpmTarget,
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import {
-  createDeferredConfiguredPluginRepairDoctorResult,
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-} from "./update-doctor-result.js";
 import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   type ResolvedGlobalInstallTarget,
@@ -53,79 +46,6 @@ async function expectPathMissing(filePath: string): Promise<void> {
   }
   throw new Error(`Expected missing path: ${filePath}`);
 }
-
-describe("markPackagePostInstallDoctorAdvisory", () => {
-  it("marks only explicit post-install doctor advisory exits", () => {
-    const step = markPackagePostInstallDoctorAdvisory(
-      {
-        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        stderrTail: "doctor deferred repair",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      },
-      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
-    );
-
-    expect(step.advisory).toEqual({
-      kind: "package-post-install-doctor",
-      message: expect.stringContaining("recoverable update-time repair warning"),
-    });
-    expect(step.stderrTail).toContain("doctor deferred repair");
-    expect(step.stderrTail).toContain("deferred configured plugin repair");
-  });
-
-  it("keeps advisory diagnostics bounded after appending deferred repair details", () => {
-    const step = markPackagePostInstallDoctorAdvisory(
-      {
-        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        stderrTail: "doctor deferred repair",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      },
-      createDeferredConfiguredPluginRepairDoctorResult([
-        `deferred configured plugin repair ${"x".repeat(10_000)}`,
-      ]),
-    );
-
-    expect(step.stderrTail).toHaveLength(8_001);
-    expect(step.stderrTail).toMatch(/^…/u);
-    expect(step.stderrTail).toContain("recoverable update-time repair warning");
-  });
-
-  it("does not mark unknown nonzero doctor exits as advisory", () => {
-    const step = markPackagePostInstallDoctorAdvisory(
-      {
-        exitCode: 1,
-        stderrTail: "doctor refused migration",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      },
-      null,
-    );
-
-    expect(step.advisory).toBeUndefined();
-    expect(step.stderrTail).toBe("doctor refused migration");
-  });
-
-  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
-    const step = markPackagePostInstallDoctorAdvisory(
-      {
-        exitCode: 124,
-        stderrTail: "doctor timed out",
-        signal: null,
-        killed: true,
-        termination: "timeout" as const,
-      },
-      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
-    );
-
-    expect(step.advisory).toBeUndefined();
-    expect(step.stderrTail).toBe("doctor timed out");
-  });
-});
 
 describe("runGlobalPackageUpdateSteps", () => {
   it.runIf(process.platform !== "win32")(
@@ -187,12 +107,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     await withTestDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
       const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
       const packageRoot = path.join(managedRoot, "openclaw");
+      const staleRenameDir = path.join(managedRoot, ".openclaw-stale");
       await writePackageRoot(packageRoot, "1.0.0");
+      await fs.mkdir(staleRenameDir);
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
+        await expectPathMissing(staleRenameDir);
         const prefixIndex = argv.indexOf("--prefix");
         expect(prefixIndex).toBeGreaterThan(0);
         const stagePrefix = argv[prefixIndex + 1];
@@ -229,7 +152,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
 
       expect(result.failedStep).toBeNull();
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
@@ -828,7 +751,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         "expected installed version 2.0.0, found 1.5.0",
       );
       // Staged tree never reached live swap — do not exempt the future-config guard.
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
@@ -865,12 +788,16 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       await fs.chmod(targetShim, 0o755);
       let stagedShimForFailure: string | undefined;
+      let restoringShim: string | undefined;
+      const isLauncherStage = (entry: string) =>
+        path.dirname(path.dirname(entry)) === path.dirname(targetShim) &&
+        path.basename(path.dirname(entry)).startsWith(".openclaw-shim-stage-");
       const realCopyFile = fs.copyFile.bind(fs);
       const realSymlink = fs.symlink.bind(fs);
       const realRename = fs.rename.bind(fs);
       const realChmod = fs.chmod.bind(fs);
       const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (...args) => {
-        if (failure === "mode restore" && String(args[0]) === targetShim) {
+        if (failure === "mode restore" && String(args[0]) === restoringShim) {
           throw createFsError("EACCES", "shim mode restoration failed");
         }
         return await realChmod(...args);
@@ -879,10 +806,16 @@ describe("runGlobalPackageUpdateSteps", () => {
         const source = String(args[0]);
         const destination = String(args[1]);
         if (
+          isLauncherStage(destination) &&
+          path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
+        ) {
+          restoringShim = destination;
+        }
+        if (
           (failure === "backup copy" && source === targetShim) ||
           (failure !== "backup copy" && source === stagedShimForFailure) ||
           (failure === "shim restore" &&
-            destination === targetShim &&
+            isLauncherStage(destination) &&
             path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-"))
         ) {
           throw createFsError("EACCES", `${failure} failed`);
@@ -890,7 +823,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         return await realCopyFile(...args);
       });
       const symlinkSpy = vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-        if (failure === "symlink copy" && args[0] === newLink && String(args[1]) === targetShim) {
+        if (failure === "symlink copy" && args[0] === newLink && isLauncherStage(String(args[1]))) {
           throw createFsError("EACCES", "staged symlink creation failed");
         }
         return await realSymlink(...args);
@@ -905,6 +838,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
         return await realRename(...args);
       });
+      const beforeActivate = vi.fn(async () => {});
 
       let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
       try {
@@ -914,6 +848,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
+          beforeActivate,
           runStep: async ({ name, argv, cwd }) => {
             const stagePrefix = argv[argv.indexOf("--prefix") + 1];
             if (!stagePrefix) {
@@ -959,9 +894,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         ).resolves.toContain('"version":"1.0.0"');
       }
       if (failure === "shim restore" || failure === "mode restore") {
-        if (failure === "shim restore") {
-          await expectPathMissing(targetShim);
-        }
+        // Atomic replacement preserves the old entry if restoration cannot stage or set its mode.
+        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
         const backups = (await fs.readdir(globalRoot)).filter((entry) =>
           entry.startsWith(".openclaw.shim-backup-"),
         );
@@ -1003,8 +937,15 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(retry.failedStep).not.toBeNull();
         expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
       }
-      // Package and launcher rollback does not reverse possible lifecycle state changes.
-      expect(result.recovery?.serviceRestartSafe).toBe(false);
+      if (failure === "backup copy") {
+        // Launcher backup failed before activation; the original runtime was verified again.
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+      } else {
+        // After activation, package rollback alone cannot reverse lifecycle state changes.
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(result.recovery?.serviceRestartSafe).toBe(false);
+      }
     });
   });
 

@@ -2,12 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createCommandTurnContext } from "./command-turn-context.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   getCommandDetection,
+  isActiveRunSafeCommandTurn,
   listChatCommands,
   listChatCommandsForConfig,
   listNativeCommandSpecs,
@@ -253,6 +255,34 @@ describe("commands registry", () => {
       }),
     ).toBeUndefined();
   });
+
+  it.each(["native", "text"] as const)(
+    "allows only authorized login cancellation beside an active run (%s)",
+    (source) => {
+      setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+      for (const [body, expected] of [
+        ["/login cancel", true],
+        [" /login CANCEL ", true],
+        ["/login", false],
+        ["/login openrouter", false],
+        ["/login cancel openrouter", false],
+      ] as const) {
+        for (const authorized of [true, false]) {
+          expect(
+            isActiveRunSafeCommandTurn({
+              commandTurn: createCommandTurnContext(source, {
+                authorized,
+                commandName: "login",
+                body,
+              }),
+              cfg: {},
+              provider: "discord",
+            }),
+          ).toBe(authorized && expected);
+        }
+      }
+    },
+  );
 
   it("exposes /side as a BTW text and native alias", () => {
     const btw = requireChatCommand("btw");
@@ -812,14 +842,16 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+  it("offers all verbose choices when no argument is provided", () => {
     const verbose = requireChatCommand("verbose");
 
     const modeArg = requireCommandArgAt(verbose, 0);
     expect(modeArg.choices).toEqual(["on", "off", "full"]);
-    expect(
-      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
-    ).toBeNull();
+    expect(requireCommandArgMenu({ command: verbose }).choices).toEqual([
+      { label: "on", value: "on" },
+      { label: "off", value: "off" },
+      { label: "full", value: "full" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {

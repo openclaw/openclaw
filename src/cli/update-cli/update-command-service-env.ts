@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../../daemon/constants.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -23,7 +24,7 @@ function applyManagedServiceSelectorEnv(params: {
   const resolved = { ...params.baseEnv };
   const selectorEnv = params.selectorEnv ?? params.serviceEnv;
   for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
-    if (selectorEnv[key]?.trim()) {
+    if (resolveEnvironmentValue(selectorEnv, key)?.trim()) {
       resolved[key] = params.serviceEnv[key];
     } else {
       delete resolved[key];
@@ -36,7 +37,14 @@ export function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
+  // A plain copy loses Windows process.env's case-insensitive lookups. Keep
+  // immutable snapshots usable by the config and database path resolvers.
+  const resolvedEnv: NodeJS.ProcessEnv =
+    process.platform === "win32"
+      ? Object.fromEntries(
+          Object.entries(mergeProcessEnv([env])).map(([key, value]) => [key.toUpperCase(), value]),
+        )
+      : { ...env };
   for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
     const rawValue = resolvedEnv[key]?.trim();
     if (!rawValue) {
@@ -53,6 +61,38 @@ export function resolveServiceRefreshEnv(
     resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
   }
   return resolvedEnv;
+}
+
+/** Run one update phase under the managed Gateway's authoritative environment. */
+export async function withOwnedManagedUpdateEnv<T>(
+  env: NodeJS.ProcessEnv | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!env) {
+    return await run();
+  }
+  // Update finalization is a single serialized CLI phase. Some plugin/config owners still read
+  // process.env, so switch the complete phase atomically and restore the caller afterward.
+  const previousEnv = { ...process.env };
+  for (const key of Object.keys(process.env)) {
+    delete process.env[key];
+  }
+  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
+  const phaseEnv = env === process.env ? previousEnv : env;
+  for (const [key, value] of Object.entries(phaseEnv)) {
+    // Node stringifies undefined on assignment; unset selectors must remain absent.
+    if (value !== undefined) {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      delete process.env[key];
+    }
+    Object.assign(process.env, previousEnv);
+  }
 }
 
 export async function withUpdateInProgressEnv<T>(
@@ -138,7 +178,9 @@ export function resolveUpdateTargetEnv(params?: {
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
-  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(
+    resolveServiceRefreshEnv(params?.baseEnv ?? process.env, params?.invocationCwd),
+  );
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }

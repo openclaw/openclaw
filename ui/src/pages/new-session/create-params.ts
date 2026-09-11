@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -46,6 +47,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   mentions?: readonly HumanMention[];
   displayName?: string;
+  deferInitialTurn?: boolean;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -56,6 +58,7 @@ export function buildDraftSessionCreateParams(draft: {
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
   projectGitUrl?: string;
+  repository?: SessionCreateParams["repository"];
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
@@ -71,25 +74,37 @@ export function buildDraftSessionCreateParams(draft: {
   const model = normalizeOptionalString(draft.model);
   const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
-  const projectId = normalizeOptionalString(draft.projectId);
+  const message = draft.deferInitialTurn ? "" : draft.message;
+  const titleSource =
+    draft.deferInitialTurn && draft.visibility !== "incognito"
+      ? truncateUtf16Safe(draft.message.trim(), 1_000)
+      : undefined;
+  const repository = draft.repository;
+  const projectId = repository ? undefined : normalizeOptionalString(draft.projectId);
   const projectGitUrl =
-    !projectId && (draft.message.trim() || draft.attachments?.length)
+    !repository &&
+    !projectId &&
+    (message.trim() || (!draft.deferInitialTurn && draft.attachments?.length))
       ? normalizeOptionalString(draft.projectGitUrl)
       : undefined;
-  const customFolder = !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
+  const customFolder =
+    !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
-    message: draft.message,
-    ...(draft.mentions?.length
+    message,
+    ...(!draft.deferInitialTurn && draft.mentions?.length
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(normalizeOptionalString(draft.displayName)
       ? { displayName: normalizeOptionalString(draft.displayName) }
       : {}),
+    ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
-    ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+    ...(!draft.deferInitialTurn && draft.attachments?.length
+      ? { attachments: draft.attachments }
+      : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
@@ -100,8 +115,9 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
+    ...(repository ? { repository: { ...repository } } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
-    ...(draft.worktree
+    ...(draft.worktree && !repository
       ? {
           worktree: true,
           // Passing the base explicitly also skips the create-time origin fetch.

@@ -1,10 +1,16 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  TERMINAL_START_FEATURE_METHODS,
+  cliAgentCatalog,
+} from "./new-session-page.native-terminal.test-support.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
@@ -19,6 +25,30 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+function mainAndResearchAgents(mainWorkspace: string, researchWorkspace: string) {
+  return {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace: mainWorkspace,
+        workspaceGit: true,
+      },
+      {
+        id: "research",
+        identity: { name: "Research" },
+        name: "Research",
+        workspace: researchWorkspace,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
+
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
     request.params &&
@@ -26,40 +56,6 @@ function requestHasParam(request: { params?: unknown }, key: string, value: unkn
     !Array.isArray(request.params) &&
     (request.params as Record<string, unknown>)[key] === value,
   );
-}
-
-const TERMINAL_START_FEATURE_METHODS = [
-  "chat.metadata",
-  "chat.startup",
-  "sessions.catalog.list",
-  "sessions.catalog.startTerminal",
-  "sessions.create",
-  "sessions.title.prepare",
-  "sessions.dispatch",
-  "terminal.open",
-  "worktrees.create",
-] as const;
-
-function cliAgentCatalog(startTerminal: boolean) {
-  return {
-    id: "claude",
-    label: "Claude Code",
-    capabilities: {
-      continueSession: true,
-      archive: false,
-      ...(startTerminal ? { startTerminal: true } : {}),
-    },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Local Claude Code",
-        kind: "gateway",
-        connected: true,
-        canStartTerminal: startTerminal,
-        sessions: [],
-      },
-    ],
-  };
 }
 
 suite.define(() => {
@@ -195,11 +191,14 @@ suite.define(() => {
       await pollLocatorText(cliGroup).toContain("Claude Code");
       expect(await cliGroup.textContent()).not.toContain("History only");
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "picker-group.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [cliGroup],
+          ),
+        );
       }
 
       await cliGroup.getByRole("option", { name: "Claude Code" }).click();
@@ -214,11 +213,12 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "catalog-target.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__runtime"),
+          ]),
+        );
       }
     } finally {
       await context.close();
@@ -245,11 +245,7 @@ suite.define(() => {
       startTerminal: false,
     },
   ])("blocks native submission visibly when $label", async (testCase) => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: testCase.cliAgentsEnabled,
@@ -305,13 +301,6 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    await page.addInitScript(() => {
-      const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-      proofWindow.terminalToggleProof = [];
-      window.addEventListener("openclaw:terminal-toggle", (event) => {
-        proofWindow.terminalToggleProof?.push((event as CustomEvent).detail);
-      });
-    });
     const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
     const config = { tools: { web: { search: { provider: "brave" } } } };
     const gateway = await installMockGateway(page, {
@@ -329,27 +318,7 @@ suite.define(() => {
           runtimeConfig: config,
           config,
         },
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, WORKSPACE),
         "sessions.catalog.list": { catalogs: [cliAgentCatalog(true)] },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
@@ -401,14 +370,12 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
       if (captureCliAgentsProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "cli-agents-picker"),
-            "terminal-primary.png",
-          ),
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "cli-agents-picker", "terminal-primary.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".new-session-page__message"),
+          ]),
+        );
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
@@ -437,14 +404,13 @@ suite.define(() => {
         methods.indexOf("sessions.catalog.startTerminal"),
       );
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      const panel = page.locator("openclaw-terminal-panel");
+      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await panel.locator(".tp-host canvas").waitFor({ state: "visible" });
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-            return proofWindow.terminalToggleProof;
-          }),
-        )
-        .toContainEqual({ open: true, terminalSessionId: "terminal-cli-1", agentOwned: false });
+        .poll(() => panel.locator(".tabstrip-tab.is-live").getAttribute("title"))
+        .toContain(worktreePath);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
 
       await expect
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
@@ -474,11 +440,7 @@ suite.define(() => {
   });
 
   it("shows the terminal-start server error without rewriting it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const serverMessage = "cwd is no longer available; choose another folder and retry";
     await installMockGateway(page, {
@@ -581,6 +543,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("sessions.catalog.startTerminal");
         await expect.poll(() => message.inputValue()).toBe("");
+        await page.locator("openclaw-terminal-panel .tabstrip-tab.is-live").waitFor();
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {
@@ -590,11 +553,7 @@ suite.define(() => {
   );
 
   it("navigates to a created session while canonical session refresh is pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:refresh-overlap-e2e";
     const listResponse = {
@@ -665,11 +624,7 @@ suite.define(() => {
   });
 
   it("resolves a pending catalog target after reconnect without clearing the draft", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
@@ -725,7 +680,13 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.catalog.startTerminal": { sessionId: "claude-reconnect" },
+        "sessions.catalog.startTerminal": {
+          sessionId: "claude-reconnect",
+          agentId: "research",
+          shell: "claude",
+          cwd: "/home/peter/research",
+          confined: false,
+        },
       },
     });
 
@@ -794,35 +755,11 @@ suite.define(() => {
   });
 
   it("clears the draft after a genuine new-session route navigation settles", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: REFRESHED_RESEARCH_WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
       },
     });
 
@@ -842,11 +779,7 @@ suite.define(() => {
   });
 
   it("preserves a manually selected agent across a same-client reconnect", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -899,27 +832,10 @@ suite.define(() => {
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: WORKSPACE,
-            workspaceGit: true,
-          },
-          {
-            id: "research",
-            identity: { name: "Research" },
-            name: "Research",
-            workspace: REFRESHED_RESEARCH_WORKSPACE,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.setMethodResponse(
+        "agents.list",
+        mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
+      );
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
 

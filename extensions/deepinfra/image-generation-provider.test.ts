@@ -1,7 +1,8 @@
-// Deepinfra tests cover image generation provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
+  requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
@@ -14,22 +15,6 @@ const {
 } = getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
-
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call[0];
-}
-
-function requireFirstMockObjectArg(mock: ReturnType<typeof vi.fn>, label: string): object {
-  const value = requireFirstMockArg(mock, label);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
 
 describe("deepinfra image generation provider", () => {
   beforeEach(() => {
@@ -59,12 +44,12 @@ describe("deepinfra image generation provider", () => {
   it("sends OpenAI-compatible image generation requests and sniffs JPEG output", async () => {
     const release = vi.fn(async () => {});
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [{ b64_json: jpegBytes.toString("base64"), revised_prompt: "red square" }],
       }),
       release,
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({
@@ -102,7 +87,10 @@ describe("deepinfra image generation provider", () => {
       ],
     ]);
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const jsonRequest = requireFirstMockArg(postJsonRequestMock, "DeepInfra JSON image request");
+    const jsonRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra JSON image request",
+    );
     const jsonRequestHeaders = Reflect.get(jsonRequest ?? {}, "headers");
     expect(jsonRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((jsonRequestHeaders as Headers).entries())).toEqual({
@@ -139,7 +127,7 @@ describe("deepinfra image generation provider", () => {
   });
 
   it("sends image edits as multipart OpenAI-compatible requests", async () => {
-    postMultipartRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [
           {
@@ -150,7 +138,7 @@ describe("deepinfra image generation provider", () => {
         ],
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({
@@ -162,7 +150,7 @@ describe("deepinfra image generation provider", () => {
     });
 
     expect(postMultipartRequestMock).toHaveBeenCalledOnce();
-    const multipartRequest = requireFirstMockObjectArg(
+    const multipartRequest = requireFirstPostJsonRecordRequest(
       postMultipartRequestMock,
       "DeepInfra multipart image request",
     );

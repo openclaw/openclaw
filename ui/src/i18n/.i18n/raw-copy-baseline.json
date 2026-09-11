@@ -41,6 +41,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "login screen"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -200,23 +207,9 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "alt",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN ("
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "ws://127.0.0.1:18789"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,
@@ -313,13 +306,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/panels-overview.ts",
-      "text": "&times;"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
       "text": "NIP-05"
     },
@@ -405,14 +391,7 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.ts",
-      "text": "ws://100.x.y.z:18789"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "placeholder",
-      "path": "ui/src/pages/connection/view.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,
@@ -450,11 +429,102 @@
       "text": "exec host=gateway/node"
     },
     {
-      "count": 4,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/view.ts",
-      "text": "v"
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Chat with your agent from Telegram groups and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Connect OpenClaw to Matrix rooms and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Coordinate work using the included calendar plugin."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Dashboard workboard for agent-owned issues and sessions."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix homeserver URL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Plan and coordinate work from a shared calendar."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Run typed workflows with resumable approvals."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Send and receive Matrix messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Web extraction and crawling."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Enabled"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Homeserver"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Mode"
     },
     {
       "count": 1,
@@ -464,7 +534,7 @@
       "text": "OpenClaw"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",

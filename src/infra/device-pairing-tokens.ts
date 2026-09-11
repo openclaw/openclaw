@@ -379,7 +379,20 @@ export async function rotateDeviceToken(params: {
     device.tokens = tokens;
     clearNodePairingGenerationState(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
-    persistState(state, params.baseDir, "paired");
+    const retiredNodeToken =
+      role === "node" &&
+      params.scopes !== undefined &&
+      requestedScopes.length === 0 &&
+      existing &&
+      !scopesWithinApprovedDeviceBaseline({
+        role,
+        scopes: existing.scopes,
+        approvedScopes,
+      })
+        ? { deviceId: device.deviceId, expectedToken: existing.token }
+        : undefined;
+    // Retire the matching legacy cache with the token, even if the CLI loses its response.
+    persistState(state, params.baseDir, "paired", { retiredNodeToken });
     return { ok: true, entry: next };
   });
 }

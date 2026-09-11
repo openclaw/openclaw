@@ -54,10 +54,18 @@ type AttachmentSidebarSource = {
   height?: number;
 };
 
+export type AttachmentSidebarState =
+  | { status: "pending" }
+  | ({ status: "ready" } & AttachmentSidebarSource)
+  | { status: "unavailable" }
+  | { status: "error"; reason: string };
+
 export type AttachmentSidebarRuntime = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
   connectionEpoch?: number;
   authToken?: string | null;
-  localMediaPreviewRoots: readonly string[];
   resourceBasePath?: string;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
@@ -80,7 +88,7 @@ type AttachmentSidebarContent = {
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,
-  ) => AttachmentSidebarSource | null;
+  ) => AttachmentSidebarState;
   rawText?: string | null;
 };
 
@@ -127,3 +135,10 @@ export type SidebarContent =
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };
+
+export type SidebarSelection =
+  | SidebarContent
+  | { kind: "loading" }
+  // A failed open keeps owning the Review tab; an empty selection falls back to
+  // the session diff, which reads as if the click had opened something else.
+  | { kind: "unavailable"; message: string };

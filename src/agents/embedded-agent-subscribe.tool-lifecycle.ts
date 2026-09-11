@@ -3,8 +3,10 @@ import {
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import type { ToolEffectReceipt } from "./tool-effect-receipt.js";
+import type { AgentEvent } from "./runtime/index.js";
+import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 type ToolTerminal = {
@@ -31,7 +33,7 @@ export function createEmbeddedToolLifecycleRunner(
 ): EmbeddedToolLifecycleRunner {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
     ctx.flushAssistantStream();
-    await handleToolExecutionStart(ctx, {
+    const startEvent = {
       type: "tool_execution_start",
       toolName: toolParams.toolName,
       toolCallId: toolParams.toolCallId,
@@ -39,7 +41,9 @@ export function createEmbeddedToolLifecycleRunner(
       replaySafe: toolParams.replaySafe,
       hideFromChannelProgress: toolParams.hideFromChannelProgress,
       lifecycleProvenance: "nested",
-    } as never); // SAFETY: internal nested lifecycle event uses the handler's closed shape.
+    } as const;
+    recordEmbeddedToolTrajectoryEvent(ctx, startEvent);
+    await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
     const onImplementationStart = () => {
       executionStarted = true;
@@ -50,15 +54,15 @@ export function createEmbeddedToolLifecycleRunner(
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
       const result = buildToolLifecycleErrorResult(error);
+      if (trustedNoStart) {
+        markToolExecutionNotStarted(result);
+      }
       const terminal = await finishToolLifecycle(ctx, toolParams, {
         executionStarted,
         isError: true,
         result,
       });
-      const effectReceipt = trustedNoStart
-        ? ({ state: "not_started" } as const)
-        : terminal.effectReceipt;
-      await toolParams.onTerminal?.({ ...terminal, effectReceipt });
+      await toolParams.onTerminal?.(terminal);
       throw error;
     }
     const terminal = await finishToolLifecycle(ctx, toolParams, {
@@ -77,7 +81,7 @@ async function finishToolLifecycle(
   outcome: { executionStarted: boolean; isError: boolean; result: unknown },
 ): Promise<ToolTerminal> {
   ctx.flushAssistantStream();
-  const terminal = await handleToolExecutionEnd(ctx, {
+  const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
     type: "tool_execution_end",
     toolName: toolParams.toolName,
     toolCallId: toolParams.toolCallId,
@@ -85,7 +89,9 @@ async function finishToolLifecycle(
     executionStarted: outcome.executionStarted,
     result: outcome.result,
     hideFromChannelProgress: toolParams.hideFromChannelProgress,
-  } as never); // SAFETY: internal nested lifecycle event uses the handler's closed shape.
+  };
+  recordEmbeddedToolTrajectoryEvent(ctx, endEvent);
+  const terminal = await handleToolExecutionEnd(ctx, endEvent);
   return {
     result: outcome.result,
     isError: terminal.isError,

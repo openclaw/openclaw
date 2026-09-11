@@ -34,7 +34,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -309,44 +309,62 @@ export async function mutateSessionGoal(
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
   const resolved = resolveSqliteScope(options);
   const databaseOptions = toDatabaseOptions(resolved);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
-    const committed = runOpenClawAgentWriteTransaction((database) => {
-      options.assertCurrent?.();
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
-      const replay = readSessionGoalOperationReceipt(
-        database.db,
-        resolved.sessionKey,
-        options.expectedSessionId,
-        options.operation,
-      );
-      if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
-        return { result: replay, replayed: true };
-      }
-      if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
-        throw new SessionGoalOperationError(
-          "session-rebound",
-          "Session changed; refresh before changing its Goal.",
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
+      const committed = runOpenClawAgentWriteTransaction((database) => {
+        options.assertCurrent?.();
+        const fresh = readSessionEntryRow(database, resolved.sessionKey);
+        const replay = readSessionGoalOperationReceipt(
+          database.db,
+          resolved.sessionKey,
+          options.expectedSessionId,
+          options.operation,
         );
+        if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
+          return { result: replay, replayed: true };
+        }
+        if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
+          throw new SessionGoalOperationError(
+            "session-rebound",
+            "Session changed; refresh before changing its Goal.",
+          );
+        }
+        const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
+        const next = mergeSessionEntry(fresh.entry, { goal });
+        const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        writeSessionEntry(database, resolved.sessionKey, next);
+        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const result = writeSessionGoalOperationReceipt(
+          database.db,
+          resolved.sessionKey,
+          options.expectedSessionId,
+          options.operation,
+          goal,
+        );
+        return {
+          result,
+          replayed: false,
+          next,
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          ),
+        };
+      }, databaseOptions);
+      if (committed.next) {
+        committed.publish();
       }
-      const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
-      const next = mergeSessionEntry(fresh.entry, { goal });
-      const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      writeSessionEntry(database, resolved.sessionKey, next);
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const result = writeSessionGoalOperationReceipt(
-        database.db,
-        resolved.sessionKey,
-        options.expectedSessionId,
-        options.operation,
-        goal,
-      );
-      return { result, replayed: false, previousIdentity, currentIdentity, next };
-    }, databaseOptions);
-    if (committed.next) {
-      emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
-    }
-    return { result: committed.result, replayed: committed.replayed, sessionEntry: committed.next };
-  });
+      return {
+        result: committed.result,
+        replayed: committed.replayed,
+        sessionEntry: committed.next,
+      };
+    },
+    "session.goal.mutate",
+  );
 }

@@ -4,6 +4,7 @@ import type {
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -77,6 +78,7 @@ export type OfficialExternalPluginCatalogManifest = {
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];
+  setup?: { nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup };
   plugin?: {
     id?: string;
     label?: string;
@@ -252,3 +254,11 @@ export type HostedOfficialExternalPluginCatalogLoadResult =
         checksum?: string;
       };
     };
+
+export type OfficialCatalogResult = Pick<
+  HostedOfficialExternalPluginCatalogLoadResult,
+  "entries"
+> & {
+  error?: string;
+  hostedFeaturedAuthoritative?: boolean;
+};

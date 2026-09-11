@@ -19,6 +19,7 @@ import {
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
+  renderChatAbortAction,
   renderChatPrimaryActions,
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
@@ -197,7 +198,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </button>
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
-              ? renderChatPrimaryActions(runControlsProps)
+              ? renderChatAbortAction(runControlsProps)
               : nothing
           }
         </div>
@@ -212,6 +213,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
+        onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
         onDismissError: props.realtimeTalkCameraError
           ? undefined
           : props.onDismissRealtimeTalkError,
@@ -344,7 +346,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             `
           : nothing
       }
-      ${disabledBanner} ${progressCard} ${queue} ${goalCard}
+      ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing} ${progressCard}
+      ${queue} ${goalCard}
       ${
         showComposerInput
           ? html`<div
@@ -564,7 +567,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
               </div>
             </div> `
-          : nothing
+          : props.disabledBanner?.kind === "composer-replacement"
+            ? disabledBanner
+            : nothing
       }
       ${composerUnderlaps}
     </div>

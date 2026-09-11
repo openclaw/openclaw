@@ -14,6 +14,7 @@ import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
@@ -238,18 +239,22 @@ export async function resolveListenerBackedScheduledTaskRuntime(
     : null;
 }
 
-export async function terminateScheduledTaskNodeHost(env: GatewayServiceEnv): Promise<number[]> {
+export async function terminateScheduledTaskNodeHost(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<number[]> {
   const matched = await resolveScheduledTaskNodeHostProcess(env);
   if (!matched) {
     return [];
   }
-  await terminateGatewayProcessTree(matched.pid, 300);
+  await terminateGatewayProcessTree(matched.pid, 300, assertCurrent);
   return [matched.pid];
 }
 
 export async function terminateScheduledTaskGatewayListeners(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts: readonly string[] },
+  assertCurrent?: () => void,
 ): Promise<number[]> {
   if (!shouldManageGatewayListenerPort(env)) {
     return [];
@@ -261,7 +266,7 @@ export async function terminateScheduledTaskGatewayListeners(
   }
   const pids = await resolveScheduledTaskOwnedGatewayPids(env, resolvedContext);
   for (const pid of pids) {
-    await terminateGatewayProcessTree(pid, 300);
+    await terminateGatewayProcessTree(pid, 300, assertCurrent);
   }
   return pids;
 }
@@ -275,7 +280,7 @@ export function probeProcessState(pid: number): "alive" | "missing" | "unknown" 
     const tasklist = spawnSync(
       getWindowsSystem32ExePath("tasklist.exe"),
       ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf8", timeout: 1_500, windowsHide: true },
+      { env: resolveServiceManagerEnv(), encoding: "utf8", timeout: 1_500, windowsHide: true },
     );
     if (tasklist.error || tasklist.status !== 0) {
       return "unknown";
@@ -303,7 +308,12 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return probeProcessState(pid) === "missing";
 }
 
-export async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
+export async function terminateGatewayProcessTree(
+  pid: number,
+  graceMs: number,
+  assertCurrent?: () => void,
+): Promise<void> {
+  assertCurrent?.();
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
     killProcessTree(pid, { graceMs });
@@ -311,6 +321,7 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
   const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+    env: resolveServiceManagerEnv(),
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
@@ -319,7 +330,9 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
+  assertCurrent?.();
   const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+    env: resolveServiceManagerEnv(),
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
@@ -365,7 +378,7 @@ export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | nu
       "-Command",
       "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
     ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    { env: resolveServiceManagerEnv(), encoding: "utf8", timeout: 5_000, windowsHide: true },
   );
   if (processSnapshot.error || processSnapshot.status !== 0) {
     return null;

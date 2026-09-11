@@ -1,5 +1,6 @@
 {
   "id": "acpx",
+  "categories": ["agent-runtimes"],
   "backupResources": [
     {
       "disposition": "regenerable",
@@ -14,7 +15,14 @@
   ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "acpx-runtime-state-to-plugin-state" },
+      {
+        "id": "acpx-session-owner-resources",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "activation": {
     "onStartup": true

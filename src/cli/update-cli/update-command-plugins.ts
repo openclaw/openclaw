@@ -2,10 +2,13 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
@@ -14,9 +17,14 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { isTrustedOfficialPluginInstallRecord } from "../../plugins/official-external-install-records.js";
 import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
+import {
+  resolveExactNpmSpecVersion,
+  resolveNpmSpecPackageName,
+} from "../../plugins/update-source.js";
 import {
   isClawHubTrustSkippedOutcome,
   type PluginUpdateIntegrityDriftParams,
@@ -99,8 +107,10 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
+  beforePersistentEffect?: () => void | Promise<void>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions: ConfigWriteOptions;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
   timeoutMs: number;
@@ -231,9 +241,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   const cohort = await convergePluginReleaseCohort({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
-    installRecords: pluginInstallRecords,
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
+    versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
@@ -268,11 +278,19 @@ export async function updatePluginsAfterCoreUpdate(params: {
   // Convergence checks activation before restart. Seed it from the current
   // sync/npm records so repair cannot overwrite them with an older disk snapshot.
   const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
+  // Keep the observed selectors stable if convergence replaces their records.
+  const probedNpmSpecs = new Map(
+    cohort.updateOutcomes.map(({ pluginId }) => {
+      const record = convergenceBaselineRecords[pluginId];
+      return [pluginId, record?.source === "npm" ? record.spec : undefined];
+    }),
+  );
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
+    beforePersistentEffect: params.beforePersistentEffect,
     ...capabilityConsent,
   });
   for (const change of convergence.changes) {
@@ -302,6 +320,38 @@ export async function updatePluginsAfterCoreUpdate(params: {
   // Repair already persisted this authoritative map; the commit below must not
   // restore the pre-convergence records and discard successful repairs.
   pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
+  // An unchanged npm outcome can report a newer registry release without replacing
+  // its pin. Do not retain that advisory if convergence repaired or removed the pin.
+  for (const outcome of cohort.updateOutcomes) {
+    const record = convergence.installRecords[outcome.pluginId];
+    if (
+      outcome.status !== "unchanged" ||
+      !outcome.currentVersion ||
+      !outcome.nextVersion ||
+      comparePackageUpdateVersions(outcome.nextVersion, outcome.currentVersion) <= 0 ||
+      record?.source !== "npm" ||
+      (record.resolvedVersion ?? record.version) !== outcome.currentVersion ||
+      record.spec !== probedNpmSpecs.get(outcome.pluginId) ||
+      resolveExactNpmSpecVersion(record.spec) !== outcome.currentVersion ||
+      !isTrustedOfficialPluginInstallRecord({
+        pluginId: outcome.pluginId,
+        packageName: resolveNpmSpecPackageName(record.spec),
+        record,
+      })
+    ) {
+      continue;
+    }
+    const message = `Plugin update retained an official plugin pin: ${outcome.message}`;
+    warnings.push({
+      pluginId: outcome.pluginId,
+      reason: "retained-plugin-pin",
+      message,
+      guidance: ["Keep the pin if intentional; replacing it is an explicit operator choice."],
+    });
+    if (!params.json) {
+      runtime.log(theme.warn(message));
+    }
+  }
   if (convergence.changes.length > 0) {
     pluginsChanged = true;
   }
@@ -318,14 +368,20 @@ export async function updatePluginsAfterCoreUpdate(params: {
     // Installed plugin metadata can own migrations that this process has not loaded yet.
     // Finalization runs fresh doctor plus strict validation before the update can complete.
     await commitPluginInstallRecordsWithConfig({
+      beforePersistentEffect: params.beforePersistentEffect,
       previousInstallRecords: pluginInstallRecords,
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: { skipPluginValidation: true },
+      writeOptions: {
+        ...params.configWriteOptions,
+        inputBase: "source",
+        skipPluginValidation: true,
+      },
     });
+    await params.beforePersistentEffect?.();
     await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
+      configPath: params.configSnapshot.path,
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,

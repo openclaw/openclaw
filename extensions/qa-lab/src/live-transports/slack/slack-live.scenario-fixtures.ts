@@ -74,7 +74,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 
 type SlackProgressCommentaryExpectation = {
   commentary: "headline" | "lane" | "standalone";
-  toolProgress: "absent" | "standalone" | "standalone-redacted";
+  toolProgress: "absent" | "draft" | "standalone" | "standalone-redacted";
 };
 
 function observedSlackText(message: { blockText?: string[]; text: string }) {
@@ -106,9 +106,17 @@ function isSlackSafeExecSummary(message: { text: string }) {
   return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
 }
 
-function hasSlackExecHeader(message: { text: string }) {
+function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
   // Full output includes the runtime's command-derived label after the Exec glyph.
-  return /^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "");
+  if (/^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "")) {
+    return true;
+  }
+  // Compact progress cards keep the native tool row in Block Kit while their
+  // fallback text remains a generic status headline. Command-derived suffixes
+  // can be truncated, so identify the row by its stable native label.
+  return (message.blockText ?? []).some((text) =>
+    text.split(/\r?\n/u).some((line) => /^• \*Exec\* — \S/u.test(line.trim())),
+  );
 }
 
 function slackMarkerEnvelope(text: string, marker: string) {
@@ -285,6 +293,13 @@ export function buildSlackProgressCommentaryRun(
           safeToolTimestamps.has(finalMessage.ts)
         ) {
           fail("expected one safe Exec summary in a standalone verbose message");
+        }
+      } else if (expectation.toolProgress === "draft") {
+        if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
+          fail("expected tool progress on the draft separate from the fresh final");
+        }
+        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
+          fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
         const toolMessages = progressMessages.filter(hasSlackExecHeader);

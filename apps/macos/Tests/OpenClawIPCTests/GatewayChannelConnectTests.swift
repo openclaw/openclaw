@@ -501,6 +501,32 @@ struct GatewayChannelConnectTests {
         await channel.shutdown()
     }
 
+    @Test func `missing challenge reaches the typed timeout mapper`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in
+                try await Task.sleep(for: .seconds(60))
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "wss://gateway.example.ts.net")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+        do {
+            try await channel.connect()
+            Issue.record("missing challenge unexpectedly connected")
+        } catch {
+            let nsError = error as NSError
+            #expect(nsError.domain == URLError.errorDomain)
+            #expect(nsError.code == URLError.timedOut.rawValue)
+            let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+            #expect(problem.kind == .timeout)
+            #expect(problem.retryable)
+            #expect(!problem.pauseReconnect)
+        }
+        await channel.shutdown()
+    }
+
     @Test func `default operator connect scopes preserve pairing and admin`() async throws {
         try await self.withTemporaryStateDir {
             let capture = ScopeCapture()

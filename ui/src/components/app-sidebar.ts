@@ -211,10 +211,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
     // Admit new geometry only between interactions; once shown it stays put.
+    // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
     if (
       this.communityInvitePresentation === "pending" &&
-      !this.matches(":hover, :focus-within") &&
+      !this.matches(":hover") &&
+      !this.contains(this.ownerDocument.activeElement) &&
       this.sessionOrganizer.draggingSessionKey === null &&
       this.sessionOrganizer.draggingSidebarSection === null &&
       this.sessionOrganizer.draggingSidebarEntry === null
@@ -382,7 +384,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
-  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
+  toggleSessionMenu(
+    session: SidebarRecentSession,
+    trigger: HTMLElement,
+    catalogMenu?: CatalogSessionMenuRequest,
+  ): void {
+    if (catalogMenu) {
+      if (this.sidebarMenus.catalogMenu.isOpenFor(catalogMenu.key)) {
+        this.sidebarMenus.catalogMenu.close();
+        return;
+      }
+      const rect = trigger.getBoundingClientRect();
+      this.openCatalogMenu(catalogMenu, rect.right, rect.bottom + 4, trigger);
+      return;
+    }
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
@@ -630,7 +645,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 ? nothing
                 : renderPanelRefreshStatus({
                     status: this.sessionData.sessionCatalogRefreshStatus,
-                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
                     className: "sidebar-session-error sidebar-session-catalog-error",
                   })
             }

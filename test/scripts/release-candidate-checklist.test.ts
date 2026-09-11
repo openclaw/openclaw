@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,7 +21,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
-import { parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
+import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -51,6 +52,7 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -92,14 +94,20 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 
 describe("release candidate checklist", () => {
   it.each([
-    { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed" },
-    { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning" },
-    { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed" },
-    { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined },
-    { tag: "v2026.9.1-alpha.1", pin: "2026.7.4", expected: undefined },
+    { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning", failedRegistry: "" },
+    { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
+    { tag: "v2026.9.1-alpha.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
+    ...["npm", "clawhub"].map((failedRegistry) => ({
+      tag: "v2026.9.1",
+      pin: "2026.9.1",
+      expected: "passed",
+      failedRegistry,
+    })),
   ])(
-    "records advisory Android pin evidence for $tag ($pin): $expected",
-    async ({ tag, pin, expected }) => {
+    "preflights registries ($failedRegistry) before validation and records Android evidence for $tag ($pin)",
+    async ({ tag, pin, expected, failedRegistry }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
         "apps/android/version.json": JSON.stringify({ version: pin, versionCode: 2026070401 }),
@@ -126,6 +134,10 @@ describe("release candidate checklist", () => {
           ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"]
           : ["--publish-workflow-ref", publishWorkflowRef]),
       ]);
+      if (failedRegistry) {
+        options.fullReleaseRunId = "";
+        options.skipDispatch = false;
+      }
       options.outputDir = join(targetRoot, "evidence");
       mkdirSync(join(options.outputDir, "npm-preflight"), { recursive: true });
       writeFileSync(join(options.outputDir, "npm-preflight", "openclaw.tgz"), "fixture");
@@ -134,6 +146,7 @@ describe("release candidate checklist", () => {
       const android =
         source.match(/^function checkCandidateAndroidVersion\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
+      const stages: string[] = [];
       const toolingSha = "b".repeat(40);
       const npmManifest = {
         tarballName: "openclaw.tgz",
@@ -143,7 +156,7 @@ describe("release candidate checklist", () => {
         pluginSdkApi: {},
       };
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
-      await runInNewContext(stripTypeScriptTypes(`${android}\n${main}\nmain();`), {
+      const completion = runInNewContext(stripNodeTypeScriptTypes(`${android}\n${main}\nmain();`), {
         process: { argv: [], cwd: () => targetRoot, env: {} },
         console: { log, warn: log },
         TOOLING_ROOT: "/trusted/tooling",
@@ -169,16 +182,27 @@ describe("release candidate checklist", () => {
         run: (command: string, args: string[]) =>
           args[0] === "fetch" ? "" : run(command, args, { cwd: targetRoot, capture: true }),
         parseReleaseVersion,
+        classifyReleaseTrain,
         isRecord,
         requireString: (value: string) => value,
         releaseNotesVersionForTag: () => "2026.9.1",
         validateCandidateReleaseNotes: () => ({ status: "passed" }),
         validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
         runLocalGeneratedCheckIfNeeded: () => ({ status: "skipped" }),
-        waitForSuccessfulRun: async () => ({
-          run: { headSha: targetSha, runAttempt: 1 },
-          source: { workflowRef: options.workflowRef },
-        }),
+        releaseBranchForTag,
+        fullReleaseTrustedWorkflowFields: () => ({}),
+        readFileSync: () => "fixture workflow",
+        dispatchWorkflow: () => {
+          stages.push("dispatch");
+          return "111";
+        },
+        waitForSuccessfulRun: async () => {
+          stages.push("wait");
+          return {
+            run: { headSha: targetSha, runAttempt: 1 },
+            source: { workflowRef: options.workflowRef },
+          };
+        },
         downloadArtifact: () => {},
         readJson: (file: string) => (file.endsWith("preflight-manifest.json") ? npmManifest : {}),
         validateFullReleaseValidationEvidence: () => ({ source: "direct" }),
@@ -193,7 +217,13 @@ describe("release candidate checklist", () => {
         preflightDependencyTarballs,
         runParallelsIfNeeded: async () => ({ status: "skipped" }),
         runTelegramIfNeeded: async () => ({ status: "skipped" }),
-        collectPluginPlanWithRetry: async () => ({ all: [] }),
+        collectPluginPlanWithRetry: async (script: string) => {
+          stages.push(script);
+          if (failedRegistry && script === `scripts/plugin-${failedRegistry}-release-plan.ts`) {
+            throw new Error(`${failedRegistry} registry unavailable`);
+          }
+          return { all: [] };
+        },
         buildPublishCommand,
         formatJsonValue: String,
         formatShippedBaselineExclusions: () => "",
@@ -204,6 +234,20 @@ describe("release candidate checklist", () => {
         mkdirSync,
         writeFileSync,
       });
+      if (failedRegistry) {
+        await expect(completion).rejects.toThrow(`${failedRegistry} registry unavailable`);
+        expect(stages).not.toContain("dispatch");
+        expect(stages).not.toContain("wait");
+        expect(existsSync(join(options.outputDir, "release-candidate-evidence.json"))).toBe(false);
+        expect(log.mock.calls.flat().join("\n")).not.toContain("publish command:");
+        return;
+      }
+      await completion;
+      expect(stages.slice(0, 3)).toEqual([
+        "scripts/plugin-npm-release-plan.ts",
+        "scripts/plugin-clawhub-release-plan.ts",
+        "wait",
+      ]);
       const evidence = JSON.parse(
         readFileSync(join(options.outputDir, "release-candidate-evidence.json"), "utf8"),
       );
@@ -315,7 +359,7 @@ describe("release candidate checklist", () => {
       let childOutput = "";
       const execute = () =>
         runInNewContext(
-          stripTypeScriptTypes(
+          stripNodeTypeScriptTypes(
             `${jsonReader}\n${owner}\nrunFromTrustedTooling(argv, { targetRoot, workflowRef: "main" });`,
           ),
           {
@@ -397,7 +441,7 @@ describe("release candidate checklist", () => {
       JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
     );
     const result = runInNewContext(
-      stripTypeScriptTypes(
+      stripNodeTypeScriptTypes(
         `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
       ),
       {
@@ -1678,7 +1722,7 @@ describe("release candidate checklist", () => {
       }));
       // Execute the private owner and its real caller without exporting a test-only API.
       const result = (await runInNewContext(
-        stripTypeScriptTypes(
+        stripNodeTypeScriptTypes(
           `async function fixture() {\n${telegramOwner}\n${telegramCall}\nreturn npmTelegram;\n}\nfixture();`,
         ),
         {
@@ -1821,6 +1865,69 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("round-trips the prepared command into the full release button contract", () => {
+    const preparedWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
+    const windowsNodeInstallerDigests = JSON.stringify({
+      "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+      "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+    });
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.9.2",
+        "--npm-dist-tag",
+        "latest",
+        "--publish-workflow-ref",
+        preparedWorkflowRef,
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
+        "--windows-node-tag",
+        "v0.6.3",
+      ]),
+      fullReleaseRunAttempt: 2,
+      windowsNodeInstallerDigests,
+    };
+    const command = buildPublishCommand(options, undefined, "prepare");
+    // A shell-local gh captures real argument decoding without dispatching anything.
+    const args = execFileSync("bash", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+      .split("\0")
+      .filter(Boolean);
+    expect(args.slice(0, 7)).toEqual([
+      "workflow",
+      "run",
+      "openclaw-release-prepare.yml",
+      "--repo",
+      "openclaw/openclaw",
+      "--ref",
+      preparedWorkflowRef,
+    ]);
+    const field = args[args.indexOf("-f") + 1] ?? "";
+    expect(field.startsWith("publish_inputs=")).toBe(true);
+    const preparedInputs = validateReleaseButtonInputs(
+      JSON.parse(field.slice("publish_inputs=".length)),
+    );
+    expect(preparedInputs).toMatchObject({
+      tag: "v2026.9.2",
+      npm_dist_tag: "latest",
+      preflight_run_id: "222",
+      full_release_validation_run_id: "111",
+      full_release_validation_run_attempt: "2",
+      plugin_sdk_api_acknowledgement: "a1b2c3d4",
+      windows_node_tag: "v0.6.3",
+      windows_node_installer_digests: windowsNodeInstallerDigests,
+      plugin_publish_scope: "all-publishable",
+      release_evidence_mode: "full-release-validation",
+      wait_for_clawhub: "true",
+    });
   });
 
   it("validates Plugin SDK acknowledgement digests", () => {

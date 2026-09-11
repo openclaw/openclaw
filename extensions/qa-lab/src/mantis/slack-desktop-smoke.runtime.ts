@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements slack desktop smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -54,7 +53,7 @@ export type MantisSlackDesktopSmokeOptions = {
   ttl?: string;
 };
 
-export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
+type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
 type MantisSlackDesktopSmokeResult = {
   approvalCheckpointScreenshotPaths?: string[];

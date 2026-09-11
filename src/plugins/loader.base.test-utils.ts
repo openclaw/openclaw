@@ -1,4 +1,3 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -19,10 +18,11 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   clearPluginInteractiveHandlers,
-  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
@@ -59,6 +59,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
@@ -515,8 +516,10 @@ describe("loadOpenClawPlugins", () => {
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
     });
-    writePersistedInstalledPluginIndexInstallRecordsSync(
-      {
+    refreshPersistedInstalledPluginIndex({
+      stateDir,
+      reason: "source-changed",
+      installRecords: {
         [plugin.id]: {
           source: "git",
           spec: "git:file:///tmp/installed-record-plugin.git@abc123",
@@ -525,8 +528,7 @@ describe("loadOpenClawPlugins", () => {
           gitCommit: "abc123",
         },
       },
-      { stateDir },
-    );
+    });
 
     const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
       loadOpenClawPlugins({
@@ -1710,7 +1712,13 @@ describe("loadOpenClawPlugins", () => {
       }),
     ]);
     expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toBeNull();
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toBeNull();
 
     const active = loadRegistryFromSinglePlugin({
       plugin,
@@ -1726,7 +1734,13 @@ describe("loadOpenClawPlugins", () => {
         acceptsArgs: true,
       },
     ]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toMatchObject({
+    expect(
+      resolvePluginInteractiveRegistrationsMatch(
+        getActivePluginChannelRegistry()?.interactiveHandlers ?? [],
+        "telegram",
+        "pair:device",
+      ),
+    ).toMatchObject({
       namespace: "pair",
       payload: "device",
       registration: {

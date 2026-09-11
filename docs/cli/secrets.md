@@ -5,7 +5,7 @@ read_when:
   - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "Secrets"
+title: "Secrets CLI"
 ---
 
 # `openclaw secrets`
@@ -24,28 +24,29 @@ Recommended operator loop:
 
 ```bash
 openclaw secrets audit --check
-openclaw secrets configure
+openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets audit --check
 openclaw secrets reload
 ```
 
-If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both the dry-run and write `apply` commands.
+If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both the dry-run and write `apply` commands. If the closing `audit --check` still reports plaintext findings, update the remaining reported target paths and rerun the audit.
 
 Exit codes for CI/gates:
 
 - `audit --check` returns `1` on findings.
 - Unresolved refs return `2` (regardless of `--check`).
-- Store validation and disclosure-policy failures return `2`; `store get` returns `3` when the name is missing.
+- Store validation and disclosure-policy failures return `2`.
+- `store get` returns `3` when the name is missing.
 
 Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/onepassword) · [SecretRef Credential Surface](/reference/secretref-credential-surface) · [Security](/gateway/security)
 
 ## Shared secret store
 
-`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped; this release accepts only `--scope team`. `--scope me` is rejected because identity scope is not supported yet.
+`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
 
-Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets), which asks you to type a credential into a masked prompt and stores it without the value reaching the model.
+Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets). That tool asks you to type a credential into a masked prompt. It stores the credential without the value reaching the model.
 
 ```bash
 openclaw secrets store list
@@ -55,7 +56,12 @@ openclaw secrets store rm <NAME>...
 openclaw secrets store import [--from <file>]
 ```
 
-Names must match `^[A-Z][A-Z0-9_]{0,127}$`. Values are limited to 64 KiB (65,536 UTF-8 bytes); an oversized value is rejected with exit code 2 whether it arrives from stdin, `--value`, or `--value-file`. A `secret` entry may not be empty, because an empty credential cannot be diagnosed later (`get` refuses secret kinds and listings mask them); `env` entries may be empty. `--kind secret|env` overrides automatic kind detection; otherwise names ending in common credential suffixes such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+Naming and value rules:
+
+- Names must match `^[A-Z][A-Z0-9_]{0,127}$`.
+- Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
+- A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
+- `--kind secret|env` overrides automatic kind detection. Otherwise names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
 
 ### Set values safely
 
@@ -68,7 +74,7 @@ openclaw secrets store set LOG_LEVEL --kind env --value debug
 For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. Use one of the three safe inputs instead:
 
 - Pipe stdin when stdin is not a TTY.
-- Pass `--value-file <path>`; `--value-file -` means stdin.
+- Pass `--value-file <path>`. `--value-file -` means stdin.
 - Run interactively and enter the value in the no-echo prompt.
 
 Examples:
@@ -84,7 +90,7 @@ openclaw secrets store set TLS_PRIVATE_KEY \
 
 `set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
 
-Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags; this policy-only form does not ask for or replace an existing secret value:
+Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
 
 ```bash
 openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
@@ -104,9 +110,9 @@ openclaw secrets store list --plain
 openclaw secrets store get LOG_LEVEL
 ```
 
-Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`; it exits `3` when the name does not exist. Environment-kind values are readable.
+Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`. It exits `3` when the name does not exist. Environment-kind values are readable.
 
-Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress; see [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
+Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress. See [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
 
 <Warning>
 Store entries do not reach commands run inside an external agent harness. The Codex app-server and its sandbox exec-server, and ACP children such as Claude Code, build their own child environment and never pass through OpenClaw's exec preparation. In eligible Codex turns, use `gateway_exec` to enter the OpenClaw-managed Gateway environment path instead.
@@ -135,7 +141,7 @@ op read 'op://Engineering/service-account/dotenv' | openclaw secrets store impor
 
 The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Kind detection follows the same name-based rule as `store set`.
 
-The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead; those methods refresh the runtime automatically when a changed name is referenced by active config.
+The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead. Those methods refresh the runtime automatically when a changed name is referenced by active config.
 
 ## Reload runtime snapshot
 
@@ -145,7 +151,7 @@ openclaw secrets reload --json
 openclaw secrets reload --url ws://127.0.0.1:18789 --token <token>
 ```
 
-Uses gateway RPC method `secrets.reload`. Healthy owners refresh independently. Eligible failed owners become stale only when their ref identities, provider definitions, and complete non-secret owner contract are unchanged; new or changed failures become cold. This degraded activation succeeds and reports `warningCount`. Strict or unmapped failures return an error and preserve the previously active snapshot.
+Uses gateway RPC method `secrets.reload`. Healthy owners refresh independently. Eligible failed owners become stale only when their ref identities, provider definitions, and complete non-secret owner contract are unchanged. New or changed failures become cold. This degraded activation succeeds and reports `warningCount`. Strict or unmapped failures return an error and preserve the previously active snapshot.
 
 Options: `--url <url>`, `--token <token>`, `--timeout <ms>`, `--json`.
 
@@ -208,10 +214,10 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
-- Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
+- Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
 - `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
 - Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.
@@ -219,7 +225,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 
@@ -231,7 +237,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
 
-`--dry-run` validates preflight without writing files; exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
+`--dry-run` validates preflight without writing files. Exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
 `--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
@@ -248,15 +254,7 @@ Plan contract details (allowed target paths, validation rules, failure semantics
 
 `secrets apply` intentionally does not write rollback backups containing old plaintext values. Safety comes from strict preflight plus atomic-ish apply, with best-effort in-memory restore on failure.
 
-## Example
-
-```bash
-openclaw secrets audit --check
-openclaw secrets configure
-openclaw secrets audit --check
-```
-
-If `audit --check` still reports plaintext findings, update the remaining reported target paths and rerun audit.
+<a id="example" />
 
 ## Related
 

@@ -249,6 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "claw_installs.bootstrap_source_path TEXT",
       "worker_environments.desktop_json TEXT",
       "worker_environments.bootstrap_install_kind TEXT",
+      "worker_environments.preparation_purpose TEXT",
       "claw_package_refs.extension_adapter_identity TEXT",
       "claw_package_refs.extension_detected_format TEXT",
       "claw_package_refs.extension_format TEXT",
@@ -260,8 +261,10 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_workspace_pending_results.repository_workspace_id TEXT",
       "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
+      "worker_session_placement_moves.target_os TEXT",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
       "session_groups.cwd TEXT",
@@ -270,7 +273,6 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "web_push_subscriptions.device_id TEXT",
       "web_push_subscriptions.user_profile_id TEXT",
       "web_push_subscriptions.preferences_json TEXT",
-      "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
 
     const database = createGlobalDatabase();

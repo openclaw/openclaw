@@ -86,6 +86,18 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
 
 Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
+When queued budget compaction accepts background maintenance, it keeps the prepared
+runtime alive through maintenance, coalesced reruns, and engine disposal. Acceptance
+does not mean cleanup has finished. Return asynchronous work from engine methods
+and `dispose()` so the host can join it before releasing their resources.
+
+A logical turn also retains its managed supplying registry through engine disposal.
+When that registry copied a runtime engine from another inspection, its recorded
+donor dependency can keep the engine usable after the donor inspection retires.
+Retiring the supplying registry still refuses new logical turns; existing engine
+work keeps its physical resources until cleanup finishes. Raw registrations keep
+their caller-owned lifetime.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)
@@ -122,6 +134,10 @@ A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
+// `buildContext`, `countTokens`, and `commitAcceptedTurn` below are your own
+// plugin's helpers to implement. They are not part of the plugin SDK.
+// `buildMemorySystemPromptAddition` is real SDK surface, imported above.
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -240,6 +256,11 @@ then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
 
+For these admitted turns, embedded tool-loop `assemble()` receives the history
+before the current turn, with a token budget that reserves space for pending user
+and tool messages. The host appends those pending messages to the assembled history before
+the next model request, so they remain visible without entering the engine's store.
+
 Without the full declaration and method, OpenClaw uses the legacy context path
 for the whole logical turn, including retries. The configured context-engine
 slot is not changed, and OpenClaw tries the configured engine again on the next
@@ -290,7 +311,13 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+| `dispose()`                    | Method | Release engine-instance resources when the logical turn retires, after any retained turn work finishes.                                      |
+
+Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
+default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
+logs a warning and lets the completed reply return; it does not cancel the
+plugin's pending disposal. Cleanup failures and timeouts retain the existing
+one-shot CLI cleanup-failure outcome; they do not certify resource closure.
 
 ### Runtime settings
 
@@ -432,6 +459,9 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
+- [Honcho memory](/concepts/memory-honcho) - a memory plugin a context engine can draw on
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview
+- [Session management deep dive](/reference/session-management-compaction) - the session store, transcript events, and auto-compaction internals
+- [System prompt](/concepts/system-prompt) - what OpenClaw assembles into the system prompt for every agent run, and the layers it renders from

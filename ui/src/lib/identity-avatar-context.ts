@@ -1,4 +1,5 @@
 import { normalizeBasePath } from "../app-route-paths.ts";
+import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 
 // Gateway startup owns connection context; avatar presentation stays in lazy views.
 let appGatewayOrigin: string | null = null;
@@ -10,8 +11,11 @@ let gatewayRequests = new AbortController();
 // would silently drop whichever registered first.
 const gatewayContextResets = new Set<() => void>();
 
-export function registerAvatarGatewayReset(reset: () => void): void {
+export function registerAvatarGatewayReset(reset: () => void): () => void {
   gatewayContextResets.add(reset);
+  return () => {
+    gatewayContextResets.delete(reset);
+  };
 }
 
 export function readAvatarGatewayContext() {
@@ -69,7 +73,10 @@ export function setAvatarGatewayOrigin(
   authTokens: readonly string[] = [],
   resourceBasePath = "",
 ): void {
-  const nextOrigin = toHttpOrigin(gatewayUrl);
+  const nextOrigin =
+    gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
+      ? (globalThis.location?.origin ?? null)
+      : toHttpOrigin(gatewayUrl);
   const documentOrigin = globalThis.location?.origin;
   const nextResourceBasePath =
     nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";

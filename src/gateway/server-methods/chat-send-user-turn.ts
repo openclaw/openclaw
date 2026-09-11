@@ -1,13 +1,15 @@
 import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -57,16 +59,40 @@ async function persistChatSendImages(params: {
   });
 }
 
-function resolveChatSendManagedMedia(entries: PersistedChatSendMedia): MediaFact[] {
+function resolveChatSendManagedMedia(
+  entries: PersistedChatSendMedia,
+  suppressInlineHydration = false,
+): MediaFact[] {
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
+    ...(suppressInlineHydration && entry.imageKind === "inline"
+      ? { hydrationSuppressed: true }
+      : {}),
   }));
 }
 
-export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): void {
-  if ((!ctx.media || ctx.media.length === 0) && media.length > 0) {
-    ctx.media = media;
+type ChatSendManagedMediaApplyMode = "replace-empty" | "append-missing";
+
+export function applyChatSendManagedMedia(
+  ctx: MsgContext,
+  media: MediaFact[],
+  mode: ChatSendManagedMediaApplyMode = "replace-empty",
+): void {
+  if (media.length === 0) {
+    return;
+  }
+  if (mode === "replace-empty") {
+    if (!ctx.media || ctx.media.length === 0) {
+      ctx.media = media;
+    }
+    return;
+  }
+  const existing = ctx.media ?? [];
+  const existingPaths = new Set(existing.flatMap((fact) => (fact.path ? [fact.path] : [])));
+  const missing = media.filter((fact) => !fact.path || !existingPaths.has(fact.path));
+  if (missing.length > 0) {
+    ctx.media = [...existing, ...missing];
   }
 }
 
@@ -130,10 +156,13 @@ export function prepareChatSendUserTurn(params: {
     }),
   );
   const pluginBoundMediaPromise =
-    attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then((result) =>
-          resolveChatSendManagedMedia(result.entries),
-        )
+    attachments.parsedImages.length > 0
+      ? persistedMediaForTranscriptPromise.then((result) => {
+          const entries = attachments.explicitOriginTargetsPlugin
+            ? result.entries
+            : result.entries.filter((entry) => entry.imageKind === "inline");
+          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
+        })
       : Promise.resolve([]);
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
@@ -215,11 +244,31 @@ export function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {
+      if (!approved) {
+        return;
+      }
+      const retained = new Set(
+        (readPersistedMediaFacts(approved) ?? []).flatMap((fact) => [fact.url, fact.path]),
+      );
+      const prepared = await persistedMediaForTranscriptPromise;
+      // Re-admission retains the original approved files. Dispose only copies
+      // prepared by this request, after its live input consumer releases custody.
+      await discardPreparedInboundMedia(
+        prepared.entries.filter(
+          (entry) => !retained.has(entry.fact.url) && !retained.has(entry.path),
+        ),
+        logGateway,
+      );
+    },
     accountId,
     ctx,
     isInternalTextSlashCommandTurn: commandSource === "text",
     queuedFollowupOwnerKey,
     pluginBoundMediaPromise,
+    managedMediaApplyMode: attachments.explicitOriginTargetsPlugin
+      ? ("replace-empty" as const)
+      : ("append-missing" as const),
     replyOptionImages: mediaPathOffloadsIncludeImages
       ? undefined
       : attachments.parsedImages.length > 0

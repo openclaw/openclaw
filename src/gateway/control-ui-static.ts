@@ -3,9 +3,15 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import {
+  resolveHttpContentEncodings,
+  type HttpContentEncoding as ControlUiContentEncoding,
+  type HttpRepresentationEncoding as ControlUiRepresentationEncoding,
+} from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
+import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -49,66 +55,18 @@ export function isControlUiPrecompressedAssetExtension(extension: string): boole
   return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
 }
 
-type ControlUiContentEncoding = "br" | "gzip";
-type ControlUiRepresentationEncoding = ControlUiContentEncoding | "identity";
 type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";
 
-const CONTROL_UI_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
 
-function normalizedAcceptEncoding(req: IncomingMessage): string {
-  const value = req.headers?.["accept-encoding"];
-  return Array.isArray(value) ? value.join(",") : (value ?? "");
-}
-
-function resolveControlUiContentEncodings(
-  req: IncomingMessage,
-  includeCompressed: boolean,
-): ControlUiRepresentationEncoding[] {
-  const acceptEncoding = normalizedAcceptEncoding(req);
-  if (!acceptEncoding.trim()) {
-    return ["identity"];
-  }
-  const qualities = new Map<string, number>();
-  for (const entry of acceptEncoding.split(",")) {
-    const [rawName, ...rawParams] = entry.split(";");
-    const name = rawName?.trim().toLowerCase();
-    if (!name) {
-      continue;
-    }
-    const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
-    const qualityText = qualityParam?.trim().slice(2);
-    const parsedQuality =
-      qualityText === undefined
-        ? 1
-        : CONTROL_UI_QVALUE_PATTERN.test(qualityText)
-          ? Number(qualityText)
-          : Number.NaN;
-    const quality =
-      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
-        ? parsedQuality
-        : 0;
-    qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
-  }
-
-  const wildcardQuality = qualities.get("*");
-  // RFC 9110 keeps identity acceptable unless identity or a rejecting wildcard
-  // explicitly disables it. This distinction is required to return 406 rather
-  // than silently violate identity;q=0.
-  const identityQuality = qualities.get("identity") ?? (wildcardQuality === 0 ? 0 : 1);
-  const qualityFor = (name: ControlUiRepresentationEncoding) =>
-    name === "identity" ? identityQuality : (qualities.get(name) ?? wildcardQuality ?? 0);
-  // Stable sorting preserves the server's br/gzip/identity preference for equal quality.
-  const encodings: ControlUiRepresentationEncoding[] = includeCompressed
-    ? ["br", "gzip", "identity"]
-    : ["identity"];
-  return encodings
-    .filter((encoding) => qualityFor(encoding) > 0)
-    .toSorted((left, right) => qualityFor(right) - qualityFor(left));
-}
-
 export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEncodingSelection {
-  return resolveControlUiContentEncodings(req, true)[0] ?? "not-acceptable";
+  return (
+    resolveHttpContentEncodings(
+      req.headers?.["accept-encoding"],
+      CONTROL_UI_DYNAMIC_ENCODINGS,
+    )[0] ?? "not-acceptable"
+  );
 }
 
 type OpenedControlUiRepresentation = {
@@ -125,9 +83,11 @@ export function resolveOpenedControlUiRepresentation(params: {
 }): OpenedControlUiRepresentation | null {
   const { req, sourceFile, precompressed, openPrecompressedFile } = params;
   const extension = path.extname(params.contentPath).toLowerCase();
-  const encodings = resolveControlUiContentEncodings(
-    req,
-    precompressed && CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension),
+  const encodings = resolveHttpContentEncodings(
+    req.headers?.["accept-encoding"],
+    precompressed && CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)
+      ? CONTROL_UI_DYNAMIC_ENCODINGS
+      : new Set<ControlUiContentEncoding>(),
   );
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
@@ -184,7 +144,11 @@ function setControlUiFileHeaders(
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
-export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
+export function isControlUiFileUnmodified(
+  req: IncomingMessage,
+  lastModifiedMs: number,
+  nowMs = Date.now(),
+): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     return false;
   }
@@ -193,9 +157,7 @@ export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: 
   if (ifNoneMatch !== undefined) {
     return ifNoneMatch.trim() === "*";
   }
-  const header = req.headers?.["if-modified-since"];
-  const since = typeof header === "string" ? Date.parse(header) : Number.NaN;
-  return Number.isFinite(since) && Math.floor(lastModifiedMs / 1000) * 1000 <= since;
+  return matchesHttpIfModifiedSince(req, lastModifiedMs, nowMs);
 }
 
 export function respondControlUiNotModified(

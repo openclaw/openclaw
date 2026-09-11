@@ -1,5 +1,5 @@
 /**
- * Durable top-level requester settle wake delivery.
+ * Durable requester settle wake delivery.
  *
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
@@ -22,6 +22,7 @@ import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   countActiveDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
@@ -31,6 +32,11 @@ import type {
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
+import {
+  consumeRequesterFinalAttachment,
+  revokeRequesterFinalAttachment,
+  transferRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   deliverSubagentAnnouncement,
@@ -178,7 +184,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 }
 
 /**
- * Wakes a registry-less top-level requester once its last spawned child
+ * Wakes a top-level or explicitly yielded nested requester once its last child
  * reaches terminal settle. Durable state transitions happen synchronously
  * through lifecycle-owned callbacks before and after every async delivery.
  */
@@ -201,9 +207,42 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   if (!requesterSessionKey || !initialState) {
     return false;
   }
+  const finalizeRequesterAttachment = (
+    runIds: readonly string[],
+    state: RequesterSettleWakeBatchState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ): void => {
+    if (
+      !requesterAgentId ||
+      state.requesterYieldBatch !== true ||
+      state.rearmGeneration === undefined
+    ) {
+      return;
+    }
+    const finalText = delivery?.finalAssistantVisibleText?.trim();
+    if (delivery?.delivered && requesterSessionId && finalText) {
+      consumeRequesterFinalAttachment({
+        requesterAgentId,
+        requesterSessionKey,
+        requesterSessionId,
+        batchRunIds: runIds,
+        rearmGeneration: state.rearmGeneration,
+        text: finalText,
+      });
+      return;
+    }
+    revokeRequesterFinalAttachment({
+      requesterAgentId,
+      requesterSessionKey,
+      batchRunIds: runIds,
+      rearmGeneration: state.rearmGeneration,
+    });
+  };
   const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
     completeBatch([params.settledEntry], initialState.rearmGeneration);
+    finalizeRequesterAttachment([params.settledEntry.runId], initialState);
     return false;
   }
 
@@ -282,6 +321,34 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const selectedState = readSharedBatchState(settledBatch);
+  const getRequesterRun = () =>
+    getLatestLiveSubagentRunByChildSessionKey(
+      requesterSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+    ) ?? getLatestLiveSubagentRunByChildSessionKey(requesterSessionKey);
+  const requesterRun = getRequesterRun();
+  const requesterGeneration = requesterRun?.generation;
+  const requesterCreatedAt = requesterRun?.createdAt;
+  const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
+  const isBatchDeliveryClosed = () => {
+    const currentRequester = getRequesterRun();
+    return (
+      requesterRun?.killReconciliation?.suppressTaskDelivery === true ||
+      requesterRun?.suppressCompletionDelivery === true ||
+      currentRequester?.killReconciliation?.suppressTaskDelivery === true ||
+      currentRequester?.suppressCompletionDelivery === true ||
+      // This marker is written by requester-wide abort/reset, so even a
+      // completed sibling cannot keep the old frozen obligation alive.
+      settledBatch.some((entry) => entry.killReconciliation?.suppressTaskDelivery === true) ||
+      settledBatch.every((entry) => entry.suppressCompletionDelivery === true)
+    );
+  };
+  if (isBatchDeliveryClosed()) {
+    // Cancellation already owns the task result; only consume its obsolete wake.
+    completeBatch(settledBatch, currentRearmGeneration);
+    finalizeRequesterAttachment(batchRunIds, selectedState);
+    return false;
+  }
   function deferBatch(state: RequesterSettleWakeBatchState): void {
     const countTowardsLimit =
       countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0;
@@ -299,6 +366,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         path: "none",
         error: "requester settle wake deferred too many times",
       });
+      finalizeRequesterAttachment(batchRunIds, state);
       return;
     }
     params.transitionBatch(settledBatch, {
@@ -332,17 +400,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
+  const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
+  // Explicit yield transfers continuation to this batch at every depth.
+  // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey, {
-      cfg,
-      agentId: requesterAgentId,
-    }) >= 1
+    (!requesterYieldedAfterDelivery && requesterDepth >= 1)
   ) {
     completeBatch(settledBatch, selectedState.rearmGeneration);
+    finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
 
@@ -356,6 +428,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       path: "none",
       error: "requester session unavailable",
     });
+    finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
 
@@ -449,6 +522,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           path: "none",
           error: state.lastError ?? "requester settle wake attempts exhausted",
         });
+        finalizeRequesterAttachment(batchRunIds, state);
         return false;
       }
       attemptIndex = state.attemptCount;
@@ -463,6 +537,69 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       params.transitionBatch(settledBatch, state);
     }
 
+    const directIdempotencyKey = buildAnnounceIdempotencyKey(
+      attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
+    );
+    const requesterSessionId = requesterEntry.sessionId;
+    const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
+    const isRequesterCurrent = () => {
+      const currentRequester = getRequesterRun();
+      // Normal admission adopts a paused requester before execution starts.
+      // Only this admitted continuation may replace its captured task owner.
+      if (
+        (currentRequester !== requesterRun ||
+          currentRequester?.generation !== requesterGeneration ||
+          currentRequester?.createdAt !== requesterCreatedAt) &&
+        (!requesterRun ||
+          !currentRequester ||
+          currentRequester.runId !== directIdempotencyKey ||
+          currentRequester.taskRunId !== requesterTaskRunId ||
+          currentRequester.requesterSessionKey !== requesterRun.requesterSessionKey ||
+          currentRequester.requesterAgentId !== requesterRun.requesterAgentId)
+      ) {
+        return false;
+      }
+      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
+      return (
+        currentSession?.sessionId === requesterSessionId &&
+        currentSession?.lifecycleRevision === requesterLifecycleRevision
+      );
+    };
+    const isBatchCurrent = () => {
+      const currentRuns = listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId });
+      return settledBatch.every(
+        (entry) =>
+          currentRuns.includes(entry) &&
+          entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+      );
+    };
+    const isSourceSessionEffectsAllowed = () =>
+      !params.signal?.aborted &&
+      !isGatewayClosed() &&
+      isBatchCurrent() &&
+      isRequesterCurrent() &&
+      !isBatchDeliveryClosed();
+    const settleRevokedBatch = (): boolean => {
+      if (isGatewayClosed() || !isBatchCurrent()) {
+        return true;
+      }
+      if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
+        completeBatch(settledBatch, currentRearmGeneration);
+        finalizeRequesterAttachment(batchRunIds, state);
+        return true;
+      }
+      return false;
+    };
+    if (requesterAgentId && state.requesterYieldBatch && state.rearmGeneration !== undefined) {
+      transferRequesterFinalAttachment({
+        requesterAgentId,
+        requesterSessionKey,
+        requesterSessionId: requesterEntry.sessionId,
+        batchRunIds,
+        rearmGeneration: state.rearmGeneration,
+        requesterTurnRunId: directIdempotencyKey,
+      });
+    }
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
       delivery = await deliverSubagentAnnouncement({
@@ -475,19 +612,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requesterOrigin: requesterSessionOrigin,
         directOrigin,
         sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceTool: "subagent_announce",
+        sourceTool: "subagent_settle",
         targetRequesterSessionKey: requesterSessionKey,
-        requesterIsSubagent: false,
+        requesterIsSubagent: requesterDepth >= 1,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
-        directIdempotencyKey: buildAnnounceIdempotencyKey(
-          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
-        ),
+        directIdempotencyKey,
         signal: params.signal,
         resolveGatewayContext,
+        isSourceSessionEffectsAllowed,
       });
     } catch (error) {
+      if (settleRevokedBatch()) {
+        return false;
+      }
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);
@@ -502,6 +641,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           path: "none",
           error: lastError,
         });
+        finalizeRequesterAttachment(batchRunIds, state);
         return false;
       }
       const nextAttemptAt = Date.now() + retryDelayMs;
@@ -524,7 +664,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     }
     if (delivery.delivered) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return true;
+    }
+    if (settleRevokedBatch()) {
+      return false;
     }
     if (
       delivery.disposition === "ambiguous" ||
@@ -533,6 +677,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       delivery.reason === "requester_abandoned"
     ) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return false;
     }
 
@@ -541,6 +686,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const lastError = delivery.error ?? delivery.reason ?? "undelivered";
     if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
       completeBatch(settledBatch, state.rearmGeneration, { ...delivery, error: lastError });
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return false;
     }
     const nextAttemptAt = Date.now() + retryDelayMs;

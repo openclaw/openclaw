@@ -14,7 +14,10 @@ import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
+import {
+  DispatchReplyOperationAbortedError,
+  runWithDispatchAbortSignal,
+} from "./dispatch-from-config.abort.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
@@ -153,7 +156,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
   const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+  if (
+    !state.activeRunSafeCommandTurn &&
+    admissionTicket &&
+    !(await admissionTicket.wait(params.replyOptions?.abortSignal))
+  ) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
@@ -186,7 +193,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
         counts: dispatcher.getQueuedCounts(),
-        ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
+        ...(turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
       }),
     };
   };
@@ -232,7 +239,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
-            await state.prepareHookMediaMetadata();
+            await runWithDispatchAbortSignal(
+              state.getPreDispatchAbortSignal(),
+              state.prepareHookMediaMetadata,
+              state.trackDispatchLifecycleWork,
+            );
             if (isPreDispatchOperationAborted()) {
               throw new DispatchReplyOperationAbortedError();
             }

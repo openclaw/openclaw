@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   listTrustedExternalProviderPolicyOwners,
@@ -59,6 +60,7 @@ describe("provider public artifacts", () => {
   }
 
   beforeEach(() => {
+    vi.resetModules();
     clearPluginMetadataLifecycleCaches();
   });
 
@@ -67,7 +69,6 @@ describe("provider public artifacts", () => {
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
-    vi.resetModules();
   });
 
   it.each(["my-ngc:nvidia", "my-ngc/nvidia", "my-ngc\\nvidia", ".", ".."])(
@@ -78,6 +79,120 @@ describe("provider public artifacts", () => {
       expect(resolveProviderPolicySurface(providerId)).toBeNull();
     },
   );
+
+  it.each([
+    [" FIXTURE-TEXT ", true],
+    [" fixture-cli ", true],
+    ["FIXTURE-EMBEDDING", true],
+    [" TEXT-ALIAS ", true],
+    ["cli-alias", true],
+    ["embedding-alias", true],
+    ["orphan-alias", false],
+    ["scoped-alias", false],
+    ["empty-target", false],
+    ["setup-only", false],
+    ["setup-cli", false],
+    [" ", true],
+  ] as const)("preserves declared policy ownership for %j", (query, matches) => {
+    const owner = createPluginManifestRecordFixture({
+      id: "fixture-owner",
+      origin: "global",
+      trustedOfficialInstall: true,
+      providers: [" fixture-text "],
+      cliBackends: [" FIXTURE-CLI "],
+      contracts: { embeddingProviders: [" fixture-embedding "] },
+      setup: { providers: [{ id: "setup-only" }], cliBackends: ["setup-cli"] },
+      providerAuthAliases: {
+        " text-alias ": " fixture-text ",
+        "cli-alias": "fixture-cli",
+        "embedding-alias": "fixture-embedding",
+        "orphan-alias": "missing",
+        "scoped-alias": { provider: "fixture-text", baseUrls: ["https://fixture.example.test"] },
+        "empty-target": " ",
+        "": "fixture-text",
+      },
+    });
+
+    expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual(
+      matches ? [owner] : [],
+    );
+  });
+
+  it("does not treat empty declarations as policy ownership", () => {
+    const owner = createPluginManifestRecordFixture({
+      id: "empty-owner",
+      trustedOfficialInstall: true,
+      providers: [""],
+      cliBackends: [" "],
+      contracts: { embeddingProviders: [""] },
+      providerAuthAliases: { empty: " " },
+    });
+    for (const query of ["", " ", "empty"]) {
+      expect(listTrustedExternalProviderPolicyOwners(query, { plugins: [owner] })).toEqual([]);
+    }
+  });
+
+  it("orders trusted external matches stably without reordering the registry", () => {
+    const owner = (id: string, rootDir: string, trustedOfficialInstall = true) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir,
+        origin: "global",
+        trustedOfficialInstall,
+        providers: ["fixture-provider"],
+      });
+    const last = owner("z-owner", "/fixture/z");
+    const first = owner("a-owner", "/fixture/first");
+    const equal = owner("a-owner", "/fixture/equal");
+    const untrusted = owner("0-owner", "/fixture/untrusted", false);
+    const plugins = [last, first, untrusted, equal];
+
+    expect(listTrustedExternalProviderPolicyOwners("fixture-provider", { plugins })).toEqual([
+      first,
+      equal,
+      last,
+    ]);
+    expect(plugins).toEqual([last, first, untrusted, equal]);
+  });
+
+  it("selects the first equal-id bundled owner in stable lexical order", async () => {
+    vi.doMock("./bundled-dir.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./bundled-dir.js")>()),
+      resolveBundledPluginsDir: () => "/fixture",
+    }));
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync: ({
+        dirName,
+      }: {
+        dirName: string;
+      }) =>
+        dirName.endsWith("-root")
+          ? { resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }) }
+          : null,
+    }));
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=stable-owner-order");
+    const owner = (id: string, root: string) =>
+      createPluginManifestRecordFixture({
+        id,
+        rootDir: `/fixture/${root}-root`,
+        providers: ["fixture-provider"],
+      });
+    const last = owner("z-owner", "last");
+    const first = owner("a-owner", "first");
+    const equal = owner("a-owner", "equal");
+    const external = { ...owner("0-owner", "external"), origin: "global" as const };
+    const earlierUnrelated = { ...owner("0-unrelated", "unrelated"), providers: ["other"] };
+    const plugins = [last, external, first, earlierUnrelated, equal];
+
+    expect(
+      resolvePolicySurface("fixture-provider", {
+        manifestRegistry: { plugins },
+      })?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" }),
+    ).toEqual({ levels: [{ id: "first-root" }] });
+    expect(plugins).toEqual([last, external, first, earlierUnrelated, equal]);
+  });
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
@@ -184,18 +299,78 @@ describe("provider public artifacts", () => {
     });
   });
 
-  it("loads OpenCode Go DeepSeek V4 thinking policy before runtime registration", () => {
+  it.each(["opencode", "opencode-go"])(
+    "preserves %s effort metadata before runtime registration",
+    (provider) => {
+      const surface = resolveBundledProviderPolicySurface(provider);
+      const cases = [
+        [undefined, undefined, undefined],
+        [null, undefined, undefined],
+        [[], undefined, undefined],
+        [["none", "off"], ["off"], "off"],
+        [["max", "high", "low", "high", "none"], ["off", "max", "high", "low"], "high"],
+        [
+          ["high", "medium", "low", "minimal", "xhigh"],
+          ["off", "high", "medium", "low", "minimal", "xhigh"],
+          "medium",
+        ],
+        [["low"], ["off", "low"], "low"],
+        [["minimal", "xhigh", "max"], ["off", "minimal", "xhigh", "max"], "off"],
+        [["adaptive", "ultra", "HIGH", " low ", "provider-native", ""], ["off"], "off"],
+      ] as const;
+      for (const [efforts, levelIds, defaultLevel] of cases) {
+        expect(
+          surface?.resolveThinkingProfile?.({
+            provider,
+            modelId: "effort-fixture",
+            compat: { supportedReasoningEfforts: efforts },
+          }),
+          JSON.stringify(efforts),
+        ).toEqual(levelIds ? { levels: levelIds.map((id) => ({ id })), defaultLevel } : undefined);
+      }
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider,
+          modelId: "effort-fixture",
+          api: "openai-responses",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: [] },
+        }),
+      ).toEqual(
+        provider === "opencode"
+          ? { levels: [{ id: "off", label: "always on" }], defaultLevel: "off" }
+          : undefined,
+      );
+    },
+  );
+
+  it("loads OpenCode Go model overrides before runtime registration", () => {
     const surface = resolveBundledProviderPolicySurface("opencode-go");
 
-    expect(
-      surface?.resolveThinkingProfile?.({
-        provider: "opencode-go",
-        modelId: "deepseek-v4-pro",
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
-    });
+    for (const [modelId, levelIds, defaultLevel] of [
+      ["deepseek-v4-pro", ["off", "high", "max"], "high"],
+      ["kimi-k3", ["off", "max"], "off"],
+      ["kimi-k2.6", ["off"], "off"],
+    ] as const) {
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider: "opencode-go",
+          modelId,
+          compat: { supportedReasoningEfforts: ["low"] },
+        }),
+      ).toEqual({ levels: levelIds.map((id) => ({ id })), defaultLevel });
+    }
+    for (const modelId of ["minimax-m2.7", "minimax-m3"]) {
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider: "opencode-go",
+          modelId,
+          api: "anthropic-messages",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low"] },
+        }),
+      ).toEqual({ levels: [{ id: "off" }, { id: "low" }], defaultLevel: "low" });
+    }
     expect(
       surface?.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "glm-5" }),
     ).toBeUndefined();
@@ -422,12 +597,14 @@ describe("provider public artifacts", () => {
     const resolveThinkingProfile = vi.fn(({ modelId }: { modelId: string }) => ({
       levels: modelId === "gpt-5.5" ? [{ id: "xhigh" }] : [{ id: "low" }],
     }));
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "openai") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
-      }
-      return { resolveThinkingProfile };
-    });
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "openai") {
+          return null;
+        }
+        return { resolveThinkingProfile };
+      },
+    );
 
     vi.doMock("./bundled-dir.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./bundled-dir.js")>();
@@ -439,7 +616,7 @@ describe("provider public artifacts", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     try {
@@ -450,9 +627,9 @@ describe("provider public artifacts", () => {
       const surface = resolvePolicySurface("openai");
 
       expect(surface?.resolveThinkingProfile).toBeTypeOf("function");
-      expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
         dirName: "openai",
-        artifactBasename: "provider-policy-api.js",
+        artifactCandidates: ["provider-policy-api.js"],
       });
       expect(
         surface
@@ -479,20 +656,22 @@ describe("provider public artifacts", () => {
     const loadPluginManifestRegistry = vi.fn(() => {
       throw new Error("unexpected manifest registry scan");
     });
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "xai") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
-      }
-      return {
-        resolveThinkingProfile: ({ provider, modelId }: { provider: string; modelId: string }) =>
-          provider === "x-ai" && modelId === "grok-4.5"
-            ? {
-                levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
-                defaultLevel: "high",
-              }
-            : { levels: [{ id: "off" }], defaultLevel: "off" },
-      };
-    });
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "xai") {
+          return null;
+        }
+        return {
+          resolveThinkingProfile: ({ provider, modelId }: { provider: string; modelId: string }) =>
+            provider === "x-ai" && modelId === "grok-4.5"
+              ? {
+                  levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+                  defaultLevel: "high",
+                }
+              : { levels: [{ id: "off" }], defaultLevel: "off" },
+        };
+      },
+    );
 
     vi.doMock("./manifest-registry.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
@@ -502,7 +681,7 @@ describe("provider public artifacts", () => {
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -533,9 +712,9 @@ describe("provider public artifacts", () => {
       levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
       defaultLevel: "high",
     });
-    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
       dirName: "xai",
-      artifactBasename: "provider-policy-api.js",
+      artifactCandidates: ["provider-policy-api.js"],
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
@@ -544,16 +723,18 @@ describe("provider public artifacts", () => {
     const loadPluginManifestRegistry = vi.fn(() => {
       throw new Error("unexpected manifest registry scan");
     });
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "anthropic") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
-      }
-      return {
-        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
-          levels: [{ id: provider }],
-        }),
-      };
-    });
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "anthropic") {
+          return null;
+        }
+        return {
+          resolveThinkingProfile: ({ provider }: { provider: string }) => ({
+            levels: [{ id: provider }],
+          }),
+        };
+      },
+    );
 
     vi.doMock("./manifest-registry.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
@@ -563,7 +744,7 @@ describe("provider public artifacts", () => {
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -596,9 +777,9 @@ describe("provider public artifacts", () => {
     ).toEqual({
       levels: [{ id: "claude-cli" }],
     });
-    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
       dirName: "anthropic",
-      artifactBasename: "provider-policy-api.js",
+      artifactCandidates: ["provider-policy-api.js"],
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
@@ -626,17 +807,19 @@ describe("provider public artifacts", () => {
       );
     };
 
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "first" && dirName !== "second") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
-      }
-      return {
-        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
-      };
-    });
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "first" && dirName !== "second") {
+          return null;
+        }
+        return {
+          resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+        };
+      },
+    );
 
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
@@ -670,14 +853,16 @@ describe("provider public artifacts", () => {
     const loadPluginManifestRegistry = vi.fn(() => {
       throw new Error("unexpected manifest registry scan");
     });
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "owner") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
-      }
-      return {
-        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
-      };
-    });
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "owner") {
+          return null;
+        }
+        return {
+          resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+        };
+      },
+    );
 
     vi.doMock("./manifest-registry.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
@@ -687,7 +872,7 @@ describe("provider public artifacts", () => {
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -720,11 +905,11 @@ describe("provider public artifacts", () => {
   });
 
   it("keeps canonical provider policy lookup on the direct artifact path", async () => {
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,
     }));
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -738,9 +923,9 @@ describe("provider public artifacts", () => {
     };
     const surface = resolvePolicySurface("openai", { manifestRegistry });
     expect(surface?.normalizeConfig).toBeTypeOf("function");
-    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
       dirName: "openai",
-      artifactBasename: "provider-policy-api.js",
+      artifactCandidates: ["provider-policy-api.js"],
     });
   });
 
@@ -756,9 +941,11 @@ describe("provider public artifacts", () => {
         },
       ] as const,
     }));
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({ resolveModelRoutes }));
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(() => ({
+      resolveModelRoutes,
+    }));
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<

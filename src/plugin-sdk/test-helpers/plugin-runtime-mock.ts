@@ -1,6 +1,7 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
+import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.shared.js";
@@ -1007,7 +1008,29 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       } as PluginRuntime["tasks"]["flows"],
       managedFlows: taskFlow,
     },
+    modelConfig: {
+      resolveDefaultModelForAgent:
+        vi.fn<PluginRuntime["modelConfig"]["resolveDefaultModelForAgent"]>(),
+      resolveAllowedModelRef: vi.fn<PluginRuntime["modelConfig"]["resolveAllowedModelRef"]>(),
+      resolveModelRuntimePolicy: vi.fn(resolveModelRuntimePolicy),
+    },
     modelAuth: {
+      resolveProviderIdForAuth: vi.fn<PluginRuntime["modelAuth"]["resolveProviderIdForAuth"]>(
+        (provider) => provider,
+      ),
+      ensureAuthProfileStore: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStore"]>(() => ({
+        version: 1,
+        profiles: {},
+      })),
+      resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
+        () => [],
+      ),
+      listProfilesForProvider: vi.fn<PluginRuntime["modelAuth"]["listProfilesForProvider"]>(
+        () => [],
+      ),
+      isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
+        () => false,
+      ),
       getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
       getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),

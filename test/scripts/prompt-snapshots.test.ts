@@ -230,47 +230,103 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 
-  it("uses normal Codex collaboration instructions for every scheduled heartbeat", async () => {
-    const [direct, group, heartbeat] = await Promise.all([
-      materializeCodexPromptSnapshot("telegram-direct"),
-      materializeCodexPromptSnapshot("discord-group"),
-      materializeCodexPromptSnapshot("heartbeat-turn"),
-    ]);
-    const heartbeatPhrase = "Heartbeat = useful proactive progress";
-    const agentSoulHeading = "## OpenClaw Agent Soul";
-
-    expect(direct).toContain('"collaborationMode": {');
-    expect(direct).toContain('"developer_instructions": "# Collaboration Mode: Default');
-    expect(direct).toContain(agentSoulHeading);
-    expect(group).toContain('"collaborationMode": {');
-    expect(group).toContain('"developer_instructions": "# Collaboration Mode: Default');
-    expect(group).toContain(agentSoulHeading);
-    expect(direct).not.toContain(heartbeatPhrase);
-    expect(group).not.toContain(heartbeatPhrase);
-    expect(direct).not.toContain("This is an OpenClaw heartbeat turn.");
-    expect(group).not.toContain("This is an OpenClaw heartbeat turn.");
-
-    expect(heartbeat).toContain('"collaborationMode": {');
-    expect(heartbeat).toContain('"developer_instructions": "# Collaboration Mode: Default');
-    expect(heartbeat).toContain(agentSoulHeading);
-    const openClawRuntimeInstructions = renderedPromptSection(
-      heartbeat,
-      "### Developer: OpenClaw Runtime Instructions",
-      "### Developer: Codex Collaboration Mode Instructions",
+  it("renders every additional-context value with its native role before the current input", () => {
+    const telegram = generated.find(
+      (file) =>
+        path.basename(file.path) ===
+        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
+    )!.content;
+    const turnSection = renderedPromptSection(
+      telegram,
+      "## Turn Start Params",
+      "## Reconstructed Model-Bound Prompt Layers",
     );
-    const collaborationModeInstructions = renderedPromptSection(
-      heartbeat,
-      "### Developer: Codex Collaboration Mode Instructions",
-      "### User: Turn Input Text",
+    const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
+    };
+    expect(Object.keys(turn.additionalContext)).toEqual(
+      expect.arrayContaining(["openclaw_current_sender", "openclaw_temporal_context"]),
     );
-
-    expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).not.toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).not.toContain("HEARTBEAT.md");
-    expect(heartbeat).not.toContain("This is an OpenClaw heartbeat turn.");
-    expect(heartbeat).not.toContain("simulatedHeartbeatWorkspaceFile");
+    let previous = telegram.indexOf("### Developer: Codex Collaboration Mode Instructions");
+    const userInput = telegram.indexOf("### User: Turn Input Text");
+    const contextTexts: string[] = [];
+    // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
+    const keyOrder = [
+      "openclaw_current_sender",
+      "openclaw_source_delivery",
+      "openclaw_temporal_context",
+    ].filter((key) => Object.hasOwn(turn.additionalContext, key));
+    expect(keyOrder).toHaveLength(Object.keys(turn.additionalContext).length);
+    for (const key of keyOrder) {
+      const entry = turn.additionalContext[key]!;
+      const role = entry.kind === "application" ? "Developer" : "User";
+      const tag = entry.kind === "application" ? key : `external_${key}`;
+      const index = telegram.indexOf(`### ${role}: OpenClaw Additional Context (${key})`);
+      expect(index).toBeGreaterThan(previous);
+      expect(index).toBeLessThan(userInput);
+      const text = `<${tag}>${entry.value}</${tag}>`;
+      expect(telegram.slice(index, userInput)).toContain(text);
+      contextTexts.push(text);
+      previous = index;
+    }
+    const statsSection = renderedPromptSection(
+      telegram,
+      "### Rough Text Token Estimates",
+      "### System: Codex Model Instructions",
+    );
+    const stats = JSON.parse(statsSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: { chars: number };
+    };
+    expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
   });
 
+  it("keeps managed persona outside native collaboration and user-input history", async () => {
+    for (const scenario of ["telegram-direct", "discord-group", "heartbeat-turn"]) {
+      const snapshot = await materializeCodexPromptSnapshot(scenario);
+      const turnSection = renderedPromptSection(
+        snapshot,
+        "## Turn Start Params",
+        "## Reconstructed Model-Bound Prompt Layers",
+      );
+      const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+        collaborationMode: { settings: { developer_instructions: string | null } };
+      };
+      expect(turn.collaborationMode.settings.developer_instructions).toBeNull();
+      const parentLocal = renderedPromptSection(
+        snapshot,
+        "### Request Instructions: OpenClaw Parent-Local Context",
+        "### Developer: Codex Permission Instructions",
+      );
+      expect(parentLocal).toContain("## OpenClaw Agent Soul");
+      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
+        expect(parentLocal).toContain("<" + name + " contents will be here>");
+      }
+      const shared = renderedPromptSection(
+        snapshot,
+        "### Developer: OpenClaw Runtime Instructions",
+        "### Developer: Codex Collaboration Mode Instructions",
+      );
+      const collaboration = renderedPromptSection(
+        snapshot,
+        "### Developer: Codex Collaboration Mode Instructions",
+        "### User: Turn Input Text",
+      );
+      const input = renderedPromptSection(
+        snapshot,
+        "### User: Turn Input Text",
+        "### Tools: Dynamic Tool Catalog",
+      );
+      for (const nativeHistory of [shared, collaboration, input]) {
+        expect(nativeHistory).not.toContain("<SOUL.md contents will be here>");
+        expect(nativeHistory).not.toContain("<IDENTITY.md contents will be here>");
+        expect(nativeHistory).not.toContain("<USER.md contents will be here>");
+      }
+      expect(collaboration).not.toContain("HEARTBEAT.md");
+      expect(snapshot).not.toContain("Heartbeat = useful proactive progress");
+      expect(snapshot).not.toContain("This is an OpenClaw heartbeat turn.");
+      expect(snapshot).not.toContain("simulatedHeartbeatWorkspaceFile");
+    }
+  });
   it("keeps the Codex model prompt fixture next to its source metadata", () => {
     expect(SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR).toBe(CODEX_MODEL_PROMPT_FIXTURE_DIR);
     expect(

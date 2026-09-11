@@ -13,7 +13,9 @@ import {
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   SystemAgentChatEngine,
   SystemAgentWizardAnswerError,
@@ -160,11 +162,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // Detection is read-only and may load native provider code. Keep it outside
-    // the mutation lane and off the Gateway event loop so health stays live.
-    const { detectSetupInferenceIsolated } =
-      await import("../../system-agent/setup-inference-detection.js");
-    respond(true, await detectSetupInferenceIsolated(params), undefined);
+    const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
+    respond(true, await detectSetupInference({}, params.agentId), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond, context }) => {
@@ -188,7 +187,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     });
   },
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
-  "openclaw.setup.auth.start": async ({ params, respond, context }) => {
+  "openclaw.setup.auth.start": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -206,6 +205,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,
       respond,
+      isLocalClient: client?.internal?.isLocalClient === true,
     });
   },
   /** Activate a detected or manual route with server-owned capability review. */
@@ -250,10 +250,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         new WizardSession(
           async (prompter, signal, runnerSession) => {
             await runSystemAgentGatewayTask(async () => {
-              const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
-                import("../../plugins/provider-auth-choice.js"),
-                import("../../wizard/setup.shared.js"),
-              ]);
+              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared, authConfig] =
+                await Promise.all([
+                  import("../../plugins/provider-auth-choice.js"),
+                  import("../../wizard/setup.shared.js"),
+                  import("../../plugins/provider-auth-config.js"),
+                ]);
               const snapshot = await setupShared.readSetupConfigFileSnapshot();
               if (!snapshot.valid) {
                 throw new Error(
@@ -266,7 +268,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const workspaceDir = params.workspace?.trim()
                 ? resolveUserPath(params.workspace.trim())
                 : undefined;
-              const applied = await applyAuthChoiceLoadedPluginProvider({
+              const prepared = await prepareAuthChoiceLoadedPluginProvider({
                 authChoice: params.authChoice,
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 config: baseConfig,
@@ -284,23 +286,26 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 isRemote: true,
                 beforePersistentEffect: () => {
                   signal.throwIfAborted();
-                  runnerSession.lockCancellation();
+                  runnerSession.lockCancellationForPreparation();
                 },
               });
-              if (!applied || applied.retrySelection) {
+              if (!prepared || prepared.retrySelection) {
                 throw new Error(
                   `Provider setup resolution failed for "${params.authChoice}". Run \`openclaw doctor --fix\`, restart the Gateway, and try again.`,
                 );
               }
               signal.throwIfAborted();
               runnerSession.lockCancellation();
-              await setupShared.writeWizardConfigFile(applied.config, {
-                allowConfigSizeDrop: false,
-                baseSnapshot: snapshot,
-                ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+              await prepared.persistAuthProfiles();
+              await authConfig.writeProviderAuthConfig({
+                config: baseConfig,
+                configSnapshot: snapshot,
+                configPatch: authConfig.createProviderAuthConfigPatch(baseConfig, prepared.config),
+                credentialsSaved: prepared.authProfiles.length > 0,
+                writeOptions: { allowConfigSizeDrop: false },
               });
-              if (applied.agentModelOverride) {
-                runnerSession.setPreparedModelRef(applied.agentModelOverride);
+              if (prepared.agentModelOverride) {
+                runnerSession.setPreparedModelRef(prepared.agentModelOverride);
               }
             });
           },
@@ -333,7 +338,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await runExclusiveSystemAgentSetupActivation(async () => {
+      const result = await runExclusiveSystemAgentSetupActivation(async () => {
         const runtime = {
           ...defaultRuntime,
           // Setup runs inside the gateway process; a failing sub-step must reject
@@ -342,18 +347,21 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             throw new Error(`setup step exited with code ${String(code)}`);
           },
         };
-        const result = await activateGatewaySetupInference({
+        return await activateGatewaySetupInference({
           kind: params.kind,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
           ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
           ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
           ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+          ...(params.nativeSessionCatalogsEnabled !== undefined
+            ? { nativeSessionCatalogsEnabled: params.nativeSessionCatalogsEnabled }
+            : {}),
           surface: "gateway",
           runtime,
         });
-        respond(true, result, undefined);
       });
+      respond(true, result, undefined);
     } catch (error) {
       if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;
@@ -636,9 +644,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return undefined;
     });
     // Human waiting must retain the requesting tool, but release the task queue:
-    // the approval owner reenters it to apply the exact proposal.
+    // the approval owner reenters it to apply the exact proposal. Gateway closure
+    // retires this observation without changing the pending decision or its handoff.
     if (pending) {
-      const reply = await pending.completion;
+      const reply = await racePromiseWithAbortSignal(pending.completion, getAsyncWorkSignal());
       respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
     }
   },

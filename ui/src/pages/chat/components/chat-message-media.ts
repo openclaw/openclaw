@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -33,10 +34,12 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
   connectionEpoch?: number;
-  localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
   authToken?: string | null;
   onRequestUpdate?: () => void;
@@ -44,6 +47,27 @@ export type ImageRenderOptions = {
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
+
+export function assistantMediaPolicyKey(
+  session: GatewaySessionRow | undefined,
+  configEpoch = 0,
+): string | undefined {
+  if (!session && configEpoch === 0) {
+    return undefined;
+  }
+  // These facts invalidate previews; the Gateway still owns the permission decision.
+  return JSON.stringify([
+    configEpoch,
+    session?.permissionMode,
+    session?.permissionModePending,
+    session?.execNode,
+    session?.execCwd,
+    session?.sessionRoot,
+    session?.spawnedWorkspaceDir,
+    session?.spawnedCwd,
+    session?.worktree?.id,
+  ]);
+}
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;
@@ -58,6 +82,8 @@ type ChatMediaResourceKind =
 export type ChatMediaResource<Value> = {
   kind: ChatMediaResourceKind;
   cacheKey: string;
+  cacheScope: string | undefined;
+  discardWhenIdle: boolean;
   value: Value | undefined;
   pending: Promise<Value | null> | undefined;
   subscribers: Set<() => void>;
@@ -65,6 +91,7 @@ export type ChatMediaResource<Value> = {
   unavailableAt: number | undefined;
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
+  retainUntil: number | undefined;
 };
 
 type ChatMediaSubscriber = {
@@ -81,7 +108,7 @@ type ManagedImageBlobUrl = {
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
 const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
-const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
+const CHAT_MEDIA_CACHE_MAX_ENTRIES = 64;
 let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
@@ -118,6 +145,17 @@ function detachChatMediaResourceSubscriber(
   const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
   if (chatMediaResources.get(resourceKey) === resource) {
     chatMediaResources.delete(resourceKey);
+    // Virtual rows release every subscriber while offscreen. Keep only settled
+    // successes so remounts reuse their signed URL without retaining failed work.
+    if (
+      resource.retainUntil !== undefined &&
+      resource.retainUntil > Date.now() &&
+      !resource.discardWhenIdle &&
+      !resource.pending
+    ) {
+      chatMediaResources.set(resourceKey, resource);
+      trimIdleChatMediaResources();
+    }
   }
   resource.abortController?.abort();
   resource.abortController = undefined;
@@ -128,13 +166,29 @@ export function observeChatMediaResource<Value>(
   cacheKey: string,
   subscriber?: () => void,
   subscriberScope = cacheKey,
+  cacheScope?: string,
 ): ChatMediaResource<Value> {
   const resourceKey = chatMediaResourceKey(kind, cacheKey);
   let resource = chatMediaResources.get(resourceKey) as ChatMediaResource<Value> | undefined;
+  if (
+    resource &&
+    resource.subscribers.size === 0 &&
+    (resource.discardWhenIdle ||
+      (resource.retainUntil !== undefined && resource.retainUntil <= Date.now()))
+  ) {
+    chatMediaResources.delete(resourceKey);
+    resource.abortController?.abort();
+    if (resource.refresh) {
+      clearTimeout(resource.refresh.timer);
+    }
+    resource = undefined;
+  }
   if (!resource) {
     resource = {
       kind,
       cacheKey,
+      cacheScope,
+      discardWhenIdle: false,
       value: undefined,
       pending: undefined,
       subscribers: new Set(),
@@ -142,20 +196,44 @@ export function observeChatMediaResource<Value>(
       unavailableAt: undefined,
       abortController: undefined,
       refresh: undefined,
+      retainUntil: undefined,
     };
     chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
   }
+  const newObservation = !subscriber || !resource.subscribers.has(subscriber);
   if (subscriber) {
     const subscriptions = getChatMediaSubscriber(subscriber).resources;
     const subscriptionKey = chatMediaResourceKey(kind, subscriberScope);
     const previous = subscriptions.get(subscriptionKey);
+    // Protect the target from idle eviction before releasing the previous resource.
+    resource.subscribers.add(subscriber);
     if (previous && previous !== resource) {
       detachChatMediaResourceSubscriber(previous, subscriber);
     }
     subscriptions.set(subscriptionKey, resource as ChatMediaResource<unknown>);
-    resource.subscribers.add(subscriber);
+  }
+  if (cacheScope !== undefined && newObservation) {
+    // Policy changes can replace the directive. Let active readers finish, but
+    // prevent superseded snapshots from becoming reusable when they later detach.
+    for (const [key, sibling] of chatMediaResources) {
+      if (sibling !== resource && sibling.kind === kind && sibling.cacheScope === cacheScope) {
+        sibling.discardWhenIdle = true;
+        if (sibling.subscribers.size === 0 && !sibling.pending) {
+          chatMediaResources.delete(key);
+        }
+      }
+    }
   }
   return resource;
+}
+
+function trimIdleChatMediaResources() {
+  const retained = [...chatMediaResources.entries()].filter(
+    ([, resource]) => resource.retainUntil !== undefined && resource.subscribers.size === 0,
+  );
+  for (const [resourceKey] of retained.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
+    chatMediaResources.delete(resourceKey);
+  }
 }
 
 export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Value>): boolean {
@@ -259,7 +337,7 @@ export function trimManagedImageMissResources() {
       resource.subscribers.size === 0 &&
       !resource.pending,
   );
-  for (const [resourceKey] of misses.slice(0, -MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES)) {
+  for (const [resourceKey] of misses.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
     chatMediaResources.delete(resourceKey);
   }
 }
@@ -275,7 +353,7 @@ export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
 }
 
 function trimManagedImageBlobUrlCache() {
-  while (managedImageBlobUrls.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+  while (managedImageBlobUrls.size > CHAT_MEDIA_CACHE_MAX_ENTRIES) {
     const evictable = [...managedImageBlobUrls].find(([, cached]) => cached.retainCount === 0);
     if (!evictable) {
       return;

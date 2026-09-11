@@ -22,20 +22,20 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
+import type { GitHubPublicationPresentationBinding } from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
-import type {
-  SessionChangedResult,
-  SessionReconcileOptions,
-  SessionRunTerminal,
-} from "./reconcile.ts";
+import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 export type SessionState = {
   result: SessionsListResult | null;
+  resultCached?: boolean;
   agentId: string | null;
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
@@ -89,6 +89,20 @@ export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "app
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
 
+export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
+
+type SessionRowReadOutcome =
+  | { status: "current"; row: GatewaySessionRow | null }
+  | { status: "invalidated" }
+  | { status: "retired" };
+
+export type SessionRowObservation = {
+  readonly row: GatewaySessionRow | null;
+  isCurrent: () => boolean;
+  captureReconcile: () => (row: GatewaySessionRow | undefined) => SessionRowReadOutcome;
+  dispose: () => void;
+};
+
 export type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
@@ -122,13 +136,17 @@ export type SessionResetOptions = {
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {
+  readonly connection?: { readonly gatewayUrl: string; readonly token?: string };
+  readonly connectionRevision?: number;
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
+    restartPending?: boolean;
+    suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
-    selfUser?: { readonly id: string } | null;
+    selfUser?: AuthenticatedUser | null;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
@@ -148,10 +166,18 @@ export type SessionCreateReconciliation = "blocking" | "background";
 export type SessionMessageSubscription = GatewaySessionMessageSubscription;
 export type SessionArchiveVisibility = "pending" | "archived";
 
+export type GitHubPublicationBinding = GitHubPublicationPresentationBinding & {
+  matches: (row: GatewaySessionRow) => boolean;
+};
+
 export type SessionCapability = {
+  readonly githubPublication: {
+    attach: (row: GatewaySessionRow, changed: () => void) => GitHubPublicationBinding | null;
+  };
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
@@ -174,6 +200,21 @@ export type SessionCapability = {
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ) => boolean;
+  /** Captures request ordering before a supplemental row read begins. */
+  captureReconcile: () => SessionCapability["reconcile"];
+  /** Owns a routed descriptor through reads and events until its consumer retires. */
+  observeRow: (
+    target: SessionRowTarget,
+    listener: (row: GatewaySessionRow | null) => void,
+  ) => SessionRowObservation;
+  /** Preserve an existing row observation through a local presentation copy. */
+  inheritRow: (
+    row: GatewaySessionRow,
+    previous: GatewaySessionRow | undefined,
+    donor?: GatewaySessionRow,
+  ) => GatewaySessionRow;
+  /** Projects held field observations without changing the input rows' keys or membership. */
+  projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;

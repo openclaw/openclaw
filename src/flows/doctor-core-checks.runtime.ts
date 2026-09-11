@@ -1,5 +1,6 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
@@ -24,7 +25,7 @@ import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-r
 import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
@@ -40,6 +41,8 @@ import {
   gatewayConnectErrorWasRateLimited,
 } from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNodeRuntime } from "../daemon/runtime-binary.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import {
   getSystemdCgroupHygieneSummary,
   type GatewayServiceRuntime,
@@ -234,6 +237,33 @@ export async function collectGatewayDaemonFindings(
     });
     return findings;
   }
+  const nodePath = state.command?.programArguments[0];
+  if (nodePath && isNodeRuntime(nodePath)) {
+    const runtime = await resolveNodeRuntimeInfo(nodePath, state.env);
+    const message =
+      runtime.status === "probe-failed"
+        ? runtime.error.message
+        : (runtime.capabilityError ?? runtime.note);
+    if (message) {
+      findings.push({
+        checkId: "core/doctor/gateway-daemon",
+        severity: runtime.status === "supported" ? "info" : "warning",
+        message,
+        path: state.command?.sourcePath,
+        target: nodePath,
+        ...(runtime.status !== "supported"
+          ? {
+              fixHint: [
+                ...(runtime.status === "unsupported"
+                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                  : []),
+                "Repair the Node runtime, then run `openclaw gateway install`.",
+              ].join("\n"),
+            }
+          : {}),
+      });
+    }
+  }
   if (state.loadState.status === "not-loaded") {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
@@ -268,7 +298,7 @@ export async function collectGatewayDaemonFindings(
       fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
     });
   }
-  if (state.runtime?.missingSupervision || state.runtime?.missingUnit) {
+  if (state.runtime?.missingUnit) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -1155,7 +1185,7 @@ export async function collectRuntimeToolSchemaFindings(
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const collectForAgent = async () => {
         const agentDir = resolveAgentDir(cfg, agentId);
-        const catalog = await loadPreparedModelCatalog({
+        const catalog = await readPreparedModelCatalog({
           config: cfg,
           agentId,
           agentDir,

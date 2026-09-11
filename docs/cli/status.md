@@ -42,6 +42,31 @@ security audit, plugin compatibility, and memory-vector probes are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
+For Git installs, plain status compares cached remote-tracking refs without a
+network fetch. If the latest recorded update fetch failed and no later update
+run records a completed fetch, the Update row shows
+`update check stale: last update fetch failed 5m ago (network error)` instead of
+`up to date`, with ahead/behind counts labeled `cached`. JSON exposes this under
+`update.git.stale` (`reason`, `failedAtMs`, `detail`, and `runId`) and sets
+`update.git.countsCached` to `true`. Without a recorded fetch failure, the usual
+cached comparison is unchanged. The history belongs to the current state
+directory. A later run that completes its fetch clears the warning even if the
+rest of that update is skipped, fails, or rolls back. A manual `git fetch` does
+not clear the recorded warning. Use `openclaw update status` for a fresh check
+and the last update run, or run `openclaw update` again. `openclaw status --deep`
+also fetches for that check; it does not change the ledger. See
+[Release channels](/install/development-channels#checking-current-status).
+
+## Skills diagnosis
+
+`status --all` reports eligible skills and skills with missing prerequisites for
+the workspace shown in the Skills row. Missing prerequisites use the same category as
+`openclaw skills check`: intentionally disabled skills and skills blocked by the
+bundled allowlist are excluded; agent allowlist exclusions remain independent.
+Unmet OS requirements are included in this count, although Doctor does not disable
+skills for OS incompatibility.
+Use `openclaw skills check --agent <id>` to inspect the missing requirements.
+
 ## Session and model resolution
 
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
@@ -50,9 +75,10 @@ and `openclaw memory status --deep`.
   backend, or an ACP backend such as `codex (acp/acpx)`. See
   [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
   distinction.
-- When the current session snapshot is sparse, `/status` can backfill token
-  and cache counters from the most recent transcript usage log. Existing
-  nonzero live values still win over transcript fallback values.
+- When the current session snapshot is sparse, the `/status` chat command (see
+  [Slash commands](/tools/slash-commands)) can backfill token and cache counters
+  from the most recent transcript usage log. Existing nonzero live values still
+  win over transcript fallback values.
 - Transcript fallback can also recover the active runtime model label when
   the live session entry is missing it. If that transcript model differs
   from the selected model, status resolves the context window against the
@@ -91,9 +117,16 @@ and `openclaw memory status --deep`.
 
 - Overview includes Gateway + node host service install/runtime status when
   available, plus compact Gateway process uptime and host system uptime.
+- `status --all` shows returned host, IP, version, and platform in **Gateway self**.
+  It uses `unknown` only when those fields are unavailable.
+- On Linux, a readable installed node service remains listed when the service
+  manager is unavailable; its runtime status stays unknown.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+- `status` and `status --all` keep current availability in **Update** and show
+  active or recent update history separately in **Update run**. A distinct
+  **Update restart** report remains visible unless it names that same run ID.
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
@@ -127,3 +160,4 @@ their own files, chunks, vector, and FTS state.
 
 - [CLI reference](/cli)
 - [Doctor](/gateway/doctor)
+- [`openclaw health`](/cli/health) — Gateway health snapshot over RPC

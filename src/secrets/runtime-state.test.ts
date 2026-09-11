@@ -16,7 +16,7 @@ import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runt
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   createConfigResolutionFacts,
@@ -410,8 +410,10 @@ describe("secrets runtime state", () => {
     );
   });
 
-  it("preserves live auth bookkeeping when prepared credentials activate", () => {
+  it.each(["save", "clear"])("preserves live auth bookkeeping after order %s", (action) => {
     const agentDir = "/tmp/openclaw-auth-bookkeeping-merge";
+    const order = { openai: ["openai:default"] };
+    const saved = action === "save";
     const credential = {
       type: "api_key" as const,
       provider: "openai",
@@ -421,7 +423,8 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
-        order: { openai: ["openai:default"] },
+        order: saved ? undefined : order,
+        runtimeLocalOrderProviderIds: saved ? [] : ["openai"],
         usageStats: { "openai:default": { lastUsed: 1 } },
       },
       agentDir,
@@ -434,7 +437,8 @@ describe("secrets runtime state", () => {
           store: {
             version: 1,
             profiles: { "openai:default": credential },
-            order: { openai: [] },
+            order: saved ? undefined : order,
+            runtimeLocalOrderProviderIds: saved ? [] : ["openai"],
             usageStats: { "openai:default": { lastUsed: 1 } },
           },
         },
@@ -444,7 +448,8 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
-        order: { openai: ["openai:default"] },
+        order: saved ? order : undefined,
+        runtimeLocalOrderProviderIds: saved ? ["openai"] : [],
         lastGood: { openai: "openai:default" },
         usageStats: {
           "openai:default": { lastUsed: 2, cooldownUntil: Date.now() + 60_000 },
@@ -458,9 +463,12 @@ describe("secrets runtime state", () => {
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats?.["openai:default"],
     ).toMatchObject({ lastUsed: 2, cooldownUntil: expect.any(Number) });
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
-      "openai:default",
-    ]);
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order).toEqual(
+      saved ? order : undefined,
+    );
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.runtimeLocalOrderProviderIds).toEqual(
+      saved ? ["openai"] : [],
+    );
     expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.lastGood?.openai).toBe(
       "openai:default",
     );
@@ -646,49 +654,14 @@ describe("secrets runtime state", () => {
   });
 
   it.each([
-    {
-      label: "candidate change",
-      baselineAKey: "a-old",
-      candidateAKey: "a-candidate",
-      currentAKey: "a-candidate",
-      currentAExternal: false,
-      expectedAKey: "a-old",
-    },
-    {
-      label: "candidate deletion",
-      baselineAKey: "a-old",
-      candidateAKey: null,
-      currentAKey: null,
-      currentAExternal: false,
-      expectedAKey: "a-old",
-    },
-    {
-      label: "triple rotation",
-      baselineAKey: "a-old",
-      candidateAKey: "a-candidate",
-      currentAKey: "a-external",
-      currentAExternal: true,
-      expectedAKey: "a-external",
-    },
-    {
-      label: "external logout",
-      baselineAKey: "a-old",
-      candidateAKey: "a-candidate",
-      currentAKey: null,
-      currentAExternal: false,
-      expectedAKey: null,
-    },
-    {
-      label: "candidate-only overwrite",
-      baselineAKey: null,
-      candidateAKey: "a-candidate",
-      currentAKey: "a-external",
-      currentAExternal: true,
-      expectedAKey: "a-external",
-    },
+    ["candidate change", "a-old", "a-candidate", "a-candidate", false, "a-old"],
+    ["candidate deletion", "a-old", null, null, false, "a-old"],
+    ["triple rotation", "a-old", "a-candidate", "a-external", true, "a-external"],
+    ["external logout", "a-old", "a-candidate", null, false, null],
+    ["candidate-only overwrite", null, "a-candidate", "a-external", true, "a-external"],
   ])(
-    "resolves per-profile ownership for $label while preserving post-activation profile B",
-    ({ label, baselineAKey, candidateAKey, currentAKey, currentAExternal, expectedAKey }) => {
+    "resolves per-profile ownership for %s while preserving post-activation profile B",
+    (label, baselineAKey, candidateAKey, currentAKey, currentAExternal, expectedAKey) => {
       const agentDir = `/tmp/openclaw-auth-post-activation-${label}`;
       const profile = (provider: string, key: string) => ({
         type: "api_key" as const,
@@ -735,9 +708,9 @@ describe("secrets runtime state", () => {
   );
 
   it.each([
-    { label: "local override", runtimeLocalProfileIds: ["openai:default"], expected: "sk-old" },
-    { label: "inherited profile", runtimeLocalProfileIds: [], expected: "sk-candidate" },
-  ])("uses the effective owner token for a $label", ({ runtimeLocalProfileIds, expected }) => {
+    ["local override", ["openai:default"], "sk-old"],
+    ["inherited profile", [], "sk-candidate"],
+  ])("uses the effective owner token for %s", (_label, runtimeLocalProfileIds, expected) => {
     const agentDir = `/tmp/openclaw-auth-effective-owner-${runtimeLocalProfileIds.length}`;
     const snapshot = (key: string, port: number) =>
       preparedGatewayAuthSnapshot(agentDir, port, {
@@ -806,13 +779,13 @@ describe("secrets runtime state", () => {
   });
 
   it.each([
-    { candidateOwner: "inherited", mutateCandidateOwner: true },
-    { candidateOwner: "local", mutateCandidateOwner: true },
-    { candidateOwner: "inherited", mutateCandidateOwner: false },
-    { candidateOwner: "local", mutateCandidateOwner: false },
+    ["inherited", true],
+    ["local", true],
+    ["inherited", false],
+    ["local", false],
   ] as const)(
-    "handles baseline external to $candidateOwner with mutation=$mutateCandidateOwner",
-    ({ candidateOwner, mutateCandidateOwner }) => {
+    "handles baseline external to %s with mutation=%s",
+    (candidateOwner, mutateCandidateOwner) => {
       const agentDir = `/tmp/openclaw-auth-external-to-${candidateOwner}-${mutateCandidateOwner}`;
       const snapshot = (key: string, owner: "external" | "inherited" | "local", port: number) =>
         preparedGatewayAuthSnapshot(agentDir, port, {
@@ -953,11 +926,11 @@ describe("secrets runtime state", () => {
   );
 
   it.each([
-    { candidateOwner: "local", currentOwner: "external" },
-    { candidateOwner: "external", currentOwner: "local" },
+    ["external", "local"],
+    ["local", "external"],
   ] as const)(
-    "preserves $currentOwner owner metadata when bytes equal the $candidateOwner candidate",
-    ({ candidateOwner, currentOwner }) => {
+    "preserves %s owner metadata when bytes equal the %s candidate",
+    (currentOwner, candidateOwner) => {
       const agentDir = `/tmp/openclaw-auth-${candidateOwner}-${currentOwner}-equal-bytes`;
       const snapshot = (key: string, owner: "external" | "local", port: number) =>
         preparedGatewayAuthSnapshot(agentDir, port, {
@@ -1039,9 +1012,9 @@ describe("secrets runtime state", () => {
   });
 
   it.each([
-    { current: "sk-candidate", expected: "sk-old" },
-    { current: "sk-external-refresh", expected: "sk-external-refresh" },
-  ])("keeps external profile ownership separate from main mutations", ({ current, expected }) => {
+    ["sk-candidate", "sk-old"],
+    ["sk-external-refresh", "sk-external-refresh"],
+  ])("keeps external profile ownership separate from main mutations", (current, expected) => {
     const agentDir = `/tmp/openclaw-auth-external-owner-${current}`;
     const snapshot = (key: string, port: number) =>
       preparedGatewayAuthSnapshot(agentDir, port, {
@@ -1159,72 +1132,16 @@ describe("secrets runtime state", () => {
   );
 
   it.each([
-    {
-      label: "candidate-owned omission",
-      mutationOwner: "none",
-      profileId: "",
-      stateOnly: false,
-      inheritsMainProfile: false,
-      inheritsMainState: false,
-      expectMissing: false,
-    },
-    {
-      label: "persisted external removal",
-      mutationOwner: "custom",
-      profileId: "openai:default",
-      stateOnly: false,
-      inheritsMainProfile: false,
-      inheritsMainState: false,
-      expectMissing: true,
-    },
-    {
-      label: "state-only bookkeeping write",
-      mutationOwner: "custom",
-      profileId: "",
-      stateOnly: true,
-      inheritsMainProfile: false,
-      inheritsMainState: false,
-      expectMissing: true,
-    },
-    {
-      label: "unrelated main-store write",
-      mutationOwner: "main",
-      profileId: "anthropic:main",
-      stateOnly: false,
-      inheritsMainProfile: true,
-      inheritsMainState: false,
-      expectMissing: false,
-    },
-    {
-      label: "unrelated main bookkeeping write",
-      mutationOwner: "main",
-      profileId: "",
-      stateOnly: true,
-      inheritsMainProfile: false,
-      inheritsMainState: false,
-      expectMissing: false,
-    },
-    {
-      label: "inherited main bookkeeping write",
-      mutationOwner: "main",
-      profileId: "",
-      stateOnly: true,
-      inheritsMainProfile: true,
-      inheritsMainState: true,
-      expectMissing: true,
-    },
-    {
-      label: "related main-store write",
-      mutationOwner: "main",
-      profileId: "openai:default",
-      stateOnly: false,
-      inheritsMainProfile: true,
-      inheritsMainState: false,
-      expectMissing: true,
-    },
+    ["candidate-owned omission", "none", "", false, false, false, false],
+    ["persisted external removal", "custom", "openai:default", false, false, false, true],
+    ["state-only bookkeeping write", "custom", "", true, false, false, true],
+    ["unrelated main-store write", "main", "anthropic:main", false, true, false, false],
+    ["unrelated main bookkeeping write", "main", "", true, false, false, false],
+    ["inherited main bookkeeping write", "main", "", true, true, true, true],
+    ["related main-store write", "main", "openai:default", false, true, false, true],
   ] as const)(
-    "handles whole-store $label after candidate omission",
-    ({
+    "handles whole-store %s after candidate omission",
+    (
       label,
       mutationOwner,
       profileId,
@@ -1232,7 +1149,7 @@ describe("secrets runtime state", () => {
       inheritsMainProfile,
       inheritsMainState,
       expectMissing,
-    }) => {
+    ) => {
       const agentDir = `/tmp/openclaw-auth-store-removal-${label}`;
       const snapshot = (includeStore: boolean, port: number) =>
         preparedSnapshot({
@@ -1342,9 +1259,9 @@ describe("secrets runtime state", () => {
   });
 
   it.each([
-    { label: "retains a resolved value for the same auth-store SecretRef", changedRef: false },
-    { label: "restores the predecessor when the auth-store SecretRef changed", changedRef: true },
-  ])("$label", ({ changedRef }) => {
+    ["retains a resolved value for the same auth-store SecretRef", false],
+    ["restores the predecessor when the auth-store SecretRef changed", true],
+  ])("%s", (_label, changedRef) => {
     const agentDir = `/tmp/openclaw-auth-ref-rollback-${changedRef}`;
     const previousRef = {
       source: "env" as const,
@@ -1667,12 +1584,12 @@ describe("secrets runtime state", () => {
   );
 
   it.each([
-    { capturedOwner: "local", currentOwner: "inherited", label: "local delete" },
-    { capturedOwner: "inherited", currentOwner: "local", label: "local upsert" },
-    { capturedOwner: "local", currentOwner: "local", label: "same-owner local update" },
+    ["local delete", "local", "inherited"],
+    ["local upsert", "inherited", "local"],
+    ["same-owner local update", "local", "local"],
   ] as const)(
-    "invalidates a same-ref provider change after a durable $label",
-    ({ capturedOwner, currentOwner }) => {
+    "invalidates a same-ref provider change after a durable %s",
+    (_label, capturedOwner, currentOwner) => {
       const agentDir = `/tmp/openclaw-auth-provider-owner-${capturedOwner}-${currentOwner}`;
       const keyRef = {
         source: "file" as const,
@@ -1748,11 +1665,11 @@ describe("secrets runtime state", () => {
   );
 
   it.each([
-    { affectedProvider: true, currentProvider: "vault" },
-    { affectedProvider: false, currentProvider: "stable" },
+    ["vault", true],
+    ["stable", false],
   ] as const)(
-    "handles a durable ref-id update through $currentProvider with affected=$affectedProvider",
-    ({ affectedProvider, currentProvider }) => {
+    "handles a durable ref-id update through %s with affected=%s",
+    (currentProvider, affectedProvider) => {
       const agentDir = `/tmp/openclaw-auth-provider-ref-update-${currentProvider}`;
       const previousSourceConfig = {
         secrets: {

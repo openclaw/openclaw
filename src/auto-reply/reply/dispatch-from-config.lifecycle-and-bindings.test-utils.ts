@@ -2,7 +2,9 @@
 import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
@@ -51,6 +53,43 @@ import {
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function mockPendingPluginClaim(params: {
+  bindingId: string;
+  targetSessionKey: string;
+  conversationId: string;
+}) {
+  setNoAbort();
+  hookMocks.runner.hasHooks.mockImplementation(
+    ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+  );
+  hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+  let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+  hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+    async () =>
+      await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+        resolveClaim = resolve;
+      }),
+  );
+  sessionBindingMocks.resolveByConversation.mockReturnValue({
+    bindingId: params.bindingId,
+    targetSessionKey: params.targetSessionKey,
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: params.conversationId,
+    },
+    status: "active",
+    boundAt: 1710000000000,
+    metadata: {
+      pluginBindingOwner: "plugin",
+      pluginId: "test-plugin",
+      pluginRoot: "/tmp/test-plugin",
+    },
+  } satisfies SessionBindingRecord);
+  return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -1001,36 +1040,174 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
+  it.each(["fresh owner", "hook-only admission"] as const)(
+    "retains cancelled plugin media staging until cleanup settles with %s",
+    async (ownership) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "inbound_claim");
+      hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+        status: "handled",
+        result: { handled: true, reply: { text: "must not send" } },
+      });
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: "binding-staging-cancellation",
+        targetSessionKey: "plugin-binding:test:staging-cancellation",
+        targetKind: "session",
+        conversation: {
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "chat:staging-cancellation",
+        },
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "test-plugin",
+          pluginRoot: "/tmp/test-plugin",
+        },
+      } satisfies SessionBindingRecord);
+      const sessionKey = "agent:main:imessage:direct:staging-cancellation";
+      const sessionId = "staging-cancellation-session";
+      sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+      const existingOperation =
+        ownership === "hook-only admission"
+          ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+          : undefined;
+      const abort = new AbortController();
+      const cancellation = new Error("attachment request cancelled");
+      const cleanup = createDeferred();
+      let cleanupStarted = false;
+      let cleanupFinished = false;
+      stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async () => {
+        await waitForAbortSignal(abort.signal);
+        try {
+          throw cancellation;
+        } finally {
+          cleanupStarted = true;
+          await cleanup.promise;
+          cleanupFinished = true;
+        }
+      });
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+      const externalLifecycleRequest = new AsyncResource("external-staging-cancellation");
+      const dispatchResult = vi.fn();
+      const dispatchFailure = vi.fn();
+      const dispatch = withDispatchProcessedOutcomeSink(() =>
+        dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "imessage",
+            Surface: "imessage",
+            To: "imessage:chat:staging-cancellation",
+            AccountId: "default",
+            SessionKey: sessionKey,
+            Body: "inspect this attachment",
+            MessageSid: "message-staging-cancellation",
+            media: [{ path: "/remote/photo.jpg", contentType: "image/jpeg" }],
+            MediaRemoteHost: "user@gateway-host",
+          }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { abortSignal: abort.signal },
+          replyResolver,
         }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      );
+      const dispatchSettled = dispatch.then(dispatchResult, dispatchFailure);
+      let mutation: Promise<void> | undefined;
+      let mutationPrepared = false;
+      let mutationRan = false;
+      try {
+        await vi.waitFor(() => {
+          expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
+        });
+        const operation = replyRunRegistry.get(sessionKey);
+        expect(operation).toBeDefined();
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        if (existingOperation) {
+          expect(operation).toBe(existingOperation);
+          existingOperation.complete();
+          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        }
+        abort.abort(cancellation);
+        mutation = externalLifecycleRequest.runInAsyncScope(async () =>
+          runExclusiveSessionLifecycleMutation({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              mutationPrepared = true;
+              await interruptSessionWorkAdmissions({
+                scope: "/tmp/mock-sessions.json",
+                identities: [sessionKey, sessionId],
+              });
+            },
+            run: async () => {
+              mutationRan = true;
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(cleanupStarted).toBe(true);
+          expect(mutationPrepared).toBe(true);
+          expect(dispatchFailure).not.toHaveBeenCalled();
+          expect(dispatchResult).toHaveBeenCalledWith({
+            result: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+            processedOutcome: { outcome: "skipped", reason: "reply_operation_aborted" },
+          });
+        });
+        expect(cleanupFinished).toBe(false);
+        expect(mutationRan).toBe(false);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation ? undefined : operation);
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+
+        cleanup.resolve();
+        await mutation;
+        await dispatchSettled;
+        expect(cleanupFinished).toBe(true);
+        expect(mutationRan).toBe(true);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(false);
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(dispatchResult).toHaveBeenCalledOnce();
+        expect(dispatchFailure).not.toHaveBeenCalled();
+        expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+        expect(messageAuditEvents()[0]).toMatchObject({
+          status: "blocked",
+          outcome: "skipped",
+          reasonCode: "reply_operation_aborted",
+        });
+        expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+        expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } finally {
+        abort.abort(cancellation);
+        cleanup.resolve();
+        existingOperation?.complete();
+        await Promise.allSettled([dispatchSettled, mutation]);
+        externalLifecycleRequest.emitDestroy();
+      }
+    },
+  );
+
+  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-lifecycle-race",
       targetSessionKey: "plugin-binding:test:race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:lifecycle-race";
     const sessionId = "plugin-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1092,35 +1269,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:active-lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:active-lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
     const sessionId = "plugin-active-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1191,35 +1344,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("does not abort the active owner when its in-band mutation interrupts borrowed work", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-owner-mutation-race",
       targetSessionKey: "plugin-binding:test:owner-mutation-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:owner-mutation-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:owner-mutation-race",
+    });
     const sessionKey = "agent:main:discord:channel:owner-mutation-race";
     const sessionId = "owner-mutation-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1417,7 +1546,7 @@ describe("dispatchReplyFromConfig", () => {
       expect(params.remoteMediaMode).toBe("cache");
       params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
       params.sessionCtx.media = params.ctx.media;
-      return { staged: new Map([[rawPath, stagedPath]]) };
+      return { staged: new Map([[0, stagedPath]]) };
     });
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>

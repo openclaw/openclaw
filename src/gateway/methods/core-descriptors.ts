@@ -168,7 +168,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
   ["taskSuggestions.dismiss", "task-suggestions", "operator.write", "<=2026.7"],
-  ["environments.list", "environments", "operator.read", "2026.7"],
+  ["environments.list", "environments", "dynamic", "2026.7"],
   ["environments.status", "environments", "operator.read", "2026.7"],
   ["worktrees.list", "worktrees", "operator.read", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
@@ -416,9 +416,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tts.speak", "tts", "operator.write", "2026.7"],
   ["plugins.list", "plugins", "operator.read", "<=2026.7"],
   ["plugins.search", "plugins", "operator.read", "<=2026.7"],
-  ["plugins.install", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.setEnabled", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.uninstall", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
@@ -634,17 +634,41 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
-  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
-  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  ["canvas.document.view", "canvas", "operator.read", "2026.9"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.9"],
   [
     "plugins.controlUi.reload",
     "plugins-control-ui",
     "operator.admin",
-    "2026.8",
+    "2026.9",
     CONTROL_PLANE_WRITE,
   ],
-  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
-  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.9"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.9"],
+  ["update.runs.get", "update", "operator.admin", "2026.9"],
+  ["update.runs.list", "update", "operator.admin", "2026.9"],
+  ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["transcripts.export", "transcripts", "operator.read", "2026.9"],
+  ["transcripts.status", "transcripts", "operator.read", "2026.9"],
+  ["update.report", "update", "operator.admin", "2026.9", { controlPlaneWrite: true }],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
+  // Public sharing appends so every previously advertised method index remains stable.
+  ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
+  ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
+  ["tasks.history", "tasks", "operator.read", "2026.9"],
+  [
+    "environments.prepare",
+    "environments",
+    "operator.admin",
+    "2026.9",
+    { startup: true, controlPlaneWrite: true },
+  ],
+  ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
@@ -691,13 +715,12 @@ export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
   readonly string[]
 > {
   const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
-  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    if (!spec.family) {
+  for (const [name, family] of CORE_GATEWAY_METHOD_SPECS) {
+    if (!family) {
       continue;
     }
-    const family = spec.family as CoreGatewayHandlerFamily;
     const methods = methodsByFamily.get(family) ?? [];
-    methods.push(spec.name);
+    methods.push(name);
     methodsByFamily.set(family, methods);
   }
   return methodsByFamily;

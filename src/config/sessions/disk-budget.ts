@@ -11,10 +11,8 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   isCompactionCheckpointTranscriptFileName,
-  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isRetainedSessionTranscriptArchiveName,
   isSessionArchiveArtifactName,
@@ -22,11 +20,23 @@ import {
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
+import {
+  isSessionPromptBlobTempArtifactName,
+  readSessionPromptBlobFiles,
+  readSessionsDirFiles,
+  type SessionPhysicalDiskUsage,
+  type SessionsDirFileStat,
+} from "./disk-budget-files.js";
+import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
 import { resolveSessionFilePathCore } from "./paths.js";
-import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
+import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { timeArchivePruningAsync } from "./session-history-archive-pruning-diagnostics.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
+
+export { measureSessionPhysicalDiskUsage };
+export type { SessionPhysicalDiskUsage };
 
 type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
@@ -52,13 +62,6 @@ export type SessionUnreferencedArtifactSweepResult = {
   olderThanMs: number;
 };
 
-export type SessionPhysicalDiskUsage = {
-  databaseMainBytes: number;
-  databaseWalBytes: number;
-  sessionFilesBytes: number;
-  totalBytes: number;
-};
-
 type SessionDiskBudgetLogger = {
   warn: (message: string, context?: Record<string, unknown>) => void;
   info: (message: string, context?: Record<string, unknown>) => void;
@@ -67,14 +70,6 @@ type SessionDiskBudgetLogger = {
 const NOOP_LOGGER: SessionDiskBudgetLogger = {
   warn: () => {},
   info: () => {},
-};
-
-type SessionsDirFileStat = {
-  path: string;
-  canonicalPath: string;
-  name: string;
-  size: number;
-  mtimeMs: number;
 };
 
 function measureStoreBytes(store: Record<string, SessionEntry>): number {
@@ -213,90 +208,6 @@ function resolveReferencedSessionArtifactPaths(params: {
   return referenced;
 }
 
-const SESSIONS_DIR_STAT_CONCURRENCY = 8;
-
-async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
-  const dirEntries = await fs.promises
-    .readdir(sessionsDir, { withFileTypes: true })
-    .catch(() => []);
-  // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
-  const tasks = dirEntries
-    .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
-    .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
-      const filePath = path.join(sessionsDir, dirent.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        return null;
-      }
-      return {
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: dirent.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      };
-    });
-  const { results } = await runTasksWithConcurrency({
-    tasks,
-    limit: SESSIONS_DIR_STAT_CONCURRENCY,
-  });
-  return results.filter((file): file is SessionsDirFileStat => Boolean(file));
-}
-
-async function readSqliteDatabaseFiles(storePath: string): Promise<SessionsDirFileStat[]> {
-  const files: SessionsDirFileStat[] = [];
-  for (const databasePath of listDurableSqliteTargetPathsForSessionStorePath(storePath)) {
-    for (const filePath of [databasePath, `${databasePath}-wal`]) {
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
-      }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: path.basename(filePath),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
-    }
-  }
-  return files;
-}
-
-/** Measures current physical session artifacts plus the agent SQLite main file and WAL. */
-export async function measureSessionPhysicalDiskUsage(
-  storePath: string,
-): Promise<SessionPhysicalDiskUsage> {
-  const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
-  const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
-  const databaseFiles = await readSqliteDatabaseFiles(storePath);
-  const databaseMainPaths = new Set(
-    databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
-  );
-  const databaseWalPaths = new Set(
-    databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
-  );
-  const uniqueFiles = new Map<string, SessionsDirFileStat>();
-  for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
-    uniqueFiles.set(file.canonicalPath, file);
-  }
-  const databaseMainBytes = [...databaseMainPaths].reduce(
-    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
-    0,
-  );
-  const databaseWalBytes = [...databaseWalPaths].reduce(
-    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
-    0,
-  );
-  const totalBytes = [...uniqueFiles.values()].reduce((sum, file) => sum + file.size, 0);
-  return {
-    databaseMainBytes,
-    databaseWalBytes,
-    sessionFilesBytes: totalBytes - databaseMainBytes - databaseWalBytes,
-    totalBytes,
-  };
-}
-
 export async function hasRetainedSessionTranscriptArchives(storePath: string): Promise<boolean> {
   const files = await readSessionsDirFiles(path.dirname(storePath));
   return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
@@ -304,6 +215,7 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
 
 /** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
+  diagnostics?: SqliteSessionArchivePruningDiagnostics;
   excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
   storePath: string;
@@ -311,72 +223,48 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   // Oldest-first is the hard-cap sacrifice order: under extreme pressure this
   // may prune an archive the current pass just extracted, which is preferred
   // over evicting additional sessions' searchable rows to spare a copy.
-  const files = (await readSessionsDirFiles(path.dirname(params.storePath)))
-    .filter(
-      (file) =>
-        isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
-    )
-    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
-  let usage = await measureSessionPhysicalDiskUsage(params.storePath);
+  const { diagnostics } = params;
+  const files = await timeArchivePruningAsync(diagnostics, "legacyInventoryMs", async () =>
+    (await readSessionsDirFiles(path.dirname(params.storePath)))
+      .filter(
+        (file) =>
+          isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
+      )
+      .toSorted((left, right) => left.mtimeMs - right.mtimeMs),
+  );
+  let usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+    measureSessionPhysicalDiskUsage(params.storePath),
+  );
   let removedFiles = 0;
   for (const file of files) {
     if (usage.totalBytes <= params.highWaterBytes) {
       break;
     }
-    if (!(await removeFileIfExists(file.path)).ok) {
+    if (
+      !(
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+          removeFileIfExists(file.path),
+        )
+      ).ok
+    ) {
+      if (diagnostics) {
+        diagnostics.failedRemovals = (diagnostics.failedRemovals ?? 0) + 1;
+      }
       continue;
     }
     removedFiles += 1;
-    usage = await measureSessionPhysicalDiskUsage(params.storePath);
+    if (diagnostics) {
+      diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
+    }
+    usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+      measureSessionPhysicalDiskUsage(params.storePath),
+    );
   }
   return { removedFiles, usage };
 }
 
-async function readSessionPromptBlobFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
-  const root = path.join(sessionsDir, "skills-prompts", "sha256");
-  const prefixEntries = await fs.promises.readdir(root, { withFileTypes: true }).catch(() => []);
-  const files: SessionsDirFileStat[] = [];
-  for (const prefixEntry of prefixEntries) {
-    if (!prefixEntry.isDirectory() || !/^[a-f0-9]{2}$/u.test(prefixEntry.name)) {
-      continue;
-    }
-    const prefixDir = path.join(root, prefixEntry.name);
-    const blobEntries = await fs.promises
-      .readdir(prefixDir, { withFileTypes: true })
-      .catch(() => []);
-    for (const blobEntry of blobEntries) {
-      if (
-        !blobEntry.isFile() ||
-        (!/^[a-f0-9]{64}\.txt$/u.test(blobEntry.name) &&
-          !isSessionPromptBlobTempArtifactName(blobEntry.name))
-      ) {
-        continue;
-      }
-      const filePath = path.join(prefixDir, blobEntry.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
-      }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: blobEntry.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
-    }
-  }
-  return files;
-}
-
 function resolvePromptBlobFileHash(file: Pick<SessionsDirFileStat, "name">): string | undefined {
   return /^[a-f0-9]{64}\.txt$/u.test(file.name) ? file.name.slice(0, -4) : undefined;
-}
-
-function isSessionPromptBlobTempArtifactName(name: string): boolean {
-  return /^[a-f0-9]{64}\.txt\.(?:\d+\.)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/u.test(
-    name,
-  );
 }
 
 function isUnreferencedSessionArtifactFile(

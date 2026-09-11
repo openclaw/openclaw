@@ -44,7 +44,7 @@ type CronScheduleOwnership = "current" | "stale";
 type CronTriggerOwnership = "current" | "stale";
 
 /** Checks both the admitted schedule and edits that may have returned to its original value. */
-export function resolveCronRunScheduleOwnership(params: {
+function resolveCronRunScheduleOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
@@ -56,7 +56,7 @@ export function resolveCronRunScheduleOwnership(params: {
 }
 
 /** Keeps trigger state owned by the exact script/once definition that evaluated it. */
-export function resolveCronRunTriggerOwnership(params: {
+function resolveCronRunTriggerOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
@@ -244,14 +244,13 @@ export function applyJobResult(
     } else if (opts?.replaySchedule && job.schedule.kind === "at") {
       applyReplaySchedule();
       job.enabled = job.state.nextRunAtMs !== undefined;
-    } else if (job.schedule.kind === "at") {
+    } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
       if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
           consecutiveSkipped: job.state.consecutiveSkipped,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          job.enabled = true;
           if (
             assignNextRunAtMs({
               state,
@@ -340,8 +339,8 @@ export function applyJobResult(
         }
       }
     } else if (opts?.scheduleMode === "preserve") {
-      // Forced recurring runs do not consume, replace, or repair a scheduled
-      // slot. Preserve the timestamp and its paced provenance as one unit.
+      // Forced recurring or disabled one-shot runs cannot change a scheduled
+      // slot. Preserve its absence, or its timestamp and paced provenance.
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
@@ -688,7 +687,12 @@ export function applyOutcomeToAuthoritativeJob(
   state: CronServiceState,
   job: CronJob,
   result: TimedCronRunOutcome,
-  opts?: { deferredNotifications?: DeferredCronNotifications; emit?: boolean },
+  opts?: {
+    deferredNotifications?: DeferredCronNotifications;
+    emit?: boolean;
+    // A requested run retains startup bookkeeping even when it advances ordinary cadence.
+    request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+  },
 ): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
     admittedJob: result.job,
@@ -713,13 +717,20 @@ export function applyOutcomeToAuthoritativeJob(
         triggerEval: result.triggerEval,
       },
       {
-        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        scheduleMode:
+          scheduleOwnership === "stale"
+            ? "stale-preserve"
+            : opts?.request?.preserveCadence
+              ? "immediate-preserve"
+              : "advance",
         triggerOwnership,
         deferredNotifications: opts?.deferredNotifications,
       },
     );
-    job.state.startupCatchupAtMs = undefined;
-    if (scheduleOwnership === "current") {
+    if (!opts?.request) {
+      job.state.startupCatchupAtMs = undefined;
+    }
+    if (!opts?.request && scheduleOwnership === "current") {
       // Quiet ticks consume their old pacing slot. Only an in-flight schedule
       // edit owns a replacement override that must survive finalization.
       job.state.pacedNextRunAtMs = undefined;
@@ -728,12 +739,21 @@ export function applyOutcomeToAuthoritativeJob(
   }
 
   const shouldDelete = applyJobResult(state, job, result, {
+    scheduleMode:
+      opts?.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
+    scheduleOwnershipAtMs: opts?.request?.scheduleOwnershipAtMs,
     deferredNotifications: opts?.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
   applyScriptRunResult(job, result, { triggerOwnership });
-  job.state.startupCatchupAtMs = undefined;
+  if (opts?.request) {
+    if (job.schedule.kind === "stream") {
+      job.state.nextRunAtMs = undefined;
+    }
+  } else {
+    job.state.startupCatchupAtMs = undefined;
+  }
 
   if (opts?.emit !== false) {
     emitCronOutcomeForJob(state, job, result);

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,8 +24,52 @@ const AgentsWaitToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+const CollectorCompletionSchema = Type.Object(
+  {
+    runId: Type.String(),
+    status: Type.Union([
+      Type.Literal("done"),
+      Type.Literal("failed"),
+      Type.Literal("killed"),
+      Type.Literal("timeout"),
+    ]),
+    result: Type.String(),
+    structured: Type.Optional(Type.Unknown()),
+    error: Type.Optional(Type.String()),
+    schemaError: Type.Optional(Type.String()),
+    sessionKey: Type.String(),
+    label: Type.Optional(Type.String()),
+    usage: Type.Optional(
+      Type.Object(
+        { inputTokens: Type.Number(), outputTokens: Type.Number() },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const AgentsWaitOutputSchema = Type.Object(
+  {
+    completed: Type.Array(CollectorCompletionSchema),
+    pending: Type.Array(Type.String()),
+    errors: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            runId: Type.String(),
+            error: Type.Union([Type.Literal("not_found"), Type.Literal("not_owner")]),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    success: Type.Optional(Type.Literal(false)),
+  },
+  { additionalProperties: false },
+);
+
 type WaitError = { runId: string; error: "not_found" | "not_owner" };
-type WaitTarget = { runId: string; entry: SubagentRunRecord };
 
 function ownsRun(
   entry: SubagentRunRecord,
@@ -65,7 +109,9 @@ function paramsOwner(config: OpenClawConfig | undefined, sessionKey: string): st
       : undefined;
 }
 
-function completionResult(entry: SubagentRunRecord) {
+function completionResult(
+  entry: SubagentRunRecord,
+): Static<typeof CollectorCompletionSchema> | undefined {
   const completion = entry.collectorCompletion;
   if (!completion) {
     return undefined;
@@ -152,36 +198,30 @@ export async function waitForCollectorCompletion(params: {
   });
 }
 
-function resolveWaitTargets(
+function readWaitState(
   ids: readonly string[],
   currentSessionKeys: ReadonlySet<string>,
   currentAgentId?: string,
   config?: OpenClawConfig,
 ) {
-  const targets: WaitTarget[] = [];
   const errors: WaitError[] = [];
-  const snapshot = getSubagentRunsByRunIds(ids);
-  for (const runId of ids) {
-    const entry = snapshot.entries.get(runId);
-    if (!entry?.collect) {
-      errors.push({ runId, error: "not_found" });
-    } else if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
-      errors.push({ runId, error: "not_owner" });
-    } else {
-      targets.push({ runId, entry });
-    }
-  }
-  return { targets, errors };
-}
-
-function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly WaitError[]) {
   const completed: Array<{
     result: NonNullable<ReturnType<typeof completionResult>>;
     completedAt: number;
     inputIndex: number;
   }> = [];
   const pending: string[] = [];
-  for (const [inputIndex, { runId, entry }] of targets.entries()) {
+  const snapshot = getSubagentRunsByRunIds(ids);
+  for (const [inputIndex, runId] of ids.entries()) {
+    const entry = snapshot.entries.get(runId);
+    if (!entry?.collect) {
+      errors.push({ runId, error: "not_found" });
+      continue;
+    }
+    if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
+      errors.push({ runId, error: "not_owner" });
+      continue;
+    }
     const result = completionResult(entry);
     if (result) {
       completed.push({
@@ -202,16 +242,6 @@ function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly 
     pending,
     ...(errors.length > 0 ? { errors } : {}),
   };
-}
-
-function readWaitState(
-  ids: readonly string[],
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
-) {
-  const resolved = resolveWaitTargets(ids, currentSessionKeys, currentAgentId, config);
-  return readResolvedWaitState(resolved.targets, resolved.errors);
 }
 
 async function waitForCollector(params: {
@@ -279,6 +309,7 @@ export function createAgentsWaitTool(opts: {
     displaySummary: "Wait for collector children.",
     description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
+    outputSchema: AgentsWaitOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { ids: string[]; timeoutSeconds?: number };
       if (params.ids.length > MAX_WAIT_IDS) {

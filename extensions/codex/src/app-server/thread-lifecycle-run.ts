@@ -2,7 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
+import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import {
+  prepareCodexInferenceThreadConfig,
+  bindCodexInferenceThread,
+} from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -13,9 +18,6 @@ import {
 } from "./plugin-thread-config.js";
 import {
   assertCodexBindingMayBeReplaced,
-  createCodexSessionGenerationSupersededError,
-  normalizeCodexAppServerBindingModelProvider,
-  reclaimCurrentCodexSessionGeneration,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -55,13 +57,14 @@ import { resolveCodexAppServerThreadModelSelection } from "./thread-model-select
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
-  params: CodexStartOrResumeThreadParams,
+  input: CodexStartOrResumeThreadParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
-  const incognito = isIncognitoSessionKey(params.params.sessionKey);
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, currentBinding) => {
+  const incognito = isIncognitoSessionKey(input.params.sessionKey);
+  const clientId = resolveCodexAppServerClientInstanceId(input.client);
+  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
+    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
-    let binding = currentBinding;
+    let binding = saved;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -72,7 +75,7 @@ export async function startOrResumeThread(
         agentDir: resolveCodexThreadAgentDir(params),
         assertCurrent: () => {
           params.signal?.throwIfAborted();
-          params.params.hostCapabilities.assertActive();
+          assert();
         },
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
@@ -82,6 +85,23 @@ export async function startOrResumeThread(
       }
     }
     const preflight = await prepareCodexThreadLifecyclePreflight(params);
+    const inference = await prepareCodexInferenceThreadConfig({
+      ...params,
+      binding: saved,
+      clientId,
+      effectiveConfig: preflight.effectiveConfig,
+      assertCurrent: assert,
+    });
+    if (inference) {
+      params.config = inference.config;
+      params.inferenceRoute = inference.route;
+    }
+    const publishInferenceBinding = (readyBinding: CodexAppServerThreadLifecycleBinding) => {
+      assert();
+      params.signal?.throwIfAborted();
+      bindCodexInferenceThread(params.client, readyBinding.threadId, inference?.route);
+      return readyBinding;
+    };
     const {
       contextEngineBinding,
       dynamicToolsContainDeferred,
@@ -132,20 +152,6 @@ export async function startOrResumeThread(
         threadId,
         assertCurrent,
       });
-    if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-      // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
-      // the authoritative session store may let its successor displace that stale owner.
-      const reclaimed = await lifecycleTiming.measure("reclaim-binding-generation", () =>
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: params.bindingStore,
-          identity: bindingIdentity,
-          config: params.params.config,
-        }),
-      );
-      if (!reclaimed) {
-        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-      }
-    }
     if (binding?.pendingSupervisionBranch) {
       await releaseRetainedThread(binding.threadId);
       const pendingBinding = binding as CodexAppServerThreadBinding & {
@@ -196,7 +202,10 @@ export async function startOrResumeThread(
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
-        throwIfAborted,
+        throwIfAborted: () => {
+          throwIfAborted();
+          assert();
+        },
         lifecycleTiming,
         normalizeBindingModelProvider,
         bindingPatch: {
@@ -239,10 +248,14 @@ export async function startOrResumeThread(
         return;
       }
       assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
-      const cleared = await params.bindingStore.mutate(bindingIdentity, {
-        kind: "clear",
-        threadId: current.threadId,
-      });
+      const cleared = await params.bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "clear",
+          threadId: current.threadId,
+        },
+        assert,
+      );
       if (!cleared) {
         throw new CodexThreadBindingConflictError(current.threadId, operation);
       }
@@ -274,7 +287,7 @@ export async function startOrResumeThread(
       params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
     const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
     if (binding?.pendingResumeConfiguration) {
-      return await resumePendingCodexThread(params, {
+      const resumed = await resumePendingCodexThread(params, {
         ...resolveRequestContext(),
         binding,
         clearCurrentBinding,
@@ -285,6 +298,7 @@ export async function startOrResumeThread(
           transientNativeToolRestriction ||
           transientWebSearchRestriction,
       });
+      return publishInferenceBinding(resumed);
     }
 
     if (
@@ -659,7 +673,7 @@ export async function startOrResumeThread(
           buildLoadedPluginThreadConfig,
         });
         if (warmReuse.kind === "ready") {
-          return warmReuse.binding;
+          return publishInferenceBinding(warmReuse.binding);
         }
         if (incognito || warmReuse.kind === "rotate") {
           throwIfAborted();
@@ -687,7 +701,7 @@ export async function startOrResumeThread(
             },
           });
           if (resumed) {
-            return resumed;
+            return publishInferenceBinding(resumed);
           }
         }
       }
@@ -709,6 +723,6 @@ export async function startOrResumeThread(
       // Release only that prior subscription after the successor has committed.
       await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
     }
-    return started;
+    return publishInferenceBinding(started);
   });
 }

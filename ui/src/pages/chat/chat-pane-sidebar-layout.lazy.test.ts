@@ -40,12 +40,11 @@ describe("chat pane lazy sidebar failures", () => {
           availableSlots: ["detail"],
           callbacks: {
             activatePanel: vi.fn(),
+            togglePanelExpanded: vi.fn(),
             closeSlot: vi.fn(),
             openSlot: vi.fn(),
-            appendComposerText: vi.fn(),
             reorderPanel: vi.fn(),
             resizePanel: vi.fn(),
-            setExpanded: vi.fn(),
             setOpen: vi.fn(),
           },
           layout,

@@ -1,3 +1,4 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
@@ -30,8 +31,6 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
-import type { AgentMessage } from "./runtime/index.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -66,8 +65,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
-  const pendingMessagingTexts = state.pendingMessagingTexts;
-  const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
@@ -76,14 +73,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitBlockReply,
     finalizeAssistantTexts,
     flushAssistantStream,
-    flushDeferredBlockReplies,
+    noteLastAssistant,
+    releaseDeferredReplies,
   } = replyDelivery;
 
-  // ── Messaging tool duplicate detection ──────────────────────────────────────
-  // Track texts sent via messaging tools to suppress duplicate block replies.
-  // Only committed (successful) texts are checked - pending texts are tracked
-  // to support commit logic but not used for suppression (avoiding lost messages on tool failure).
-  // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
+  // Suppress duplicate block replies only after confirmed messaging-tool delivery.
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
@@ -316,10 +310,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.currentSourceMessagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
-    pendingMessagingTexts.clear();
-    pendingMessagingTargets.clear();
-    state.heartbeatToolResponse = undefined;
-    state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();
@@ -337,12 +327,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
-  };
-
-  const noteLastAssistant = (msg: AgentMessage) => {
-    if (msg?.role === "assistant") {
-      state.lastAssistant = msg;
-    }
   };
 
   // Re-filter the full raw buffer. Reusing live scanner state would hide the
@@ -401,7 +385,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitAssistantStreamData,
     emitBlockReply,
     flushAssistantStream,
-    flushDeferredBlockReplies,
+    releaseDeferredReplies,
     clearAssistantStream,
     clearDeferredBlockReplies,
     emitReasoningStream,

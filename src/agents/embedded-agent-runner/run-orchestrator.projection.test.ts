@@ -166,6 +166,7 @@ describe("embedded retry transcript ownership", () => {
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+      vi.spyOn(getAiTransportHost().plugin, "resolveTransportTurnState").mockReturnValue(undefined);
       vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetchMock);
       const history = [
         { role: "user", content: "Check the results.", timestamp: 1 },
@@ -241,7 +242,9 @@ describe("embedded retry transcript ownership", () => {
         .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
           expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
-          expect(attempt.prompt).toContain("Continue from the current transcript");
+          expect(attempt.prompt).toContain(
+            "Continue the current task from the existing transcript",
+          );
           expect(attempt.suppressNextUserMessagePersistence).toBe(true);
           expect(attempt.skipPreparedUserTurnMessage).toBe(true);
           if (callerOwned) {

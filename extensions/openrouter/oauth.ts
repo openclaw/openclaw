@@ -112,18 +112,15 @@ function parseOpenRouterKeyResponse(value: unknown): OpenRouterOAuthKeyResult {
   };
 }
 
-function buildOpenRouterOAuthRedirectUri(params: { state: string }): string {
-  const url = new URL(OPENROUTER_OAUTH_REDIRECT_URI);
-  url.searchParams.set("state", params.state);
-  return url.toString();
-}
-
 function buildOpenRouterOAuthAuthorizeUrl(params: {
   codeChallenge: string;
+  redirectUrl: string;
   state: string;
 }): string {
+  const callbackUrl = new URL(params.redirectUrl);
+  callbackUrl.searchParams.set("state", params.state);
   const url = new URL(OPENROUTER_OAUTH_AUTHORIZE_URL);
-  url.searchParams.set("callback_url", buildOpenRouterOAuthRedirectUri({ state: params.state }));
+  url.searchParams.set("callback_url", callbackUrl.toString());
   url.searchParams.set("code_challenge", params.codeChallenge);
   url.searchParams.set("code_challenge_method", OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD);
   return url.toString();
@@ -230,12 +227,22 @@ async function promptForOpenRouterRedirect(
 async function resolveOpenRouterOAuthCode(
   ctx: ProviderAuthContext,
   params: {
-    authorizeUrl: string;
+    buildAuthorizationUrl: (redirectUrl: string) => string;
     state: string;
     startCallback: typeof startProviderOAuthLoopbackCallbackServer;
     onProgress: (message: string) => void;
   },
 ): Promise<string> {
+  if (ctx.oauth.authorize) {
+    const result = await ctx.oauth.authorize({
+      state: params.state,
+      timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
+      buildAuthorizationUrl: params.buildAuthorizationUrl,
+    });
+    return result.code;
+  }
+
+  const authorizeUrl = params.buildAuthorizationUrl(OPENROUTER_OAUTH_REDIRECT_URI);
   await ctx.prompter.note(
     ctx.isRemote
       ? [
@@ -254,10 +261,10 @@ async function resolveOpenRouterOAuthCode(
   );
 
   if (ctx.isRemote) {
-    ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${params.authorizeUrl}\n`);
-    await ctx.openUrl(params.authorizeUrl);
+    ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${authorizeUrl}\n`);
+    await ctx.openUrl(authorizeUrl);
     await ctx.prompter.note(
-      `Open this URL in your LOCAL browser:\n\n${params.authorizeUrl}`,
+      `Open this URL in your LOCAL browser:\n\n${authorizeUrl}`,
       "OpenRouter OAuth",
     );
     return await promptForOpenRouterRedirect(ctx, params.state);
@@ -289,10 +296,10 @@ async function resolveOpenRouterOAuthCode(
   }
 
   try {
-    await ctx.openUrl(params.authorizeUrl);
-    ctx.runtime.log(`Open: ${params.authorizeUrl}`);
+    await ctx.openUrl(authorizeUrl);
+    ctx.runtime.log(`Open: ${authorizeUrl}`);
   } catch {
-    ctx.runtime.log(`Open manually: ${params.authorizeUrl}`);
+    ctx.runtime.log(`Open manually: ${authorizeUrl}`);
   }
 
   if (!callback) {
@@ -331,24 +338,23 @@ async function loginOpenRouterOAuth(
   try {
     const pkce = options.createPkce?.() ?? generatePkceVerifierChallenge();
     const state = options.createState?.() ?? generateOAuthState();
-    const authorizeUrl = buildOpenRouterOAuthAuthorizeUrl({
-      codeChallenge: pkce.challenge,
-      state,
-    });
     const code = await resolveOpenRouterOAuthCode(ctx, {
-      authorizeUrl,
+      buildAuthorizationUrl: (redirectUrl) =>
+        buildOpenRouterOAuthAuthorizeUrl({ codeChallenge: pkce.challenge, redirectUrl, state }),
       state,
       startCallback: options.startCallback ?? startProviderOAuthLoopbackCallbackServer,
       onProgress: (message) => progress.update(message),
     });
     progress.update("Exchanging OpenRouter OAuth code...");
+    ctx.signal?.throwIfAborted();
+    ctx.assertCurrent?.();
     const token = await exchangeOpenRouterOAuthCode({
       code,
       codeVerifier: pkce.verifier,
       fetchImpl: options.fetchImpl,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
-    progress.stop("OpenRouter OAuth complete");
+    progress.stop("OpenRouter credential received");
 
     const metadata = {
       authFlow: "oauth-pkce",
@@ -364,7 +370,7 @@ async function loginOpenRouterOAuth(
       configPatch: applyOpenrouterConfig(ctx.config),
       defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
       notes: [
-        "OpenRouter OAuth issued an OpenRouter API key and stored it in the default OpenRouter auth profile.",
+        "OpenRouter OAuth issued an OpenRouter API key for the default OpenRouter auth profile.",
         "Re-run OpenRouter OAuth to rotate that key or use the API-key setup path for a key you manage manually.",
       ],
     };

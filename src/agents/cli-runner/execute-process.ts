@@ -5,7 +5,10 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
+import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -35,30 +38,6 @@ import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
 
-function appendCliOutputParseBuffer(buffer: Buffer, chunk: string) {
-  if (!chunk) {
-    return { buffer, exceeded: false };
-  }
-  const chunkBuffer = Buffer.from(chunk);
-  if (buffer.byteLength + chunkBuffer.byteLength <= CLI_RUNNER_OUTPUT_PARSE_BYTES) {
-    return {
-      buffer: Buffer.concat([buffer, chunkBuffer], buffer.byteLength + chunkBuffer.byteLength),
-      exceeded: false,
-    };
-  }
-  const remainingBytes = CLI_RUNNER_OUTPUT_PARSE_BYTES - buffer.byteLength;
-  return {
-    buffer:
-      remainingBytes <= 0
-        ? buffer
-        : Buffer.concat(
-            [buffer, chunkBuffer.subarray(0, remainingBytes)],
-            CLI_RUNNER_OUTPUT_PARSE_BYTES,
-          ),
-    exceeded: true,
-  };
-}
-
 type ExecuteCliProcessOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
 };
@@ -83,7 +62,7 @@ export async function executeCliProcess(params: {
   executionCommand: string;
   executionArgv0?: string;
   executionLeadingArgv: readonly string[];
-  executionArgs: string[];
+  resolveExecutionArgs: () => string[];
   env: Record<string, string>;
   prompt: string;
   promptContext?: PreparedCliRunContext["promptContext"];
@@ -135,25 +114,40 @@ export async function executeCliProcess(params: {
       })
     : null;
   let stdoutTail = "";
-  let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+  const stdoutCapture = createCapturedOutputBuffers();
   let stdoutBytes = 0;
   const stdoutHash = crypto.createHash("sha256");
-  let stdoutParseExceeded = false;
   let stderrTail = "";
-  let stderrParseBuffer: Buffer = Buffer.alloc(0);
+  const stderrCapture = createCapturedOutputBuffers();
   let stderrBytes = 0;
   const stderrHash = crypto.createHash("sha256");
-  let stderrParseExceeded = false;
+  // Only the core lifecycle owner may publish recovery facts. Plugin records
+  // carry output, never the authority or deadline used to protect its execution.
+  const reportStreamProgress = createModelCallStreamProgressReporter(
+    () => backendActivity?.observeOutput(true) ?? false,
+  );
+  const streamProgressTarget = {
+    runId: runParams.runId,
+    ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
+    ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+  };
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
+    if (chunkBytes > 0) {
+      if (params.events.activeParsedToolCount() === 0) {
+        reportStreamProgress(streamProgressTarget);
+      } else {
+        // Tool chatter renews the transport's quiet allowance, not the separate
+        // blocked-tool progress clock.
+        backendActivity?.observeOutput(false);
+      }
+    }
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
     stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-    if (!stdoutParseExceeded) {
-      const next = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-      stdoutParseBuffer = next.buffer;
-      stdoutParseExceeded = next.exceeded;
+    if (chunk && stdoutCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
     streamingParser?.push(chunk);
   };
@@ -162,10 +156,8 @@ export async function executeCliProcess(params: {
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
     stderrTail = appendCliOutputTail(stderrTail, chunk);
-    if (!stderrParseExceeded) {
-      const next = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-      stderrParseBuffer = next.buffer;
-      stderrParseExceeded = next.exceeded;
+    if (chunk && stderrCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stderrCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
   };
 
@@ -184,132 +176,147 @@ export async function executeCliProcess(params: {
   runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   params.assertCurrent();
-  if (params.nodePlacement) {
-    const nodeRun = await executeNodeClaudeRun({
-      context,
-      nodePlacement: params.nodePlacement,
-      executionArgs: params.executionArgs,
-      stdinPayload: params.stdin ?? "",
-      ...(params.nodeSystemPrompt !== undefined
-        ? { nodeSystemPrompt: params.nodeSystemPrompt }
-        : {}),
-      ...(params.nodeEnv ? { nodeEnv: params.nodeEnv } : {}),
-      ...(params.nodeClearEnv ? { nodeClearEnv: params.nodeClearEnv } : {}),
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      consumeStdout,
-      consumeStderr,
-      deps: params.deps,
-    });
-    result = nodeRun.result;
-    nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
-    nodeRunTruncated = nodeRun.nodeRunTruncated;
-  } else if (context.executionTarget.kind === "plugin") {
-    result = await executePluginOwnedProcess({
-      context,
-      execute: context.executionTarget.execute,
-      executionCommand: params.executionCommand,
-      executionArgs: params.executionArgs,
-      env: params.env,
-      prompt: params.prompt,
-      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
-      useResume: params.useResume,
-      forceNewSession:
-        params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
-      sessionId: params.resolvedSessionId,
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      consumeStdout,
-      activeToolCount: params.events.activeParsedToolCount,
-      onNoOutputTimeout: (error) => {
-        pluginTimeout.error = error;
-      },
-      onInterrupted: (reason) => {
-        streamingParser?.finish();
-        const partialOutput = streamingParser?.getOutput();
-        if (
-          !partialOutput?.text.trim() ||
-          partialOutput.errorText ||
-          partialOutput.terminalFailure
-        ) {
-          return false;
-        }
-        terminalInterruption = { reason };
-        return true;
-      },
-      ...(params.useManagedClaudeLiveSession
-        ? {
-            liveSession: {
-              captureKey: params.initialGatewayCaptureKey,
-              beginCapture: params.toolTracking.beginGatewayCapture,
-              requiredGeneration: params.cliSessionIdToUse
-                ? context.requiredClaudeLiveSessionGeneration
-                : undefined,
-            },
-          }
-        : {}),
-    }).catch((error: unknown) => {
-      runParams.assertCurrent?.();
-      if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
-        throw error;
-      }
-      throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
-    });
-  } else {
-    const supervisor = params.deps.getProcessSupervisor();
-    const scopeKey = buildCliSupervisorScopeKey({
-      backend: params.backend,
-      backendId: context.backendResolved.id,
-      cliSessionId: params.useResume ? params.resolvedSessionId : undefined,
-    });
-    if (runParams.abortSignal?.aborted) {
-      throw createCliAbortError();
-    }
-    // Startup can wait behind another scoped run. Reserve cancellation under
-    // the caller's run id before awaiting the child or replacement fence.
-    const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
-    runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
-    try {
-      const managedRun = await supervisor.spawn({
-        assertCurrent: params.assertCurrent,
-        runId: runParams.runId,
-        sessionId: runParams.sessionId,
-        backendId: context.backendResolved.id,
-        scopeKey,
-        replaceExistingScope: Boolean(params.useResume && scopeKey),
-        mode: "child",
-        argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
-        argv0: params.executionArgv0,
-        timeoutMs: runParams.timeoutMs,
+  const backendActivity = runParams.diagnosticOwner
+    ? beginDiagnosticBackendActivity({
+        owner: runParams.diagnosticOwner,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
-        cwd: context.cwd ?? context.workspaceDir,
-        env: params.env,
-        input: params.stdin ?? "",
-        secretInput: context.preparedBackend.secretInput,
-        captureOutput: false,
-        onStdout: consumeStdout,
-        onStderr: consumeStderr,
+        assertCurrent: params.assertCurrent,
+      })
+    : undefined;
+  try {
+    if (params.nodePlacement) {
+      const nodeRun = await executeNodeClaudeRun({
+        context,
+        nodePlacement: params.nodePlacement,
+        executionArgs: params.resolveExecutionArgs(),
+        stdinPayload: params.stdin ?? "",
+        ...(params.nodeSystemPrompt !== undefined
+          ? { nodeSystemPrompt: params.nodeSystemPrompt }
+          : {}),
+        ...(params.nodeEnv ? { nodeEnv: params.nodeEnv } : {}),
+        ...(params.nodeClearEnv ? { nodeClearEnv: params.nodeClearEnv } : {}),
+        noOutputTimeoutMs: params.noOutputTimeoutMs,
+        consumeStdout,
+        consumeStderr,
+        deps: params.deps,
       });
-      managedRunPid = managedRun.pid;
-      const replyBackendHandle = runParams.replyOperation
-        ? {
-            kind: "cli" as const,
-            runId: runParams.runId,
-            toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
-            cancel: () => managedRun.cancel("manual-cancel"),
+      result = nodeRun.result;
+      nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
+      nodeRunTruncated = nodeRun.nodeRunTruncated;
+    } else if (context.executionTarget.kind === "plugin") {
+      result = await executePluginOwnedProcess({
+        context,
+        execute: context.executionTarget.execute,
+        executionCommand: params.executionCommand,
+        executionArgv0: params.executionArgv0,
+        executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
+        env: params.env,
+        prompt: params.prompt,
+        ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+        useResume: params.useResume,
+        forceNewSession:
+          params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
+        sessionId: params.resolvedSessionId,
+        noOutputTimeoutMs: params.noOutputTimeoutMs,
+        consumeStdout,
+        onOutstandingWorkChange: backendActivity?.setOutstandingWork,
+        activeToolCount: params.events.activeParsedToolCount,
+        getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
+        onActiveLoopbackAskUserDeadlineChange:
+          params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
+        onNoOutputTimeout: (error) => {
+          pluginTimeout.error = error;
+        },
+        onInterrupted: (reason) => {
+          streamingParser?.finish();
+          const partialOutput = streamingParser?.getOutput();
+          if (
+            !partialOutput?.text.trim() ||
+            partialOutput.errorText ||
+            partialOutput.terminalFailure
+          ) {
+            return false;
           }
-        : undefined;
-      if (replyBackendHandle) {
-        runParams.replyOperation?.attachBackend(replyBackendHandle);
-      }
-      try {
-        result = await managedRun.wait();
-      } finally {
-        if (replyBackendHandle) {
-          runParams.replyOperation?.detachBackend(replyBackendHandle);
+          terminalInterruption = { reason };
+          return true;
+        },
+        ...(params.useManagedClaudeLiveSession
+          ? {
+              liveSession: {
+                captureKey: params.initialGatewayCaptureKey,
+                beginCapture: params.toolTracking.beginGatewayCapture,
+                requiredGeneration: params.cliSessionIdToUse
+                  ? context.requiredClaudeLiveSessionGeneration
+                  : undefined,
+              },
+            }
+          : {}),
+      }).catch((error: unknown) => {
+        runParams.assertCurrent?.();
+        if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
+          throw error;
         }
+        throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
+      });
+    } else {
+      const supervisor = params.deps.getProcessSupervisor();
+      const scopeKey = buildCliSupervisorScopeKey({
+        backend: params.backend,
+        backendId: context.backendResolved.id,
+        cliSessionId: params.useResume ? params.resolvedSessionId : undefined,
+      });
+      if (runParams.abortSignal?.aborted) {
+        throw createCliAbortError();
       }
-    } finally {
-      runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
+      // Startup can wait behind another scoped run. Reserve cancellation under
+      // the caller's run id before awaiting the child or replacement fence.
+      const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
+      runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+      try {
+        const managedRun = await supervisor.spawn({
+          assertCurrent: params.assertCurrent,
+          runId: runParams.runId,
+          scopeKey,
+          replaceExistingScope: Boolean(params.useResume && scopeKey),
+          mode: "child",
+          argv: [params.executionCommand, ...params.executionLeadingArgv],
+          resolveArgs: params.resolveExecutionArgs,
+          argv0: params.executionArgv0,
+          timeoutMs: runParams.timeoutMs,
+          noOutputTimeoutMs: params.noOutputTimeoutMs,
+          cwd: context.cwd ?? context.workspaceDir,
+          env: params.env,
+          input: params.stdin ?? "",
+          secretInput: context.preparedBackend.secretInput,
+          captureOutput: false,
+          onStdout: consumeStdout,
+          onStderr: consumeStderr,
+        });
+        managedRunPid = managedRun.pid;
+        const replyBackendHandle = runParams.replyOperation
+          ? {
+              kind: "cli" as const,
+              runId: runParams.runId,
+              toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
+              cancel: () => managedRun.cancel("manual-cancel"),
+            }
+          : undefined;
+        if (replyBackendHandle) {
+          runParams.replyOperation?.attachBackend(replyBackendHandle);
+        }
+        try {
+          result = await managedRun.wait();
+        } finally {
+          if (replyBackendHandle) {
+            runParams.replyOperation?.detachBackend(replyBackendHandle);
+          }
+        }
+      } finally {
+        runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
+      }
     }
+  } finally {
+    backendActivity?.close();
   }
   if (
     (runParams.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
@@ -341,7 +348,9 @@ export async function executeCliProcess(params: {
   }
 
   let stdout: string | undefined;
-  const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
+  // Preserve replacement characters when the byte limit clips a UTF-8 sequence.
+  const readStdout = () =>
+    (stdout ??= Buffer.concat(stdoutCapture.chunks, stdoutCapture.bytes).toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
   const stderrDiagnostic = stderrTail.trim();
   const processDiagnostics = {
@@ -377,7 +386,7 @@ export async function executeCliProcess(params: {
     params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && !stdoutParseExceeded
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
       ? parseCliOutput({
           raw: readStdout(),
           backend: params.backend,
@@ -471,7 +480,7 @@ export async function executeCliProcess(params: {
       );
     }
     const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
-    const stderr = stderrParseBuffer.toString("utf8").trim();
+    const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
@@ -481,7 +490,7 @@ export async function executeCliProcess(params: {
     });
   }
 
-  if (stdoutParseExceeded && !streamedJsonlOutput) {
+  if (stdoutCapture.truncatedBytes > 0 && !streamedJsonlOutput) {
     throw createCliFailoverError(
       `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
       "format",

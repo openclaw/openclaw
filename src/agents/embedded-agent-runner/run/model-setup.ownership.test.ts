@@ -258,6 +258,7 @@ describe("model chat and native model ownership", () => {
         expect(snapshot.agentHarness.id).toBe("openclaw");
         expect(snapshot.lastProfileId).toBe("openai:fixture");
         expect(snapshot.contextTokenBudget).toBe(65_536);
+        expect(snapshot.modelContextWindow).toBe(65_536);
         expect(snapshot.effectiveModel.baseUrl).toBe("https://api.openai.com/v1");
         const payload: Record<string, unknown> = {};
         applyOpenAIResponsesPayloadPolicy(
@@ -444,6 +445,28 @@ describe("model chat and native model ownership", () => {
     });
   });
 
+  it("reads latest native lineage from the admitted store after a session rollover", async () => {
+    const fixture = await createFixture({}, ({ readPreviousSessionId }) =>
+      readPreviousSessionId?.() === "model-chat" ? { model: "native", auth: "native" } : undefined,
+    );
+    const target = {
+      ...fixture.target,
+      storePath: `${fixture.state.workspaceDir}/alternate/sessions.json`,
+    };
+    await replaceSessionEntry(target, fixture.entry);
+    await patchSessionEntryCore(target, () => ({ sessionId: "successor" }));
+    fixture.runParams.sessionId = "successor";
+    fixture.runParams.sessionTarget = { ...target, sessionId: "successor" };
+
+    const setup = await fixture.resolve();
+    expect(setup.nativeModelOwned).toBe(true);
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).resolves.toBeUndefined();
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+
+    await patchSessionEntryCore(target, () => ({ previousSessionId: "different-predecessor" }));
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).rejects.toThrow("ownership changed");
+  });
+
   it("does not replace a pinned session whose native ownership is unavailable", async () => {
     const fixture = await createFixture({}, () => undefined);
     await expect(fixture.resolve()).rejects.toMatchObject({
@@ -461,10 +484,12 @@ describe("model chat and native model ownership", () => {
     expect(fixture.runParams.streamParams).toEqual({ temperature: 0.5 });
   });
 
-  it("closes the host assertion after the ownership callback returns", async () => {
+  it("closes host assertions and lineage reads after the ownership callback returns", async () => {
     let retained: (() => void) | undefined;
-    const fixture = await createFixture({}, ({ assertCurrent }) => {
+    let retainedRead: (() => string | undefined) | undefined;
+    const fixture = await createFixture({}, ({ assertCurrent, readPreviousSessionId }) => {
       retained = assertCurrent;
+      retainedRead = readPreviousSessionId;
       return {
         model: "native",
         auth: "host",
@@ -474,6 +499,8 @@ describe("model chat and native model ownership", () => {
     await fixture.resolve();
     expect(retained).toBeTypeOf("function");
     expect(() => retained?.()).toThrow("ownership changed");
+    expect(retainedRead).toBeTypeOf("function");
+    expect(() => retainedRead?.()).toThrow("ownership changed");
   });
 
   it("uses the native owner fact and rejects a lost binding before dispatch", async () => {

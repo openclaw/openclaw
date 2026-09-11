@@ -9,8 +9,7 @@ import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-share
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openUrl } from "../infra/browser-open.js";
-import { isRemoteEnvironment } from "../infra/remote-env.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -23,9 +22,9 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
+import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
-import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthOptionBag,
@@ -57,12 +56,19 @@ type ApplyProviderAuthChoiceResult = {
 };
 
 type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
+  /** Retain installer detail when the setup wizard retires its progress steps. */
+  installError?: string;
+  /** The resolved provider owns starter-model normalization. */
+  provider?: ProviderPlugin;
+  /** Installer-owned records captured before provider authentication executes. */
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
   authProfiles: ProviderAuthResult["profiles"];
   persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 };
 
 function preparedWithoutAuthProfiles(
-  result: ApplyProviderAuthChoiceResult,
+  result: ApplyProviderAuthChoiceResult &
+    Pick<PreparedApplyProviderAuthChoiceResult, "installError">,
 ): PreparedApplyProviderAuthChoiceResult {
   return {
     ...result,
@@ -241,48 +247,6 @@ function resolveManifestAuthChoiceScope(params: {
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
-export async function runProviderPluginAuthMethodUnpersisted(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  runtime: RuntimeEnv;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-  /** Force remote/manual browser presentation for a connected GUI client. */
-  isRemote?: boolean;
-  prompter: WizardPrompter;
-  method: ProviderAuthMethod;
-  agentDir?: string;
-  workspaceDir?: string;
-  secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
-  allowSecretRefPrompt?: boolean;
-  opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<ProviderAuthResult> {
-  return await params.method.run({
-    config: params.config,
-    env: params.env,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    prompter: params.prompter,
-    runtime: params.runtime,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
-    opts: params.opts,
-    secretInputMode: params.secretInputMode,
-    allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: params.isRemote ?? isRemoteEnvironment(),
-    openUrl: async (url) => {
-      if (params.isRemote === true) {
-        await params.prompter.openUrl?.(url);
-        return;
-      }
-      await openUrl(url);
-    },
-    oauth: {
-      createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
-    },
-  });
-}
-
 export function applyProviderPluginAuthMethodResultConfig(params: {
   config: OpenClawConfig;
   result: ProviderAuthResult;
@@ -421,6 +385,7 @@ export async function prepareAuthChoiceLoadedPluginProvider(
   // Import the reviewed generation while locked; authentication may outlive the lease.
   const prepared = await withPluginLifecycleLease({ env: params.env }, async () => {
     let nextConfig = params.config;
+    let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
     let enabledConfig = params.config;
     const manifestAuthChoice = resolveManifestAuthChoiceScope({
       authChoice: params.authChoice,
@@ -463,18 +428,21 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       enabledConfig = enableResult.config;
     }
 
-    const resolveScopedRuntimeProviders = (config: OpenClawConfig): ProviderPlugin[] =>
-      resolvePluginProviders({
+    const resolveScopedRuntimeProviders = (
+      config: OpenClawConfig,
+      preparedInstallRecords?: Record<string, PluginInstallRecord>,
+    ): ProviderPlugin[] => {
+      const request = {
         config,
         workspaceDir,
         env: params.env,
-        mode: "setup",
-        ...(manifestAuthChoice
-          ? {
-              onlyPluginIds: [manifestAuthChoice.pluginId],
-            }
-          : {}),
-      });
+        mode: "setup" as const,
+        ...(manifestAuthChoice ? { onlyPluginIds: [manifestAuthChoice.pluginId] } : {}),
+      };
+      return preparedInstallRecords
+        ? resolvePluginProviders(request, preparedInstallRecords)
+        : resolvePluginProviders(request);
+    };
 
     const setupProvider = manifestAuthChoice
       ? resolvePluginSetupProvider({
@@ -491,12 +459,14 @@ export async function prepareAuthChoiceLoadedPluginProvider(
     let resolved = resolveProviderPluginChoice({
       providers,
       choice: params.authChoice,
+      manifestChoice: manifestAuthChoice ?? installCatalogEntry,
     });
     if (!resolved && setupProvider) {
       providers = resolveScopedRuntimeProviders(enabledConfig);
       resolved = resolveProviderPluginChoice({
         providers,
         choice: params.authChoice,
+        manifestChoice: manifestAuthChoice ?? installCatalogEntry,
       });
     }
     if (!resolved && installCatalogEntry) {
@@ -515,16 +485,26 @@ export async function prepareAuthChoiceLoadedPluginProvider(
         prompter: params.prompter,
         runtime: params.runtime,
         workspaceDir,
+        reviewOfficialArtifacts: true,
         beforePersistentEffect: params.beforePersistentEffect,
       });
       if (!installResult.installed) {
-        return preparedWithoutAuthProfiles({ config: installResult.cfg, retrySelection: true });
+        return preparedWithoutAuthProfiles({
+          config: installResult.cfg,
+          retrySelection: true,
+          ...(installResult.error ? { installError: installResult.error } : {}),
+        });
       }
       nextConfig = installResult.cfg;
-      providers = resolveScopedRuntimeProviders(nextConfig);
+      const installRecord = nextConfig.plugins?.installs?.[installResult.pluginId];
+      if (installRecord) {
+        pendingPluginInstalls = { [installResult.pluginId]: structuredClone(installRecord) };
+      }
+      providers = resolveScopedRuntimeProviders(nextConfig, pendingPluginInstalls);
       resolved = resolveProviderPluginChoice({
         providers,
         choice: params.authChoice,
+        manifestChoice: manifestAuthChoice ?? installCatalogEntry,
       });
     }
     if (!resolved) {
@@ -536,7 +516,7 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       nextConfig = enabledConfig;
     }
 
-    return { nextConfig, resolved };
+    return { nextConfig, resolved, pendingPluginInstalls };
   });
   if (!prepared || !("resolved" in prepared)) {
     return prepared;
@@ -583,6 +563,8 @@ export async function prepareAuthChoiceLoadedPluginProvider(
           await runProviderModelSelectedHook({
             config,
             model: selectedModel,
+            preparedProvider: resolved.provider,
+            env: params.env,
             prompter: params.prompter,
             agentDir: params.agentDir,
             workspaceDir,
@@ -598,6 +580,10 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       nextConfig = defaultModelConfig;
       return {
         config: nextConfig,
+        provider: resolved.provider,
+        ...(prepared.pendingPluginInstalls
+          ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+          : {}),
         authProfiles: applied.authProfiles,
         persistAuthProfiles: applied.persistAuthProfiles,
       };
@@ -609,6 +595,10 @@ export async function prepareAuthChoiceLoadedPluginProvider(
   return {
     config: nextConfig,
     agentModelOverride,
+    provider: resolved.provider,
+    ...(prepared.pendingPluginInstalls
+      ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+      : {}),
     authProfiles: applied.authProfiles,
     persistAuthProfiles: applied.persistAuthProfiles,
   };

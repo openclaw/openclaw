@@ -13,6 +13,7 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   estimateLlmBoundaryTokenPressure,
+  estimateToolSchemaTokenPressure,
 } from "./preemptive-compaction.js";
 
 const attempt = {
@@ -71,12 +72,22 @@ describe("attempt prompt preflight", () => {
     "discarded-invalid",
     "fitting-with-raw-overflow",
     "fitting-with-discarded-invalid",
+    "fitting-with-tool-output-schema",
   ] as const)(
     "handles a %s checkpoint when a context engine owns ordinary compaction",
     async (variant) => {
       const discarded = variant === "discarded" || variant === "discarded-invalid";
       const fitting = variant.startsWith("fitting-");
       const unwindowed = variant === "unwindowed" || variant === "unwindowed-tools";
+      const toolWithOutputSchema = {
+        name: "lookup",
+        description: "Look up a record.",
+        parameters: { type: "object" },
+        outputSchema: {
+          type: "string",
+          description: "result documentation ".repeat(4_000),
+        },
+      };
       const owner = makeAgentAssistantMessage({
         content: [{ type: "text", text: "covered" }],
         model: attempt.model.id,
@@ -157,6 +168,11 @@ describe("attempt prompt preflight", () => {
         sessionMessageCount: 1,
         systemPrompt: "",
         toolResultMaxChars: 1_000,
+        ...(variant === "fitting-with-tool-output-schema"
+          ? {
+              toolSchemaTokens: estimateToolSchemaTokenPressure([toolWithOutputSchema]),
+            }
+          : {}),
         state: {
           contextBudgetStatus: undefined,
           preflightRecovery: undefined,

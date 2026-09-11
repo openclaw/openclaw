@@ -1,6 +1,7 @@
 // `openclaw update status`: combines install metadata, configured channel, and remote update checks.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -13,6 +14,8 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
@@ -24,7 +27,11 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     return;
   }
 
-  const [root, config] = await Promise.all([resolveUpdateRoot(), readSourceConfigBestEffort()]);
+  const [root, config, runtimeFindings] = await Promise.all([
+    resolveUpdateRoot(),
+    readSourceConfigBestEffort(),
+    collectNodeRuntimeFindings(),
+  ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
@@ -52,6 +59,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
+  const runStatus = readUpdateRunStatus();
+
   if (opts.json) {
     defaultRuntime.writeJson({
       update,
@@ -62,6 +71,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
+      ...runStatus,
     });
     return;
   }
@@ -88,6 +99,19 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   defaultRuntime.log(theme.heading("OpenClaw update status"));
   defaultRuntime.log("");
+  for (const finding of runtimeFindings) {
+    const color =
+      finding.severity === "error"
+        ? theme.error
+        : finding.severity === "warning"
+          ? theme.warn
+          : theme.muted;
+    defaultRuntime.log(color(finding.message));
+    if (finding.fixHint) {
+      defaultRuntime.log(finding.fixHint);
+    }
+    defaultRuntime.log("");
+  }
   defaultRuntime.log(
     renderTable({
       width: tableWidth,
@@ -99,6 +123,43 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  if ("runReconciliationError" in runStatus) {
+    defaultRuntime.log(
+      theme.warn(`Update run reconciliation failed: ${runStatus.runReconciliationError}`),
+    );
+    defaultRuntime.log("");
+  }
+  if ("runStatusError" in runStatus) {
+    defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
+    defaultRuntime.log("");
+  } else {
+    const { activeRun, lastRun, staleRun, abandonedRun, advisories } = runStatus;
+    const run = activeRun ?? lastRun;
+    for (const advisory of advisories ?? []) {
+      if (advisory.runId !== run?.runId) {
+        defaultRuntime.log(advisory.message);
+      }
+    }
+    if (run) {
+      if (staleRun) {
+        defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
+      }
+      if (abandonedRun) {
+        defaultRuntime.log(
+          "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+        );
+      }
+      const report = renderUpdateRunReport(run);
+      if (!abandonedRun && !staleRun) {
+        defaultRuntime.log(report.headline);
+      }
+      for (const line of report.lines) {
+        defaultRuntime.log(line);
+      }
+      defaultRuntime.log("");
+    }
+  }
 
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {

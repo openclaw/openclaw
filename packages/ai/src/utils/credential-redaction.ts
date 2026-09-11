@@ -1,5 +1,10 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { extractBalancedJsonFragments, stableStringify } from "@openclaw/normalization-core";
+import {
+  expectDefined,
+  extractBalancedJsonFragments,
+  stableStringify,
+} from "@openclaw/normalization-core";
+import { parseRetryAfterHeadersSeconds } from "../internal/retry-after.js";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",
@@ -33,13 +38,58 @@ const LOOSE_CREDENTIAL_PAIR_RE =
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
-const PLAIN_BRACKET_TAG_RE = /^\[[A-Za-z0-9][A-Za-z0-9 _.-]*\]$/u;
+const BRACKET_PROSE_PATTERN = String.raw`(\[+)([A-Za-z][A-Za-z0-9 _.-]*|\s*\d+\s+(?!(?:true|false|null)(?![\w-]))[A-Za-z][A-Za-z0-9 _.=-]*)(\]+)`;
+const BRACKET_PROSE_RE = new RegExp(`^${BRACKET_PROSE_PATTERN}$`, "u");
+const BRACKET_PROSE_PART_RE = new RegExp(String.raw`(?<!\[)${BRACKET_PROSE_PATTERN}`, "gu");
+const JSON_LITERAL_PROSE_START_RE = /^(?:true|false|null)\b(?!-)/u;
+const PROSE_ASSIGNMENT_RE =
+  /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)\s*(?:=\s*)+(?=([^=;&\s\]'"},]+))/gu;
+const PRIVATE_KEY_HEADER_RE = /-----BEGIN [A-Z ]*PRIVATE KEY/iu;
 const JSON_ARRAY_START_RE = /\[\s*(?:[{"\d\]-]|true\b|false\b|null\b)/u;
 const MALFORMED_JSON_RE =
   /\{|(?:"[^"]+"|\b(?:b64_json|data|(?:input|output)?(?:audio|image|video)[\w-]*))\s*:/iu;
 
 function looksLikeDiagnosticJson(value: string): boolean {
   return JSON_ARRAY_START_RE.test(value) || MALFORMED_JSON_RE.test(value);
+}
+
+function isPlainBracketProse(value: string): boolean {
+  const match = BRACKET_PROSE_RE.exec(value);
+  return (
+    match !== null &&
+    expectDefined(match[1], "opening brackets").length ===
+      expectDefined(match[3], "closing brackets").length &&
+    !JSON_LITERAL_PROSE_START_RE.test(expectDefined(match[2], "bracket prose"))
+  );
+}
+
+function hasSensitiveProseContent(value: string): boolean {
+  if (PRIVATE_KEY_HEADER_RE.test(value)) {
+    return true;
+  }
+  let mediaContext = false;
+  let contextualPayload = false;
+  for (const match of value.matchAll(PROSE_ASSIGNMENT_RE)) {
+    const assigned = expectDefined(match[2], "diagnostic assignment value");
+    const valueEnd = match.index + match[0].length + assigned.length;
+    if (assigned === "<redacted>" && value[valueEnd] !== "=") {
+      continue;
+    }
+    const key = expectDefined(match[1], "diagnostic assignment field");
+    const normalized = normalizeDiagnosticFieldName(key);
+    if (
+      isCredentialFieldName(normalized) ||
+      extractDiagnosticMediaField(key, normalized, undefined, false)
+    ) {
+      return true;
+    }
+    mediaContext ||= isDiagnosticMediaPayload({ [key]: { value: assigned } });
+    contextualPayload ||= Boolean(extractDiagnosticMediaField(key, normalized, undefined, true));
+    if (mediaContext && contextualPayload) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeDiagnosticFieldName(value: string): string {
@@ -170,6 +220,15 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
+    try {
+      // Brand-check without provider getters; retain only numeric retry timing.
+      Headers.prototype.has.call(value, "retry-after");
+      const seconds = parseRetryAfterHeadersSeconds(value);
+      state.changed = true;
+      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+    } catch {
+      // Other objects follow the bounded descriptor walk below.
+    }
     const keys = Reflect.ownKeys(value).slice(0, 65);
     const descriptors = Object.fromEntries(
       keys.slice(0, 64).flatMap((key) => {
@@ -231,7 +290,16 @@ export function redactDiagnosticText(value: string): string {
   if (!looksLikeDiagnosticJson(text)) {
     return text;
   }
+  const allowProse = !hasSensitiveProseContent(text);
   if (text.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
+    // Prove the whole bracket surface is prose before bypassing the structured-data bound.
+    const remaining =
+      allowProse && !MALFORMED_JSON_RE.test(text)
+        ? text.replace(BRACKET_PROSE_PART_RE, (part) => (isPlainBracketProse(part) ? "" : part))
+        : text;
+    if (allowProse && !/[[\]{}]/u.test(remaining) && !MALFORMED_JSON_RE.test(text)) {
+      return text;
+    }
     return "[Oversized diagnostic JSON redacted]";
   }
   let cursor = 0;
@@ -241,16 +309,19 @@ export function redactDiagnosticText(value: string): string {
     const plainText = text.slice(cursor, fragment.startIndex);
     unstructured += plainText;
     redacted += plainText;
+    // Only the complete outer fragment can establish a prose exemption.
+    if (allowProse && isPlainBracketProse(fragment.json)) {
+      redacted += fragment.json;
+      cursor = fragment.endIndex + 1;
+      continue;
+    }
     try {
       const state = { changed: false, nodesRemaining: 64 };
       const parsed = JSON.parse(fragment.json);
       const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
-      if (!PLAIN_BRACKET_TAG_RE.test(fragment.json) || JSON_ARRAY_START_RE.test(fragment.json)) {
-        return "[Malformed diagnostic JSON redacted]";
-      }
-      redacted += fragment.json;
+      return "[Malformed diagnostic JSON redacted]";
     }
     cursor = fragment.endIndex + 1;
   }

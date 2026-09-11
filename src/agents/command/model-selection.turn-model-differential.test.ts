@@ -63,7 +63,7 @@ vi.mock("../auth-profiles/order.js", () => ({
 vi.mock("../auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(async () => undefined),
 }));
-vi.mock("../auth-profiles/store.js", () => ({
+vi.mock("../auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
 }));
 vi.mock("../harness/runtime-plugin.js", () => ({
@@ -97,7 +97,7 @@ vi.mock("../model-visibility-policy.js", () => ({
     allowAny: true,
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    allowsKey: () => true,
+    allows: () => true,
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
 }));

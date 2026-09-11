@@ -1,11 +1,12 @@
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
+import remend from "remend";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { renderDiffStatChips } from "./chat-diff-render.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
@@ -70,7 +71,7 @@ export function deriveSubagentActivity(params: {
 
 function subagentActivityLabel(task: TaskSummary): string {
   if (isActiveTask(task)) {
-    return t("chat.backgroundTasks.subagentActivity.working");
+    return t("chat.backgroundTasks.subagentActivity.running");
   }
   if (task.status === "cancelled") {
     return t("chat.backgroundTasks.subagentActivity.cancelled");
@@ -115,7 +116,22 @@ function renderSubagentActivityRow(
   task: TaskSummary,
   onOpenTaskDetail?: (task: TaskSummary) => void,
 ): TemplateResult {
-  const snippet = subagentActivitySnippet(task);
+  const rawSnippet = subagentActivitySnippet(task);
+  // Previews can end mid-emphasis. Repair delimiters without adding escapes
+  // intended for a Markdown renderer; the row and tooltip stay plain text.
+  const snippet = rawSnippet
+    ? flattenMarkdownToPlainText(
+        remend(rawSnippet, {
+          katex: false,
+          links: false,
+          images: false,
+          comparisonOperators: false,
+          singleTilde: false,
+          setextHeadings: false,
+          htmlTags: false,
+        }),
+      )
+    : undefined;
   const label = subagentActivityLabel(task);
   const content = html`
     ${renderSubagentActivityIndicator(task)}
@@ -132,7 +148,6 @@ function renderSubagentActivityRow(
           )
         : nothing
     }
-    ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
   `;
   if (!onOpenTaskDetail) {
     return html`<div

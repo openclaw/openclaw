@@ -1,6 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
@@ -32,6 +32,7 @@ import {
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
 import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 // Keep real Slack operations in Vitest's graph instead of recompiling them through Jiti.
 // The separate facade tests own plugin loading; this suite owns delivery behavior.
@@ -114,6 +115,13 @@ function renderExpectedSlackTableAccessibleText(summaryText: string) {
 }
 
 describe("Slack live QA runtime helpers", () => {
+  beforeAll(async () => {
+    // Load the real Slack action graph as suite preparation, outside scenario
+    // deadlines: the first send otherwise pays that cold import inside its
+    // 120s test budget and times out on contended CI shards.
+    await loadSlackQaRuntime().preloadSlackActions();
+  });
+
   it("converts Slack rate-limit retry seconds for the observer backoff", () => {
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();
@@ -634,7 +642,7 @@ describe("Slack live QA runtime helpers", () => {
         ?.streaming,
     ).toEqual({ mode: "off" });
     const omitted = progressConfig("slack-progress-commentary-omitted");
-    expect(omitted).toMatchObject({ toolProgress: true });
+    expect(omitted).toMatchObject({ style: "compact", toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
     expect(
       buildScenarioConfig("slack-progress-commentary-verbose-dedupe").agents?.defaults
@@ -667,7 +675,7 @@ describe("Slack live QA runtime helpers", () => {
         id: "slack-progress-commentary-omitted",
         commentaryTs: "1.500000",
         commentaryStyle: "headline",
-        toolProgress: "absent",
+        toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
@@ -695,7 +703,8 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // The command marker detects accidental tool detail disclosure in quiet drafts.
+      // Progress cards compact command details from the middle, so the QA marker
+      // stays at the command suffix where the real Slack presentation preserves it.
       expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
       const messages = [
         {
@@ -723,8 +732,15 @@ describe("Slack live QA runtime helpers", () => {
                 text:
                   testCase.toolProgress === "standalone-redacted"
                     ? "🛠️ Exec"
-                    : `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``,
-                ts: "1.750000",
+                    : testCase.toolProgress === "standalone"
+                      ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
+                      : testCase.id === "slack-progress-commentary-omitted"
+                        ? commentaryMarker
+                        : `🛠️ Exec ${toolMarker}`,
+                ...(testCase.id === "slack-progress-commentary-omitted"
+                  ? { blockText: [`• *Exec* — sleep 5`] }
+                  : {}),
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -858,12 +874,8 @@ describe("Slack live QA runtime helpers", () => {
       ).toThrow("tool progress to stay out");
     }
     expect(
-      verify("slack-progress-commentary-omitted", ([commentary, tool, final]) => [
-        commentary,
-        tool,
-        final,
-      ]),
-    ).toThrow("tool progress to stay out");
+      verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
@@ -1311,7 +1323,9 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const captureBeforeReply =
+      run && "captureBeforeReply" in run ? run.captureBeforeReply : undefined;
+    if (!summaryText || !afterReply || !captureBeforeReply) {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
@@ -1348,6 +1362,9 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    expect(
+      captureBeforeReply([{ channelId: "C123456789", text: summaryText, ts: "2.000000" }]),
+    ).toBe(true);
 
     await expect(
       afterReply(
@@ -1360,11 +1377,12 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
+    expect(history).toHaveBeenCalledOnce();
     expect(history).toHaveBeenCalledWith({
       channel: "C123456789",
       inclusive: true,
-      limit: 50,
-      oldest: "1.000000",
+      latest: "2.000000",
+      limit: 1,
     });
   });
 
@@ -1375,7 +1393,9 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const captureBeforeReply =
+      run && "captureBeforeReply" in run ? run.captureBeforeReply : undefined;
+    if (!summaryText || !afterReply || !captureBeforeReply) {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
@@ -1388,6 +1408,9 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    expect(
+      captureBeforeReply([{ channelId: "C123456789", text: summaryText, ts: "2.000000" }]),
+    ).toBe(true);
     const result = expect(
       afterReply(
         {} as never,
@@ -1435,7 +1458,9 @@ describe("Slack live QA runtime helpers", () => {
         },
       }),
     );
-    expect(run && "matchText" in run ? run.matchText : "").toBe(summaryText);
+    expect(run && "matchText" in run ? run.matchText : "").toMatch(
+      /^SLACK_QA_TABLE_DONE_[A-Z0-9]+$/u,
+    );
   });
 
   it("verifies the SUT-owned native table and exact accessible top-level text", async () => {
@@ -1444,7 +1469,9 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const captureBeforeReply =
+      run && "captureBeforeReply" in run ? run.captureBeforeReply : undefined;
+    if (!summaryText || !afterReply || !captureBeforeReply) {
       throw new Error("missing Slack table scenario verifier");
     }
     const accessibleText = renderExpectedSlackTableAccessibleText(summaryText);
@@ -1481,6 +1508,9 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    expect(
+      captureBeforeReply([{ channelId: "C123456789", text: summaryText, ts: "2.000000" }]),
+    ).toBe(true);
 
     await expect(
       afterReply(
@@ -1493,6 +1523,13 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_table block and deterministic accessible text");
+    expect(history).toHaveBeenCalledOnce();
+    expect(history).toHaveBeenCalledWith({
+      channel: "C123456789",
+      inclusive: true,
+      latest: "2.000000",
+      limit: 1,
+    });
   });
 
   it("rejects fallback-only Slack table delivery", async () => {
@@ -1502,7 +1539,9 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const captureBeforeReply =
+      run && "captureBeforeReply" in run ? run.captureBeforeReply : undefined;
+    if (!summaryText || !afterReply || !captureBeforeReply) {
       throw new Error("missing Slack table scenario verifier");
     }
     const history = vi.fn(async () => ({
@@ -1514,6 +1553,9 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    expect(
+      captureBeforeReply([{ channelId: "C123456789", text: summaryText, ts: "2.000000" }]),
+    ).toBe(true);
     const result = expect(
       afterReply(
         {} as never,

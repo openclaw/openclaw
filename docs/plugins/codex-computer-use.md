@@ -229,6 +229,7 @@ marketplace fields choose where Codex should find `computer-use`.
 Fresh Codex homes may need a short moment to seed their official
 marketplaces. During install, OpenClaw polls `plugin/list` for up to
 `marketplaceDiscoveryTimeoutMs` milliseconds (default 60 seconds).
+When Codex reports `features.plugins` as disabled, OpenClaw skips this discovery wait.
 
 If multiple known marketplaces contain Computer Use, OpenClaw prefers
 `openai-bundled`, then `openai-curated`, then `local`. Unknown ambiguous
@@ -277,7 +278,7 @@ reconciliation so OpenClaw does not override that selection.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.153.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.153.4. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 

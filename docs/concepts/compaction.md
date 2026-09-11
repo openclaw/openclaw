@@ -40,11 +40,11 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 
 Stopping a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
-Normal replies check session usage before the next turn. Successful direct commands using the built-in OpenClaw runtime, including `openclaw agent --local`, run the same usage-based maintenance after recording the completed turn and protecting any pending reply. The following command then uses the compacted context. This works in safeguard mode even when memory flush is disabled; native runtimes retain their own compaction ownership.
+The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
-If direct-command post-turn compaction fails, OpenClaw logs a warning and returns the completed reply while the run and session are still current. Cancellation, restart, or a replaced session still stops that result from being returned.
+One-shot `openclaw agent --local` commands skip optional post-turn work; the next command performs required maintenance before inference. Generic CLI backends keep their existing synchronous host compaction, and native runtimes retain their own compaction policy. Optional maintenance failures are logged without replacing an already completed reply. Cancellation, restart, or a replaced session still fences active writers.
 
-Set `agents.defaults.compaction.enabled: false` to disable the embedded runtime's proactive threshold compaction and direct-command post-turn maintenance. OpenClaw's preflight and overflow-recovery compaction paths remain available, as does manual `/compact`.
+Set `agents.defaults.compaction.enabled: false` to disable proactive threshold compaction and optional maintenance in the built-in runtime. Overflow-recovery compaction and manual `/compact` remain available.
 
 You will see:
 
@@ -82,11 +82,18 @@ Client-side compaction in the built-in OpenClaw runtime passes focus to both old
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
-### Provider checkpoints
-
-When an embedded Responses provider returns a compacted window, OpenClaw preserves the complete returned context alongside the checkpoint. Recent-turn history limits do not discard an eligible checkpoint, and the retained context still counts toward the model's prompt budget. The saved checkpoint is limited to 16 MiB; oversized or incompatible endpoint output uses the normal client-side compaction path instead of being truncated.
-
-If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+When the built-in OpenClaw runtime has prepared the foreground request,
+client-side automatic compaction also accounts for its system prompt, tool
+schemas, pending input, and output reserve when choosing the retained tail.
+It may retain fewer recent messages so the summary and conversation fit together.
+Choosing a larger summarization model does not increase the foreground model's
+context window. The reserve is a preferred target, not a provider token limit.
+When the fixed prompt or pending input consumes that target, OpenClaw can still reclaim older
+history while preserving the unprocessed request. Such a replacement must
+strictly reduce history; unchanged or larger results are rejected. Otherwise,
+automatic compaction requires the complete replacement to fit the estimated target.
+Early required preflight runs before those request facts are available and still
+uses history-based sizing; it does not guarantee this preferred headroom.
 
 ## Configuration
 
@@ -110,6 +117,8 @@ The built-in OpenClaw runtime starts compaction with the active session model. S
 
 Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
+If Gateway configuration reloads while compaction is waiting to start, compaction uses the newly loaded context engine and model settings together. Its requested workspace and transcript stay the same.
+
 This works with local models too, for example a second Ollama model dedicated to summarization:
 
 ```json
@@ -130,7 +139,7 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 
 ### Identifier preservation
 
-Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
+Compaction summarization preserves opaque identifiers by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Set `agents.defaults.compaction.identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
 ### Active transcript byte guard
 
@@ -148,16 +157,6 @@ oversized native threads restart fresh.
 The byte guard applies to the active SQLite transcript history. Legacy JSONL
 checkpoint artifacts are not the active compaction target.
 </Warning>
-
-### Successor transcripts
-
-A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
-
-A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
-
-OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
-compactions. Existing legacy checkpoint files can still be used while referenced
-and are pruned by normal session cleanup.
 
 ### Compaction notices
 
@@ -196,6 +195,24 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 Memory flush is optional maintenance: a failure, including exhausted retries, does not reset the session or discard conversation history. If compaction is unnecessary or succeeds, OpenClaw continues the reply; with `notifyUser` enabled, exhausted flush retries also produce a degraded notice. If required compaction fails, OpenClaw reports that failure and keeps the conversation intact instead of starting over automatically.
 
 The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
+
+## Provider and engine behavior
+
+### Provider checkpoints
+
+When an embedded Responses provider returns a compacted window, OpenClaw preserves the complete returned context alongside the checkpoint. Recent-turn history limits do not discard an eligible checkpoint, and the retained context still counts toward the model's prompt budget. The saved checkpoint is limited to 16 MiB; oversized or incompatible endpoint output uses the normal client-side compaction path instead of being truncated.
+
+If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+
+### Successor transcripts
+
+A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
+
+A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
+
+OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
+compactions. Existing legacy checkpoint files can still be used while referenced
+and are pruned by normal session cleanup.
 
 ## Pluggable compaction providers
 
@@ -247,8 +264,11 @@ For advanced configuration (reserve tokens, identifier preservation, custom cont
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop): the turn lifecycle that triggers auto-compaction.
 - [Session](/concepts/session): session management and lifecycle.
 - [Session pruning](/concepts/session-pruning): trimming tool results.
 - [Context](/concepts/context): how context is built for agent turns.
-- [Hooks](/automation/hooks#event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
-- [Plugin hooks](/plugins/hooks#hook-catalog): typed compaction hooks (`before_compaction`, `after_compaction`).
+- [Context engines](/concepts/context-engine): pluggable context assembly.
+- [Hooks](/automation/hooks/event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
+- [Plugin hooks](/plugins/hooks/reference#hook-catalog): typed compaction hooks (`before_compaction`, `after_compaction`).
+- [Goal](/tools/goal) — durable per-session objectives and the `/goal` controls

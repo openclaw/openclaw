@@ -43,6 +43,15 @@ describe("restart health", () => {
       elapsedMs: 2_000,
     },
     {
+      name: "restarts settling when the boot changes under the same PID",
+      pids: [8000, 8000, 8000, 8000, 8000],
+      bootIds: ["boot-a", "boot-a", "boot-b", "boot-b", "boot-b"],
+      reachable: [true, true, true, true, true],
+      attempts: 6,
+      outcome: "healthy",
+      elapsedMs: 2_000,
+    },
+    {
       name: "keeps the full settle window after the standard readiness deadline",
       pids: [8000, 8000, 8000, 8000, 8000],
       reachable: [false, false, true, true, true],
@@ -76,7 +85,7 @@ describe("restart health", () => {
       outcome: "healthy",
       elapsedMs: 1_000,
     },
-  ])("$name", async ({ platform, pids, reachable, attempts, outcome, elapsedMs }) => {
+  ])("$name", async ({ platform, pids, bootIds, reachable, attempts, outcome, elapsedMs }) => {
     if (platform) {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
     }
@@ -84,10 +93,12 @@ describe("restart health", () => {
     for (const pid of pids) {
       vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
     }
-    for (const ok of reachable) {
+    for (const [index, ok] of reachable.entries()) {
       if (ok) {
         callGateway.mockImplementationOnce(
-          gatewayHealthResponse({ server: { version: "2026.8.1" } }),
+          gatewayHealthResponse({
+            server: { version: "2026.8.1", ...(bootIds ? { bootId: bootIds[index] } : {}) },
+          }),
         );
       } else {
         callGateway.mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
@@ -613,5 +624,26 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("timeout");
     expect(snapshot.elapsedMs).toBe(4_000);
     expect(sleep).toHaveBeenCalledTimes(4);
+  });
+
+  it("cancels a migration-extended wait before another health inspection", async () => {
+    const controller = new AbortController();
+    const aborted = new Error("repair-budget");
+    inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
+    sleep.mockImplementationOnce(async () => {
+      controller.abort(aborted);
+    });
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    await expect(
+      waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        attempts: 1,
+        delayMs: 60_000,
+        isStartupMigrationActive: () => true,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(aborted);
+    expect(inspectPortUsage).toHaveBeenCalledOnce();
   });
 });

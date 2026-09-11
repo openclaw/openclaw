@@ -16,10 +16,16 @@ it("skips control-ui localization checks for test-only UI source", () => {
   );
 });
 
-it("runs control-ui localization checks for the canonical locale config", () => {
-  expect(detectChangedScope(["scripts/lib/control-ui-i18n-config.json"]).runControlUiI18n).toBe(
-    true,
-  );
+it.each([
+  "scripts/lib/control-ui-i18n-config.json",
+  "scripts/lib/control-ui-i18n-catalog-values.ts",
+  "src/config/schema.labels.ts",
+  "src/config/zod-schema.cloud-workers.ts",
+  "src/config/media-audio-field-metadata.ts",
+  "src/config/talk-defaults.ts",
+  "ui/src/lib/fnv1a.ts",
+])("runs control-ui localization checks for %s", (file) => {
+  expect(detectChangedScope([file]).runControlUiI18n).toBe(true);
 });
 
 it.each([
@@ -76,6 +82,8 @@ it.each([
   "test/vitest/vitest.ui-browser.config.ts",
   "test/vitest/vitest.ui-e2e.config.ts",
   "test/vitest/vitest.ui-e2e.global-setup.ts",
+  "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
+  "test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts",
   "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
   "test/vitest/vitest.ui-e2e.setup.ts",
   "test/vitest/vitest.ui-e2e.sequencer.ts",
@@ -100,6 +108,8 @@ it.each([
   "config/ci-test-timings.json",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
 ])("runs Chromium UI tests when %s changes browser test inputs", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });

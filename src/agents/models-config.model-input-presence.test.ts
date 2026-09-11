@@ -9,14 +9,15 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { planOpenClawModelsJsonSource } from "./models-config.js";
-import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.test-support.js";
+import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
+import * as modelsConfigProviders from "./models-config.providers.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 
-afterEach(clearRuntimeConfigSnapshot);
-
-type ResolveImplicitProviders = NonNullable<
-  NonNullable<Parameters<typeof planOpenClawModelsJsonWithDeps>[1]>["resolveImplicitProviders"]
->;
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 function model(id: string, input: Array<"text" | "image"> = ["text"]) {
   return {
@@ -47,19 +48,35 @@ describe("models config input presence", () => {
       sourceModels: [],
       expected: ["text"],
     },
+    {
+      name: "preserves explicit input when a later duplicate omits it",
+      sourceModels: [
+        { id: "vision-model", name: "vision-model", input: ["text"] },
+        { id: "vision-model", name: "vision-model" },
+      ],
+      expected: ["text"],
+    },
+    {
+      name: "inherits explicit input from an exact duplicate before discovery",
+      sourceModels: [
+        { id: "vision-model", name: "vision-model" },
+        { id: "vision-model", name: "vision-model", input: ["text"] },
+      ],
+      expected: ["text"],
+    },
   ] as const)("$name in the final generated models.json", async ({ sourceModels, expected }) => {
     const configuredProvider = {
-      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      apiKey: "AWS_PROFILE",
+      baseUrl: "https://model-input.example/v1",
+      apiKey: "MODEL_INPUT_FIXTURE_KEY",
       models: [model("vision-model")],
     };
     const cfg: OpenClawConfig = {
-      models: { providers: { "amazon-bedrock": configuredProvider } },
+      models: { providers: { "model-input-fixture": configuredProvider } },
     };
     const sourceConfigForSecrets = {
       models: {
         providers: {
-          "amazon-bedrock": {
+          "model-input-fixture": {
             baseUrl: configuredProvider.baseUrl,
             apiKey: configuredProvider.apiKey,
             models: sourceModels,
@@ -67,27 +84,24 @@ describe("models config input presence", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const resolveImplicitProviders = vi.fn<ResolveImplicitProviders>(async () => ({
-      "amazon-bedrock": {
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      "model-input-fixture": {
         ...configuredProvider,
         models: [model("vision-model", ["text", "image"])],
       },
-    }));
+    });
 
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: sourceModels.length ? sourceConfigForSecrets : cfg,
-        discoveryAuthConfig: cfg,
-        sourceConfigForSecrets,
-        agentDir: "/tmp/openclaw-model-input-presence",
-        // Model-ID policies are part of this prepared merge fixture, not ambient discovery.
-        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
-        env: { AWS_PROFILE: "default" },
-        existingRaw: "",
-        existingParsed: {},
-      },
-      { resolveImplicitProviders },
-    );
+    const plan = await planModelsJsonForTest({
+      cfg: sourceModels.length ? sourceConfigForSecrets : cfg,
+      discoveryAuthConfig: cfg,
+      sourceConfigForSecrets,
+      agentDir: "/tmp/openclaw-model-input-presence",
+      // Model-ID policies are part of this prepared merge fixture, not ambient discovery.
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      env: { MODEL_INPUT_FIXTURE_KEY: "default" },
+      existingRaw: "",
+      existingParsed: {},
+    });
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
@@ -96,8 +110,149 @@ describe("models config input presence", () => {
     const generated = JSON.parse(plan.contents) as {
       providers: Record<string, { models?: Array<{ input?: string[] }> }>;
     };
-    expect(generated.providers["amazon-bedrock"]?.models?.[0]?.input).toEqual(expected);
+    expect(generated.providers["model-input-fixture"]?.models?.[0]?.input).toEqual(expected);
   });
+
+  it.each(["merge", "replace"] as const)(
+    "keeps one-step identities and exact source fields through repeated %s planning",
+    async (mode) => {
+      const providerId = "custom";
+      const rates = { input: 11, output: 22, cacheRead: 3, cacheWrite: 4 };
+      const scopedRates = { input: 33, output: 44, cacheRead: 5, cacheWrite: 6 };
+      const sourceModel = (
+        id: string,
+        fields: {
+          input?: Array<"text" | "image">;
+          cost?: Partial<ModelDefinitionConfig["cost"]>;
+        } = {},
+      ) => {
+        const { input: _input, cost: _cost, ...row } = model(id);
+        return { ...row, ...fields };
+      };
+      const cfg = {
+        models: {
+          mode,
+          providers: {
+            [providerId]: {
+              baseUrl: "https://catalog-fields.example/v1",
+              api: "openai-completions",
+              apiKey: "CATALOG_FIXTURE_KEY",
+              models: [
+                sourceModel("latest", { cost: { input: 7 } }),
+                sourceModel("bare", { input: ["text"], cost: { input: 2 } }),
+                sourceModel("custom/bare", { cost: { output: 8 } }),
+                sourceModel("alias-exact", {
+                  input: ["text"],
+                  cost: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 },
+                }),
+                sourceModel("exact"),
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const original = structuredClone(cfg);
+      const discovered = {
+        baseUrl: "https://catalog-fields.example/v1",
+        api: "openai-completions" as const,
+        apiKey: "CATALOG_FIXTURE_KEY",
+        models: ["middle", "bare", "custom/bare", "exact", "discovered-only"].map((id) =>
+          Object.assign(model(id, ["text", "image"]), {
+            cost: id === "custom/bare" ? scopedRates : rates,
+          }),
+        ),
+      };
+      const plugin: ProviderPlugin = {
+        id: providerId,
+        pluginId: providerId,
+        label: "Catalog fields fixture",
+        auth: [],
+        staticCatalog: { run: async () => ({ provider: discovered }) },
+      };
+      const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: providerId,
+            providers: [providerId],
+            modelIdNormalization: {
+              providers: {
+                [providerId]: {
+                  aliases: { latest: "middle", middle: "final", "alias-exact": "exact" },
+                },
+              },
+            },
+          },
+        ],
+      });
+      const merged = mode === "merge";
+      const emptyRates = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const inheritedInput = merged ? ["text", "image"] : undefined;
+      const expected = [
+        {
+          id: "middle",
+          input: inheritedInput,
+          cost: { ...(merged ? rates : emptyRates), input: 7 },
+        },
+        { id: "bare", input: ["text"], cost: { ...(merged ? rates : emptyRates), input: 2 } },
+        {
+          id: "custom/bare",
+          input: inheritedInput,
+          cost: { ...(merged ? scopedRates : emptyRates), output: 8 },
+        },
+        { id: "exact", input: inheritedInput, cost: merged ? rates : undefined },
+      ];
+      await withOpenClawTestState({ label: "catalog-authored-fields" }, async (state) => {
+        let existingRaw = "";
+        let existingParsed: unknown = {};
+        let pluginCatalogs: Array<{ pluginId: string; contents: string }> = [];
+        for (let pass = 0; pass < 2; pass++) {
+          const plan = await planOpenClawModelsJson({
+            context: {
+              cfg,
+              discoveryAuthConfig: cfg,
+              sourceConfigForSecrets: cfg,
+              agentDir: state.agentDir(),
+              env: state.env,
+              envFingerprint: state.env,
+              pluginMetadataSnapshot,
+              preparedStaticProviderCatalog: {
+                providers: [plugin],
+                entries: [{ provider: plugin, result: { provider: discovered } }],
+              },
+              providerDiscoveryEntriesOnly: true,
+              providerDiscoveryProviderIds: [providerId],
+            },
+            existingRaw,
+            existingParsed,
+            pluginCatalogs,
+          });
+          expect(plan.action).toBe("write");
+          if (plan.action !== "write") {
+            throw new Error(`Expected catalog write plan, got ${plan.action}`);
+          }
+          const contents = plan.pluginCatalogWrites?.["plugins/custom/catalog.json"];
+          expect(contents).toBeDefined();
+          if (!contents) {
+            throw new Error("Expected the plugin-owned catalog");
+          }
+          const generated = JSON.parse(contents) as {
+            providers: Record<string, { models: ModelDefinitionConfig[] }>;
+          };
+          expect(
+            generated.providers[providerId]?.models.map(({ id, input, cost }) => ({
+              id,
+              input,
+              cost,
+            })),
+          ).toEqual(expected);
+          expect(cfg).toStrictEqual(original);
+          existingRaw = plan.contents;
+          existingParsed = JSON.parse(plan.contents);
+          pluginCatalogs = [{ pluginId: providerId, contents }];
+        }
+      });
+    },
+  );
 
   const liveCost = {
     input: 11,
@@ -253,7 +408,7 @@ describe("models config input presence", () => {
       );
       // Workers retain the captured pair after losing the parent's process-local snapshot.
       clearRuntimeConfigSnapshot();
-      const plan = await planOpenClawModelsJsonWithDeps({
+      const plan = await planModelsJsonForTest({
         ...options,
         cfg: cloned.sourceConfigForSecrets,
         discoveryAuthConfig: cloned.input.config,

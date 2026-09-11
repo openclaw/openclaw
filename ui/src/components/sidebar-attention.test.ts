@@ -228,8 +228,7 @@ describe("sidebar attention refresh ownership", () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
 
-    await import("./sidebar-attention-panel.runtime.ts");
-    await element.updateComplete;
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
     const panel = element.querySelector(".sidebar-issues-panel");
     expect(panel).not.toBeNull();
     expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
@@ -413,6 +412,9 @@ describe("sidebar attention refresh ownership", () => {
     const request = vi.fn((method: string) => {
       if (method === "exec.approval.resolve") {
         return resolution.promise;
+      }
+      if (method === "update.status") {
+        return Promise.resolve({ sentinel: null, updateAvailable: null });
       }
       if (method === "cron.list") {
         return Promise.resolve(cronListResponse([]));

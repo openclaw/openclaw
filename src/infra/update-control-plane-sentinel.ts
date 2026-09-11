@@ -8,16 +8,23 @@ import {
   type RestartSentinelPayload,
 } from "./restart-sentinel.js";
 import {
+  resolveUpdateRestartNoticeMeta,
+  shouldPublishUpdateRestartNotice,
+} from "./update-restart-notice.js";
+import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
+import { getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Control-plane update sentinel helpers preserve update metadata while a
 // managed service handoff waits for restart health to complete.
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
+// Internal helper/orchestrator correlation; never persisted as an operator setting.
+export const UPDATE_RUN_ID_ENV = "OPENCLAW_UPDATE_RUN_ID";
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
-export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 
 // The detached helper must retain an explicit unsafe verdict without relying on
 // a notification that another process may consume. Ordinary CLI failures stay 1.
@@ -45,6 +52,7 @@ export function buildControlPlaneUpdateRestartHealthPendingResult(
   result: UpdateRunResult,
 ): UpdateRunResult {
   return {
+    ...(result.runId ? { runId: result.runId } : {}),
     status: "skipped",
     mode: result.mode,
     ...(result.root ? { root: result.root } : {}),
@@ -74,9 +82,11 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
     return null;
   }
   const sessionKey = readNonBlankString(value.sessionKey);
+  const runId = readNonBlankString(value.runId);
   const threadId = readNonBlankString(value.threadId);
   const handoffId = readNonBlankString(value.handoffId);
   const root = readNonBlankString(value.root);
+  const target = readNonBlankString(value.target);
   const triageContextPath = readNonBlankString(value.triageContextPath);
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
@@ -96,7 +106,14 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
         }
       : undefined;
   return {
+    ...(runId ? { runId } : {}),
+    ...(typeof value.serviceStoppedAtMs === "number" &&
+    Number.isSafeInteger(value.serviceStoppedAtMs) &&
+    value.serviceStoppedAtMs >= 0
+      ? { serviceStoppedAtMs: value.serviceStoppedAtMs }
+      : {}),
     ...(root ? { root } : {}),
+    ...(target ? { target } : {}),
     ...(triageContextPath ? { triageContextPath } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
@@ -129,21 +146,32 @@ export async function readControlPlaneUpdateSentinelMeta(
 }
 
 /** Write an update restart sentinel with control-plane routing metadata. */
-export async function writeControlPlaneUpdateRestartSentinel(params: {
-  result: UpdateRunResult;
-  meta: UpdateRestartSentinelMeta;
-}): Promise<void> {
+export async function writeControlPlaneUpdateRestartSentinel(
+  params: { result: UpdateRunResult; meta: UpdateRestartSentinelMeta },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const runId = params.meta.runId ?? params.result.runId;
+  const run = runId ? getUpdateRun(runId, { env }) : undefined;
+  const meta = resolveUpdateRestartNoticeMeta(run, params.meta);
+  if (!shouldPublishUpdateRestartNotice(run, meta)) {
+    return;
+  }
   await writeRestartSentinel(
     buildUpdateRestartSentinelPayload({
       result: params.result,
-      meta: params.meta,
+      meta,
     }),
+    env,
   );
 }
 
 /** Mark the pending update restart sentinel as failed. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
+  meta?: UpdateRestartSentinelMeta,
 ): Promise<RestartSentinelPayload | null> {
-  return (await markUpdateRestartSentinelFailure(reason))?.payload ?? null;
+  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId), meta)) {
+    return null;
+  }
+  return (await markUpdateRestartSentinelFailure(reason, process.env, meta))?.payload ?? null;
 }

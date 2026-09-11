@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import { z } from "zod";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
-import { withOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-managed-context.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   stripGatewayServiceMarkerEnv,
+  withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
 import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
@@ -19,6 +19,7 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveOsHomeDir } from "./home-dir.js";
 import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
 import { tryProcessCwd } from "./safe-cwd.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 
 export type UpdateTriageTarget = {
   root?: string;
@@ -27,8 +28,8 @@ export type UpdateTriageTarget = {
 };
 
 type UpdateTriageResult =
-  | { status: "completed"; hint: string; contextPath?: string }
-  | { status: "failed"; hint: string; contextPath?: string }
+  | { status: "completed"; hint: string }
+  | { status: "failed"; hint: string }
   | { status: "cancelled" };
 
 type UpdateTriageInvocation = {
@@ -119,6 +120,7 @@ async function runPreparedUpdateFailureTriage(
     ...installationTargetEnv(installationTarget),
   };
   delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+  delete env[UPDATE_RUN_ID_ENV];
   const redaction = { env, stateDir: installationTarget.stateDir };
   const { log, error: logError } = prepared.runtime;
   log("Update failed. Entering triage...");
@@ -156,6 +158,7 @@ async function runPreparedUpdateFailureTriage(
               target: installationTarget,
               cwd: cwd ?? prepared.operatorHome,
               updateFailure: params.failure,
+              signal: params.signal,
               isCurrent,
             },
           },
@@ -226,7 +229,7 @@ async function runPreparedUpdateFailureTriage(
         hint += `\nDiagnostics export unavailable: ${reason}`;
       }
     }
-    return { status: "completed", hint, ...(contextPath ? { contextPath } : {}) };
+    return { status: "completed", hint };
   } catch (error) {
     if (!isCurrent()) {
       return { status: "cancelled" };
@@ -251,7 +254,6 @@ async function runPreparedUpdateFailureTriage(
     return {
       status: "failed",
       hint: `${message}\n${TRIAGE_OUTPUT_HINT}`,
-      ...(contextPath ? { contextPath } : {}),
     };
   }
 }

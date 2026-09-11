@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw security` (audit and fix common security f
 read_when:
   - You want to run a quick security audit on config/state
   - You want to apply safe "fix" suggestions (permissions, tighten defaults)
-title: "Security"
+title: "Security CLI"
 ---
 
 # `openclaw security`
@@ -28,15 +28,18 @@ If Gateway password auth is supplied only at startup, pass the same value with `
 
 ## What it checks
 
-**DM/trust model**
+### DM/trust model
 
 - Warns when multiple DM senders share the main session and recommends secure DM mode: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes. This is cooperative/shared-inbox hardening, not isolation for mutually untrusted operators; split trust boundaries with separate gateways (or separate OS users/hosts) for that.
 - Emits `security.trust_model.group_scope_main` when global `session.groupScope="main"` or a binding override merges group/channel rooms into the main session. Every member of each matched room shares that context, so reserve this for trusted rooms (see [Groups](/channels/groups#session-keys)).
 - Emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules) — OpenClaw's default trust model is personal-assistant (one operator), not hostile multi-tenant isolation. For intentional shared-user setups: sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
-- Emits `security.trust_model.cross_agent_session_access_default` when two or more agents have `tools.sessions.visibility` resolving to `all` and agent-to-agent access enabled with an omitted or empty `tools.agentToAgent.allow` list, provided at least one agent retains a session tool in an unclamped context (unsandboxed sessions or `agents.defaults.sandbox.sessionToolsVisibility: "all"`). The detail lists each agent's reach and allowed session tools; no finding is emitted if every agent is clamped or has no session tools. This is `info` for plain multi-agent setups, escalating to `warn` when an agent is sandboxed, has agent-level tool restrictions, or shared-user ingress signals suggest different trust levels. Narrow [session visibility or agent-to-agent access](/gateway/config-tools#tools-agenttoagent) for persona separation.
+- Emits `security.trust_model.cross_agent_session_access_default` for cross-agent session reach that no config narrows.
+  - Condition: two or more agents have `tools.sessions.visibility` resolving to `all` and agent-to-agent access enabled with an omitted or empty `tools.agentToAgent.allow` list, provided at least one agent retains a session tool in an unclamped context (unsandboxed sessions or `agents.defaults.sandbox.sessionToolsVisibility: "all"`). No finding is emitted if every agent is clamped or has no session tools.
+  - Severity: `info` for plain multi-agent setups, escalating to `warn` when an agent is sandboxed, has agent-level tool restrictions, or shared-user ingress signals suggest different trust levels.
+  - Fix: the detail lists each agent's reach and allowed session tools. Narrow [session visibility or agent-to-agent access](/gateway/config-tools#tools-agenttoagent) for persona separation.
 - Warns when small models (`<=300B` parameters) are used without sandboxing and with web/browser tools enabled.
 
-**Webhook/hooks**
+### Webhook/hooks
 
 Startup logs a non-fatal security warning, and audit flags `hooks.token` reuse of active Gateway shared-secret auth values (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`, `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`). Also warns when:
 
@@ -49,7 +52,7 @@ Startup logs a non-fatal security warning, and audit flags `hooks.token` reuse o
 
 Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new token.
 
-**Sandbox/tools**
+### Sandbox/tools
 
 - Warns when sandbox Docker settings are configured while sandbox mode is off.
 - Warns when `gateway.nodes.commands.deny` uses ineffective pattern-like/unknown entries (matching is exact node command-name only, not shell-text filtering).
@@ -59,24 +62,26 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 - Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards.
 - Warns when installed plugin tools may be reachable under permissive tool policy.
 
-**Sandbox browser**
+### Sandbox browser
 
 - Warns when sandbox browser uses Docker `bridge` network without `sandbox.browser.cdpSourceRange`.
 - Flags dangerous sandbox Docker network modes, including `host` and `container:*` namespace joins.
 - Warns when existing sandbox browser Docker containers have missing/stale hash labels (for example pre-migration containers missing `openclaw.browserConfigEpoch`) and recommends `openclaw sandbox recreate --browser --all`.
 
-**Network/discovery**
+### Network/discovery
 
 - Flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured).
 - Flags `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
 - Warns when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable without a shared secret (`/tools/invoke` plus any enabled `/v1/*` endpoint).
 
-**Plugins/channels**
+### Plugins/channels
 
 - Warns when npm-based plugin/hook install records are unpinned, missing integrity metadata, or drift from currently installed package versions.
 - Warns when channel allowlists rely on mutable names/emails/tags instead of stable IDs (Discord, Slack, Google Chat, Microsoft Teams, Mattermost, IRC scopes where applicable).
 
-Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides; enabling one is not, by itself, a security vulnerability report. For the complete dangerous-parameter inventory, see "Insecure or dangerous flags summary" in [Security](/gateway/security).
+### Dangerous flags
+
+Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides. Enabling one is not, by itself, a security vulnerability report. Audit reports them under the `config.insecure_or_dangerous_flags` checkId. For the complete dangerous-parameter inventory, see "Insecure or dangerous flags summary" in [Security](/gateway/security).
 
 ## SecretRef behavior
 

@@ -20,7 +20,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
+import {
+  codexControlRequest,
+  prepareCodexControlSessionAuth,
+  type CodexControlRequestOptions,
+} from "./command-rpc.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const withCodexAppServerJsonClientMock = vi.hoisted(() => vi.fn());
@@ -90,8 +94,14 @@ describe("Codex command RPC helpers", () => {
       ) =>
         await run(requestCodexAppServerJsonMock, harness.client, {
           assertCurrent: () => undefined,
+          abort: vi.fn(),
         }),
     );
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: Date.now() },
+    });
   });
 
   afterEach(async () => {
@@ -132,6 +142,20 @@ describe("Codex command RPC helpers", () => {
       typeof withCodexAppServerJsonClient
     >[0];
   }
+
+  it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
+    const options = { config, authProfileId: "openai:selected" };
+    const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
+    await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
+      authProfileId: "openai:selected",
+      clientOptions: { authProfileId: "openai:selected" },
+    });
+    await expect(
+      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, startOptions),
+    ).rejects.toThrow("requires admitted session authority");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
+  });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");
@@ -239,6 +263,66 @@ describe("Codex command RPC helpers", () => {
       authRequirement: "api-key",
       preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
     });
+  });
+
+  it("uses the admitted explicit store instead of an unrelated configured store", async () => {
+    const explicitStorePath = path.join(tempDir, "explicit", "sessions.json");
+    const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
+    config.session = { store: configuredStorePath };
+    setAuthStore({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "api_key", provider: "openai", key: "automatic-key" },
+        "openai:pinned": { type: "api_key", provider: "openai", key: "pinned-key" },
+      },
+      order: { openai: ["openai:first", "openai:pinned"] },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: explicitStorePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:pinned",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: configuredStorePath,
+      sessionKey,
+      entry: { sessionId: "unrelated-session", updatedAt: Date.now() },
+    });
+
+    await resume({ storePath: explicitStorePath, authProfileId: "openai:first" });
+
+    expect(acquiredOptions()).toMatchObject({
+      authRequirement: "api-key",
+      preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
+    });
+  });
+
+  it.each([
+    { label: "missing", sessionId: undefined },
+    { label: "mismatched", sessionId: "another-session" },
+  ])("rejects a $label admitted row before auth or client acquisition", async ({ sessionId }) => {
+    const storePath = path.join(tempDir, `authority-${sessionId ?? "missing"}`, "sessions.json");
+    if (sessionId) {
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId, updatedAt: Date.now() },
+      });
+    }
+
+    await expect(resume({ storePath })).rejects.toThrow(
+      "Codex session generation is no longer current: session-1",
+    );
+
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
 
   it("does not replace a cooled configured profile with an ambient API key", async () => {

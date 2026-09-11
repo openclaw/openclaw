@@ -10,6 +10,7 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -35,6 +36,14 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
     plugins: [],
   })),
+}));
+
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
@@ -2463,11 +2472,22 @@ describe("gatewayInstallErrorHint", () => {
 });
 
 describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
-  async function buildEnvironment(existingEnvironment: Record<string, string>) {
-    mockNodeGatewayPlanFixture();
+  async function buildEnvironment(
+    existingEnvironment: Record<string, string>,
+    env: Record<string, string> = { HOME: "/tmp" },
+  ) {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        ...(env.HOMEBREW_PREFIX !== undefined ? { HOMEBREW_PREFIX: env.HOMEBREW_PREFIX } : {}),
+        ...(env.OPENCLAW_CONFIG_READONLY !== undefined
+          ? { OPENCLAW_CONFIG_READONLY: env.OPENCLAW_CONFIG_READONLY }
+          : {}),
+      },
+    });
     return (
       await buildGatewayInstallPlan({
-        env: { HOME: "/tmp" },
+        env,
         port: 3000,
         runtime: "node",
         existingEnvironment,
@@ -2480,6 +2500,17 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
   });
 
+  it("uses only the current install's HOMEBREW_PREFIX", async () => {
+    const existingEnvironment = { HOMEBREW_PREFIX: "/opt/homebrew" };
+    const result = await buildEnvironment(existingEnvironment);
+    expect(result.HOMEBREW_PREFIX).toBeUndefined();
+    const current = await buildEnvironment(existingEnvironment, {
+      HOME: "/tmp",
+      HOMEBREW_PREFIX: "/usr/local",
+    });
+    expect(current.HOMEBREW_PREFIX).toBe("/usr/local");
+  });
+
   it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", async () => {
     const result = await buildEnvironment({
       OPENCLAW_CLI_CONTAINER_BYPASS: "1",
@@ -2487,6 +2518,18 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     });
     expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
     expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
+  });
+
+  it("preserves config read-only mode unless the current install overrides it", async () => {
+    const existingEnvironment = { OPENCLAW_CONFIG_READONLY: "1" };
+    const preserved = await buildEnvironment(existingEnvironment);
+    const overridden = await buildEnvironment(existingEnvironment, {
+      HOME: "/tmp",
+      OPENCLAW_CONFIG_READONLY: "0",
+    });
+
+    expect(preserved.OPENCLAW_CONFIG_READONLY).toBe("1");
+    expect(overridden.OPENCLAW_CONFIG_READONLY).toBe("0");
   });
 
   it("still drops arbitrary OPENCLAW_FOO", async () => {

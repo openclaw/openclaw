@@ -142,42 +142,52 @@ describe("renderTable", () => {
     expect(lines.at(-1)).toBe(lines[0]);
   });
 
-  it("renders large tables with the CLI process stack rather than the worker stack", () => {
-    // Worker threads have a larger stack than the CLI process; spreading every
-    // row into Math.max can pass in Vitest but crash a normal sessions --limit all.
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
-        "--input-type=module",
-        "-e",
-        `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
+  it.each(["rows", "wrapped lines", "soft-wrap suffix"])(
+    "renders large %s with the CLI process stack",
+    (shape) => {
+      // Worker threads have a larger stack than the CLI process. Neither many
+      // rows nor one heavily wrapped cell may depend on V8's argument-count limit.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+          "--input-type=module",
+          "-e",
+          `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
+const shape = ${JSON.stringify(shape)};
 const output = renderTable({
   border: "ascii",
-  columns: [{ key: "Key", header: "Key" }],
-  rows: Array.from({ length: 150_000 }, () => ({ Key: "session" })),
+  columns: [{ key: "Key", header: "Key", maxWidth: 5 }],
+  rows: shape === "rows"
+    ? Array.from({ length: 150_000 }, () => ({ Key: "row" }))
+    : [{ Key: shape === "wrapped lines" ? "row".repeat(150_000) : "a  " + "\\u200b".repeat(150_000) + "b" }],
 });
 const lines = output.trimEnd().split("\\n");
 console.log(JSON.stringify({
   lineCount: lines.length,
-  rows: lines.filter(line => line === "| session |").length,
+  rows: lines.filter(line => line === "| row |").length,
   header: lines[1],
   firstLine: lines[0],
   lastLine: lines.at(-1),
+  softWrapRowsMatch: lines[3] === "| a   |" && lines[4] === "| " + "\\u200b".repeat(150_000) + "b   |",
 }));`,
-      ],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const rendered = JSON.parse(result.stdout);
-    expect(rendered.lineCount).toBe(150_004);
-    expect(rendered.rows).toBe(150_000);
-    expect(rendered.header).toMatch(/^\| Key +\|$/u);
-    expect(rendered.lastLine).toBe(rendered.firstLine);
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const rendered = JSON.parse(result.stdout);
+      expect(rendered.lineCount).toBe(shape === "soft-wrap suffix" ? 6 : 150_004);
+      expect(rendered.rows).toBe(shape === "soft-wrap suffix" ? 0 : 150_000);
+      if (shape === "soft-wrap suffix") {
+        expect(rendered.softWrapRowsMatch).toBe(true);
+      }
+      expect(rendered.header).toMatch(/^\| Key +\|$/u);
+      expect(rendered.lastLine).toBe(rendered.firstLine);
+    },
+  );
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
     const out = renderTable({
@@ -610,6 +620,55 @@ console.log(JSON.stringify({
   );
 
   it.each([
+    ["LF", "\n", "", ""],
+    ["CR", "\r", "", ""],
+    ["CRLF", "\r\n", "", ""],
+    ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
+    ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
+  ])(
+    "preserves blank %s lines without adding rows after wrapped spacing",
+    (_label, separator, open, close) => {
+      const out = renderTable({
+        border: "ascii",
+        width: 15,
+        columns: [
+          { key: "A", header: "A", minWidth: 6, maxWidth: 6 },
+          { key: "B", header: "B", minWidth: 6, maxWidth: 6 },
+        ],
+        rows: [
+          {
+            A: `${open}${["", "Read ", "", "Next", "", ""].join(separator)}${close}`,
+            B: "0\n1\n2\n3\n4",
+          },
+        ],
+      });
+
+      const dataLines = out.trimEnd().split("\n").slice(3, -1);
+      expect(
+        dataLines.map((line) =>
+          stripAnsi(line)
+            .split("|")
+            .slice(1, -1)
+            .map((cell) => cell.trim()),
+        ),
+      ).toEqual([
+        ["", "0"],
+        ["Read", "1"],
+        ["", "2"],
+        ["Next", "3"],
+        ["", "4"],
+      ]);
+      if (open) {
+        for (const line of dataLines) {
+          const cell = line.split("|")[1] ?? "";
+          expect(cell).toContain(open);
+          expect(cell).toContain(close);
+        }
+      }
+    },
+  );
+
+  it.each([
     ["LF", "line1\n東京 line2", "", "", 0],
     ["CR", "line1\r東京 line2", "", "", 0],
     ["CRLF", "line1\r\n東京 line2", "", "", 0],
@@ -887,6 +946,31 @@ console.log(JSON.stringify({
 });
 
 describe("wrapNoteMessage", () => {
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+    ["Unicode line separator", "\u2028"],
+    ["Unicode paragraph separator", "\u2029"],
+  ])("preserves note text across %s line endings", (_label, separator) => {
+    const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
+    const writes: string[] = [];
+    const output = {
+      columns: 80,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    noteToStream(input, "Note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("First paragraph.");
+    expect(rendered).toContain("- Second paragraph.");
+    expect(wrapNoteMessage(input, { columns: 80 })).toBe("First paragraph.\n\n- Second paragraph.");
+  });
+
   it("preserves long filesystem paths without inserting spaces/newlines", () => {
     const input =
       "/Users/user/Documents/Github/impact-signals-pipeline/with/really/long/segments/file.txt";

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   type AgentRunTerminalReplySnapshot,
@@ -227,14 +228,9 @@ describe("worker turn launcher terminal results", () => {
                 },
               }),
             );
-            completed.appendMessage({
-              role: "toolResult",
-              toolCallId: "call-usage",
-              toolName: "read",
-              content: [{ type: "text", text: "usage result" }],
-              isError: false,
-              timestamp: 22,
-            });
+            completed.appendMessage(
+              makeTextToolResult("call-usage", "read", "usage result", false, 22),
+            );
             const leafId = completed.appendMessage(
               makeAgentAssistantMessage({
                 content,
@@ -278,7 +274,10 @@ describe("worker turn launcher terminal results", () => {
             throw new Error("unexpected workspace sync");
           }),
           reconcileWorkspace: vi.fn(async (request) => {
-            request.journal.commit(MANIFEST_REF);
+            if (request.source.kind !== "local") {
+              throw new Error("expected a local workspace source");
+            }
+            request.source.journal.commit(MANIFEST_REF);
             return {
               manifestRef: MANIFEST_REF,
               changed: false,

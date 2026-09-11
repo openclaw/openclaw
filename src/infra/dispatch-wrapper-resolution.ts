@@ -434,6 +434,7 @@ type DispatchWrapperSpec = {
   name: string;
   unwrap?: (argv: string[], platform?: NodeJS.Platform) => string[] | null;
   transparentUsage?: boolean | ((argv: string[], platform?: NodeJS.Platform) => boolean);
+  changesExecutableLookup?: true;
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
@@ -494,6 +495,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "watch" },
   {
     name: "xcrun",
+    changesExecutableLookup: true,
     unwrap: (argv, platform) =>
       supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
     transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
@@ -514,11 +516,15 @@ type DispatchWrapperUnwrapResult =
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
 type DispatchWrapperTrustPlan = {
+  dispatchChainComplete: boolean;
   argv: string[];
   wrappers: string[];
+  wrapperInvocations: DispatchWrapperInvocation[];
   policyBlocked: boolean;
   blockedWrapper?: string;
 };
+
+export type DispatchWrapperInvocation = { wrapper: string; sourceArgv: string[] };
 
 function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
   return { kind: "blocked", wrapper };
@@ -583,12 +589,15 @@ function isSemanticDispatchWrapperUsage(
 function blockedDispatchWrapperPlan(params: {
   argv: string[];
   wrappers: string[];
+  wrapperInvocations: DispatchWrapperInvocation[];
   blockedWrapper: string;
 }): DispatchWrapperTrustPlan {
   return {
     argv: params.argv,
     wrappers: params.wrappers,
+    wrapperInvocations: params.wrapperInvocations,
     policyBlocked: true,
+    dispatchChainComplete: false,
     blockedWrapper: params.blockedWrapper,
   };
 }
@@ -600,12 +609,14 @@ export function resolveDispatchWrapperTrustPlan(
 ): DispatchWrapperTrustPlan {
   let current = argv;
   const wrappers: string[] = [];
+  const wrapperInvocations: DispatchWrapperInvocation[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (unwrap.kind === "blocked") {
       return blockedDispatchWrapperPlan({
         argv: current,
         wrappers,
+        wrapperInvocations,
         blockedWrapper: unwrap.wrapper,
       });
     }
@@ -613,10 +624,12 @@ export function resolveDispatchWrapperTrustPlan(
       break;
     }
     wrappers.push(unwrap.wrapper);
+    wrapperInvocations.push({ wrapper: unwrap.wrapper, sourceArgv: [...current] });
     if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current, platform)) {
       return blockedDispatchWrapperPlan({
         argv: current,
         wrappers,
+        wrapperInvocations,
         blockedWrapper: unwrap.wrapper,
       });
     }
@@ -628,11 +641,20 @@ export function resolveDispatchWrapperTrustPlan(
       return blockedDispatchWrapperPlan({
         argv: current,
         wrappers,
+        wrapperInvocations,
         blockedWrapper: overflow.wrapper,
       });
     }
   }
-  return { argv: current, wrappers, policyBlocked: false };
+  return {
+    argv: current,
+    wrappers,
+    wrapperInvocations,
+    policyBlocked: false,
+    dispatchChainComplete: wrappers.every(
+      (wrapper) => !DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper)?.changesExecutableLookup,
+    ),
+  };
 }
 
 export function hasDispatchEnvManipulation(argv: string[]): boolean {

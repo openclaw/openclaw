@@ -50,17 +50,6 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
-vi.mock("../terminal/links.js", () => ({ formatDocsLink: () => "docs.openclaw.ai/cli/skills" }));
-vi.mock("../terminal/theme.js", () => ({
-  theme: {
-    command: (value: string) => value,
-    error: (value: string) => value,
-    heading: (value: string) => value,
-    muted: (value: string) => value,
-    success: (value: string) => value,
-    warn: (value: string) => value,
-  },
-}));
 
 const status = {
   lastAttemptAtMs: 1,
@@ -437,7 +426,7 @@ describe("skills curator cli", () => {
   it("prints the last collection and experience outcomes", async () => {
     await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Collection review workspac"),
+      expect.stringContaining("Collection review: attempted"),
     );
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("Experience review workspac: proposed (proposal-1)"),

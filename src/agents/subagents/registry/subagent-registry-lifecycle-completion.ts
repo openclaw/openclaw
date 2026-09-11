@@ -326,6 +326,7 @@ export async function completeSubagentRunAttempt(
         }
         entry.killReconciliation = {
           killedAt: killIntent.requestedAt,
+          taskCancellationAccepted: killOwnsCurrentLifecycle ? true : undefined,
           suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
         };
       }
@@ -452,6 +453,8 @@ export async function completeSubagentRunAttempt(
         status: "terminal",
         endedAt,
         outcome: executionOutcome,
+        interruptedAt: undefined,
+        interruptionReason: undefined,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };

@@ -87,8 +87,7 @@ function isTransientTailscaleStatusError(error: unknown): boolean {
  * Locate Tailscale binary using multiple strategies:
  * 1. PATH lookup (via which command)
  * 2. Known macOS app path
- * 3. find /Applications for Tailscale.app
- * 4. locate database (if available)
+ * 3. locate database (if available)
  *
  * @returns Path to Tailscale binary or null if not found
  */
@@ -123,30 +122,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
-  // Strategy 3: find command in /Applications
-  try {
-    const { stdout } = await runExec(
-      "find",
-      [
-        "/Applications",
-        "-maxdepth",
-        "3",
-        "-name",
-        "Tailscale",
-        "-path",
-        "*/Tailscale.app/Contents/MacOS/Tailscale",
-      ],
-      { timeoutMs: 5000 },
-    );
-    const found = stdout.trim().split("\n")[0];
-    if (found && (await checkBinary(found))) {
-      return found;
-    }
-  } catch {
-    // find failed, continue
-  }
-
-  // Strategy 4: locate command
+  // Strategy 3: locate command
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
@@ -231,12 +207,12 @@ type TailscaleRouteOwnerFailure = Pick<
   "code" | "stdout" | "stderr"
 >;
 
-function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
+function routeClaimError(message: TailscaleRouteOwnerFailure, serveStatus: string): Error {
   const conflict = /listener already exists for port (\d+)/i.exec(
     `${message.stderr}\n${message.stdout}`,
   );
   if (conflict) {
-    return new TailscaleRouteOwnershipConflictError(Number(conflict[1]));
+    return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
@@ -263,7 +239,10 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
   });
 }
 
-async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
+async function startTailscaleRouteOwner(
+  argv: string[],
+  serveStatus: string,
+): Promise<TailscaleRouteClaim> {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = fork(
@@ -271,6 +250,7 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
@@ -278,7 +258,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   let ready = false;
   let active = false;
   let stopping = false;
-  let startupSettled = false;
   let failure: Error | undefined;
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => {
@@ -287,10 +266,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
   const startup = new Promise<void>((resolve, reject) => {
     const settle = (error?: Error) => {
-      if (startupSettled) {
-        return;
-      }
-      startupSettled = true;
       clearTimeout(startupTimer);
       if (error) {
         reject(error);
@@ -326,11 +301,14 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
         ) {
           return;
         }
-        failure = routeClaimError({
-          code: event.code,
-          stdout: event.stdout,
-          stderr: event.stderr,
-        });
+        failure = routeClaimError(
+          {
+            code: event.code,
+            stdout: event.stdout,
+            stderr: event.stderr,
+          },
+          serveStatus,
+        );
         if (!ready) {
           settle(failure);
         }
@@ -404,7 +382,10 @@ export async function claimTailscaleRoute(
       await exec(["serve", "--yes", "--https=443", "--set-path=/", "off"]);
       adopted = true;
     }
-    return startTailscaleRouteOwner([bin, ...prefix, mode, "--yes", "--bg=false", `${target}`]);
+    return startTailscaleRouteOwner(
+      [bin, ...prefix, mode, "--yes", "--bg=false", `${target}`],
+      stdout,
+    );
   };
   let claim: TailscaleRouteClaim;
   try {

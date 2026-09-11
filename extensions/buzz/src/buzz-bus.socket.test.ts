@@ -244,6 +244,67 @@ it("finishes an admitted room turn after its sender is removed", async () => {
   }
 });
 
+it("keeps healthy rooms subscribed when a configured room lost the Bot role", async () => {
+  const fixture = await createBuzzRelayFixture();
+  // A second configured room the bot can see but is only a member of. This is
+  // the shape a demoted or abandoned room takes: it is still in the directory,
+  // so it reaches the membership gate, but the bot cannot act in it.
+  const demotedRoomId = randomUUID();
+  const seededAt = Math.floor(Date.now() / 1000);
+  fixture.events.push(
+    fixture.signRelay({
+      kind: 39000,
+      created_at: seededAt,
+      content: "",
+      tags: [
+        ["d", demotedRoomId],
+        ["name", "Demoted room"],
+        ["t", "stream"],
+      ],
+    }),
+    fixture.signRelay({
+      kind: 39002,
+      created_at: seededAt,
+      content: "",
+      tags: [
+        ["d", demotedRoomId],
+        ["p", fixture.botPublicKey, "", "member"],
+      ],
+    }),
+  );
+  const messages: string[] = [];
+  const unavailable: Error[] = [];
+  const fatal: Error[] = [];
+  let bus: BuzzBus | undefined;
+  try {
+    bus = await startBuzzBus({
+      accountId: randomUUID(),
+      relayUrl: fixture.relayUrl,
+      privateKey: fixture.botPrivateKey,
+      // The unusable room is listed first: aborting on it would have stopped
+      // the healthy room from ever being subscribed.
+      channelIds: [demotedRoomId, fixture.roomId],
+      onMessage: async (message) => {
+        messages.push(message.text);
+      },
+      onRoomUnavailable: (error) => unavailable.push(error),
+      onFatalError: (error) => fatal.push(error),
+    });
+    fixture.sendMessage("healthy room keeps delivering");
+    await vi.waitFor(() => expect(messages).toEqual(["healthy room keeps delivering"]));
+    await expect(
+      bus.sendText({ channelId: fixture.roomId, text: "healthy room keeps sending" }),
+    ).resolves.toBeTruthy();
+    expect(fatal).toEqual([]);
+    expect(unavailable).toHaveLength(1);
+    expect(unavailable[0]?.message).toContain(demotedRoomId);
+    expect(unavailable[0]?.message).toContain("does not have the Bot role");
+  } finally {
+    await bus?.close();
+    await fixture.close();
+  }
+});
+
 it("revokes the active bot immediately on a signed role downgrade", async () => {
   const fixture = await createBuzzRelayFixture();
   const fatal: Error[] = [];
@@ -326,6 +387,7 @@ it("recovers the Gateway account after silent presence without replaying pre-act
   const abort = new AbortController();
   const states: string[] = [];
   const firstReady = createDeferred<void>();
+  const secondReady = createDeferred<void>();
   const ctx = createStartAccountContext({
     account,
     cfg,
@@ -336,6 +398,9 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       }
       if (next.lifecycle === "ready") {
         firstReady.resolve();
+        if (states.filter((state) => state === "ready").length === 2) {
+          secondReady.resolve();
+        }
       }
       if (next.lifecycle === "recovering") {
         fixture.setPresenceMode("accept");
@@ -344,18 +409,18 @@ it("recovers the Gateway account after silent presence without replaying pre-act
     },
   });
   const lifecycle = startBuzzGatewayAccount(ctx);
+  const stoppedBeforeReady = lifecycle.then(() => {
+    throw new Error("Buzz account stopped before becoming ready");
+  });
   try {
-    await Promise.race([
-      firstReady.promise,
-      lifecycle.then(() => {
-        throw new Error("Buzz account stopped before becoming ready");
-      }),
-    ]);
+    await Promise.race([firstReady.promise, stoppedBeforeReady]);
     expect(states).toContain("ready");
     fixture.sendMessage("before stall");
     await vi.waitFor(() => expect(handled).toContain("before stall"));
     await vi.waitFor(() => expect(fixture.authenticatedSessions()).toBe(2), { timeout: 8000 });
     await vi.waitFor(() => expect(handled).toContain("during reconnect"));
+    // Replay can dispatch before subscription history and Gateway startup finish.
+    await Promise.race([secondReady.promise, stoppedBeforeReady]);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
     expect(states).toContain("recovering");
     expect(handled).toEqual(["before stall", "during reconnect"]);

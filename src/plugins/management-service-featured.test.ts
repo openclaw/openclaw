@@ -25,11 +25,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   };
 });
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  listManagedPlugins,
-  resolveManagedPluginIconSource,
-} = await import("./management-service.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { listManagedPlugins, resolveManagedPluginIconSource } =
+  await import("./management-service.js");
 
 function metadataSnapshot(params: {
   id?: string;
@@ -221,7 +219,7 @@ describe("plugin management Featured authority", () => {
 
   beforeEach(() => {
     mocks.bundledEntries = undefined;
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
@@ -603,6 +601,7 @@ describe("plugin management Featured authority", () => {
   });
 
   it("preserves npm-only bundled curation outside the hosted producer identity", async () => {
+    mocks.bundledEntries = [compositionEntry("acpx", { npmSpec: "@openclaw/acpx" })];
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         id: "acpx",

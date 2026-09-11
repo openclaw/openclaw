@@ -23,7 +23,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 vi.mock("./verified-inference.js", async (importOriginal) => {
@@ -130,16 +130,14 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runSystemAgentTui", () => {
-  it("rejects a missing inference binding before overview, planner, TUI, or setup", async () => {
+  it("rejects a missing inference binding before overview, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
-    const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
     const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
-      planWithAssistant,
       runTui,
       runChannelsAdd,
     };
@@ -150,7 +148,6 @@ describe("runSystemAgentTui", () => {
     );
 
     expect(loadOverview).not.toHaveBeenCalled();
-    expect(planWithAssistant).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
     expect(runChannelsAdd).not.toHaveBeenCalled();
   });
@@ -259,7 +256,7 @@ describe("runSystemAgentTui", () => {
 
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const catalogPreparation = vi.mocked(preparedModelCatalog.readPreparedModelCatalog);
     const publishedSnapshot = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
       .mockReturnValue(undefined);

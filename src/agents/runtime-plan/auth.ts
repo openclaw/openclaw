@@ -42,6 +42,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   credentialSource?: AgentRuntimeAuthPlan["credentialSource"];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
@@ -56,13 +57,17 @@ export function buildAgentRuntimeAuthPlan(params: {
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env: params.env,
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
-  const authProfileProviderForAuth = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.provider,
-    aliasLookupParams,
-  );
+  const authProfileProviderForAuth =
+    params.authProfileProvider !== undefined
+      ? resolveProviderIdForAuth(params.authProfileProvider, {
+          ...aliasLookupParams,
+          storedCredential: true,
+        })
+      : providerForAuth;
   const harnessAuthProvider = resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)

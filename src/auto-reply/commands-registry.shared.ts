@@ -234,11 +234,9 @@ export function buildBuiltinChatCommands(
         ],
       },
     ),
-    defineBuiltinCommand("login", "Pair Codex login.", "management", "standard", {
+    defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
       nativeProviders: ["discord", "slack", "telegram"],
-      args: [
-        defineCommandArgument("provider", "Provider to pair", { choices: ["codex", "openai"] }),
-      ],
+      args: [defineCommandArgument("provider", "Provider or connection method")],
     }),
     defineBuiltinCommand(
       "openclaw",
@@ -524,6 +522,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
       textAliases: ["/verbose", "/v"],
       args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
+      argsMenu: "auto",
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
       args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
@@ -566,8 +565,8 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
       args: [
-        defineCommandArgument("host", "sandbox, gateway, or node", {
-          choices: ["sandbox", "gateway", "node"],
+        defineCommandArgument("host", "auto, sandbox, gateway, or node", {
+          choices: ["auto", "sandbox", "gateway", "node"],
         }),
         defineCommandArgument("security", "deny, allowlist, or full", {
           choices: ["deny", "allowlist", "full"],

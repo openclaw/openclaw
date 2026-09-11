@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+import { cancelTrackedTextResponse } from "../../../test-support/streaming-error-response.js";
 import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
@@ -100,28 +101,6 @@ function streamingMattermostResponse(body: unknown): {
   };
 }
 
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
 function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
   const { mockFetch, calls } = createMockFetch(response);
   const client = createMattermostClient({
@@ -179,7 +158,7 @@ describe("readMattermostError", () => {
     const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
     const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
 
-    await expect(readMattermostError(response)).resolves.toBe("");
+    await expect(readMattermostError(response, {})).resolves.toBe("");
 
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(textSpy).not.toHaveBeenCalled();
@@ -193,10 +172,69 @@ describe("readMattermostError", () => {
     const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
     const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
 
-    await expect(readMattermostError(response)).resolves.toBe("invalid token");
+    await expect(readMattermostError(response, {})).resolves.toBe("invalid token");
 
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("redacts reflected credentials in non-JSON error bodies", async () => {
+    // A self-hosted or misbehaving server can echo the request's Authorization
+    // header back in its error body; the surfaced detail must not carry it.
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(`Request failed\nAuthorization: Bearer ${token}\n`, {
+      status: 500,
+      headers: { "content-type": "text/plain" },
+    });
+
+    const detail = await readMattermostError(response, { Authorization: `Bearer ${token}` });
+
+    expect(detail).not.toContain(token);
+    expect(detail).toContain("Request failed");
+  });
+
+  it("redacts reflected credentials in JSON error messages", async () => {
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(JSON.stringify({ message: `auth failed for Bearer ${token}` }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response, { Authorization: `Bearer ${token}` });
+
+    expect(detail).not.toContain(token);
+    expect(detail).toBe("auth failed for ***");
+  });
+
+  it("redacts JSON-escaped credentials after decoding", async () => {
+    // Raw literal: \u0020 decodes to a space and \u0061 to "a". Escapes bypass
+    // literal credential matching on the serialized body, so redaction must
+    // run on the decoded message, not the raw JSON text.
+    const body = String.raw`{"message":"Bearer\u0020\u0061bcdefghijklmnopqrstuvwxyz"}`;
+    const response = new Response(body, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response, {
+      Authorization: "Bearer abcdefghijklmnopqrstuvwxyz",
+    });
+
+    expect(detail).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(detail).toBe("***");
+  });
+
+  it("redacts credentials in non-JSON bodies served with a JSON content type", async () => {
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(`upstream error: Bearer ${token}`, {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response, { Authorization: `Bearer ${token}` });
+
+    expect(detail).not.toContain(token);
+    expect(detail).toContain("upstream error");
   });
 });
 
@@ -243,7 +281,7 @@ describe("createMattermostClient", () => {
 
   it("bounds and cancels guarded Mattermost error bodies", async () => {
     const release = vi.fn(async () => {});
-    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(512)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"upstream unavailable ".repeat(512)}tail`, {
       status: 503,
       statusText: "Service Unavailable",
       headers: { "content-type": "text/plain" },
@@ -314,7 +352,7 @@ describe("createMattermostClient", () => {
 
   it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
     const release = vi.fn(async () => {});
-    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"plain success ".repeat(7000)}tail`, {
       status: 200,
       headers: { "content-type": "text/plain" },
     });

@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
-import { hasUniformLineEndings } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -167,6 +168,60 @@ describe("file sidebar editor locality", () => {
 });
 
 describe("markdown sidebar", () => {
+  it.each([
+    { kind: "markdown", trailingNewline: false },
+    { kind: "file", trailingNewline: true },
+  ] as const)("keeps nested code literal when viewing raw $kind text", async (testCase) => {
+    const source =
+      ["Intro", "", "```ts", "const x = 1;", "```", "", "**literal after**"].join("\n") +
+      (testCase.trailingNewline ? "\n" : "");
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    const editorLoad =
+      testCase.kind === "file" ? vi.spyOn(panel, "ensureFileEditor").mockResolvedValue() : null;
+    panel.content =
+      testCase.kind === "markdown"
+        ? { kind: "markdown", content: "Rendered summary", rawText: source }
+        : { kind: "file", path: "notes.md", name: "notes.md", language: "md", content: source };
+    document.body.append(panel);
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await panel.updateComplete;
+      const rawButton = Array.from(panel.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === "View Raw Text",
+      );
+      expect(rawButton).toBeDefined();
+      rawButton!.click();
+      await panel.updateComplete;
+
+      const reader = panel.querySelector(".sidebar-markdown-reader");
+      const copyButton = reader?.querySelector<HTMLButtonElement>(".code-block-copy");
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      copyButton!.click();
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied!"));
+      expect(writeText).toHaveBeenCalledOnce();
+
+      expect.soft(reader?.querySelectorAll("pre code")).toHaveLength(1);
+      expect.soft(reader?.querySelector("pre code")?.textContent).toBe(`${source}\n`);
+      expect.soft(reader?.querySelector("strong")).toBeNull();
+      expect.soft(writeText).toHaveBeenCalledWith(source);
+    } finally {
+      for (const [index, [, delay]] of schedule.mock.calls.entries()) {
+        if (delay === 1_500) {
+          globalThis.clearTimeout(schedule.mock.results[index]?.value);
+        }
+      }
+      schedule.mockRestore();
+      editorLoad?.mockRestore();
+      panel.remove();
+    }
+  });
+
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
@@ -455,8 +510,8 @@ describe("markdown sidebar", () => {
 
   it.each([
     ["external.html", "https://files.example/external.html", "text/html"],
-    ["preview.html", "/__openclaw__/media/preview.html", "text/html"],
-    ["wide.csv", "/__openclaw__/media/wide.csv", "text/csv"],
+    ["external.txt", "https://files.example/external.txt", "text/plain"],
+    ["bundle.zip", "/__openclaw__/media/bundle.zip", "application/zip"],
     ["brief.pdf", "/__openclaw__/media/brief.pdf", "application/pdf"],
   ] as const)(
     "renders document %s as a Files card without previewing it",
@@ -486,6 +541,56 @@ describe("markdown sidebar", () => {
       expect(download?.target).toBe("_blank");
       expect(download?.rel).toBe("noreferrer");
       expect(fetchMock).not.toHaveBeenCalled();
+      panel.remove();
+    },
+  );
+
+  it.each(["load", "error"] as const)(
+    "keeps the image placeholder through metadata until the image emits %s",
+    async (outcome) => {
+      let pending = true;
+      let src = "/diagram.png";
+      const content = {
+        kind: "attachment",
+        attachmentKind: "image",
+        title: "diagram.png",
+        mimeType: "image/png",
+        width: 600,
+        height: 400,
+        resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src }),
+      } satisfies SidebarContent;
+      const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
+        content,
+      });
+      document.body.append(panel);
+      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
+      const presentation = panel.querySelector('[role="status"]');
+      const header = panel.querySelector(".chat-assistant-attachment-card__header");
+      pending = false;
+      panel.content = { ...panel.content };
+      const image = await vi.waitFor(() =>
+        expectDefined(panel.querySelector(".sidebar-attachment-preview__image"), "Preview image"),
+      );
+      expect(panel.querySelector('[role="status"]')).toBe(presentation);
+      expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+      image.dispatchEvent(new Event(outcome));
+      expect(image.getAttribute("data-preview")).toBe(outcome === "load" ? "ready" : "error");
+      src = "/next.png";
+      panel.content = { ...panel.content };
+      const next = await vi.waitFor(() => {
+        const current = expectDefined(
+          panel.querySelector(".sidebar-attachment-preview__image"),
+          "Next preview image",
+        );
+        expect(current).not.toBe(image);
+        return current;
+      });
+      image.dispatchEvent(new Event("load"));
+      expect(next.hasAttribute("data-preview")).toBe(false);
+      panel.remove();
+      next.dispatchEvent(new Event("load"));
+      document.body.append(panel);
+      expect(next.getAttribute("data-preview")).toBe("ready");
       panel.remove();
     },
   );

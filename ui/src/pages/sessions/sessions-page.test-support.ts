@@ -14,7 +14,6 @@ import type {
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
-import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -26,6 +25,7 @@ export type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
@@ -36,7 +36,6 @@ export type TestSessionsPage = HTMLElement & {
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
   loadCheckpoint: (sessionKey: string) => Promise<void>;

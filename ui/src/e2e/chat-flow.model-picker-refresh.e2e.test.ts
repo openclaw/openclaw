@@ -2,11 +2,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -242,11 +244,7 @@ suite.define(() => {
   });
 
   it("keeps the warm model list interactive while a picker-open refresh is in flight", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       models: [
@@ -264,10 +262,14 @@ suite.define(() => {
       await picker.locator("[data-chat-model-option]").first().waitFor({ state: "attached" });
 
       // Freeze the operator-signaled revalidation so the in-flight state is observable.
-      await gateway.deferNext("models.list", { refresh: true });
+      await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
-      const request = await gateway.waitForRequest("models.list");
-      expect(requireRecord(request.params)).toMatchObject({ refresh: true, view: "configured" });
+      const request = await gateway.waitForRequest("models.list", { after: 1 });
+      expect(requireRecord(request.params)).toMatchObject({
+        sessionKey: "agent:main:main",
+        view: "configured",
+      });
+      expect(request.params).not.toHaveProperty("refresh");
 
       // The warm list stays rendered and selectable with no refresh/loading interstitial.
       await expect
@@ -279,21 +281,8 @@ suite.define(() => {
         await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isDisabled(),
       ).toBe(false);
 
-      // Discovery invalidates the session projection; only that projection can update readiness.
-      await gateway.deferNext("chat.metadata");
+      // The direct scoped response owns model readiness; commands remain independent.
       await gateway.resolveDeferred("models.list", {
-        models: [
-          { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-          { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
-        ],
-      });
-      const metadataRequest = await gateway.waitForRequest("chat.metadata");
-      expect(metadataRequest.params).toEqual({ agentId: "main", sessionKey: "agent:main:main" });
-      expect(
-        await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible(),
-      ).toBe(true);
-      await gateway.resolveDeferred("chat.metadata", {
-        commands: [],
         models: [
           { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
           { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
@@ -304,6 +293,91 @@ suite.define(() => {
         .waitFor({ state: "visible" });
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await screenshot(page, "02-picker-after-background-apply.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reconciles the current model search when an open catalog replaces its results", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("model-search-refresh", artifactRoot)
+      : undefined;
+    const gateway = await installMockGateway(page, {
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
+      ],
+      sessionKey: "agent:main:main",
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const picker = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+      );
+      const previous = picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]');
+      await previous.waitFor({ state: "attached" });
+      const discoveryCount = (await gateway.getRequests("models.list")).length;
+      await gateway.deferNext("models.list", { view: "configured" });
+      await picker.locator('[data-chat-model-select="true"]').click();
+      await gateway.waitForRequest("models.list", { after: discoveryCount });
+      const search = picker.locator("[data-chat-model-search]");
+      await search.fill("anthropic");
+      await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      expect(await previous.isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/01-search-warm.png`,
+        });
+      }
+
+      const refreshedModels = [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ];
+      await gateway.resolveDeferred("models.list", { models: refreshedModels });
+
+      const replacement = picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+      await replacement.waitFor({ state: "attached" });
+      await previous.waitFor({ state: "detached" });
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/02-search-refreshed.png`,
+        });
+      }
+
+      expect(await search.inputValue()).toBe("anthropic");
+      await expect
+        .poll(() =>
+          picker
+            .locator("[data-chat-model-option]:visible")
+            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option"))),
+        )
+        .toEqual(["anthropic/claude-sonnet-4-6"]);
+      expect(await picker.locator("[data-chat-model-search-empty]").isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          search.evaluate((input) => {
+            const activeId = input.getAttribute("aria-activedescendant");
+            return activeId
+              ? document.getElementById(activeId)?.getAttribute("data-chat-model-option")
+              : null;
+          }),
+        )
+        .toBe("anthropic/claude-sonnet-4-6");
+      const patchCount = (await gateway.getRequests("sessions.patch")).length;
+      await search.press("Enter");
+      const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
+      expect(patch.params).toMatchObject({
+        key: "agent:main:main",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+      await expect.poll(() => picker.getAttribute("open")).toBe(null);
     } finally {
       await context.close();
     }

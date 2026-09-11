@@ -1,74 +1,74 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 // Diagnostics Prometheus tests cover service plugin behavior.
-import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  emitTrustedDiagnosticEventWithPrivateData,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPrivateData,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  OpenClawPluginServiceContext,
-} from "../api.js";
+import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
+import {
+  baseEvent,
+  createMetricsHarness,
+  trusted,
+  untrusted,
+  type ExporterHealthReport,
+  type TrustedExporterInternalDiagnostics,
+} from "./service.test-helpers.js";
 
-const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
-const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
-type ExporterHealthReport = {
-  signal: "metrics";
-  transport: "prometheus-scrape";
-  status: "started" | "dropped";
-  reason?: "configured";
-};
-type TrustedExporterInternalDiagnostics = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
-  reportExporterHealth?: (update: ExporterHealthReport) => void;
-};
-
-function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
-  return { seq: 1, ts: 1700000000000 };
-}
-
-function createMetricsHarness() {
-  const exporter = createDiagnosticsPrometheusExporter();
-  let listener:
-    | ((
-        event: DiagnosticEventPayload,
-        metadata: DiagnosticEventMetadata,
-        privateData: DiagnosticEventPrivateData,
-      ) => void)
-    | undefined;
-  exporter.service.start({
-    config: {} as never,
-    stateDir: "/tmp/openclaw-prometheus-test",
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    internalDiagnostics: {
-      emit() {},
-      onEvent(nextListener) {
-        listener = nextListener;
-        return () => {
-          listener = undefined;
-        };
-      },
-      reportExporterHealth() {},
-    } as TrustedExporterInternalDiagnostics,
-  });
-  return {
-    handler: exporter.handler,
-    record(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
-      expectDefined(listener, "Prometheus diagnostics listener")(event, metadata, {});
-    },
-    render: exporter.render,
-    stop: () => exporter.service.stop?.(),
-  };
-}
+// HTTP scrapes here exercise an authorized operator; the exporter's scope guard is covered by
+// service.http-scope.test.ts.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 describe("diagnostics-prometheus service", () => {
+  it("records terminal metrics without reading private diagnostic content", async () => {
+    const exporter = createDiagnosticsPrometheusExporter();
+    const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));
+    exporter.service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-prometheus-test",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      internalDiagnostics: {
+        emit() {},
+        onEvent: onTrustedInternalDiagnosticEvent,
+      },
+    });
+    try {
+      emitTrustedDiagnosticEventWithPrivateData(
+        {
+          type: "tool.execution.completed",
+          runId: "run-1",
+          toolCallId: "call-1",
+          toolName: "synthetic",
+          toolSource: "core",
+          durationMs: 3,
+        },
+        {
+          get toolContent() {
+            return readPrivateContent();
+          },
+        },
+      );
+      await waitForDiagnosticEventsDrained();
+      expect(exporter.render()).toContain(
+        'openclaw_tool_execution_total{error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
+      );
+      expect(readPrivateContent).not.toHaveBeenCalled();
+    } finally {
+      exporter.service.stop?.();
+      await waitForDiagnosticEventsDrained();
+    }
+    expect(exporter.render()).toBe("");
+  });
+
   it("records Gateway RPC timings by method and outcomes without method multiplication", () => {
     const metrics = createMetricsHarness();
     const base = {

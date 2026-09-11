@@ -59,11 +59,13 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
   if (!isRecord(value) || !Array.isArray(value.columns)) {
     return { columns: [], open: false, expanded: false };
   }
-  const usedColumnIds = new Set<string>();
+  let columnId: string | undefined;
   const usedPanelIds = new Set<string>();
   const usedSlots = new Set<SidebarSlotId>();
   const panels: SidebarPanel[] = [];
-  const panelIdsBySource = new Map<string, string>();
+  const requestedMainId =
+    typeof value.mainPanelId === "string" ? value.mainPanelId.trim() : undefined;
+  let mainPanelId: string | undefined;
   let activePanelId = "";
   let width = DEFAULT_WIDTH;
   let height = DEFAULT_HEIGHT;
@@ -75,9 +77,10 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     ) {
       continue;
     }
-    uniqueId(rawColumn.id, "column", usedColumnIds);
-    const columnPanels: SidebarPanel[] = [];
-    const panelIds = new Map<string, string>();
+    columnId ??= (typeof rawColumn.id === "string" ? rawColumn.id.trim() : "") || "column";
+    const requestedActiveId =
+      typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
+    let columnActivePanelId: string | undefined;
     for (const rawPanel of rawColumn.panels) {
       if (!isRecord(rawPanel)) {
         continue;
@@ -89,18 +92,16 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       const rawPanelId = typeof rawPanel.id === "string" ? rawPanel.id.trim() : "";
       const panelId = uniqueId(rawPanel.id, slot, usedPanelIds);
       const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : slot);
-      if (!panelIds.has(sourceId)) {
-        panelIds.set(sourceId, panelId);
+      if (sourceId === requestedActiveId) {
+        columnActivePanelId ??= panelId;
       }
-      if (!panelIdsBySource.has(sourceId)) {
-        panelIdsBySource.set(sourceId, panelId);
+      if (sourceId === requestedMainId) {
+        mainPanelId ??= panelId;
       }
       usedSlots.add(slot);
-      columnPanels.push({ id: panelId, slot });
+      panels.push({ id: panelId, slot });
     }
-    const requestedActiveId =
-      typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
-    activePanelId = panelIds.get(requestedActiveId) ?? activePanelId;
+    activePanelId = columnActivePanelId ?? activePanelId;
     width =
       typeof rawColumn.width === "number" && Number.isFinite(rawColumn.width)
         ? clampWidth(rawColumn.width)
@@ -109,11 +110,7 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       typeof rawColumn.height === "number" && Number.isFinite(rawColumn.height)
         ? clampHeight(rawColumn.height)
         : height;
-    panels.push(...columnPanels);
   }
-  const requestedMainId =
-    typeof value.mainPanelId === "string" ? value.mainPanelId.trim() : undefined;
-  let mainPanelId = requestedMainId ? panelIdsBySource.get(requestedMainId) : undefined;
   let conversation = panels.find((panel) => panel.slot === "conversation");
   // Legacy expansion only hid chat while the side panel was open. A minimized
   // panel must not displace chat just because its old expanded flag was retained.
@@ -137,10 +134,10 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     }
   }
   const columns =
-    usedColumnIds.size > 0 || panels.length > 0 || value.open === true
+    columnId || panels.length > 0 || value.open === true
       ? [
           {
-            id: usedColumnIds.values().next().value ?? "side-panel-column",
+            id: columnId ?? "side-panel-column",
             side: "right" as const,
             panels,
             activePanelId: panels.some(
@@ -159,5 +156,11 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     dock: value.dock === "bottom" || value.dock === "left" ? value.dock : "right",
     open: typeof value.open === "boolean" ? value.open : columns.length > 0,
     expanded: value.expanded === true,
+    ...(value.expanded === true &&
+    value.expandedSide === true &&
+    value.open !== false &&
+    panels.some((panel) => panel.id === activePanelId && panel.id !== mainPanelId)
+      ? { expandedSide: true }
+      : {}),
   };
 }

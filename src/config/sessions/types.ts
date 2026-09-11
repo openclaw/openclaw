@@ -371,6 +371,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
+    /** Durable cloud repository owner; never identifies a Gateway filesystem path. */
+    repositoryWorkspaceId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
@@ -505,11 +507,11 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**
-     * Tracks whether the persisted model override came from an explicit user
-     * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
-     * Resets only preserve user-driven overrides.
+     * Tracks whether the persisted model selection came from an explicit user
+     * action (`/model`, `sessions.patch`), a temporary runtime fallback, or an
+     * explicit configured-default selection that blocks parent inheritance.
      */
-    modelOverrideSource?: "auto" | "user";
+    modelOverrideSource?: "auto" | "user" | "default";
     /** Present only when providerOverride/modelOverride are a canonical route pair. */
     modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */
@@ -585,6 +587,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Automatic device name; never claims a custom label or overrides a generated title. */
+    autoLabel?: string;
     /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
     icon?: string;
     /** Named sidebar tint (SESSION_COLOR_IDS); palette mirrors Claude Code /color for import. */
@@ -598,6 +602,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     delivery?: SessionDeliveryState;
     groupId?: string;
     subject?: string;
+    /** Display-only topic name; subject remains the group name used for routing. */
+    topicName?: string;
     groupChannel?: string;
     space?: string;
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
@@ -618,6 +624,10 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Transcript-wide account provenance; native binding replacement must not replace it. */
+  cliHistoryBoundary?: import("./cli-history-boundary.js").CliHistoryBoundary;
+  /** Explicit world-readable publication, bound to one transcript generation. */
+  publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
@@ -631,6 +641,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     workspace?: string;
     name?: string;
     baseRef?: string;
+    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
+    baseCommit?: string;
     titleSource: string;
   };
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
@@ -813,6 +825,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;
+  }
+  if (existing.repositoryWorkspaceId !== undefined) {
+    next.repositoryWorkspaceId = existing.repositoryWorkspaceId;
   }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;

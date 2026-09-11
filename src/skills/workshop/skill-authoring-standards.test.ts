@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { buildSkillWorkshopToolDescription } from "../../agents/tools/skill-workshop-tool-description.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
-import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
 import { buildLearnPrompt } from "./learn-prompt.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
 
@@ -19,17 +19,18 @@ describe("skill authoring standards", () => {
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never the failed attempts");
   });
 
-  it("keeps review instructions in the tool description instead of the review prompt", () => {
+  it("provides review authoring standards once through the Workshop tool", () => {
     const learnPrompt = buildLearnPrompt("Capture the recovery procedure");
-    const experienceReviewPrompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
+    const experienceReviewPrompt = buildSkillExperienceReviewPrompt({});
+    const toolDescription = buildSkillWorkshopToolDescription({
+      autonomousMode: "off",
+      proposalRevision: false,
     });
-    const historyScanPrompt = buildSkillHistoryScanPrompt({ sessions: [] });
 
-    for (const prompt of [learnPrompt, historyScanPrompt]) {
-      expect(prompt).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
-      expect(prompt.split(SKILL_AUTHORING_STANDARDS_PROMPT)).toHaveLength(2);
-    }
+    expect(learnPrompt.split(SKILL_AUTHORING_STANDARDS_PROMPT)).toHaveLength(2);
     expect(experienceReviewPrompt).not.toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
+    expect(
+      `${toolDescription}\n${experienceReviewPrompt}`.split(SKILL_AUTHORING_STANDARDS_PROMPT),
+    ).toHaveLength(2);
   });
 });

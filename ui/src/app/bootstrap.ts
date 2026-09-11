@@ -1,4 +1,4 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
   type ControlUiFocusLocation,
@@ -6,6 +6,7 @@ import {
 import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -24,19 +25,33 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { readBootRecord } from "./boot-record.ts";
+import {
+  createInitialApplicationLocationResolver,
+  normalizeInitialApplicationLocation,
+  resolveInitialApplicationLocation,
+} from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import {
+  subscribeBootRecordPersistence,
+  subscribeWarmBootConnection,
+} from "./bootstrap-warm-boot.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -53,7 +68,6 @@ import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
-import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
@@ -61,7 +75,6 @@ import {
   loadGatewaySessionSelection,
   loadSettings,
   patchSettings,
-  persistSessionToken,
   resolveGatewayCredentialsForUrlEdit,
   resolvePageGatewaySettings,
   saveSettings,
@@ -73,6 +86,7 @@ import {
   normalizeLegacyTerminalViewLocation,
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
+import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
@@ -124,6 +138,7 @@ export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
   readonly documentMode: ControlUiDocumentMode | null;
+  readonly warmBoot: boolean;
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
@@ -173,12 +188,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     // Remove URL credentials before deferred routing or Gateway authentication can expose them.
     history.replace(startup.location);
   }
-  if (startup.changed) {
-    if (documentMode) {
-      persistSessionToken(settings.gatewayUrl, settings.token);
-    } else {
-      saveSettings(settings);
-    }
+  if (startup.changed && !documentMode) {
+    saveSettings(settings);
   }
   let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   const startupSearchParams = new URLSearchParams(applicationLocation.search);
@@ -215,37 +226,74 @@ export function bootstrapApplication(): ApplicationRuntime {
       ...(startup.nativeClient ? { clientOptions: startup.nativeClient } : {}),
     },
   );
+  const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
-  const agents = createAgentCapability(gateway);
+  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
+    if (startup.pendingBootstrapToken || startup.password) {
+      return null;
+    }
+    // An explicit token takes precedence over paired-device auth on the next connect.
+    return method === "token"
+      ? settings.token
+      : settings.token.trim()
+        ? null
+        : loadCurrentDeviceAuthToken(settings.gatewayUrl);
+  });
+  const warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  if (warmBoot && parseAgentSessionKey(settings.sessionKey)) {
+    prewarmChatSnapshot(
+      resolveChatSnapshotKey(
+        { agentsList: bootRecord.agents, hello: null, assistantAgentId: null },
+        { sessionKey: settings.sessionKey },
+      ),
+    );
+  }
+  const stopWarmBootConnection = subscribeWarmBootConnection(
+    gateway,
+    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined,
+  );
+  const agents = createAgentCapability(gateway, {
+    cachedList: bootRecord?.agents ?? null,
+    cachedProfileId: bootRecord?.profileId ?? null,
+  });
   const startupLifecycle = createStartupLifecycle();
-  const deferInitialLocationUntilGateway =
-    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
+  const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
+  const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
         resolveInitialFirstRunDecision = resolve;
       })
     : null;
-  const initialLocationReady = (
-    documentMode || focusLocation
-      ? Promise.resolve(applicationLocation)
-      : resolveInitialApplicationLocation({
-          location: applicationLocation,
-          basePath,
-          sessionKey: settings.sessionKey,
-          gateway,
-          agentsList: () => agents.state.agentsList,
-          selectedAgentId: settings.selectedAgentId,
-          signal: startupLifecycle.signal,
-        })
-  ).catch((error: unknown) => {
-    // stop() aborts eager session lookups even before start() reaches location
-    // resolution, so consume that teardown-only rejection here.
-    if (startupLifecycle.signal.aborted) {
-      return applicationLocation;
-    }
-    throw error;
+  const resolveInitialLocation = createInitialApplicationLocationResolver({
+    fallback: applicationLocation,
+    signal: startupLifecycle.signal,
+    resolve: () =>
+      documentMode || focusLocation
+        ? Promise.resolve(applicationLocation)
+        : resolveInitialApplicationLocation({
+            location: applicationLocation,
+            basePath,
+            sessionKey: settings.sessionKey,
+            gateway,
+            agentsList: () => agents.state.agentsList,
+            ensureAgentsList: () => agents.ensureList(),
+            selectedAgentId: settings.selectedAgentId,
+            signal: startupLifecycle.signal,
+          }),
   });
+  const initialRoutingLocation =
+    firstRunDefaultLanding && parsedInitialSession
+      ? normalizeInitialApplicationLocation(
+          applicationLocation,
+          basePath,
+          settings.sessionKey,
+          parsedInitialSession.agentId,
+        )
+      : applicationLocation;
+  const initialRoutingLocationReady = firstRunDefaultLanding
+    ? Promise.resolve(initialRoutingLocation)
+    : resolveInitialLocation();
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(
     gateway,
@@ -271,7 +319,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       password: gateway.connection.password,
     }),
   });
-  const sessions = createSessionCapability(gateway, agentSelection);
+  const sessions = createSessionCapability(gateway, agentSelection, { bootRecord });
+  const stopBootRecordPersistence = subscribeBootRecordPersistence({ gateway, agents, sessions });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -288,15 +337,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     scopeUpgrade,
     connectionBootstrap,
   });
-  // App-updater interlock: writing config (or restarting the gateway) while
-  // the updater runs can corrupt the install; pause config writes until the
-  // update settles. Wired app-lifetime so page unmounts cannot strand it.
-  const syncConfigWriteSuspension = () => {
-    const update = overlays.snapshot;
-    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
-  };
-  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
-  syncConfigWriteSuspension();
+  const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
   const navigation = createApplicationNavigationPreferences(
     settings,
     hasSidebarCollapseIntent &&
@@ -305,6 +346,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
+    signal: startupLifecycle.signal,
+    canPresentBrowserPanel: () => {
+      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
+        "openclaw-app-shell",
+      );
+      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
+    },
     onNativeUpdateDeclined: () => {
       const snapshot = overlays.snapshot;
       const campaign = snapshot.updateSchedule?.campaign;
@@ -322,7 +370,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       document.querySelector("openclaw-app-shell")?.isConnected === true,
   });
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
-  const nativeNotifications = createNativeNotificationsCapability();
+  let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
   const chatSubmissions = createChatSubmissions();
   const placementStartup = createApplicationPlacementStartup({
@@ -470,6 +518,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     basePath,
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
+    router,
     gateway,
     connectionBootstrap,
     agents,
@@ -481,6 +530,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     sidebarAttention,
     runtimeConfig,
     sessions,
+    liveActivity,
     placementStartup,
     plugins,
     overlays,
@@ -490,7 +540,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     get nativeDeviceSettings() {
       return nativeDeviceSettings;
     },
-    nativeNotifications,
+    get nativeNotifications() {
+      return nativeNotifications;
+    },
     webPush,
     chatSubmissions,
     chatAttachmentHandoff,
@@ -508,6 +560,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     context,
     router,
     documentMode,
+    warmBoot,
     focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
@@ -535,12 +588,30 @@ export function bootstrapApplication(): ApplicationRuntime {
         // wait for setup's decision before fetching the Chat workspace graph.
         steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
       }
-      // Only the native host needs the bridge parser. Initialize before routing,
+      // Only the native host needs bridge parsers. Initialize before routing,
       // and fence the import so a stopped application cannot install listeners.
       // SAFETY: WebKit adds this optional host field; its callable handler is checked below.
       const nativeWindow = window as Window & {
-        webkit?: { messageHandlers?: { openclawDeviceSettings?: { postMessage?: unknown } } };
+        webkit?: {
+          messageHandlers?: {
+            openclawDeviceSettings?: { postMessage?: unknown };
+            openclawNotifications?: { postMessage?: unknown };
+          };
+        };
       };
+      if (
+        typeof nativeWindow.webkit?.messageHandlers?.openclawNotifications?.postMessage ===
+        "function"
+      ) {
+        steps.unshift(async () => {
+          const { createNativeNotificationsCapability } = await import("./native-notifications.ts");
+          if (!startupLifecycle.signal.aborted) {
+            nativeNotifications = createNativeNotificationsCapability();
+            return () => nativeNotifications?.dispose();
+          }
+          return undefined;
+        });
+      }
       if (
         typeof nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings?.postMessage ===
         "function"
@@ -562,9 +633,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           context,
           enabled: firstRunDefaultLanding,
           history,
-          initialLocationReady: deferInitialLocationUntilGateway
-            ? Promise.resolve(applicationLocation)
-            : initialLocationReady,
+          initialLocationReady: initialRoutingLocationReady,
           ...(deferInitialLocationUntilGateway
             ? {
                 redirect: () =>
@@ -595,16 +664,16 @@ export function bootstrapApplication(): ApplicationRuntime {
           return stopRouter;
         });
       }
-      if (deferInitialLocationUntilGateway) {
+      if (firstRunDefaultLanding) {
         steps.push(() => {
-          // The router claims the connected Gateway session before persisted
-          // location normalization can install a competing retained Chat pane.
+          // Post-connect validation may replace only the provisional landing;
+          // navigation during startup remains authoritative.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
               enabled: false,
               history,
-              initialLocationReady,
+              initialLocationReady: resolveInitialLocation(),
               installLocation: async (location) => {
                 const routeId = routeIdFromPath(location.pathname, basePath);
                 if (routeId) {
@@ -614,7 +683,9 @@ export function bootstrapApplication(): ApplicationRuntime {
                 }
               },
               shouldInstallLocation: () =>
-                isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+                parsedInitialSession
+                  ? sameRouteLocation(history.location(), initialRoutingLocation)
+                  : isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
             }),
             (error) => {
               console.error("[openclaw] initial session location failed", error);
@@ -626,6 +697,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     stop: () => {
       startupLifecycle.stop();
+      stopWarmBootConnection();
+      stopBootRecordPersistence();
       stopPostConnect();
       connectionBootstrap.reset();
       agents.dispose();
@@ -634,13 +707,13 @@ export function bootstrapApplication(): ApplicationRuntime {
       sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
+      liveActivity.dispose();
       stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
-      nativeNotifications?.dispose();
       webPush.dispose();
       chatSubmissions.clear();
       chatAttachmentHandoff.dispose();

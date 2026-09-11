@@ -67,8 +67,9 @@ the Gateway already runs inside a managed Google Cloud environment.
     catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
     and Flash-Lite variants therefore appear in
     `openclaw models list --provider google` without waiting for an OpenClaw
-    release. If discovery is unavailable, OpenClaw keeps the bundled fallback
-    catalog.
+    release. Failed refreshes report the failure and retain the last successful
+    inventory, or bundled models before the first success. A successful empty
+    response clears discovered models. Vertex uses its separate static catalog.
 
   </Tab>
 
@@ -127,6 +128,11 @@ the Gateway already runs inside a managed Google Cloud environment.
     - Auth: selected Google AI Studio API-key profile
     - Model refs: canonical `google/*`
 
+    `google-gemini-cli` is the CLI backend the bundled Google plugin registers.
+    See [CLI backends](/gateway/cli-backends) for its argv, JSONL dialect, and
+    session and compaction behavior, and for the settings shared by every
+    registered backend.
+
     Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
     but OpenClaw cannot create or repair them. If one breaks, replace it with a
     Google AI Studio API-key profile.
@@ -172,7 +178,7 @@ or let it reuse `models.providers.google.apiKey` after `GEMINI_API_KEY`:
           webSearch: {
             apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // falls back to models.providers.google.baseUrl
-            model: "gemini-2.5-flash",
+            model: "gemini-3.6-flash",
           },
         },
       },
@@ -508,5 +514,11 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
   </Card>
   <Card title="Music generation" href="/tools/music-generation" icon="music">
     Shared music tool parameters and provider selection.
+  </Card>
+  <Card title="CLI backends" href="/gateway/cli-backends" icon="terminal">
+    Gemini CLI backend setup and runtime details.
+  </Card>
+  <Card title="Voice call plugin" href="/plugins/voice-call" icon="phone">
+    Audio bridge that consumes the Gemini Live realtime voice provider.
   </Card>
 </CardGroup>

@@ -541,6 +541,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
           differences: [
             {
               pluginId: fixture.pluginId,
+              changed: ["record"],
               persistedSource: fixture.runtimeSource,
               derivedSource: fixture.runtimeSource,
             },

@@ -17,6 +17,7 @@ const resolveHookModelSelectionMock = vi.hoisted(() =>
 );
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
+const resolveEmbeddedCompactionThinkingLevelMock = vi.hoisted(() => vi.fn(() => "off"));
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -35,6 +36,7 @@ const staticCatalogModel = {
   contextWindow: 200_000,
   maxTokens: 64_000,
   compat: { supportsLongCacheRetention: false },
+  compactionThinkingDefault: "off",
 };
 
 const resolveModelAsyncMock = vi.fn(
@@ -57,6 +59,7 @@ const resolveModelAsyncMock = vi.fn(
       return {
         ...stores,
         model: { ...staticCatalogModel, provider, id: modelId, name: modelId },
+        logicalRef: { provider, model: modelId },
       };
     }
     return {
@@ -149,8 +152,11 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
-vi.mock("../provider-secret-egress.js", () => ({
+vi.mock("../provider-runtime-auth-protection.js", () => ({
   protectPreparedProviderRuntimeAuth: (value: unknown) => value,
+}));
+
+vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
 }));
 
@@ -163,7 +169,7 @@ vi.mock("../sandbox.js", () => ({
 }));
 
 vi.mock("./compaction-runtime-context.js", () => ({
-  resolveEmbeddedCompactionThinkingLevel: vi.fn(() => "off"),
+  resolveEmbeddedCompactionThinkingLevel: resolveEmbeddedCompactionThinkingLevelMock,
 }));
 
 vi.mock("./logger.js", () => ({
@@ -251,7 +257,7 @@ describe("embedded model resolution consistency", () => {
         modelIdNormalization: {
           providers: {
             "custom-provider": {
-              aliases: { "legacy-model": "modern-model" },
+              aliases: { "legacy-model": "modern-model", "modern-model": "unexpected-second-pass" },
             },
           },
         },
@@ -263,7 +269,7 @@ describe("embedded model resolution consistency", () => {
         agentId: "worker",
         provider: initial.provider,
         model: initial.modelId,
-        requestedRouteResolution: "resolved",
+        requestedRouteResolution: "raw",
         fallbacksOverride: [],
         manifestPlugins,
       }),
@@ -277,7 +283,6 @@ describe("embedded model resolution consistency", () => {
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
       provider: "custom-provider",
-      plugins: manifestPlugins,
       context: {
         provider: "custom-provider",
         modelId: "modern-model",
@@ -334,6 +339,13 @@ describe("embedded model resolution consistency", () => {
       provider: PROVIDER,
       id: STATIC_MODEL_ID,
     });
+    expect(resolveEmbeddedCompactionThinkingLevelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: PROVIDER,
+        modelId: STATIC_MODEL_ID,
+        compactionThinkingDefault: "off",
+      }),
+    );
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   decodeWindowsLauncherScript,
@@ -12,12 +13,18 @@ import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
+  GatewayServiceReadOptions,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_LAUNCHER_ACTIVE,
+  WINDOWS_TASK_LAUNCHER_ENV,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "./windows-task-supervisor-contract.js";
 
 export function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -214,6 +221,7 @@ export function resolveTaskLauncherScriptPath(env: GatewayServiceEnv, scriptPath
 
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
+  options?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
   const scriptPath = resolveTaskScriptPath(env);
   try {
@@ -231,7 +239,13 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
+        const assignment = parseCmdSetAssignment(
+          rawLine.trimStart().slice(4),
+          options?.requireEffective,
+        );
+        if (!assignment && options?.requireEffective) {
+          throw new Error("Invalid Scheduled Task environment assignment");
+        }
         if (assignment) {
           // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
@@ -248,15 +262,19 @@ export async function readScheduledTaskCommand(
       break;
     }
     if (!commandLine) {
-      return null;
+      throw new Error("Missing Scheduled Task command");
+    }
+    const programArguments = parseCmdScriptCommandLine(commandLine).filter(
+      (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
+    );
+    if (options?.requireEffective && programArguments.length === 0) {
+      throw new Error("Missing Scheduled Task command");
     }
     const hasEnvironment = Object.keys(environment).length > 0;
     return {
       // The task-only outer process owns the Job Object; diagnostics and lifecycle
       // controls must compare against its inner Gateway child, which omits this flag.
-      programArguments: parseCmdScriptCommandLine(commandLine).filter(
-        (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
-      ),
+      programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(hasEnvironment ? { environment } : {}),
       ...(hasEnvironment
@@ -268,9 +286,40 @@ export async function readScheduledTaskCommand(
         : {}),
       sourcePath: scriptPath,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (!options?.requireEffective) {
+      return null;
+    }
+    if (
+      hasErrnoCode(error, "ENOENT") &&
+      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+    ) {
+      return null;
+    }
   }
+  // Native failures can contain raw service credentials; expose only the closed diagnostic.
+  throw new Error("Effective Scheduled Task service command could not be inspected.");
+}
+
+async function isScheduledTaskDefinitionAbsent(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<boolean> {
+  // A missing script can still belong to a registered task or Startup login item.
+  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+    return false;
+  }
+  for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
+    try {
+      await fs.lstat(pathname);
+      return false;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export function buildTaskScript({
@@ -294,7 +343,10 @@ export function buildTaskScript({
       if (
         value === undefined ||
         (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
-        key.toUpperCase() === "PATH"
+        key.toUpperCase() === "PATH" ||
+        // This preference chooses the launcher at install time. Persisting it
+        // would overwrite the live WScript marker inherited by the supervisor.
+        key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
       ) {
         continue;
       }
@@ -346,6 +398,7 @@ function quoteVbsRunCommand(scriptPath: string): string {
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
+  taskSupervisor?: boolean;
 }): string {
   const lines = [];
   const trimmedDescription = params.description?.trim();
@@ -353,9 +406,13 @@ export function buildHiddenLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
     lines.push(`' ${trimmedDescription}`);
   }
-  lines.push(
-    `WScript.Quit CreateObject("WScript.Shell").Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`,
-  );
+  lines.push('Set shell = CreateObject("WScript.Shell")');
+  if (params.taskSupervisor) {
+    lines.push(
+      `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
+    );
+  }
+  lines.push(`WScript.Quit shell.Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 

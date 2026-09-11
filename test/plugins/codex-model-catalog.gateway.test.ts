@@ -5,11 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import codexPlugin from "../../extensions/codex/index.js";
-import { createAgentHarnessCatalogEvaluator } from "../../src/agents/harness/model-catalog-readiness.js";
 import type { AgentHarness } from "../../src/agents/harness/types.js";
+import { prepareModelCatalogView } from "../../src/agents/model-catalog-view.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -20,6 +21,10 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
+import {
+  resolveNativePluginModelAuth,
+  resolveNativePluginModelConfig,
+} from "../../src/plugins/loader-runtime-load.js";
 import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
@@ -154,7 +159,11 @@ describe("models.list native account catalog", () => {
                 rootDir: fileURLToPath(new URL("../../extensions/codex/", import.meta.url)),
                 config,
                 pluginConfig: config.plugins?.entries?.codex?.config,
-                runtime: { config: { current: () => config } } as never,
+                runtime: createPluginRuntimeMock({
+                  config: { current: () => config },
+                  modelAuth: resolveNativePluginModelAuth(),
+                  modelConfig: resolveNativePluginModelConfig(),
+                }),
                 registerAgentHarness: (harness) => harnesses.push(harness),
               }),
             );
@@ -214,7 +223,7 @@ describe("models.list native account catalog", () => {
                   provider: "openai",
                   modelId: "synthetic-opaque",
                 });
-              expect(readiness()).toEqual({ accountType: "apiKey" });
+              expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
               const configured = (cfg = config) =>
                 listModels({
                   ...scope,
@@ -240,11 +249,14 @@ describe("models.list native account catalog", () => {
                 pinnedProfileId: "openai:missing",
               });
               const locked = await buildModelsListResult({
-                context: {
-                  getRuntimeConfig: () => config,
-                  loadGatewayModelCatalogSnapshot: vi.fn(),
-                  logGateway: { debug: vi.fn() },
-                } as unknown as GatewayRequestContext,
+                source: {
+                  kind: "gateway",
+                  context: {
+                    getRuntimeConfig: () => config,
+                    loadGatewayModelCatalogSnapshot: vi.fn(),
+                    logGateway: { debug: vi.fn() },
+                  } as unknown as GatewayRequestContext,
+                },
                 agentId: "main",
                 params: { view: "configured" },
                 preloadedOnly: true,
@@ -263,11 +275,15 @@ describe("models.list native account catalog", () => {
               for (const observed of [
                 {
                   value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                  mode: "chatgpt",
+                  readiness: { accountType: "chatgpt" },
                   available: true,
                 },
-                { value: null, mode: undefined, available: false },
-                { value: { type: "apiKey" }, mode: "apiKey", available: true },
+                { value: null, readiness: undefined, available: false },
+                {
+                  value: { type: "apiKey" },
+                  readiness: { accountType: "apiKey", authMode: "api_key" },
+                  available: true,
+                },
               ]) {
                 account = observed.value;
                 const refreshed = await listModels({
@@ -279,9 +295,7 @@ describe("models.list native account catalog", () => {
                   refresh: true,
                 });
                 expect(refreshed.models[0]?.available).toBe(observed.available);
-                expect(readiness()).toEqual(
-                  observed.mode ? { accountType: observed.mode } : undefined,
-                );
+                expect(readiness()).toEqual(observed.readiness);
               }
               const hostRoutes: OpenClawConfig["models"][] = [
                 {
@@ -330,8 +344,12 @@ describe("models.list native account catalog", () => {
                   cfg: hostConfig,
                   catalog: rows,
                   view: "configured",
+                  refresh: true,
                 });
-                expect(readiness(hostConfig)).toEqual({ accountType: "apiKey" });
+                expect(readiness(hostConfig)).toEqual({
+                  accountType: "apiKey",
+                  authMode: "api_key",
+                });
                 expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
               }
               expect(requests).not.toContain("account/login/start");
@@ -340,8 +358,14 @@ describe("models.list native account catalog", () => {
               }
               await expect.poll(() => readiness()).toBeUndefined();
               expect((await configured()).models[0]?.available).toBe(false);
+              const nativeView = prepareModelCatalogView({
+                ...scope,
+                cfg: config,
+                snapshot,
+                metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+              });
               expect(
-                createAgentHarnessCatalogEvaluator(scope)(rows[0]!, {
+                nativeView.evaluateNative(rows[0]!, {
                   availability: true,
                   selectedAuthMode: "oauth",
                   evidence: "runtime",
@@ -356,9 +380,7 @@ describe("models.list native account catalog", () => {
                 evidence: "runtime" as const,
                 routeResolution: null,
               };
-              expect(createAgentHarnessCatalogEvaluator(scope)(hostRow, hostEvidence)).toBe(
-                hostEvidence,
-              );
+              expect(nativeView.evaluateNative(hostRow, hostEvidence)).toBe(hostEvidence);
               const replacement = createEmptyPluginRegistry();
               setActivePluginRegistry(replacement);
               expect((await configured()).models[0]?.available).toBe(false);

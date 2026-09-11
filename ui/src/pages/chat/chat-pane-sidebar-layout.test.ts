@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, LitElement, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -11,6 +11,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import "./components/chat-sidebar-region.runtime.ts";
 import {
+  closeSlot,
   openSlot,
   promoteSidebarPanel,
   setSidebarDock,
@@ -23,6 +24,7 @@ import {
 
 function board(face: ResolvedBoardView["face"] = "dashboard") {
   return {
+    available: true,
     hasBoard: true,
     face,
     provider: { hasLoadedSnapshot: true },
@@ -35,15 +37,52 @@ const requestUpdate = vi.fn();
 function callbacks() {
   return {
     activatePanel: vi.fn(),
+    togglePanelExpanded: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
-    appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
-    setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
 }
+
+class NativeCloseLayoutFixture extends LitElement {
+  static override properties = { layout: { attribute: false } };
+  declare layout: SidebarLayout;
+
+  constructor() {
+    super();
+    this.layout = openSlot(openSlot({ columns: [] }, "workspace"), "detail");
+  }
+
+  override createRenderRoot() {
+    return this;
+  }
+
+  override render() {
+    return renderSidebarRegion({
+      availableWidth: 1_400,
+      availableSlots: ["detail", "workspace"],
+      callbacks: {
+        ...callbacks(),
+        closeSlot: (slot) => {
+          this.layout = closeSlot(this.layout, slot);
+        },
+      },
+      layout: this.layout,
+      narrow: false,
+      panelActions: {},
+      panelTemplates: {
+        detail: html`<textarea aria-label="Side panel input"></textarea>`,
+        workspace: html`<div>Workspace</div>`,
+      },
+      primary: html`<main>Conversation</main>`,
+      requestUpdate: () => this.requestUpdate(),
+    });
+  }
+}
+
+customElements.define("native-close-layout-fixture", NativeCloseLayoutFixture);
 
 async function renderLayout(container: HTMLElement, layout: SidebarLayout, narrow = false) {
   render(
@@ -71,6 +110,27 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it("restores focus to the surviving tab after its parent commits native Close", async () => {
+    const parent = new NativeCloseLayoutFixture();
+    containers.push(parent);
+    document.body.append(parent);
+    await parent.updateComplete;
+    const region = parent.querySelector("openclaw-chat-sidebar-region")!;
+    await region.updateComplete;
+    parent.querySelector("textarea")!.focus();
+
+    const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+    window.dispatchEvent(command);
+    expect(command.defaultPrevented).toBe(true);
+    await parent.updateComplete;
+    await region.updateComplete;
+
+    expect(sidebarActivePanel(parent.layout)?.slot).toBe("workspace");
+    const nextTab = parent.querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    expect(nextTab).not.toBeNull();
+    expect(document.activeElement).toBe(nextTab);
+  });
+
   it("preserves drafts and panel state across swapping, docking, focus, minimize, and mobile", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -234,7 +294,6 @@ describe("chat pane sidebar layout", () => {
       layout: rendered,
       closePanelSlot: vi.fn(),
       openPanelSlot: vi.fn(),
-      appendComposerText: vi.fn(),
       forgetDiscussionUrl: vi.fn(),
       resizePanel: vi.fn(),
       setPanelOpen: vi.fn(),
@@ -268,7 +327,6 @@ describe("chat pane sidebar layout", () => {
       layout,
       closePanelSlot,
       openPanelSlot: vi.fn(),
-      appendComposerText: vi.fn(),
       forgetDiscussionUrl: vi.fn(),
       resizePanel: vi.fn(),
       setPanelOpen,
@@ -279,7 +337,7 @@ describe("chat pane sidebar layout", () => {
     expect(state.updateSidebarLayout).not.toHaveBeenCalled();
   });
 
-  it("keeps restored main content until the board owner confirms its removal", () => {
+  it("keeps an empty dashboard open and only removes it when dashboard support is unavailable", () => {
     const layout = promoteSidebarPanel(
       openSlot(openSlot({ columns: [] }, "dashboard"), "detail"),
       "dashboard",
@@ -291,7 +349,14 @@ describe("chat pane sidebar layout", () => {
       paneWidth: 1_400,
     });
     expect(awaitingSnapshot).toEqual(layout);
-    const removed = resolveSidebarLayoutForBoard({ board: loading, layout, paneWidth: 1_400 });
+    expect(resolveSidebarLayoutForBoard({ board: loading, layout, paneWidth: 1_400 })).toEqual(
+      layout,
+    );
+    const removed = resolveSidebarLayoutForBoard({
+      board: { ...loading, available: false },
+      layout,
+      paneWidth: 1_400,
+    });
     expect(sidebarMainPanel(removed)?.slot).toBe("conversation");
     expect(sidebarActivePanel(removed)?.slot).toBe("detail");
   });

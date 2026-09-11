@@ -31,8 +31,7 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -121,8 +120,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         continue;
       }
       builtinToolNames.add(name);
-      // SAFETY: getPluginToolMeta only performs concrete object-identity lookup.
-      const pluginMeta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+      const pluginMeta = getPluginToolMeta(tool);
       if (
         pluginMeta?.trustedLocalMedia === true ||
         (!pluginMeta && isCoreToolResultMediaTrustedName(name))

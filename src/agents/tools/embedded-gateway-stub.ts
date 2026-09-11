@@ -45,7 +45,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
+  const { storePath, store, targetsBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: opts.agentId,
     projection: "list",
   });
@@ -53,6 +53,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
     cfg,
     storePath,
     store,
+    targetsBySessionKey,
     opts,
   });
 }
@@ -209,7 +210,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
     entry: historyEntry,
     provider: resolvedSessionModel.provider,

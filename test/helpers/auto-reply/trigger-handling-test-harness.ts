@@ -91,7 +91,6 @@ const providerUsageMocks = vi.hoisted(() => ({
     updatedAt: 0,
     providers: [],
   }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
@@ -123,7 +122,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
+  readPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -132,24 +131,24 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
 }));
 
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
   loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
-    await modelCatalogMocks.loadPreparedModelCatalog(...args),
+    await modelCatalogMocks.readPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
@@ -339,12 +338,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -363,7 +362,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -397,7 +396,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
 }) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
