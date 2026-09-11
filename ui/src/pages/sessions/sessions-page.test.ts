@@ -258,7 +258,7 @@ describe("sessions page lifecycle", () => {
 
   it.each([
     ["green", "Green"],
-    [null, "Default"],
+    [null, "No color"],
   ] as const)("patches color %s from the sessions page menu", async (color, label) => {
     const row = {
       key: "agent:main:color",

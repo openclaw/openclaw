@@ -1,159 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { describe, expect, it, vi } from "vitest";
 import { deferred } from "../test-helpers/app-sidebar.ts";
+import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../test-helpers/application-context.ts";
+  containers,
+  mountMenu,
+  menuItemLabels,
+  menuItem,
+  iconChoices,
+  selectMenuValue,
+  type SessionMenuItem,
+} from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./session-menu.ts";
-import type { SessionMenuData } from "./session-menu-actions.ts";
-import type {
-  PluginSessionMenuAction,
-  SessionMenuAction,
-  SessionMenuActionKind,
-  SessionMenuWork,
-} from "./session-menu.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
-type SessionMenuElement = HTMLElement & {
-  anchor: { x: number; y: number };
-  compact: boolean;
-  lastActive: string;
-  session: SessionMenuData;
-  updateComplete: Promise<boolean>;
-};
-type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
-
-const containers: HTMLElement[] = [];
-
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.remove();
-  }
-});
-
-async function mountMenu(
-  options: {
-    session?: Partial<SessionMenuData>;
-    compact?: boolean;
-    navigationAllowed?: boolean;
-    copyMarkdownAllowed?: boolean;
-    splitAllowed?: boolean;
-    work?: SessionMenuWork | null;
-    pluginActions?: readonly PluginSessionMenuAction[];
-    archiveAllowed?: boolean;
-    deleteAllowed?: boolean;
-    cloudWorkerStopAllowed?: boolean;
-    selectionCount?: number;
-    lastActive?: string;
-    groups?: readonly string[];
-    context?: ApplicationContext<RouteId>;
-    currentOwner?: SessionOwnerOption | null;
-    trigger?: HTMLElement | null;
-    onAction?: (action: SessionMenuAction) => void;
-    onClose?: () => void;
-    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
-    forkFromLastCompleted?: boolean;
-  } = {},
-): Promise<SessionMenuElement> {
-  const container = options.context
-    ? createApplicationContextProvider(options.context)
-    : document.createElement("div");
-  containers.push(container);
-  document.body.append(container);
-  const session: SessionMenuData = {
-    label: "Test session",
-    sessionId: "session-123",
-    isChild: false,
-    pinned: false,
-    unread: false,
-    archived: false,
-    category: null,
-    icon: null,
-    color: null,
-    categoryClearReturnsToGroups: false,
-    ...options.session,
-  };
-  render(
-    html`<openclaw-session-menu
-      .session=${session}
-      .compact=${options.compact ?? false}
-      .navigationAllowed=${options.navigationAllowed ?? true}
-      .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
-      .splitAllowed=${options.splitAllowed ?? false}
-      .selectionCount=${options.selectionCount ?? 1}
-      .lastActive=${options.lastActive ?? "57d"}
-      .anchor=${{ x: 100, y: 100 }}
-      .trigger=${options.trigger ?? null}
-      .disabled=${false}
-      .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
-      .forkDisabled=${false}
-      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
-      .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${
-        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
-      }
-      .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
-      .groups=${options.groups ?? []}
-      .currentOwner=${options.currentOwner ?? null}
-      .work=${options.work ?? null}
-      .pluginActions=${options.pluginActions ?? []}
-      .onAction=${options.onAction ?? (() => {})}
-      .onClose=${options.onClose ?? (() => {})}
-    ></openclaw-session-menu>`,
-    container,
-  );
-  const element = container.querySelector("openclaw-session-menu") as SessionMenuElement | null;
-  if (!element) {
-    throw new Error("Expected session menu");
-  }
-  await element.updateComplete;
-  return element;
-}
-
-function itemLabel(item: HTMLElement): string {
-  return item.querySelector(".session-menu__text")?.textContent?.trim() ?? "";
-}
-
-function menuItemLabels(menu: ParentNode): string[] {
-  const selector =
-    menu instanceof Element && menu.matches("wa-dropdown-item")
-      ? ":scope > wa-dropdown-item[slot='submenu']"
-      : ":scope > wa-dropdown > wa-dropdown-item";
-  return Array.from(menu.querySelectorAll<HTMLElement>(selector)).map(itemLabel);
-}
-
-function menuItem(menu: ParentNode, label: string): SessionMenuItem {
-  const item = Array.from(menu.querySelectorAll<SessionMenuItem>("wa-dropdown-item")).find(
-    (candidate) => itemLabel(candidate) === label,
-  );
-  if (!item) {
-    throw new Error(`Expected menu item: ${label}`);
-  }
-  return item;
-}
-
-function iconChoices(menu: ParentNode): HTMLButtonElement[] {
-  return Array.from(menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"));
-}
-
-function selectMenuValue(menu: SessionMenuElement, value: string) {
-  menu.querySelector("wa-dropdown")?.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
-  );
-}
+import type { SessionMenuAction } from "./session-menu.ts";
 
 describe("session menu", () => {
   it("keeps self, agents, and the current owner while the directory loads, then retries a visible failure", async () => {
@@ -662,7 +526,7 @@ describe("session menu", () => {
         ?.click();
       iconChoices(menu)[1]?.click();
       menu
-        .querySelector<HTMLButtonElement>('.session-menu__color-choice[aria-label="Default"]')
+        .querySelector<HTMLButtonElement>('.session-menu__color-choice[aria-label="No color"]')
         ?.click();
       menu.querySelector<HTMLButtonElement>(".session-menu__icon-remove")?.click();
       expect(onAction.mock.calls).toEqual([
@@ -694,7 +558,7 @@ describe("session menu", () => {
     if (options.selectionCount === 2) {
       expect(menu.querySelector(".session-menu__appearance")).toBeNull();
     } else {
-      for (const label of ["Red", "Default"]) {
+      for (const label of ["Red", "No color"]) {
         const choice = menu.querySelector<HTMLButtonElement>(
           `.session-menu__color-choice[aria-label="${label}"]`,
         );
@@ -733,7 +597,10 @@ describe("session menu", () => {
     expect(grids[0]?.querySelector("button:nth-child(12)")?.getAttribute("aria-label")).toBe(
       "Custom emoji…",
     );
-    expect(grids[1]?.querySelectorAll("button")).toHaveLength(6);
+    const noIcon = grids[1]?.querySelector<HTMLButtonElement>('[aria-label="No icon"]');
+    expect(noIcon).not.toBeNull();
+    noIcon?.click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: null });
     const current = choices[0];
     if (!current) {
       throw new Error("Expected the first icon choice");
@@ -796,7 +663,7 @@ describe("session menu", () => {
 
   it("returns from custom entry on Escape without closing the menu", async () => {
     const onClose = vi.fn();
-    const menu = await mountMenu({ onClose });
+    const menu = await mountMenu({ onClose, session: { icon: "braces" } });
     const submenu = menuItem(menu, "Icon & color");
     submenu.querySelector<HTMLButtonElement>('[aria-label="Custom emoji…"]')?.click();
     await menu.updateComplete;
@@ -810,8 +677,27 @@ describe("session menu", () => {
     );
     await menu.updateComplete;
 
-    expect(submenu.querySelector(".session-menu__icon-custom-input")).toBeNull();
-    expect(submenu.querySelector('[aria-label="Custom emoji…"]')).not.toBeNull();
+    const customEntry = input.closest(".session-menu__icon-custom-entry");
+    expect(customEntry?.getAttribute("aria-hidden")).toBe("true");
+    expect(customEntry?.hasAttribute("inert")).toBe(true);
+    expect(submenu.querySelector(".session-menu__icon-options")?.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(submenu.querySelector('[aria-label="Custom emoji…"]'));
+    const currentIcon = submenu.querySelector<HTMLButtonElement>(
+      '.session-menu__icon-options button[tabindex="0"]',
+    );
+    const reset = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-remove");
+    if (!currentIcon || !reset) {
+      throw new Error("Expected the current icon and reset control");
+    }
+    currentIcon.focus();
+    currentIcon.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(reset);
+    reset.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(currentIcon);
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -847,22 +733,34 @@ describe("session menu", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "book" });
   });
 
-  it("moves icon-grid focus by cell and row with arrow keys", async () => {
-    const menu = await mountMenu({ session: { icon: "🚀" } });
-    const submenu = menuItem(menu, "Icon & color");
-    const choices = iconChoices(submenu);
-    choices[1]?.focus();
+  it.each([6, 10])(
+    "moves icon-grid focus by cell and visible row with %i columns",
+    async (columns) => {
+      const menu = await mountMenu({ session: { icon: "🚀" } });
+      const submenu = menuItem(menu, "Icon & color");
+      const choices = iconChoices(submenu);
+      for (const [index, choice] of choices.entries()) {
+        vi.spyOn(choice, "getBoundingClientRect").mockReturnValue(
+          new DOMRect((index % columns) * 28, Math.floor(index / columns) * 28, 28, 28),
+        );
+      }
+      choices[1]?.focus();
 
-    choices[1]?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
-    );
-    expect(document.activeElement).toBe(choices[2]);
-    choices[2]?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
-    );
-    expect(document.activeElement).toBe(choices[8]);
-    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[8]]);
-  });
+      choices[1]?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(choices[2]);
+      choices[2]?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(choices[2 + columns]);
+      expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[2 + columns]]);
+      choices[2 + columns]?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(choices[2]);
+    },
+  );
 
   it("omits Remove from group when the session has no category", async () => {
     const menu = await mountMenu({ groups: ["Research"] });

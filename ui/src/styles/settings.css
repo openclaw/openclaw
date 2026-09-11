@@ -505,35 +505,6 @@
 
 /* ── Controls ── */
 
-/* One control height inside settings clusters. Buttons, inputs, selects, and
-   segmented controls share 32px so mixed rows never show ragged heights.
-   Multi-select list boxes and textareas keep their natural height. */
-.settings-row__control .btn,
-.settings-section__actions .btn,
-.settings-group .data-table-search input {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
-}
-
-.settings-row__control .btn--icon,
-.settings-section__actions .btn--icon {
-  width: var(--settings-control-height);
-  min-width: var(--settings-control-height);
-  padding-inline: 0;
-}
-
-.settings-section__actions .btn--xs.btn--icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-}
-
-.settings-section__actions .btn--xs.btn--icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 .settings-toggle {
   display: inline-flex;
   align-items: center;

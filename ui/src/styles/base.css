@@ -397,6 +397,7 @@
   .sidebar-recent-session.sidebar-recent-session,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
+  .agent-select__trigger.agent-select__trigger,
   .settings-input.settings-input,
   .field.field :is(input, textarea, select) {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));

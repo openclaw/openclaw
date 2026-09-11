@@ -4,7 +4,7 @@ import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { renderSessionAppearancePicker } from "./session-icon-picker.ts";
+import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
@@ -87,8 +87,6 @@ type SessionMenuActionsState = {
   splitAllowed: boolean;
   renderOpenInExtra?: (inline: boolean) => TemplateResult;
 };
-
-const SESSION_ICON_GRID_COLUMNS = 6;
 
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
@@ -253,7 +251,7 @@ export class SessionMenuActions {
         appearance.querySelectorAll<HTMLElement>(
           'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled)',
         ),
-      );
+      ).filter((control) => !control.closest('[inert], [hidden], [aria-hidden="true"]'));
       const index = controls.indexOf(target);
       const next = index < 0 ? undefined : controls[index + (event.shiftKey ? -1 : 1)];
       if (next) {
@@ -517,7 +515,9 @@ export class SessionMenuActions {
                 "copy-session-link",
                 t("sessionsView.copySessionLink"),
                 icons.link,
-                { inline },
+                {
+                  inline,
+                },
               )}
               ${this.renderItem(
                 "copy-session-preview-link",
@@ -595,7 +595,7 @@ export class SessionMenuActions {
 
   private renderAppearancePicker(inline = false) {
     const state = this.readState();
-    return renderSessionAppearancePicker({
+    return renderAppearancePicker({
       inline,
       mode: this.iconPickerMode,
       currentIcon: state.session.icon,
@@ -622,7 +622,7 @@ export class SessionMenuActions {
     });
   }
 
-  private readonly selectIcon = (event: MouseEvent, icon: string) => {
+  private readonly selectIcon = (event: MouseEvent, icon: string | null) => {
     event.stopPropagation();
     this.runAction({ kind: "set-icon", icon });
   };
@@ -670,42 +670,7 @@ export class SessionMenuActions {
     }
   };
 
-  private readonly handleIconGridKeydown = (event: KeyboardEvent) => {
-    const choice = event.target;
-    if (!(choice instanceof HTMLButtonElement)) {
-      return;
-    }
-    const offsets: Partial<Record<string, number>> = {
-      ArrowLeft: -1,
-      ArrowRight: 1,
-      ArrowUp: -SESSION_ICON_GRID_COLUMNS,
-      ArrowDown: SESSION_ICON_GRID_COLUMNS,
-    };
-    const offset = offsets[event.key];
-    if (offset === undefined) {
-      return;
-    }
-    const grid = event.currentTarget;
-    if (!(grid instanceof HTMLElement)) {
-      return;
-    }
-    const choices = Array.from(
-      grid.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
-    );
-    const index = choices.indexOf(choice);
-    if (index < 0) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const nextIndex = (index + offset + choices.length) % choices.length;
-    choice.tabIndex = -1;
-    const next = choices[nextIndex];
-    if (next) {
-      next.tabIndex = 0;
-      next.focus();
-    }
-  };
+  private readonly handleIconGridKeydown = handleAppearanceGridKeydown;
 
   private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
     const item = event.currentTarget;
