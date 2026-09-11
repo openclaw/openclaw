@@ -38,7 +38,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("blocks empty chat home until a model is connected", async () => {
+  it("keeps help available on empty chat home while messages require a model", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -46,20 +46,41 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, { agentModel: null });
+    const gateway = await installMockGateway(page, { agentModel: null });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
-      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
-      await expect.poll(() => page.locator("textarea").count()).toBe(0);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).count())
-        .toBe(1);
+      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(1);
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      const welcome = page.locator(".agent-chat__welcome--setup");
+      const welcomeAction = welcome.getByRole("button", { name: "Connect an AI provider" });
+      const composerAction = page
+        .locator(".agent-chat__disabled-banner")
+        .getByRole("button", { name: "Connect an AI provider" });
+      await expect.poll(() => welcomeAction.count()).toBe(1);
+      await expect.poll(() => composerAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
-      await page.getByRole("button", { name: "Connect an AI provider" }).click();
+      await welcomeAction.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await page.goBack();
+      await composerAction.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await page.goBack();
+      const sendButton = page.getByRole("button", { name: "Send message", exact: true });
+      await textarea.fill("/help");
+      await expect.poll(() => sendButton.isDisabled()).toBe(false);
+      await sendButton.click();
+      await page.getByText("Available Commands", { exact: true }).waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await expect.poll(() => welcome.count()).toBe(0);
+      await expect.poll(() => composerAction.count()).toBe(1);
+      await textarea.fill("Start a conversation.");
+      await expect.poll(() => sendButton.isDisabled()).toBe(true);
+      expect(await textarea.inputValue()).toBe("Start a conversation.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
       await context.close();
     }

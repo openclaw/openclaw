@@ -148,20 +148,6 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
   </Accordion>
 </AccordionGroup>
 
-## Model menu readiness
-
-The model-data builders in `openclaw/plugin-sdk/models-provider-runtime` prepare
-an optional `ModelsProviderData.modelMenu` projection from the published catalog
-and its paired readiness facts. Use `modelMenu.modelNames` for button labels and
-pass `modelMenu.byProvider.get(provider)` to `formatModelsAvailableHeader` as
-`availability` for ready counts and recovery notices. Provider menus can join the
-notices from `modelMenu.byProvider.values()`.
-
-The projection does not refresh the catalog or change selection IDs. Login
-metadata determines whether recovery offers a login command or the custom-provider
-guide. Older SDK producers can omit `modelMenu`; consumers then use the existing
-`modelNames` and header behavior.
-
 ## Prepared completion SDK compatibility
 
 Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of

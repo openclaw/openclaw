@@ -11,11 +11,6 @@ read_when:
 The Gateway handles commands sent as standalone messages starting with `/`.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 
-In web chat, `/commands`, `/help`, `/login`, `/models`, `/status`, and `/whoami`
-remain usable before you connect a model provider. Normal messages still need
-a working model connection. `/models` marks unavailable choices and gives the
-connection or retry action. Command permissions still apply.
-
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
 the OpenClaw command handler, and `/status` plus `/session` stay local whenever
