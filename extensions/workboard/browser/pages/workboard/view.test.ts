@@ -271,7 +271,9 @@ describe("renderWorkboard", () => {
     async ({ path, agentId }) => {
       const card = createWorkboardCard({ agentId: "writer" });
       const saved = { ...card, agentId, updatedAt: card.updatedAt + 1 };
-      const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ card: saved });
+      const { request } = createWorkboardTestClient({
+        "workboard.cards.update": { card: saved },
+      });
       const { state, container, renderView } = createWorkboardView({
         client: { request, addEventListener: () => () => undefined },
         agentsList: {
