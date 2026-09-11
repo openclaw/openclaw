@@ -104,6 +104,7 @@ export type WorkboardUiState = {
   lifecycleConfirmedTaskIds: Set<string>;
   lifecycleTaskConfirmationStartedAt: number | null;
   draftOpen: boolean;
+  draftDiscardOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
   editingCardBase: WorkboardCard | null;

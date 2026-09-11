@@ -96,8 +96,15 @@ export function normalizeBoardMetadata(
     1000,
     "board description",
   );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  // Explicit null clears appearance; omitted fields preserve the board's current choice.
+  const icon =
+    input.icon === null
+      ? undefined
+      : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
+  const color =
+    input.color === null
+      ? undefined
+      : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);

@@ -163,6 +163,7 @@ export function removeCardAndReferences(
 export function resetDraftState(state: WorkboardUiState) {
   const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
   state.draftOpen = false;
+  state.draftDiscardOpen = false;
   state.editingCardId = null;
   state.editingCardBase = null;
   state.draftTitle = "";
