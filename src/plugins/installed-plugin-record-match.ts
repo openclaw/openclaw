@@ -1,17 +1,37 @@
+// One installation-bound trust decision shared by manifest and channel catalog discovery.
+import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { resolveUserPath } from "../utils.js";
-import type { PluginCandidate } from "./discovery.js";
-import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
-  getOfficialExternalPluginCatalogEntryForPackage,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
-} from "./official-external-plugin-catalog.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
+import type { PluginCandidate } from "./discovery.js";
+import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
+import { isPathInside } from "./path-safety.js";
+import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import type { PluginTrust } from "./plugin-trust.js";
+
+function resolveCandidateInstallOwner(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  installRecords: Record<string, PluginInstallRecord>;
+}): string | undefined {
+  if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
+    return undefined;
+  }
+  const installOwner = resolvePluginCandidateInstallOwner(params.candidate);
+  if (installOwner) {
+    return Object.hasOwn(params.installRecords, installOwner) ? installOwner : undefined;
+  }
+  return undefined;
+}
 
 export function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
+  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
   installPathOnly?: boolean;
@@ -19,7 +39,8 @@ export function matchesInstalledPluginRecord(params: {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
   }
-  const record = params.installRecords[params.pluginId];
+  const installOwner = resolveCandidateInstallOwner(params);
+  const record = installOwner ? params.installRecords[installOwner] : undefined;
   if (!record) {
     return false;
   }
@@ -32,7 +53,7 @@ export function matchesInstalledPluginRecord(params: {
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
+      return pluginCacheRealpathSync(resolved) ?? resolved;
     });
   // Security decisions must bind to the current install output. sourcePath can
   // legitimately identify path installs, but it can also survive a source switch.
@@ -42,7 +63,7 @@ export function matchesInstalledPluginRecord(params: {
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
+      return pluginCacheRealpathSync(resolved) ?? resolved;
     });
   if (candidatePaths.length === 0 || trackedPaths.length === 0) {
     return false;
@@ -52,66 +73,72 @@ export function matchesInstalledPluginRecord(params: {
       (candidatePath) =>
         candidatePath === trackedPath ||
         isPathInside(trackedPath, candidatePath) ||
-        (!params.installPathOnly && isPathInside(candidatePath, trackedPath)),
+        isPathInside(candidatePath, trackedPath),
     ),
   );
 }
 
-function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return false;
-  }
-  return normalized === packageName || normalized.startsWith(`${packageName}@`);
-}
-
-export function isTrustedOfficialPluginInstall(params: {
+export function resolvePluginTrust(params: {
   pluginId: string;
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  if (
-    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
-    !matchesInstalledPluginRecord({ ...params, installPathOnly: true })
+  registryPath: string;
+}): PluginTrust {
+  const installOwner = resolveCandidateInstallOwner(params);
+  const record = installOwner ? params.installRecords[installOwner] : undefined;
+  const origin = params.candidate.origin;
+  let reason: PluginTrust["reason"];
+  if (origin === "bundled") {
+    reason = "bundled";
+  } else if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
+    reason = "owner-ambiguous";
+  } else if (
+    origin === "workspace" ||
+    record?.source === "path" ||
+    (record?.source === "npm" &&
+      (record.artifactKind !== undefined || record.sourcePath !== undefined))
   ) {
-    return false;
-  }
-  const packageName = params.candidate.packageName?.trim();
-  if (!packageName) {
-    return false;
-  }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
-    return false;
-  }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
-  const installRecord = params.installRecords[params.pluginId];
-  if (!installRecord) {
-    return false;
-  }
-  if (
-    installRecord.source === "npm" &&
-    installRecord.artifactKind === undefined &&
-    installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
-  ) {
-    return true;
-  }
-  if (
-    installRecord.source === "clawhub" &&
-    resolveTrustedSourceLinkedOfficialClawHubInstall({
+    reason = "origin-path";
+  } else if (!record || !installOwner) {
+    reason = "record-missing";
+  } else if (
+    !matchesInstalledPluginRecord({
       pluginId: params.pluginId,
-      record: installRecord,
+      candidate: params.candidate,
+      env: params.env,
+      installRecords: params.installRecords,
+      installPathOnly: true,
     })
   ) {
-    return true;
+    reason = "install-path-mismatch";
+  } else if (
+    isTrustedOfficialPluginInstallRecord({
+      pluginId: installOwner,
+      packageName: params.candidate.packageName,
+      record,
+    })
+  ) {
+    reason = "trusted-official";
+  } else if (
+    (record.source === "npm" &&
+      record.spec === undefined &&
+      record.resolvedName === undefined &&
+      record.resolvedSpec === undefined) ||
+    (record.source === "clawhub" &&
+      record.clawhubUrl === undefined &&
+      record.clawhubChannel === undefined)
+  ) {
+    reason = "provenance-missing";
+  } else {
+    reason = "provenance-invalid";
   }
-  return false;
+  return {
+    reason,
+    registryPath: params.registryPath,
+    origin,
+    installSource: record?.source,
+    installSpec:
+      record?.spec === undefined ? undefined : redactSensitiveText(record.spec, { mode: "tools" }),
+  };
 }

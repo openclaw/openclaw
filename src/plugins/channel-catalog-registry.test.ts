@@ -2,6 +2,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
 
 afterEach(() => {
@@ -183,7 +184,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(
       module.listChannelCatalogEntries({
-        installRecords: {},
         discovery: {
           candidates: [createChannelCandidate({ pluginId: "package-plugin" })],
           diagnostics: [],
@@ -226,214 +226,65 @@ describe("listChannelCatalogEntries", () => {
       })[0]?.pluginId,
     ).toBe("bundled-plugin");
   });
-
-  it("marks ledger-backed official installs as trusted", async () => {
-    const { module } = await loadWithMocks({});
-    const rootDir = "/tmp/openclaw-test-slack";
-    const candidate = {
-      ...createChannelCandidate({ idHint: "slack" }),
-      source: `${rootDir}/index.js`,
-      rootDir,
-      packageName: "@openclaw/slack",
-      packageManifest: {
-        channel: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-      },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          slack: {
-            source: "npm",
-            spec: "@openclaw/slack@2026.6.2",
-            resolvedName: "@openclaw/slack",
-            installPath: rootDir,
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBe(true);
-  });
-
-  it("marks official ClawHub installs as trusted", async () => {
-    const { module } = await loadWithMocks({});
-    const rootDir = "/tmp/openclaw-test-matrix";
-    const candidate = {
-      ...createChannelCandidate({ idHint: "matrix" }),
-      source: `${rootDir}/index.js`,
-      rootDir,
-      packageName: "@openclaw/matrix",
-      packageManifest: {
-        channel: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
-      },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          matrix: {
-            source: "clawhub",
-            spec: "clawhub:@openclaw/matrix",
-            installPath: rootDir,
-            clawhubPackage: "@openclaw/matrix",
-            clawhubUrl: "https://clawhub.ai",
-            clawhubChannel: "official",
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBe(true);
-  });
-
   it.each([
+    { name: "current npm global", origin: "global", source: "npm", trusted: true },
+    { name: "current npm config", origin: "config", source: "npm", trusted: true },
+    { name: "current official ClawHub", origin: "global", source: "clawhub", trusted: true },
+    { name: "legacy ClawHub without authority", origin: "global", source: "clawhub", legacy: true },
+    { name: "conflicting package identity", origin: "global", source: "npm", conflict: true },
     {
-      name: "custom ClawHub origin",
-      clawhubUrl: "https://custom-clawhub.example",
-      clawhubChannel: "official" as const,
+      name: "relocated install before ledger repair",
+      origin: "global",
+      source: "npm",
+      stalePath: true,
     },
     {
-      name: "community ClawHub channel",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubChannel: "community" as const,
+      name: "relocated install after ledger repair",
+      origin: "global",
+      source: "npm",
+      trusted: true,
     },
-  ])("does not trust a matching official package from a $name", async (record) => {
+    { name: "unrecorded discovery owner", origin: "global", source: "npm", unowned: true },
+    { name: "ambiguous discovery owner", origin: "global", source: "npm", ambiguous: true },
+    { name: "workspace shadow", origin: "workspace", source: "npm" },
+    { name: "local npm archive", origin: "global", source: "npm", archive: true },
+  ] as const)("retains the canonical trust decision for $name", async (scenario) => {
     const { module } = await loadWithMocks({});
-    const rootDir = "/tmp/openclaw-test-matrix";
-    const candidate = {
-      ...createChannelCandidate({ idHint: "matrix" }),
-      source: `${rootDir}/index.js`,
-      rootDir,
-      packageName: "@openclaw/matrix",
-      packageManifest: {
-        channel: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
+    const rootDir = "/tmp/openclaw-test-slack/current";
+    const candidate = recordPluginCandidateInstallOwner(
+      {
+        ...createChannelCandidate({ idHint: "slack", origin: scenario.origin }),
+        source: `${rootDir}/index.js`,
+        rootDir,
+        packageName: "@openclaw/slack",
+        packageManifest: { channel: { id: "slack", label: "Slack", blurb: "Slack channel" } },
       },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          matrix: {
+      "unowned" in scenario ? undefined : "slack",
+      "ambiguous" in scenario,
+    );
+    const record: PluginInstallRecord =
+      scenario.source === "clawhub"
+        ? {
             source: "clawhub",
-            spec: "clawhub:@openclaw/matrix",
+            spec: "clawhub:@openclaw/slack",
+            clawhubPackage: "@openclaw/slack",
             installPath: rootDir,
-            clawhubPackage: "@openclaw/matrix",
-            clawhubUrl: record.clawhubUrl,
-            clawhubChannel: record.clawhubChannel,
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBeUndefined();
-  });
-
-  it("trusts a catalog-backed legacy ClawHub record without authority metadata", async () => {
-    const { module } = await loadWithMocks({});
-    const rootDir = "/tmp/openclaw-test-matrix";
-    const candidate = {
-      ...createChannelCandidate({ idHint: "matrix" }),
-      source: `${rootDir}/index.js`,
-      rootDir,
-      packageName: "@openclaw/matrix",
-      packageManifest: {
-        channel: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
-      },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          matrix: {
-            source: "clawhub",
-            spec: "clawhub:@openclaw/matrix",
-            installPath: rootDir,
-            clawhubPackage: "@openclaw/matrix",
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBe(true);
-  });
-
-  it("does not trust official identity without a matching install path", async () => {
-    const { module } = await loadWithMocks({});
-    const candidate = {
-      ...createChannelCandidate({ idHint: "slack" }),
-      packageName: "@openclaw/slack",
-      packageManifest: {
-        channel: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-      },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          slack: {
+            ...("legacy" in scenario
+              ? {}
+              : { clawhubUrl: "https://clawhub.ai", clawhubChannel: "official" as const }),
+          }
+        : {
             source: "npm",
-            spec: "@openclaw/slack@2026.6.2",
-            resolvedName: "@openclaw/slack",
-            installPath: "/tmp/other-slack",
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBeUndefined();
-  });
-
-  it("does not trust an official package candidate rooted above the recorded install", async () => {
-    const { module } = await loadWithMocks({});
-    const rootDir = "/tmp/openclaw-test-plugins";
-    const candidate = {
-      ...createChannelCandidate({ idHint: "slack" }),
-      source: `${rootDir}/index.js`,
-      rootDir,
-      packageName: "@openclaw/slack",
-      packageManifest: {
-        channel: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-      },
-    } satisfies PluginCandidate;
-
-    expect(
-      module.listChannelCatalogEntries({
-        env: ENV,
-        installRecords: {
-          slack: {
-            source: "npm",
-            spec: "@openclaw/slack@2026.6.2",
-            resolvedName: "@openclaw/slack",
-            installPath: `${rootDir}/slack`,
-          } as PluginInstallRecord,
-        },
-        discovery: { candidates: [candidate], diagnostics: [] },
-      })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBeUndefined();
+            spec: "@openclaw/slack@2026.9.4",
+            resolvedName: "conflict" in scenario ? "@vendor/slack" : "@openclaw/slack",
+            installPath: "stalePath" in scenario ? "/tmp/openclaw-test-slack/previous" : rootDir,
+            ...("archive" in scenario ? { sourcePath: "/tmp/slack.tgz" } : {}),
+          };
+    const entry = module.listChannelCatalogEntries({
+      env: ENV,
+      installRecords: { slack: record },
+      discovery: { candidates: [candidate], diagnostics: [] },
+    })[0];
+    expect(entry?.trustedOfficialInstall).toBe("trusted" in scenario ? true : undefined);
   });
 });

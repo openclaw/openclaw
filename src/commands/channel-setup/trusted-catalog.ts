@@ -6,10 +6,12 @@ import {
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../plugins/config-state.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
@@ -124,6 +126,8 @@ function resolveTrustedCatalogEntry(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
+    installRecords?: Record<string, PluginInstallRecord>;
   },
   rejected: ChannelPluginCatalogEntry[] = [],
 ): ChannelPluginCatalogEntry | undefined {
@@ -141,6 +145,8 @@ function resolveTrustedCatalogEntry(
       workspaceDir: params.workspaceDir,
       env: params.env,
       ...(extraPaths ? { extraPaths } : {}),
+      ...(params.discovery ? { discovery: params.discovery } : {}),
+      ...(params.installRecords ? { installRecords: params.installRecords } : {}),
       ...resolveRejectedCatalogLookup(rejectedEntries),
     });
     if (!candidate) {
@@ -171,6 +177,8 @@ export function getTrustedChannelPluginCatalogEntry(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
+    installRecords?: Record<string, PluginInstallRecord>;
   },
 ): ChannelPluginCatalogEntry | undefined {
   return resolveTrustedCatalogEntry(channelId, params);
@@ -181,6 +189,8 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
+    installRecords?: Record<string, PluginInstallRecord>;
   },
   onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
 ): ChannelPluginCatalogEntry[] {
@@ -189,6 +199,8 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
     workspaceDir: params.workspaceDir,
     env: params.env,
     ...(extraPaths ? { extraPaths } : {}),
+    ...(params.discovery ? { discovery: params.discovery } : {}),
+    ...(params.installRecords ? { installRecords: params.installRecords } : {}),
   });
   return unfiltered.flatMap((entry) => {
     if (isTrustedLocalChannelCatalogEntry(entry, params.cfg, params.env)) {
@@ -204,6 +216,8 @@ export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
+  installRecords?: Record<string, PluginInstallRecord>;
 }): ChannelPluginCatalogEntry[] {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
@@ -213,6 +227,8 @@ export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
+  installRecords?: Record<string, PluginInstallRecord>;
 }): ChannelPluginCatalogEntry[] {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, (entry) => [entry]);
 }
