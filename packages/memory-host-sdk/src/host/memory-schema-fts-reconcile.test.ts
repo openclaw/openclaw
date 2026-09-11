@@ -4,6 +4,44 @@ import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory FTS schema reconciliation", () => {
+  it("rebuilds a populated body index when its row count diverges", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES
+          ('kept', 'memory/kept.md', 'memory', 1, 1, 'kept-hash', 'model', 'kept body', '[]', 1),
+          ('missing', 'memory/missing.md', 'memory', 1, 1, 'missing-hash', 'model', 'missing body', '[]', 1);
+      `);
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      db.exec("DELETE FROM memory_index_chunks_fts WHERE id = 'missing'");
+
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+
+      expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "kept" },
+        { id: "missing" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("missing"),
+      ).toEqual([{ id: "missing" }]);
+      expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual([
+        { id: "kept" },
+        { id: "missing" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rebuilds body and path indexes when their tokenizer changes", () => {
     const db = new DatabaseSync(":memory:");
     try {
