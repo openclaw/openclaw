@@ -18,7 +18,7 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: selectedText }],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-shell textarea");
         await composer.waitFor({ state: "visible" });
         const text = page.locator(".chat-bubble .chat-text p").filter({ hasText: selectedText });
         const popup = page.getByRole("toolbar", { name: "Selection actions" });

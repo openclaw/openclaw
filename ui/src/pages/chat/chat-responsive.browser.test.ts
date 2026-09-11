@@ -669,7 +669,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <footer class="agent-chat__input chat-session-rail__composer" data-composer-layout="multiline">
                         <div class="agent-chat__composer-input-row">
                           <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                            <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
+                            <textarea class="chat-session-rail__input" rows="1" placeholder="What should I know?"></textarea>
                           </label>
                         </div>
                         <div class="agent-chat__composer-footer">
@@ -5605,7 +5605,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <form class="agent-chat__input chat-session-rail__composer">
             <div class="agent-chat__composer-input-row">
               <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                <input class="chat-session-rail__input" type="text" placeholder="Ask a question" />
+                <textarea class="chat-session-rail__input" rows="1" placeholder="Ask a question"></textarea>
               </label>
             </div>
             <div class="agent-chat__composer-footer">

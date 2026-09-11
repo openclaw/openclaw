@@ -52,10 +52,12 @@ import {
   focusedTranscriptRowKey,
 } from "./chat-transcript-range.ts";
 import {
+  applyPendingScrollOffset,
+  type TranscriptScrollRestoreHost,
+} from "./chat-transcript-scroll-restore.ts";
+import {
   CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
   CHAT_TRANSCRIPT_OVERSCAN,
-  CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES,
-  CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES,
   type ChatTranscriptSession,
   type TranscriptCallbacks,
   type TranscriptHeader,
@@ -79,6 +81,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private appliedHeaderHeight = 0;
   private implicitEndAnchorPending: boolean;
   private pendingScrollFrame: number | null = null;
+  private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
   // Lit calls refs before newly rendered nodes are connected. Resolve the
   // scroll parent lazily or a stable ref can permanently capture null.
@@ -289,6 +292,20 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
+    this.scrollRestoreHost = {
+      offsetState: this.offsetState,
+      virtualizer: this.virtualizerController.getVirtualizer(),
+      getScrollElement: () => this.scrollElement,
+      isContentReady: () => this.contentReady,
+      getRowCount: () => this.rowKeys.length,
+      isConnected: () => this.connected,
+      getPendingScrollFrame: () => this.pendingScrollFrame,
+      setPendingScrollFrame: (frame) => {
+        this.pendingScrollFrame = frame;
+      },
+      requestUpdate: this.requestUpdate,
+      onReaderScroll: () => this.callbacks.onReaderScroll?.(),
+    };
     if (initialOffset !== null) {
       this.offsetState.pendingScrollOffset = {
         offset: initialOffset,
@@ -351,7 +368,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.host.requestUpdate();
     }
     this.reconcileImplicitEndAnchor();
-    this.applyPendingScrollOffset();
+    applyPendingScrollOffset(this.scrollRestoreHost);
+    this.reconcileEndScroll();
   }
 
   disconnect(): void {
@@ -523,9 +541,33 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       return false;
     }
     this.cancelScroll();
-    this.offsetState.scrollCommand = { behavior, target: "end" };
+    this.offsetState.scrollCommand = {
+      behavior,
+      target: "end",
+      maxOffset: maxTranscriptScrollOffset(this.scrollElement),
+    };
     this.virtualizerController.getVirtualizer().scrollToEnd({ behavior });
     return true;
+  }
+
+  private reconcileEndScroll(): void {
+    const { scrollCommand, pendingScrollOffset, touching, touchScrolling } = this.offsetState;
+    if (scrollCommand?.target !== "end" || pendingScrollOffset || touching || touchScrolling) {
+      return;
+    }
+    const element = this.scrollElement;
+    const maxOffset = maxTranscriptScrollOffset(element);
+    if (
+      !element ||
+      maxOffset === null ||
+      maxOffset === scrollCommand.maxOffset ||
+      Math.abs(maxOffset - element.scrollTop) <= 1
+    ) {
+      return;
+    }
+    // Row measurement can commit a larger sizer after the command's first frame.
+    scrollCommand.maxOffset = maxOffset;
+    this.virtualizerController.getVirtualizer().scrollToEnd({ behavior: scrollCommand.behavior });
   }
 
   private cancelScroll(): void {
@@ -711,77 +753,5 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     virtualizer.scrollOffset = 0;
     virtualizer.scrollToOffset(0);
     this.host.requestUpdate();
-  }
-
-  private applyPendingScrollOffset(): void {
-    const pending = this.offsetState.pendingScrollOffset;
-    if (!pending || !this.connected) {
-      return;
-    }
-    if (this.contentReady && this.rowKeys.length === 0) {
-      this.settlePendingScroll(0);
-      return;
-    }
-    const maxOffset = maxTranscriptScrollOffset(this.scrollElement);
-    if (maxOffset === null) {
-      return;
-    }
-    if (maxOffset === 0 && pending.offset > 0) {
-      if (this.contentReady) {
-        if (++pending.zeroMaxFrames > CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES) {
-          this.settlePendingScroll(0);
-        } else {
-          this.schedulePendingScrollRetry();
-        }
-      }
-      return;
-    }
-    pending.zeroMaxFrames = 0;
-    const targetOffset = Math.min(pending.offset, maxOffset);
-    if (this.scrollElement) {
-      this.scrollElement.scrollTop = targetOffset;
-    }
-    this.virtualizerController.getVirtualizer().scrollToOffset(targetOffset);
-    const currentOffset = this.scrollElement?.scrollTop;
-    const atTarget = currentOffset != null && Math.abs(currentOffset - targetOffset) <= 1;
-    pending.stableFrames = atTarget ? pending.stableFrames + 1 : 0;
-    if (
-      currentOffset != null &&
-      pending.stableFrames > CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES
-    ) {
-      this.settlePendingScroll(currentOffset);
-    } else {
-      this.schedulePendingScrollRetry();
-    }
-  }
-
-  private schedulePendingScrollRetry(): void {
-    if (!this.connected || this.pendingScrollFrame !== null) {
-      return;
-    }
-    this.pendingScrollFrame = requestAnimationFrame(() => {
-      this.pendingScrollFrame = null;
-      if (this.connected && this.offsetState.pendingScrollOffset) {
-        this.host.requestUpdate();
-      }
-    });
-  }
-
-  private settlePendingScroll(scrollTop: number): void {
-    const pending = this.offsetState.pendingScrollOffset;
-    this.offsetState.pendingScrollOffset = null;
-    if (!pending) {
-      return;
-    }
-    const maxScrollTop = maxTranscriptScrollOffset(this.scrollElement);
-    pending.onSettled?.({
-      scrollTop,
-      anchorToEnd:
-        maxScrollTop === null
-          ? this.contentReady && this.rowKeys.length === 0
-          : maxScrollTop - scrollTop <= CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-    });
-    // Publish the restored reader before queued hydration/resize follow runs.
-    this.callbacks.onReaderScroll?.();
   }
 }

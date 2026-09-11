@@ -52,7 +52,7 @@ suite.define(() => {
       await expect
         .poll(() => input.evaluate((element) => document.activeElement === element))
         .toBe(true);
-      const mainInput = page.locator(".agent-chat__composer-combobox textarea");
+      const mainInput = page.locator(".agent-chat__composer-shell textarea");
       await mainInput.fill("Keep typing here");
       await gateway.resolveDeferred("sessions.companion.state", {
         exchanges: [{ question: "What changed?", answer: "The introduction is ready.", ts: 1 }],

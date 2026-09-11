@@ -8,7 +8,8 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 type TranscriptOffsetState = {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end" | "index" }
+    | { behavior: ScrollBehavior; target: "end"; maxOffset: number | null }
+    | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null;
   touching: boolean;
