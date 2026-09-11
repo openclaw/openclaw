@@ -135,6 +135,7 @@ async function requestThroughTunnel(params: {
   bodyChunks?: readonly string[];
   caPath?: string;
   proxyEnv?: Record<string, string>;
+  framing?: "chunked" | "declared-length";
 }): Promise<{ body: string; status: number }> {
   const env = params.proxyEnv ?? proxyEnv;
   const configuredProxy = env.HTTPS_PROXY;
@@ -156,10 +157,19 @@ async function requestThroughTunnel(params: {
     secureSocket.once("error", reject);
   });
   const bodyChunks = params.bodyChunks ?? [];
+  const chunked = params.framing !== "declared-length";
+  if (!chunked && bodyChunks.length > 1) {
+    throw new Error("a declared-length body must be written as one chunk");
+  }
+  const declaredBody = bodyChunks.join("");
   const headers = {
     Host: `localhost:${originPort}`,
     Connection: "close",
-    ...(bodyChunks.length > 0 ? { "Transfer-Encoding": "chunked" } : {}),
+    ...(bodyChunks.length > 0
+      ? chunked
+        ? { "Transfer-Encoding": "chunked" }
+        : { "Content-Length": String(Buffer.byteLength(declaredBody)) }
+      : {}),
     ...params.headers,
   };
   secureSocket.write(`POST ${params.path ?? "/"} HTTP/1.1\r\n`);
@@ -167,11 +177,15 @@ async function requestThroughTunnel(params: {
     secureSocket.write(`${name}: ${value}\r\n`);
   }
   secureSocket.write("\r\n");
-  for (const chunk of bodyChunks) {
-    secureSocket.write(`${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`);
-  }
-  if (bodyChunks.length > 0) {
-    secureSocket.write("0\r\n\r\n");
+  if (chunked) {
+    for (const chunk of bodyChunks) {
+      secureSocket.write(`${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`);
+    }
+    if (bodyChunks.length > 0) {
+      secureSocket.write("0\r\n\r\n");
+    }
+  } else if (bodyChunks.length > 0) {
+    secureSocket.write(declaredBody);
   }
   const raw = await new Promise<string>((resolve, reject) => {
     let output = "";
@@ -547,6 +561,77 @@ describe("secret egress proxy", () => {
 
     expect(originRequests.at(-1)?.body).toBe(`${prefix}${secret}${suffix}`);
     expect(originRequests.at(-1)?.body).not.toContain(sentinel);
+  });
+
+  it("keeps the declared length for a known-length body that carries no sentinel", async () => {
+    const body = "p".repeat(4096);
+
+    await expect(
+      requestThroughTunnel({
+        headers: { Authorization: "Bearer plain-token" },
+        bodyChunks: [body],
+        framing: "declared-length",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect(originRequests.at(-1)?.body).toBe(body);
+    expect(originRequests.at(-1)?.headers["content-length"]).toBe(String(Buffer.byteLength(body)));
+    expect(originRequests.at(-1)?.headers).not.toHaveProperty("transfer-encoding");
+  });
+
+  it("forwards a known-length body with the substituted byte length as Content-Length", async () => {
+    const secret = "fixed-length-secret-value";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-declared" });
+    proxyEnv = registerSentinel({ sentinel, allowedHosts: ["localhost"] });
+    const prefix = "b".repeat(3072);
+    const forwardedBody = `${prefix}${secret}`;
+
+    await expect(
+      requestThroughTunnel({
+        headers: { Authorization: `Bearer ${sentinel}` },
+        bodyChunks: [`${prefix}${sentinel}`],
+        framing: "declared-length",
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect(originRequests.at(-1)?.body).toBe(forwardedBody);
+    expect(originRequests.at(-1)?.headers["content-length"]).toBe(
+      String(Buffer.byteLength(forwardedBody)),
+    );
+    expect(originRequests.at(-1)?.headers).not.toHaveProperty("transfer-encoding");
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({ kind: "forwarded", host: "localhost", substituted: true }),
+    );
+  });
+
+  it("refuses a known-length body whose sentinel cannot be resolved before egress", async () => {
+    const unknown = tamperSentinel(
+      mintSecretSentinel("never-forward-fixed", { label: "egress-declared-refuse" }),
+    );
+
+    const result = await requestThroughTunnel({
+      path: "/refuse",
+      bodyChunks: [`prefix-${unknown}-suffix`],
+      framing: "declared-length",
+    });
+
+    expect(result.status).toBe(502);
+    expect(originRequests).toEqual([]);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: "refused",
+      reason: "unresolved-sentinel",
+    });
+  });
+
+  it("streams a known-length body above the prepared bound instead of buffering it", async () => {
+    const body = "q".repeat(1024 * 1024 + 1);
+
+    await expect(
+      requestThroughTunnel({ bodyChunks: [body], framing: "declared-length" }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect(originRequests.at(-1)?.body).toBe(body);
+    expect(originRequests.at(-1)?.headers["transfer-encoding"]).toBe("chunked");
   });
 
   it("blind-tunnels bypassed hosts without substituting sentinels", async () => {
