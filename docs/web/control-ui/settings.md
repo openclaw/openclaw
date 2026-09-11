@@ -231,17 +231,18 @@ focus. Availability follows the menu: Terminal, Browser, Desktop, and Discussion
 need their corresponding capabilities; Dashboard needs an available session board
 and is omitted in compact panes. Conversation has no shortcut.
 
-| Panel      | macOS | Windows / Linux  |
-| ---------- | ----- | ---------------- |
-| Terminal   | ⌃\`   | Ctrl+\`          |
-| Browser    | ⌘⌥⇧U  | Ctrl+Alt+Shift+U |
-| Files      | ⌘⇧B   | Ctrl+Shift+B     |
-| Side chat  | ⌘⇧S   | Ctrl+Shift+S     |
-| Tasks      | ⌘⌥⇧K  | Ctrl+Alt+Shift+K |
-| Desktop    | ⌘⌥⇧D  | Ctrl+Alt+Shift+D |
-| Discussion | ⌘⌥⇧J  | Ctrl+Alt+Shift+J |
-| Dashboard  | ⌘⌥⇧G  | Ctrl+Alt+Shift+G |
-| Review     | ⌘⌥⇧E  | Ctrl+Alt+Shift+E |
+| Panel         | macOS | Windows / Linux  |
+| ------------- | ----- | ---------------- |
+| Terminal      | ⌃\`   | Ctrl+\`          |
+| Browser       | ⌘⌥⇧U  | Ctrl+Alt+Shift+U |
+| Files         | ⌘⇧B   | Ctrl+Shift+B     |
+| Side chat     | ⌘⇧S   | Ctrl+Shift+S     |
+| Tasks         | ⌘⌥⇧K  | Ctrl+Alt+Shift+K |
+| Desktop       | ⌘⌥⇧D  | Ctrl+Alt+Shift+D |
+| Discussion    | ⌘⌥⇧J  | Ctrl+Alt+Shift+J |
+| Dashboard     | ⌘⌥⇧G  | Ctrl+Alt+Shift+G |
+| Review        | ⌘⌥⇧E  | Ctrl+Alt+Shift+E |
+| Balance panes | ⌘⌥⇧B  | Ctrl+Alt+Shift+B |
 
 Command+Option chords accept Option symbols through the physical key; Ctrl+Alt chords require the matching ASCII letter to preserve non-ASCII AltGr text. Dead keys and composition are ignored.
 

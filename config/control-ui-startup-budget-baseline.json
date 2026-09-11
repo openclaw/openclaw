@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 352531,
-  "reason": "Plugin discovery shell adds the canonical /plugins workspace route and navigation metadata; measured 352531 B startup gzip on Linux-equivalent local build. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-09"
+  "startupJsGzipBytes": 353124,
+  "reason": "PR #144562 (split view: balance panes, even splits by default, session-colour pane tint) measures 353124 B startup gzip in Linux CI at 054cbe28f8 (+593 B, 0.17% over the 352531 B baseline). Most of that growth was already on main: a macOS local comparison measures main 5a6d0619ab at 353070 B and this candidate at 353270 B (+200 B for the balance action, split controls and pane tint on the chat startup path). Fixed 358400 B cap retained.",
+  "updatedAt": "2026-09-11"
 }

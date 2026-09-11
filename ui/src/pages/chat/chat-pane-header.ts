@@ -467,6 +467,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onActivate: () => this.onSplitRight?.(this.paneId),
       });
     }
+    if (!this.narrow && this.onBalancePanes) {
+      layoutMenuActions.push({
+        id: "balance-panes",
+        label: t("chat.splitView.balancePanes"),
+        icon: icons.layoutGrid,
+        onActivate: () => this.onBalancePanes?.(),
+      });
+    }
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
       movingKey: this.headerPlacementMovingKey,
@@ -686,6 +694,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onOpenSplitView: this.onOpenSplitView,
       onSplitDown: this.onSplitDown,
       onSplitRight: this.onSplitRight,
+      onBalancePanes: this.onBalancePanes,
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);

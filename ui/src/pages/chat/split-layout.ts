@@ -44,7 +44,24 @@ function cloneLayout(layout: ChatSplitLayout): ChatSplitLayout {
     })),
     columnWeights: [...layout.columnWeights],
     activePaneId: layout.activePaneId,
+    customColumnWeights: layout.customColumnWeights,
   };
+}
+
+function evenWeights(length: number): number[] {
+  return Array.from({ length }, () => 1 / length);
+}
+
+/** Reset every column and every stacked pane to equal shares and forget manual sizing. */
+export function balanceLayout(layout: ChatSplitLayout): ChatSplitLayout {
+  const next = cloneLayout(layout);
+  next.columnWeights = evenWeights(next.columns.length);
+  delete next.customColumnWeights;
+  for (const column of next.columns) {
+    column.paneWeights = evenWeights(column.panes.length);
+    delete column.customPaneWeights;
+  }
+  return next;
 }
 
 function nextColumnId(layout: ChatSplitLayout): string {
@@ -114,6 +131,9 @@ export function insertPane(
       paneWeights: [1],
     });
     next.columnWeights.splice(location.columnIndex, 1, sourceWeight / 2, sourceWeight / 2);
+    if (!next.customColumnWeights) {
+      next.columnWeights = evenWeights(next.columns.length);
+    }
   } else {
     const column = next.columns[location.columnIndex];
     if (!column) {
@@ -126,6 +146,9 @@ export function insertPane(
     const insertIndex = location.paneIndex + (edge === "down" ? 1 : 0);
     column.panes.splice(insertIndex, 0, { id: newPaneId, sessionKey });
     column.paneWeights.splice(location.paneIndex, 1, sourceWeight / 2, sourceWeight / 2);
+    if (!column.customPaneWeights) {
+      column.paneWeights = evenWeights(column.panes.length);
+    }
   }
   next.activePaneId = newPaneId;
   return next;
@@ -156,12 +179,16 @@ export function closePane(layout: ChatSplitLayout, paneId: string): ChatSplitLay
     next.columns.splice(location.columnIndex, 1);
     next.columnWeights.splice(location.columnIndex, 1);
   } else {
-    column.paneWeights = normalizeSplitLayoutWeights(column.paneWeights);
+    column.paneWeights = column.customPaneWeights
+      ? normalizeSplitLayoutWeights(column.paneWeights)
+      : evenWeights(column.panes.length);
   }
   if (panesOf(next).length <= 1) {
     return undefined;
   }
-  next.columnWeights = normalizeSplitLayoutWeights(next.columnWeights);
+  next.columnWeights = next.customColumnWeights
+    ? normalizeSplitLayoutWeights(next.columnWeights)
+    : evenWeights(next.columns.length);
   next.activePaneId = nextActivePaneId;
   return next;
 }
@@ -241,6 +268,7 @@ export function resizeColumns(
 ): ChatSplitLayout {
   const next = cloneLayout(layout);
   next.columnWeights = resizePair(next.columnWeights, boundaryIndex, pairRatio);
+  next.customColumnWeights = true;
   return next;
 }
 
@@ -254,6 +282,7 @@ export function resizePanes(
   const column = next.columns.find((entry) => entry.id === columnId);
   if (column) {
     column.paneWeights = resizePair(column.paneWeights, boundaryIndex, pairRatio);
+    column.customPaneWeights = true;
   }
   return next;
 }

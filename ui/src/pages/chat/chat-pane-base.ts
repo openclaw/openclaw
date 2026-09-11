@@ -279,6 +279,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
+  @property({ attribute: false }) onBalancePanes?: () => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
   @property({ attribute: false }) boardProvider?: BoardProvider;
 

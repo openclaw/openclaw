@@ -21,12 +21,13 @@ import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonic
 import { resolveDropIndicator, type DropIndicator } from "./chat-page-drop-indicator.ts";
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
+import { ChatPageSplitControls } from "./chat-page-split-controls.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
 import { bindChatPageSession } from "./chat-state-route.ts";
-import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 import "./chat-pane.ts";
+import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -119,6 +120,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.addEventListener("drop", this.handleDrop);
     window.addEventListener("dragend", this.clearDropIndicator);
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
+    this.splitControls.connect();
     this.retainedSessions.connect();
     this.syncRouteToActivePane();
     this.syncRouteBindings();
@@ -143,6 +145,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.removeEventListener("drop", this.handleDrop);
     window.removeEventListener("dragend", this.clearDropIndicator);
     window.removeEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
+    this.splitControls.disconnect();
     this.clearDropIndicator();
     super.disconnectedCallback();
   }
@@ -308,7 +311,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       if (!pending || this.narrow || !this.isConnected) {
         return;
       }
-      const indicator = resolveDropIndicator(this, pending.pane, pending.x, pending.y);
+      const layout = this.layout ?? this.classicLayout();
+      const indicator = resolveDropIndicator(this, layout, pending.pane, pending.x, pending.y);
       if (!indicator) {
         return;
       }
@@ -343,9 +347,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    const dropLayout = this.layout ?? this.classicLayout();
     const indicator =
       (pane && this.contains(pane)
-        ? resolveDropIndicator(this, pane, event.clientX, event.clientY)
+        ? resolveDropIndicator(this, dropLayout, pane, event.clientX, event.clientY)
         : null) ?? this.dropIndicator;
     this.clearDropIndicator();
     if (sessionKey && indicator) {
@@ -516,26 +521,14 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.updateRoute(sessionKey, false, face);
   };
 
-  private readonly openSplitView = () => {
-    const sessionKey = this.data?.sessionKey?.trim();
-    if (sessionKey) {
-      this.persistLayout(
-        insertPane(this.classicLayout(sessionKey), this.classicPaneId, sessionKey, "right"),
-      );
-    }
-  };
-
-  private handleSplit(paneId: string, direction: "right" | "down") {
-    const layout = this.layout;
-    const pane = layout ? findPane(layout, paneId)?.pane : null;
-    if (!layout || !pane) {
-      return;
-    }
-    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, direction));
-  }
-
-  private readonly handleSplitRight = (paneId: string) => this.handleSplit(paneId, "right");
-  private readonly handleSplitDown = (paneId: string) => this.handleSplit(paneId, "down");
+  private readonly splitControls = new ChatPageSplitControls({
+    layout: () => this.layout,
+    presented: () => this.presented,
+    classicLayout: (sessionKey) => this.classicLayout(sessionKey),
+    classicPaneId: () => this.classicPaneId,
+    activeSessionKey: () => this.data?.sessionKey,
+    persist: (layout) => this.persistLayout(layout),
+  });
 
   private closeSplitPane(layout: ChatSplitLayout, paneId: string): void {
     const survivingPane = closeStagedPane(this.context, this, layout, paneId);
@@ -610,11 +603,13 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
                     onClosePane: splitMode ? this.handleClosePane : undefined,
                     onFaceChange: this.handlePaneFaceChange,
                     onFocusPane: this.handleFocusPane,
-                    onOpenSplitView: splitMode || this.narrow ? undefined : this.openSplitView,
+                    onOpenSplitView:
+                      splitMode || this.narrow ? undefined : this.splitControls.openSplitView,
                     onPaneSessionChange: this.handlePaneSessionChange,
                     onSessionDeleted: this.retainedSessions.removeSession,
-                    onSplitDown: splitMode ? this.handleSplitDown : undefined,
-                    onSplitRight: splitMode ? this.handleSplitRight : undefined,
+                    onSplitDown: splitMode ? this.splitControls.splitDown : undefined,
+                    onSplitRight: splitMode ? this.splitControls.splitRight : undefined,
+                    onBalancePanes: splitMode ? this.splitControls.balance : undefined,
                     ownerKey: JSON.stringify([column.id, pane.id]),
                     pane,
                     sessionSlots: retainedSessions.get(pane.id) ?? [],

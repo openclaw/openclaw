@@ -28,6 +28,7 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   discussionPanel: { modifiers: ["mod", "alt", "shift"], key: "j" },
   dashboardPanel: { modifiers: ["mod", "alt", "shift"], key: "g" },
   reviewPanel: { modifiers: ["mod", "alt", "shift"], key: "e" },
+  balancePanes: { modifiers: ["mod", "alt", "shift"], key: "b" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },
   historyPrevious: { modifiers: [], key: "ArrowUp" },
