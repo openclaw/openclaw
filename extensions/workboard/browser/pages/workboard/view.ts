@@ -461,6 +461,18 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                 </div>
                 <div class="workboard-filter-display">
                   ${renderFilterChoices({
+                    label: t("workboard.filterLayout"),
+                    value: state.viewMode,
+                    options: [
+                      { value: "board", label: t("workboard.viewBoard"), icon: "kanban" },
+                      { value: "list", label: t("workboard.viewList"), icon: "list" },
+                    ],
+                    onChange: (value) => {
+                      state.viewMode = value;
+                      props.onRequestUpdate?.();
+                    },
+                  })}
+                  ${renderFilterChoices({
                     label: t("workboard.filterDensity"),
                     value: state.layout,
                     options: [
@@ -591,14 +603,32 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                 </div>
               `
             : html`
-                <div class="workboard-board-viewport">
+                <div
+                  class="workboard-board-viewport ${
+                    state.viewMode === "list" ? "workboard-board-viewport--list" : ""
+                  }"
+                >
                   <div
                     ${ref(boardScrollEdgesRef())}
-                    class="workboard-board workboard-board--page workboard-board--${state.layout} ${visibleStatuses.length === 1 ? "workboard-board--single-column" : ""}"
+                    class="workboard-board workboard-board--page workboard-board--${state.layout} ${
+                      state.viewMode === "list" ? "workboard-board--list" : ""
+                    } ${visibleStatuses.length === 1 ? "workboard-board--single-column" : ""}"
                   >
+                    ${
+                      state.viewMode === "list"
+                        ? html`<div class="workboard-list-header" aria-hidden="true">
+                            <span>${t("workboard.fieldTitle")}</span>
+                            <span>${t("workboard.fieldSession")}</span>
+                            <span>${t("workboard.detailTabDetails")}</span>
+                            <span>${t("workboard.fieldPriority")}</span>
+                            <span>${t("workboard.detailUpdated")}</span>
+                            <span></span><span></span>
+                          </div>`
+                        : nothing
+                    }
                     ${visibleStatuses.map((status) =>
                       renderColumn(props, status, byStatus.get(status) ?? [], {
-                        surface: "page",
+                        surface: state.viewMode === "list" ? "list" : "page",
                       }),
                     )}
                   </div>

@@ -1267,6 +1267,15 @@
   pointer-events: auto;
 }
 
+.workboard-board--list .workboard-column__add--empty {
+  min-height: 40px;
+}
+
+.workboard-board--list .workboard-column__empty {
+  min-height: 60px;
+  padding: 8px 12px;
+}
+
 .workboard-empty-state {
   display: grid;
   place-items: center;
@@ -2021,12 +2030,13 @@
   background: var(--bg-hover);
 }
 
-:root[data-theme-mode="light"] .workboard-card:where(:not(.workboard-card--dragging)) {
+:root[data-theme-mode="light"]
+  .workboard-card:where(:not(.workboard-card--dragging, .workboard-card--list)) {
   background: var(--card);
   box-shadow: var(--shadow-sm);
 }
 
-:root[data-theme-mode="light"] .workboard-card--openable:hover {
+:root[data-theme-mode="light"] .workboard-card--openable:where(:not(.workboard-card--list)):hover {
   background: color-mix(in srgb, var(--text) 6%, var(--card));
 }
 
@@ -2311,7 +2321,370 @@
   color: var(--text-strong);
 }
 
+/* The list responds to available board space, including the sidebar. */
+.workboard-board-viewport:has(> .workboard-board--list) {
+  container: workboard-list / inline-size;
+  flex: 1;
+  overflow: hidden;
+}
+
+.workboard-board-viewport:has(> .workboard-board--list)::before,
+.workboard-board-viewport:has(> .workboard-board--list)::after {
+  display: none;
+}
+
 /* Headers and rows share the same tracks, including empty cells. */
+.workboard-board.workboard-board--list {
+  --workboard-list-columns: minmax(220px, 1.5fr) minmax(180px, 1fr) minmax(100px, 0.65fr) 76px 64px
+    28px 28px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  gap: 0;
+  overflow: auto;
+  scroll-snap-type: none;
+  scroll-padding-top: 68px;
+}
+
+.workboard-board.workboard-board--list.workboard-board--page .workboard-column {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
+  margin-bottom: 12px;
+  border-radius: 0;
+  overflow: visible;
+  scroll-snap-align: none;
+}
+
+.workboard-board.workboard-board--list.workboard-board--page
+  .workboard-column:where(:not(.workboard-column--drop-target)) {
+  background: transparent;
+}
+
+.workboard-board--list .workboard-column__header {
+  position: sticky;
+  top: 32px;
+  z-index: 3;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+  margin: 0;
+  background: var(--bg-content, var(--bg));
+}
+
+.workboard-list-header,
+.workboard-board.workboard-board--list .workboard-card--list {
+  display: grid;
+  grid-template-columns: var(--workboard-list-columns);
+  align-items: center;
+  column-gap: 12px;
+  box-sizing: border-box;
+  padding: 0 12px;
+}
+
+.workboard-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  flex: 0 0 32px;
+  height: 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-content, var(--bg));
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.workboard-list-header > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-list-header > :nth-child(5) {
+  text-align: right;
+}
+
+.workboard-board.workboard-board--list .workboard-column__cards {
+  flex: none;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+  mask-image: none;
+}
+
+.workboard-board--list .workboard-column__rail {
+  min-height: 36px;
+  padding: 6px 12px;
+  writing-mode: horizontal-tb;
+}
+
+.workboard-board--list .workboard-column__rail .workboard-column__count {
+  min-width: 24px;
+  min-height: 0;
+  padding: 1px 0;
+}
+
+.workboard-board--list .workboard-column__rail-icon {
+  margin-top: 0;
+  margin-left: auto;
+}
+
+.workboard-board.workboard-board--list .workboard-card--list {
+  height: 48px;
+  min-height: 48px;
+  row-gap: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.workboard-board.workboard-board--list
+  .workboard-card--list:where(:not(.workboard-card--dragging)) {
+  background: transparent;
+}
+
+.workboard-board.workboard-board--list
+  .workboard-card--list:where(:not(.workboard-card--dragging)):hover {
+  background: var(--bg-hover);
+}
+
+.workboard-card--list > *,
+.workboard-list-row__metadata > * {
+  min-width: 0;
+}
+
+.workboard-list-row__metadata {
+  display: contents;
+}
+
+.workboard-list-row__title {
+  grid-column: 1;
+}
+.workboard-list-row__context {
+  grid-column: 3;
+}
+.workboard-list-row__priority {
+  grid-column: 4;
+}
+.workboard-list-row__agent {
+  grid-column: 6;
+}
+.workboard-list-row__actions {
+  grid-column: 7;
+}
+
+.workboard-list-row__title,
+.workboard-list-row__session,
+.workboard-list-row__context,
+.workboard-list-row__agent,
+.workboard-list-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workboard-list-row__agent,
+.workboard-list-row__actions {
+  justify-content: center;
+}
+
+.workboard-list-row__title h3 {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-list-row__title .workboard-card__labels {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  max-width: 32%;
+  gap: 4px;
+}
+
+.workboard-list-row__title .workboard-chip {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 88px;
+  padding: 1px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-list-row__title .workboard-chip:not(.workboard-truncate) {
+  flex: 0 0 auto;
+}
+
+.workboard-list-row__session {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.workboard-list-row__session > .workboard-card__session {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 22px;
+  font-size: 12px;
+}
+
+.workboard-list-row__alert {
+  flex: 1;
+  min-width: 0;
+}
+
+.workboard-list-row__context,
+.workboard-list-row__priority,
+.workboard-list-row__updated {
+  overflow: hidden;
+}
+
+.workboard-list-row__context .workboard-card__counts {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.workboard-list-row__priority .workboard-card__priority {
+  white-space: nowrap;
+}
+
+.workboard-list-row__updated {
+  grid-column: 5;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-list-row__agent .workboard-agent-avatar {
+  padding: 0;
+  background: transparent;
+}
+
+.workboard-list-row__actions .workboard-card__menu-trigger {
+  width: 28px;
+  height: 28px;
+}
+
+.workboard-board--list .workboard-column__add {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@container workboard-list (max-width: 900px) {
+  .workboard-board.workboard-board--list {
+    --workboard-list-columns: minmax(0, 1fr) 76px 64px 28px 28px;
+    scroll-padding-top: 36px;
+  }
+
+  .workboard-list-header {
+    display: none;
+  }
+  .workboard-board--list .workboard-column__header {
+    top: 0;
+  }
+
+  .workboard-board.workboard-board--list .workboard-card--list {
+    height: 64px;
+    min-height: 64px;
+    grid-template-rows: 32px 31px;
+  }
+
+  .workboard-list-row__title,
+  .workboard-list-row__priority,
+  .workboard-list-row__updated,
+  .workboard-list-row__agent,
+  .workboard-list-row__actions {
+    grid-row: 1;
+  }
+
+  .workboard-list-row__priority {
+    grid-column: 2;
+  }
+  .workboard-list-row__updated {
+    grid-column: 3;
+  }
+  .workboard-list-row__agent {
+    grid-column: 4;
+  }
+  .workboard-list-row__actions {
+    grid-column: 5;
+  }
+
+  .workboard-list-row__metadata {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-items: center;
+    align-self: start;
+    gap: 20px;
+    overflow: hidden;
+  }
+
+  .workboard-list-row__session {
+    flex: 0 1 50%;
+  }
+  .workboard-list-row__context {
+    flex: 1;
+  }
+}
+
+@container workboard-list (max-width: 560px) {
+  .workboard-board.workboard-board--list {
+    --workboard-list-columns: minmax(0, 1fr) auto 28px;
+  }
+
+  .workboard-board.workboard-board--list .workboard-card--list {
+    height: 48px;
+    min-height: 48px;
+    grid-template-rows: 47px;
+    column-gap: 8px;
+  }
+
+  .workboard-list-row__metadata {
+    display: contents;
+  }
+  .workboard-list-row__session {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .workboard-list-row__agent {
+    grid-column: 3;
+  }
+  .workboard-list-row__session > .workboard-card__session {
+    grid-template-columns: auto;
+  }
+
+  .workboard-list-row__title .workboard-card__labels,
+  .workboard-list-row__session .workboard-card__session-name,
+  .workboard-list-row__context,
+  .workboard-list-row__priority,
+  .workboard-list-row__updated,
+  .workboard-list-row__actions {
+    display: none;
+  }
+}
 
 @media (hover: none) {
   .workboard {

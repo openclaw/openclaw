@@ -648,15 +648,16 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
   });
 
-  it.each(["board"] as const)(
+  it.each(["board", "list"] as const)(
     "moves the resolved active %s card when a drop has no transfer payload",
-    async () => {
+    async (viewMode) => {
       const card = createWorkboardCard({ title: "Fallback drag move" });
       const moved = { ...card, status: "running" as const, position: 1000 };
       const request = vi.fn(async () => ({ card: moved }));
       const { state, container, renderView } = createWorkboardView({
         client: { request } as unknown as GatewayBrowserClient,
       });
+      state.viewMode = viewMode;
       state.cards = [card];
       state.draggedCardId = card.id;
       renderView();
@@ -908,14 +909,15 @@ describe("renderWorkboard", () => {
     },
   );
 
-  it.each(["board"] as const)(
+  it.each(["board", "list"] as const)(
     "preserves full diagnostic text in the %s card's accessible description",
-    () => {
+    (viewMode) => {
       const sentinel = "SYNTHETIC_PRIVATE_OUTPUT";
       vi.mocked(workboardTestHost().host.redact).mockImplementation((text) =>
         text.replaceAll(sentinel, "[redacted]"),
       );
       const { state, container, renderView } = createWorkboardView();
+      state.viewMode = viewMode;
       state.cards = [
         createWorkboardCard({
           id: "card-boundary",
@@ -1244,9 +1246,9 @@ describe("renderWorkboard", () => {
     expect(details.textContent).not.toContain("Invalid Date");
   });
 
-  it.each(["board"] as const)(
+  it.each(["board", "list"] as const)(
     "opens %s card details without hijacking action buttons",
-    async () => {
+    async (viewMode) => {
       const onOpenSession = vi.fn();
       const { state, container, renderView } = createWorkboardView({
         sessions: [
@@ -1261,6 +1263,7 @@ describe("renderWorkboard", () => {
         ],
         onOpenSession,
       });
+      state.viewMode = viewMode;
       state.cards = [
         createWorkboardCard({
           title: "Inspect a running task",

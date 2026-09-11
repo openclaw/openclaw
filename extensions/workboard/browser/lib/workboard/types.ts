@@ -87,6 +87,7 @@ export type WorkboardUiState = {
   boardFilter: string;
   showArchived: boolean;
   layout: "comfortable" | "compact";
+  viewMode: "board" | "list";
   emptyColumnMode: "show" | "collapse" | "hide";
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;

@@ -30,6 +30,7 @@ import {
   cardRelativeTime,
   renderCardMeta,
   renderCardCounts,
+  renderAgentChip,
   renderCardSession,
 } from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
@@ -52,7 +53,7 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-type WorkboardCardSurface = "page" | "widget";
+type WorkboardCardSurface = "page" | "widget" | "list";
 
 function renderCard(props: WorkboardProps, card: WorkboardCard, surface: WorkboardCardSurface) {
   const {
@@ -182,9 +183,75 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
             card.priority,
           )}
         </span>`;
+  const listContents =
+    surface === "list"
+      ? html`
+          <div class="workboard-list-row__title">
+            <h3
+              class="workboard-truncate"
+              title=${[card.title, card.notes].filter(Boolean).join("\n\n")}
+            >
+              ${card.title}
+            </h3>
+            ${
+              card.labels.length
+                ? html`<div class="workboard-card__labels">
+                    ${card.labels
+                      .slice(0, 1)
+                      .map(
+                        (label) =>
+                          html`<span class="workboard-chip workboard-truncate" title=${label}
+                            >${label}</span
+                          >`,
+                      )}
+                    ${
+                      card.labels.length > 1
+                        ? html`<span
+                            class="workboard-chip"
+                            title=${card.labels.slice(1).join(", ")}
+                            aria-label=${t("workboard.cardMoreLabels", {
+                              count: String(card.labels.length - 1),
+                              labels: card.labels.slice(1).join(", "),
+                            })}
+                            >+${card.labels.length - 1}</span
+                          >`
+                        : nothing
+                    }
+                  </div>`
+                : nothing
+            }
+            ${
+              archived
+                ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
+                : nothing
+            }
+          </div>
+          <div class="workboard-list-row__metadata">
+            <div class="workboard-list-row__session">
+              ${renderCardSession(props, card, lifecycle, task, sessionStatus, false)}
+            </div>
+            <div class="workboard-list-row__context">
+              ${
+                alerts.length
+                  ? html`<div class="workboard-list-row__alert">
+                      ${renderCardAlert(alerts, alertDescriptionId)}
+                    </div>`
+                  : nothing
+              }
+              ${renderCardCounts(card)}
+            </div>
+          </div>
+          <div class="workboard-list-row__priority">${priority}</div>
+          <div class="workboard-list-row__updated">${updatedTime}</div>
+          <div class="workboard-list-row__agent">${renderAgentChip(props, card)}</div>
+          <div class="workboard-list-row__actions">${actionsMenu}</div>
+        `
+      : nothing;
   return html`
     <article
-      class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${
+      class="workboard-card ${
+        surface === "list" ? "workboard-card--list" : ""
+      } priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${
         archived ? "workboard-card--archived" : ""
       }
       ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${
@@ -242,21 +309,25 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         props.onRequestUpdate?.();
       }}
     >
-      ${html` <header class="workboard-card__title">
-          <h3 class="workboard-truncate-two" title=${card.title}>${card.title}</h3>
-          <div class="workboard-card__header-actions">${actionsMenu}</div>
-        </header>
-        ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
-        ${renderCardMeta(card, archived)} ${renderCardAlert(alerts, alertDescriptionId)}
-        ${renderCardCounts(card)}
-        <footer class="workboard-card__footer">${priority} ${updatedTime}</footer>
-        ${
-          widget
-            ? html`<div class="workboard-card__actions workboard-card__actions--widget">
-                ${moveAction}
-              </div>`
-            : nothing
-        }`}
+      ${
+        surface === "list"
+          ? listContents
+          : html` <header class="workboard-card__title">
+                <h3 class="workboard-truncate-two" title=${card.title}>${card.title}</h3>
+                <div class="workboard-card__header-actions">${actionsMenu}</div>
+              </header>
+              ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+              ${renderCardMeta(card, archived)} ${renderCardAlert(alerts, alertDescriptionId)}
+              ${renderCardCounts(card)}
+              <footer class="workboard-card__footer">${priority} ${updatedTime}</footer>
+              ${
+                widget
+                  ? html`<div class="workboard-card__actions workboard-card__actions--widget">
+                      ${moveAction}
+                    </div>`
+                  : nothing
+              }`
+      }
     </article>
   `;
 }
@@ -466,7 +537,11 @@ export function renderColumn(
                     : nothing
                 }
               </div>
-              <div class="workboard-column__cards" ${ref(workboardScrollFadeRef())}>
+              <div
+                class="workboard-column__cards"
+                role=${surface === "list" ? "list" : nothing}
+                ${ref(workboardScrollFadeRef())}
+              >
                 ${
                   cards.length
                     ? cards.map(
@@ -483,6 +558,7 @@ export function renderColumn(
                                 ? "workboard-column__item--drop-after"
                                 : ""
                             }"
+                            role=${surface === "list" ? "listitem" : nothing}
                             data-card-id=${card.id}
                           >
                             ${renderCard(props, card, surface)}
@@ -512,7 +588,7 @@ export function renderColumn(
                           </div>`
                 }
                 ${
-                  canCreate && !state.draggedCardId && cards.length > 0
+                  canCreate && !state.draggedCardId && cards.length > 0 && surface !== "list"
                     ? renderCreateButton("workboard-column__add", true)
                     : nothing
                 }
