@@ -1,7 +1,9 @@
 // Openclaw Performance Workflow tests cover openclaw performance workflow script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,10 +12,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { buildSync } from "esbuild";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
@@ -86,12 +90,16 @@ function kovaMatrixEntries(): Array<Record<string, string>> {
 
 function runCandidateTrustClassification({
   candidateSha,
+  canonicalRef = "0f9e678e239b45db46d2bd930b7983203580df78",
   eventName,
+  kovaSha = "0f9e678e239b45db46d2bd930b7983203580df78",
   ref,
   workflowSha,
 }: {
   candidateSha: string;
+  canonicalRef?: string;
   eventName: "schedule" | "workflow_dispatch";
+  kovaSha?: string;
   ref: string;
   workflowSha: string;
 }) {
@@ -107,6 +115,8 @@ function runCandidateTrustClassification({
       GITHUB_EVENT_NAME: eventName,
       GITHUB_OUTPUT: output,
       GITHUB_REF: ref,
+      KOVA_CANONICAL_CONFIG_REF: canonicalRef,
+      KOVA_SHA: kovaSha,
       WORKFLOW_SHA: workflowSha,
     },
   });
@@ -122,6 +132,273 @@ function runCandidateTrustClassification({
       : [],
   );
   return { outputs, result };
+}
+
+function runLiveLane(kovaRefTrusted: string, secretEligible: string) {
+  const root = tempDirs.make("openclaw-performance-live-lane-");
+  const output = join(root, "output");
+  const summary = join(root, "summary");
+  const run = (findStep("Decide lane").run ?? "")
+    .replaceAll("${{ github.event_name }}", "workflow_dispatch")
+    .replaceAll("${{ inputs.deep_profile || 'false' }}", "false")
+    .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
+  const result = spawnSync("bash", ["-c", run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: summary,
+      KOVA_REF_TRUSTED_FOR_LIVE: kovaRefTrusted,
+      LANE_ID: "live-openai-candidate",
+      SECRET_ELIGIBLE: secretEligible,
+    },
+  });
+  return { result, output, summary };
+}
+
+function createGitHubResolutionStub(root: string) {
+  const bin = join(root, "bin");
+  const gh = join(bin, "gh");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    gh,
+    `#!/bin/sh
+[ "\${API_ERROR:-}" != "$2" ] || exit 71
+case "$2" in
+  repos/openclaw/openclaw/compare/*) printf '%s\\n' "$CONTRACT_STATUS" ;;
+  repos/openclaw/openclaw/commits/*) printf '%s\\n' "$TARGET_SHA" ;;
+  repos/openclaw/Kova/commits/*) printf '%s\\n' "\${KOVA_SHA_OVERRIDE:-\${2##*/}}" ;;
+  *) exit 64 ;;
+esac
+`,
+  );
+  chmodSync(gh, 0o755);
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nprintf invoked > "$GIT_POISON"\nexit 99\n', {
+    mode: 0o755,
+  });
+  return bin;
+}
+
+const CANONICAL_SCHEMA = "    mediaModels: z\n";
+const LEGACY_SCHEMA = "    imageGenerationModel: AgentToolModelSchema.optional(),\n";
+const SCHEMA_PATH = "src/config/zod-schema.agent-defaults.ts";
+const CALIBRATED_KOVA_REF = "18c9eb8c3950a35794d196f4e40ad471e9308e27";
+
+function contentsMetadata(sourcePath: string, bytes: Buffer) {
+  return {
+    type: "file",
+    name: sourcePath.split("/").at(-1),
+    path: sourcePath,
+    sha: "f".repeat(40),
+    size: bytes.length,
+    encoding: "base64",
+    content: bytes.toString("base64"),
+  };
+}
+
+type ResolutionOptions = {
+  external?: boolean;
+  schema?: string | Buffer;
+  packageJson?: string;
+  packageMetadata?: unknown;
+  packageStatus?: number;
+  contractStatus?: "ahead" | "behind" | "diverged";
+  contractOverride?: string;
+  kovaRef?: string;
+  overrides?: {
+    TARGET_SHA?: string;
+    TARGET_REF_INPUT?: string;
+    KOVA_SHA_OVERRIDE?: string;
+    KOVA_CANONICAL_CONFIG_REF?: string;
+    KOVA_LEGACY_LIST_CONFIG_REF?: string;
+    KOVA_TRUSTED_LIVE_REF?: string;
+    KOVA_ISOLATED_REF?: string;
+    API_ERROR?: string;
+  };
+  status?: number;
+  metadata?: unknown;
+  body?: string;
+  headers?: Record<string, string>;
+  fault?: "reset" | "truncate" | "timeout";
+};
+
+async function runTargetResolution(options: ResolutionOptions = {}) {
+  const step = findStep("Resolve OpenClaw target ref", "resolve_target");
+  const root = tempDirs.make("openclaw-performance-resolve-");
+  const bin = createGitHubResolutionStub(root);
+  const output = join(root, "output");
+  const canonicalRef = "a".repeat(40);
+  const legacyRef = "b".repeat(40);
+  const schema = Buffer.from(options.schema ?? CANONICAL_SCHEMA);
+  const metadata = options.metadata ?? contentsMetadata(SCHEMA_PATH, schema);
+  const packageMetadata =
+    options.packageMetadata ??
+    contentsMetadata(
+      "package.json",
+      Buffer.from(options.packageJson ?? JSON.stringify({ version: "0.0.0-fixture" })),
+    );
+  let requests = 0;
+  const requestedPaths: string[] = [];
+  let responseClosed = false;
+  const server = createServer((request, response) => {
+    requests += 1;
+    expect(request.method).toBe("GET");
+    const sourcePath =
+      request.url === `/repos/openclaw/openclaw/contents/package.json?ref=${"c".repeat(40)}`
+        ? "package.json"
+        : SCHEMA_PATH;
+    expect(request.url).toBe(
+      `/repos/openclaw/openclaw/contents/${sourcePath}?ref=${"c".repeat(40)}`,
+    );
+    requestedPaths.push(sourcePath);
+    expect(request.headers.accept).toBe("application/vnd.github.object+json");
+    if (sourcePath === "package.json") {
+      response.writeHead(options.packageStatus ?? 200, {
+        "content-type": "application/json; charset=utf-8",
+      });
+      response.end(JSON.stringify(packageMetadata));
+      return;
+    }
+    response.on("close", () => {
+      responseClosed = true;
+    });
+    if (options.fault === "reset") {
+      request.socket.destroy();
+      return;
+    }
+    if (options.fault === "timeout") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.flushHeaders();
+      return;
+    }
+    response.writeHead(options.status ?? 200, {
+      "content-type": "application/json; charset=utf-8",
+      ...options.headers,
+    });
+    if (options.fault === "truncate") {
+      response.flushHeaders();
+      response.write('{"type":');
+      setImmediate(() => response.destroy());
+      return;
+    }
+    response.end(options.body ?? JSON.stringify(metadata));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Contents fixture did not bind");
+  }
+  const preload = join(root, "contents.cjs");
+  writeFileSync(
+    preload,
+    `
+const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
+const assert = require("node:assert/strict");
+let deadline;
+https.get = (options, callback) => {
+  assert.equal(options.hostname, "api.github.com");
+  assert.equal(options.method, "GET");
+  assert.equal(options.maxHeaderSize, 64 * 1024);
+  fs.appendFileSync(process.env.CONTENTS_CALLS, JSON.stringify({
+    hostname: options.hostname, method: options.method, path: options.path
+  }) + "\\n");
+  return http.get({...options, hostname:"127.0.0.1", port:${address.port}}, (response) => {
+    callback(response);
+    if (process.env.CONTENTS_TIMEOUT === "true" &&
+        options.path === ${JSON.stringify(`/repos/openclaw/openclaw/contents/${SCHEMA_PATH}?ref=${"c".repeat(40)}`)}) {
+      assert.equal(typeof deadline, "function");
+      setImmediate(deadline);
+    }
+  });
+};
+if (process.env.CONTENTS_TIMEOUT === "true") {
+  const timer = global.setTimeout;
+  global.setTimeout = (callback, delay, ...args) => {
+    assert.equal(delay, 30000);
+    deadline = callback;
+    return timer(callback, delay, ...args);
+  };
+}
+`,
+  );
+  const child = spawn("bash", ["-c", step.run ?? ""], {
+    cwd: root,
+    env: {
+      ...process.env,
+      CONTRACT_STATUS: options.contractStatus ?? "ahead",
+      GH_TOKEN: "test",
+      GITHUB_OUTPUT: output,
+      GITHUB_REF_NAME: "main",
+      GITHUB_REF: "refs/heads/main",
+      DEFAULT_BRANCH: "main",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      KOVA_CANONICAL_CONFIG_REF: canonicalRef,
+      KOVA_CONFIG_CONTRACT_INPUT: options.contractOverride ?? "",
+      KOVA_LEGACY_LIST_CONFIG_REF: legacyRef,
+      KOVA_TRUSTED_LIVE_REF: canonicalRef,
+      KOVA_ISOLATED_REF: "9".repeat(40),
+      KOVA_REF_INPUT: options.kovaRef ?? "",
+      KOVA_REPOSITORY: "openclaw/Kova",
+      OPENCLAW_CANONICAL_CONFIG_SINCE: "d".repeat(40),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      TARGET_REF_INPUT: "candidate",
+      TARGET_SHA: "c".repeat(40),
+      WORKFLOW_SHA: options.external ? "e".repeat(40) : "c".repeat(40),
+      GIT_POISON: join(root, "git-called"),
+      NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+      CONTENTS_CALLS: join(root, "contents-calls"),
+      CONTENTS_TIMEOUT: String(options.fault === "timeout"),
+      ...options.overrides,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  let status: number | null;
+  try {
+    status = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+  const result = { status, stdout, stderr };
+  const outputs = Object.fromEntries(
+    existsSync(output)
+      ? readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          })
+      : [],
+  );
+  expect(existsSync(join(root, "git-called"))).toBe(false);
+  return {
+    canonicalRef,
+    legacyRef,
+    outputs,
+    result,
+    requests,
+    requestedPaths,
+    responseClosed,
+    root,
+  };
 }
 
 describe("OpenClaw performance workflow", () => {
@@ -210,7 +487,12 @@ describe("OpenClaw performance workflow", () => {
     const guard = jobs?.vitest_pair_guard;
     const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
 
-    for (const name of ["resolve_target", "kova", "source_performance"] as const) {
+    for (const name of [
+      "resolve_target",
+      "kova",
+      "source_performance",
+      "external_performance",
+    ] as const) {
       expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
     }
     expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
@@ -219,6 +501,7 @@ describe("OpenClaw performance workflow", () => {
       "resolve_target",
       "kova",
       "source_performance",
+      "external_performance",
       "publish",
       "artifact_only_guard",
       "vitest_pair",
@@ -245,7 +528,6 @@ describe("OpenClaw performance workflow", () => {
     const trustedLiveKovaRef = "3da9582e9c3eef970ef102dc3950595e0876a1d5";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
-    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
@@ -266,34 +548,18 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
       "${{ inputs.kova_config_contract }}",
     );
-    expect(targetCheckout.with?.["sparse-checkout"]).toBe(
-      "package.json\nsrc/config/zod-schema.agent-defaults.ts\n",
-    );
-    expect(resolveTarget.run).toContain(
-      'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
-    );
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
-    expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).not.toContain("OPENCLAW_CANONICAL_CONFIG_SINCE");
     expect(resolveTarget.run).toContain('kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
-      'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
+      'kova_sha="$(gh api "repos/${KOVA_REPOSITORY}/commits/${encoded_kova_ref}" --jq .sha)"',
     );
-    expect(resolveTarget.run).toContain('if [[ -f "$schema_path" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content="$(cat "$schema_path")"');
-    expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content=""');
-    expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
-    expect(
-      resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
-    ).toBeLessThan(resolveTarget.run?.indexOf('schema_path="${TARGET_CHECKOUT_DIR}') ?? -1);
     expect(resolveTarget.run).toContain(
       'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
     );
-    expect(resolveTarget.run).toContain('if [[ "$kova_ref" == "$KOVA_TRUSTED_LIVE_REF" ]]; then');
+    expect(resolveTarget.run).toContain('if [[ "$kova_sha" == "$KOVA_TRUSTED_LIVE_REF" ]]; then');
     expect(resolveTarget.run).toContain(
       'echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"',
     );
@@ -328,35 +594,638 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
+  it.each([false, true])(
+    "selects calibrated Kova for the exact historical release (external: %s)",
+    async (external) => {
+      const run = await runTargetResolution({
+        external,
+        packageJson: JSON.stringify({ version: "2026.7.33" }),
+      });
+      const workflowSha = (external ? "e" : "c").repeat(40);
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.outputs.tested_sha).toBe("c".repeat(40));
+      expect(run.outputs.tested_sha === workflowSha).toBe(!external);
+      expect(run.outputs.kova_ref).toBe(CALIBRATED_KOVA_REF);
+      expect(run.outputs.kova_config_contract).toBe("canonical");
+      expect(run.outputs.kova_ref_trusted_for_live).toBe("false");
+      expect(run.requestedPaths).toEqual(["package.json", SCHEMA_PATH]);
+      expect(run.requests).toBe(2);
+      const trust = runCandidateTrustClassification({
+        candidateSha: run.outputs.tested_sha,
+        eventName: "workflow_dispatch",
+        kovaSha: run.outputs.kova_ref,
+        ref: "refs/heads/main",
+        workflowSha,
+      });
+      expect(trust.result.status, trust.result.stderr).toBe(0);
+      expect(trust.outputs).toEqual({
+        secret_eligible: "false",
+        cache_write_allowed: "false",
+        external_required: "true",
+      });
+    },
+  );
+
+  it.each([
+    { name: "historical candidate", workflowSha: "e".repeat(40), eligible: "false" },
+    { name: "canonical workflow candidate", workflowSha: "c".repeat(40), eligible: "true" },
+  ])(
+    "resolves the shared calibrated pin without granting $name extra trust",
+    async ({ workflowSha, eligible }) => {
+      const canonicalRef = CALIBRATED_KOVA_REF;
+      const run = await runTargetResolution({
+        packageJson: JSON.stringify({ version: "2026.7.33" }),
+        overrides: {
+          KOVA_CANONICAL_CONFIG_REF: canonicalRef,
+          KOVA_LEGACY_LIST_CONFIG_REF: canonicalRef,
+          KOVA_TRUSTED_LIVE_REF: canonicalRef,
+        },
+      });
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.outputs.kova_ref).toBe(CALIBRATED_KOVA_REF);
+      expect(run.outputs.kova_config_contract).toBe("canonical");
+      expect(run.outputs.kova_ref_trusted_for_live).toBe("true");
+      expect(run.requestedPaths).toEqual(["package.json", SCHEMA_PATH]);
+      const trust = runCandidateTrustClassification({
+        candidateSha: run.outputs.tested_sha,
+        canonicalRef,
+        eventName: "workflow_dispatch",
+        kovaSha: run.outputs.kova_ref,
+        ref: "refs/heads/main",
+        workflowSha,
+      });
+      expect(trust.result.status, trust.result.stderr).toBe(0);
+      expect(trust.outputs).toEqual({
+        secret_eligible: eligible,
+        cache_write_allowed: eligible,
+        external_required: eligible === "true" ? "false" : "true",
+      });
+      const lane = runLiveLane(
+        run.outputs.kova_ref_trusted_for_live,
+        trust.outputs.secret_eligible,
+      );
+      expect(lane.result.status, lane.result.stderr).toBe(0);
+      expect(readFileSync(lane.output, "utf8")).toBe(`run=${eligible}\n`);
+      if (eligible === "false") {
+        expect(readFileSync(lane.summary, "utf8")).toContain(
+          "candidate is not eligible for live credentials",
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "admitted",
+      canonicalRef: CALIBRATED_KOVA_REF,
+      legacyRef: "b".repeat(40),
+      required: "true",
+    },
+    {
+      name: "admitted legacy",
+      canonicalRef: "a".repeat(40),
+      legacyRef: CALIBRATED_KOVA_REF,
+      required: "true",
+    },
+    { name: "custom", canonicalRef: "a".repeat(40), legacyRef: "b".repeat(40), required: "false" },
+  ])(
+    "passes the $name Kova instrumentation requirement to the guest",
+    ({ canonicalRef, legacyRef, required }) => {
+      const body = expectDefined(
+        findStep("Attest and run candidate in disposable Crabbox", "external_performance").run,
+        "external performance execution body",
+      );
+      const start = body.indexOf("require_instrumented=false");
+      const end = body.indexOf("status=${PIPESTATUS[0]}", start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const run = body
+        .slice(start, end)
+        .replaceAll("${{ matrix.include_filters }}", "fixture")
+        .replaceAll("${{ matrix.expected_release_entries }}", "1")
+        .replaceAll("${{ inputs.fail_on_regression || 'false' }}", "false");
+      const root = tempDirs.make("openclaw-performance-instrumentation-");
+      const output = join(root, "arguments");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+capture() { printf '%s\\0' "$@" > "$ARGUMENTS"; }
+crabbox=capture
+args=(run)
+lane=source repeat=1
+${run}
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ARGUMENTS: output,
+            KOVA_SHA: CALIBRATED_KOVA_REF,
+            KOVA_CANONICAL_CONFIG_REF: canonicalRef,
+            KOVA_LEGACY_LIST_CONFIG_REF: legacyRef,
+            KOVA_ISOLATED_REF: required === "true" ? CALIBRATED_KOVA_REF : "9".repeat(40),
+            OPENCLAW_SHA: "c".repeat(40),
+            WORKFLOW_SHA: "e".repeat(40),
+            TESTED_REF: "fixture",
+            PROFILE: "smoke",
+            KOVA_CONFIG_CONTRACT: "canonical",
+            GITHUB_RUN_ID: "1",
+            GITHUB_RUN_ATTEMPT: "1",
+            CRABBOX_VERSION: "fixture",
+            PERFORMANCE_MODEL_ID: "fixture",
+            timing_log: join(root, "timing"),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8").split("\0")).toEqual([
+        "run",
+        "--",
+        "remote",
+        "source",
+        "c".repeat(40),
+        CALIBRATED_KOVA_REF,
+        "e".repeat(40),
+        "fixture",
+        "smoke",
+        "1",
+        "canonical",
+        "fixture",
+        "1",
+        "false",
+        "1",
+        "1",
+        "fixture",
+        "fixture",
+        required,
+        required === "true" ? CALIBRATED_KOVA_REF : "9".repeat(40),
+        "",
+      ]);
+    },
+  );
+
+  it.each([
+    { name: "ordinary version", version: "2026.8.1" },
+    { name: "longer patch", version: "2026.7.330" },
+    { name: "prerelease", version: "2026.7.33-beta.1" },
+    { name: "trailing newline", version: "2026.7.33\n" },
+  ])("preserves ordinary Kova defaults for $name", async ({ version }) => {
+    const run = await runTargetResolution({
+      packageJson: JSON.stringify({ version }),
+      schema: LEGACY_SCHEMA,
+    });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.outputs.kova_ref).toBe(run.legacyRef);
+    expect(run.outputs.kova_config_contract).toBe("legacy-list");
+    expect(run.requestedPaths).toEqual(["package.json", SCHEMA_PATH]);
+    expect(run.requests).toBe(2);
+  });
+
+  it.each(["", "producer-v2"])(
+    "preserves explicit Kova ref without fetching package metadata (contract: %s)",
+    async (contractOverride) => {
+      const run = await runTargetResolution({
+        kovaRef: "9".repeat(40),
+        contractOverride,
+        packageJson: JSON.stringify({ version: "2026.7.33" }),
+        packageStatus: 503,
+      });
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.outputs.kova_ref).toBe("9".repeat(40));
+      expect(run.outputs.kova_config_contract).toBe(contractOverride || "canonical");
+      expect(run.requestedPaths).toEqual(contractOverride ? [] : [SCHEMA_PATH]);
+      expect(run.requests).toBe(contractOverride ? 0 : 1);
+    },
+  );
+
+  it.each([
+    { name: "explicit contract", contractOverride: "producer-v2", status: 503 },
+    { name: "legacy schema", schema: LEGACY_SCHEMA },
+    { name: "unknown schema", schema: "// unknown", expectedContract: "" },
+    { name: "missing schema", status: 404, expectedContract: "" },
+  ])("preserves calibrated release contract behavior: $name", async (options) => {
+    const run = await runTargetResolution({
+      ...options,
+      packageJson: JSON.stringify({ version: "2026.7.33" }),
+    });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.outputs.kova_ref).toBe(CALIBRATED_KOVA_REF);
+    expect(run.outputs.kova_config_contract).toBe(
+      options.contractOverride ?? options.expectedContract ?? "legacy-list",
+    );
+    expect(run.requestedPaths).toEqual(
+      options.contractOverride ? ["package.json"] : ["package.json", SCHEMA_PATH],
+    );
+    expect(run.requests).toBe(options.contractOverride ? 1 : 2);
+  });
+
+  it.each([
+    { name: "malformed JSON", packageJson: "{" },
+    { name: "null JSON", packageJson: "null" },
+    { name: "array JSON", packageJson: "[]" },
+    { name: "missing version", packageJson: "{}" },
+    { name: "numeric version", packageJson: '{"version":733}' },
+    { name: "null version", packageJson: '{"version":null}' },
+    { name: "missing package", packageStatus: 404 },
+    { name: "unavailable package", packageStatus: 503 },
+    { name: "directory package", packageMetadata: { entries: [] } },
+    {
+      name: "symlink package",
+      packageMetadata: {
+        ...contentsMetadata("package.json", Buffer.from("{}")),
+        type: "symlink",
+        target: "other.json",
+      },
+    },
+    {
+      name: "submodule package",
+      packageMetadata: {
+        ...contentsMetadata("package.json", Buffer.from("{}")),
+        submodule_git_url: "https://github.com/openclaw/openclaw.git",
+      },
+    },
+    {
+      name: "wrong package path",
+      packageMetadata: contentsMetadata("other.json", Buffer.from('{"version":"2026.7.33"}')),
+    },
+  ])("rejects required package metadata without fallback: $name", async (options) => {
+    const run = await runTargetResolution(options);
+    expect(run.result.status).not.toBe(0);
+    expect(run.outputs).toEqual({});
+    expect(run.requestedPaths).toEqual(["package.json"]);
+    expect(run.requests).toBe(1);
+  });
+
+  it("never executes or logs package source or arbitrary version bytes", async () => {
+    const marker = "$(touch package-executed);`exit 31`";
+    const run = await runTargetResolution({
+      packageJson: JSON.stringify({ version: marker, scripts: { preinstall: marker } }),
+    });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.outputs.kova_ref).toBe(run.canonicalRef);
+    expect(run.result.stdout + run.result.stderr).not.toContain(marker);
+    expect(existsSync(join(run.root, "package-executed"))).toBe(false);
+    expect(run.requestedPaths).toEqual(["package.json", SCHEMA_PATH]);
+  });
+
+  it("selects canonical Kova metadata for targets containing the config transition", async () => {
+    const { canonicalRef, outputs, result } = await runTargetResolution();
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_ref).toBe(canonicalRef);
+    expect(outputs.kova_config_contract).toBe("canonical");
+    expect(outputs.tested_sha).toBe("c".repeat(40));
+    expect(outputs.tested_ref).toBe("candidate");
+  });
+
+  it.each([
+    { TARGET_SHA: "invalid" },
+    { KOVA_SHA_OVERRIDE: "invalid" },
+    { API_ERROR: "repos/openclaw/openclaw/commits/candidate" },
+    { API_ERROR: `repos/openclaw/Kova/commits/${"a".repeat(40)}` },
+  ])("fails API resolution without Git or partial outputs: %j", async (overrides) => {
+    const { result, outputs } = await runTargetResolution({ overrides });
+    expect(result.status).not.toBe(0);
+    expect(outputs).toEqual({});
+  });
+
+  it.each([{ TARGET_SHA: "invalid" }, { KOVA_SHA_OVERRIDE: "invalid" }])(
+    "validates immutable refs even when both overrides skip acquisition: %j",
+    async (overrides) => {
+      const { result, outputs, requests } = await runTargetResolution({
+        overrides,
+        kovaRef: "9".repeat(40),
+        contractOverride: "producer=v2",
+      });
+      expect(result.status).not.toBe(0);
+      expect(outputs).toEqual({});
+      expect(requests).toBe(0);
+    },
+  );
+
+  it.each([
+    { overrides: { TARGET_REF_INPUT: "candidate\nother" } },
+    { overrides: { TARGET_REF_INPUT: "candidate\rother" } },
+    { kovaRef: "ref\nother" },
+    { kovaRef: "ref\rother" },
+    { contractOverride: "producer\nother" },
+    { contractOverride: "producer\rother" },
+  ])("rejects multiline inputs before acquisition: %j", async (options) => {
+    const { result, outputs, requests } = await runTargetResolution(options);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("must be a single line");
+    expect(outputs).toEqual({});
+    expect(requests).toBe(0);
+  });
+
+  it("selects legacy-list Kova metadata for targets before the config transition", async () => {
+    const { legacyRef, outputs, result } = await runTargetResolution({
+      schema: LEGACY_SCHEMA,
+      contractStatus: "behind",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_ref).toBe(legacyRef);
+    expect(outputs.kova_config_contract).toBe("legacy-list");
+  });
+
+  it.each(["", "legacy-list", "producer-specific"])(
+    "preserves explicit contracts while inspecting divergent target bytes (override: %s)",
+    async (override) => {
+      const { canonicalRef, outputs, result } = await runTargetResolution({
+        contractStatus: "diverged",
+        contractOverride: override,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(outputs.kova_config_contract).toBe(override || "canonical");
+      expect(outputs.kova_ref).toBe(canonicalRef);
+    },
+  );
+
+  it.each([
+    {
+      name: "reverted descendant",
+      contractStatus: "ahead" as const,
+      schema: LEGACY_SCHEMA,
+      expected: "legacy-list",
+    },
+    {
+      name: "no-marker descendant",
+      contractStatus: "ahead" as const,
+      schema: "// unknown\n",
+      expected: null,
+    },
+    {
+      name: "canonical backport",
+      contractStatus: "diverged" as const,
+      schema: CANONICAL_SCHEMA,
+      expected: "canonical",
+    },
+  ])("infers the contract from actual schema bytes: $name", async ({ expected, ...options }) => {
+    const { result, outputs } = await runTargetResolution(options);
+    if (expected === null) {
+      expect(result.status).not.toBe(0);
+      expect(outputs).toEqual({});
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      expect(outputs.kova_config_contract).toBe(expected);
+    }
+  });
+
+  it.each([
+    { name: "canonical", schema: CANONICAL_SCHEMA, contract: "canonical", ref: "a" },
+    { name: "legacy", schema: LEGACY_SCHEMA, contract: "legacy-list", ref: "b" },
+    {
+      name: "canonical precedence",
+      schema: LEGACY_SCHEMA + CANONICAL_SCHEMA,
+      contract: "canonical",
+      ref: "a",
+    },
+    {
+      name: "custom ref",
+      schema: LEGACY_SCHEMA,
+      kovaRef: "9".repeat(40),
+      contract: "legacy-list",
+      ref: "9",
+    },
+    {
+      name: "contract-only override",
+      schema: LEGACY_SCHEMA,
+      contractOverride: "producer=v2",
+      contract: "producer=v2",
+      ref: "b",
+    },
+    {
+      name: "both overrides",
+      kovaRef: "9".repeat(40),
+      contractOverride: "producer-v2",
+      status: 403,
+      contract: "producer-v2",
+      ref: "9",
+      requests: 0,
+    },
+    {
+      name: "unknown with custom ref",
+      schema: "// unknown",
+      kovaRef: "9".repeat(40),
+      contract: "",
+      ref: "9",
+    },
+    { name: "empty with custom ref", schema: "", kovaRef: "9".repeat(40), contract: "", ref: "9" },
+    {
+      name: "404 with custom ref",
+      status: 404,
+      body: '{"message":"Not Found"}',
+      kovaRef: "9".repeat(40),
+      contract: "",
+      ref: "9",
+    },
+    {
+      name: "maximum file",
+      schema: CANONICAL_SCHEMA + " ".repeat(1_000_000 - CANONICAL_SCHEMA.length),
+      contract: "canonical",
+      ref: "a",
+    },
+  ])(
+    "preserves the complete Kova override table: $name",
+    async ({ contract, ref, requests, ...options }) => {
+      const run = await runTargetResolution(options);
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.outputs.kova_ref).toBe(ref.repeat(40));
+      expect(run.outputs.kova_config_contract).toBe(contract);
+      const expectedPaths =
+        requests === 0 ? [] : options.kovaRef ? [SCHEMA_PATH] : ["package.json", SCHEMA_PATH];
+      expect(run.requestedPaths).toEqual(expectedPaths);
+      expect(run.requests).toBe(expectedPaths.length);
+    },
+  );
+
+  it.each([
+    { schema: "" },
+    { schema: "// unknown" },
+    { schema: "// unknown", contractOverride: "canonical" },
+    { status: 404 },
+    { status: 404, contractOverride: "producer-v2" },
+  ])("requires an explicit ref for unusable schema: %j", async (options) => {
+    const { result, outputs } = await runTargetResolution(options);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("Supply kova_ref explicitly");
+    expect(outputs).toEqual({});
+  });
+
+  it.each([
+    { name: "object directory", metadata: { entries: [] } },
+    {
+      name: "named directory",
+      metadata: {
+        type: "dir",
+        path: SCHEMA_PATH,
+        name: "zod-schema.agent-defaults.ts",
+        entries: [],
+      },
+    },
+    { name: "symlink descriptor", metadata: { type: "symlink", target: "../schema.ts" } },
+    {
+      name: "submodule descriptor",
+      metadata: { type: "submodule", submodule_git_url: "https://example.invalid/module.git" },
+    },
+    {
+      name: "legacy submodule descriptor",
+      metadata: { type: "file", submodule_git_url: "https://example.invalid/module.git" },
+    },
+  ])("does not traverse a valid non-file response: $name", async ({ metadata }) => {
+    const response =
+      "entries" in metadata
+        ? metadata
+        : {
+            name: "zod-schema.agent-defaults.ts",
+            path: SCHEMA_PATH,
+            sha: "f".repeat(40),
+            size: 0,
+            ...metadata,
+          };
+    for (const kovaRef of ["", "9".repeat(40)]) {
+      const { result, outputs, requests, requestedPaths } = await runTargetResolution({
+        metadata: response,
+        kovaRef,
+      });
+      const expectedPaths = kovaRef ? [SCHEMA_PATH] : ["package.json", SCHEMA_PATH];
+      expect(requestedPaths).toEqual(expectedPaths);
+      expect(requests).toBe(expectedPaths.length);
+      if (kovaRef) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(outputs.kova_config_contract).toBe("");
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(outputs).toEqual({});
+      }
+    }
+  });
+
+  it.each<ResolutionOptions & { name: string; patch?: Record<string, unknown> }>([
+    { name: "missing metadata", metadata: {} },
+    { name: "array metadata", metadata: [] },
+    { name: "null metadata", body: "null" },
+    { name: "invalid JSON", body: "not json" },
+    { name: "wrong path", patch: { path: "other.ts" } },
+    { name: "wrong name", patch: { name: "other.ts" } },
+    { name: "wrong SHA type", patch: { sha: 1 } },
+    { name: "unknown type", patch: { type: "unknown" } },
+    { name: "missing symlink target", patch: { type: "symlink" } },
+    { name: "invalid submodule descriptor", patch: { submodule_git_url: null } },
+    { name: "directory path mismatch", metadata: { entries: [], path: "other" } },
+    { name: "malformed directory child", metadata: { entries: [null] } },
+    { name: "negative size", patch: { size: -1 } },
+    { name: "fractional size", patch: { size: 1.5 } },
+    { name: "non-number size", patch: { size: "24" } },
+    { name: "oversize file", patch: { size: 1_000_001 } },
+    { name: "size mismatch", patch: { size: 1 } },
+    { name: "encoding none", patch: { encoding: "none" } },
+    { name: "non-string content", patch: { content: [] } },
+    { name: "base64 tab", patch: { content: "YQ==\t", size: 1 } },
+    { name: "base64 spaces", patch: { content: "Y Q==", size: 1 } },
+    { name: "base64 alphabet", patch: { content: "YQ-_", size: 3 } },
+    { name: "base64 nonzero pad bits", patch: { content: "YR==", size: 1 } },
+    { name: "base64 missing padding", patch: { content: "YQ", size: 1 } },
+    { name: "body limit", body: " ".repeat(2 * 1024 * 1024 + 1) },
+    { name: "header limit", headers: { "x-overflow": "x".repeat(64 * 1024) } },
+    { name: "wrong media", headers: { "content-type": "text/html" } },
+    { name: "redirect", status: 302, headers: { location: "https://example.invalid/credentials" } },
+    { name: "unusable cached response", status: 304 },
+    { name: "unauthorized", status: 401 },
+    { name: "forbidden", status: 403 },
+    { name: "rate limited", status: 429 },
+    { name: "server failure", status: 500 },
+    { name: "reset", fault: "reset" as const },
+    { name: "truncated body", fault: "truncate" as const },
+    { name: "deadline", fault: "timeout" as const },
+  ])("rejects Contents acquisition failure without partial outputs: $name", async (entry) => {
+    const { patch, ...options } = entry;
+    const metadata = patch
+      ? {
+          type: "file",
+          name: "zod-schema.agent-defaults.ts",
+          path: SCHEMA_PATH,
+          sha: "f".repeat(40),
+          size: Buffer.byteLength(CANONICAL_SCHEMA),
+          encoding: "base64",
+          content: Buffer.from(CANONICAL_SCHEMA).toString("base64"),
+          ...patch,
+        }
+      : options.metadata;
+    const run = await runTargetResolution({ ...options, metadata, kovaRef: "9".repeat(40) });
+    expect(run.result.status, run.result.stderr).not.toBe(0);
+    expect(run.outputs).toEqual({});
+    expect(run.requestedPaths).toEqual([SCHEMA_PATH]);
+    expect(run.requests).toBe(1);
+    expect(run.responseClosed).toBe(true);
+    expect(run.result.stderr).not.toContain("Bearer");
+    expect(run.result.stderr).not.toContain("credentials");
+  });
+
+  it("decodes line-folded base64 and never evaluates schema bytes", async () => {
+    const schema = Buffer.from("$(touch should-not-exist)\n`exit 31`\n" + CANONICAL_SCHEMA);
+    const run = await runTargetResolution({
+      metadata: {
+        type: "file",
+        name: "zod-schema.agent-defaults.ts",
+        path: SCHEMA_PATH,
+        sha: "f".repeat(40),
+        size: schema.length,
+        encoding: "base64",
+        content:
+          schema
+            .toString("base64")
+            .match(/.{1,12}/g)
+            ?.join("\r\n") + "\n",
+      },
+    });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.outputs.kova_config_contract).toBe("canonical");
+    expect(existsSync(join(run.root, "should-not-exist"))).toBe(false);
+    expect(run.result.stderr).not.toContain("touch");
+  });
+
+  it.each([
+    Buffer.from("prefix    mediaModels: z\n"),
+    Buffer.from("    mediaModels: z\r\n"),
+    Buffer.from("    mediaModels: z\0\n"),
+    Buffer.concat([Buffer.from([0xff]), Buffer.from("    mediaModels: z\n")]),
+    Buffer.from("   mediaModels: z\n"),
+  ])("does not invent a marker by normalizing bytes: %j", async (schema) => {
+    const { result, outputs } = await runTargetResolution({ schema, kovaRef: "9".repeat(40) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_config_contract).toBe("");
+  });
+
   it("keeps live credentials away from custom Kova refs", () => {
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const decideLane = findStep("Decide lane");
     const configureLiveAuth = findStep("Configure live OpenAI auth");
     const runKova = findStep("Run Kova");
     const root = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-kova-live-ref-"));
+    const bin = createGitHubResolutionStub(root);
     const trustedRef = "1fe2f4081877bb12b7f7ed355349f98b8a0a6882";
     const compatibleUntrustedRef = "0f9e678e239b45db46d2bd930b7983203580df78";
-    const decideLaneRun = (decideLane.run ?? "")
-      .replaceAll("${{ github.event_name }}", "workflow_dispatch")
-      .replaceAll("${{ inputs.deep_profile || 'false' }}", "false")
-      .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
-
     const runBoundary = (kovaRef: string, name: string) => {
       const resolveOutput = join(root, `${name}-resolve-output`);
-      const laneOutput = join(root, `${name}-lane-output`);
       const resolve = spawnSync("bash", ["-c", resolveTarget.run ?? ""], {
         encoding: "utf8",
         env: {
           ...process.env,
           GITHUB_OUTPUT: resolveOutput,
           GITHUB_REF_NAME: "fix/kova-runtime-major-baseline",
+          GITHUB_REPOSITORY: "openclaw/openclaw",
           KOVA_CANONICAL_CONFIG_REF: compatibleUntrustedRef,
           KOVA_CONFIG_CONTRACT_INPUT: "canonical",
           KOVA_LEGACY_LIST_CONFIG_REF: compatibleUntrustedRef,
           KOVA_REF_INPUT: kovaRef,
           KOVA_TRUSTED_LIVE_REF: trustedRef,
-          TARGET_CHECKOUT_DIR: process.cwd(),
-          CI_GIT_OWNER: resolvePath(".github/actions/git-owner/owner.py"),
+          KOVA_REPOSITORY: "openclaw/Kova",
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          TARGET_SHA: "c".repeat(40),
           TARGET_REF_INPUT: "test-head",
         },
       });
@@ -367,18 +1236,8 @@ describe("OpenClaw performance workflow", () => {
           .split("\n")
           .map((line) => line.split("=", 2)),
       );
-      const lane = spawnSync("bash", ["-c", decideLaneRun], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_OUTPUT: laneOutput,
-          GITHUB_STEP_SUMMARY: join(root, `${name}-summary`),
-          KOVA_REF_TRUSTED_FOR_LIVE: resolved.kova_ref_trusted_for_live,
-          LANE_ID: "live-openai-candidate",
-          SECRET_ELIGIBLE: "true",
-        },
-      });
-      return { lane, laneOutput, resolved };
+      const lane = runLiveLane(resolved.kova_ref_trusted_for_live, "true");
+      return { lane: lane.result, laneOutput: lane.output, resolved };
     };
 
     expect(decideLane.run).toContain(
@@ -418,6 +1277,25 @@ describe("OpenClaw performance workflow", () => {
     }
   });
 
+  it.each([
+    { name: "default isolated evaluator", kovaRef: "", expected: "9".repeat(40) },
+    { name: "explicit custom diagnostic", kovaRef: "8".repeat(40), expected: "8".repeat(40) },
+  ])("preserves evaluator selection for $name", async ({ kovaRef, expected }) => {
+    const { result, outputs } = await runTargetResolution({ external: true, kovaRef });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_ref).toBe(expected);
+    expect(outputs.kova_ref_trusted_for_live).toBe("false");
+  });
+
+  it("refuses an external default until an immutable isolated evaluator is pinned", async () => {
+    const { result } = await runTargetResolution({
+      external: true,
+      overrides: { KOVA_ISOLATED_REF: "" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("reviewed cross-user Kova dependency is not pinned");
+  });
+
   it("keeps arbitrary performance candidates secretless and cacheless", () => {
     const workflow = readWorkflow();
     const trust = findStep("Classify performance candidate trust", "resolve_target");
@@ -433,18 +1311,22 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow.jobs?.resolve_target?.outputs).toMatchObject({
       secret_eligible: "${{ steps.candidate_trust.outputs.secret_eligible }}",
       cache_write_allowed: "${{ steps.candidate_trust.outputs.cache_write_allowed }}",
+      external_required: "${{ steps.candidate_trust.outputs.external_required }}",
     });
     expect(trust.env).toMatchObject({
       CANDIDATE_SHA: "${{ steps.resolve.outputs.tested_sha }}",
       DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}",
+      KOVA_SHA: "${{ steps.resolve.outputs.kova_ref }}",
       WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(trust.run).toContain("secret_eligible=false");
     expect(trust.run).toContain("cache_write_allowed=false");
+    expect(trust.run).toContain("external_required=true");
     expect(trust.run).toContain('"$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}"');
     expect(trust.run).toContain('"$CANDIDATE_SHA" == "$WORKFLOW_SHA"');
     expect(trust.run).toContain("secret_eligible=true");
     expect(trust.run).toContain("cache_write_allowed=true");
+    expect(trust.run).toContain("external_required=false");
 
     for (const harness of [kovaHarness, sourceHarness, publisherHarness]) {
       expect(harness.with?.ref).toBe("${{ github.workflow_sha }}");
@@ -497,6 +1379,7 @@ describe("OpenClaw performance workflow", () => {
       expect(trusted.outputs).toEqual({
         secret_eligible: "true",
         cache_write_allowed: "true",
+        external_required: "false",
       });
     }
 
@@ -519,6 +1402,7 @@ describe("OpenClaw performance workflow", () => {
       expect(untrusted.outputs).toEqual({
         secret_eligible: "false",
         cache_write_allowed: "false",
+        external_required: "true",
       });
     }
   });
@@ -589,7 +1473,6 @@ describe("OpenClaw performance workflow", () => {
 
   it("resolves each target once before benchmark and publication fan out", () => {
     const workflow = readWorkflow();
-    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const checkout = findStep("Checkout OpenClaw");
     const record = findStep("Record tested revision");
@@ -598,19 +1481,14 @@ describe("OpenClaw performance workflow", () => {
 
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
-    expect(targetCheckout.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
-    expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
-    expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
-    expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);
-    expect(targetCheckout.with?.["persist-credentials"]).toBe(false);
     expect(resolveTarget.id).toBe("resolve");
-    expect(resolveTarget.env?.GH_TOKEN).toBeUndefined();
+    expect(resolveTarget.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(resolveTarget.env?.TARGET_REF_INPUT).toBe("${{ inputs.target_ref }}");
-    expect(resolveTarget.env?.TARGET_CHECKOUT_DIR).toBe(
-      "${{ github.workspace }}/.artifacts/performance-target",
+    expect(resolveTarget.run).toContain(
+      'resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"',
     );
-    expect(resolveTarget.run).toContain('--git 0 -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD');
-    expect(resolveTarget.run).not.toContain("gh api");
+    expect(resolveTarget.run).not.toContain("git clone");
+    expect(resolveTarget.run).not.toContain("actions/checkout");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
     expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
@@ -1389,5 +2267,444 @@ printf '%s\\n' \
       "steps.upload_source_performance_artifacts.outcome == 'failure'",
     );
     expect(retrySourceUpload.with?.overwrite).toBe(true);
+  });
+});
+
+describe("external performance workflow", () => {
+  const clientDirs = useAutoCleanupTempDirTracker(afterAll);
+  let client: string;
+  beforeAll(() => {
+    const root = clientDirs.make("openclaw-performance-broker-client-");
+    client = join(root, "crabbox.mjs");
+    buildSync({
+      stdin: {
+        resolveDir: process.cwd(),
+        contents: `
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import { Compile } from "typebox/schema";
+const args = process.argv.slice(2), root = process.env.FIXTURE_ROOT;
+const fault = process.env.FAULT, status = Number(process.env.SUT_EXIT);
+const id = args[args.indexOf("--id") + 1];
+fs.appendFileSync(root + "/calls", JSON.stringify(args) + "\\n");
+if (args[0] === "config") console.log(JSON.stringify({aws:{instanceProfile:fault === "configured-role" ? "unsafe-role" : ""}}));
+else if (args[0] === "warmup") {}
+else if (args[0] === "inspect") console.log(JSON.stringify({
+  id, provider:"aws", network:"public", tailscale:fault === "tailscale" ? {state:"ok"} : null,
+  providerMetadata:fault === "unknown-role" ? {} : {instanceProfileAttached:fault === "attached-role"}
+}));
+else if (args[0] === "stop") process.exit(fault === "stop" ? 5 : 0);
+else if (args[0] === "run") {
+  for (const flag of ["--no-hydrate", "--timing-json"]) assert(args.includes(flag));
+  assert.equal(args[args.indexOf("--stop-after") + 1], "never");
+  assert.equal(args[args.indexOf("--allow-env") + 1], "CI");
+  assert(args.includes("--require-artifact-schema"));
+  const collection = !args.includes("--script");
+  if (collection) {
+    assert.deepEqual(args.slice(args.indexOf("--") + 1), ["/usr/bin/true"]);
+    assert(args.includes("--no-sync"));
+    assert.equal(fs.existsSync(root + "/collected"), false);
+    fs.writeFileSync(root + "/collected", "once");
+  }
+  const evidence = JSON.parse(fs.readFileSync(root + "/remote-evidence.json", "utf8"));
+  let code = collection ? (fault === "collection" ? 9 : 0) : status;
+  if (!collection && fault !== "missing-receipt") {
+    // The real collector's final record supersedes candidate stdout.
+    console.log("performance-result " + JSON.stringify(
+      fault === "incomplete" ? null : {
+        exitCode:status, exportExitCode:0, startedAt:evidence.command.startedAt,
+        finishedAt:evidence.command.finishedAt, noHydration:fault !== "hydration", runId:"run_workload",
+        workspace: "/work/crabbox/" + id + "/openclaw"
+      }));
+  }
+  if (code === 0) {
+    if (fault === "missing") code = 7;
+    else {
+      if (fault === "schema") delete evidence.isolation.noSudo;
+      if (fault === "identity") evidence.openclawSha = "d".repeat(40);
+      if (fault === "timing") evidence.command.finishedAt = "2026-08-21T00:02:00Z";
+      if (fault === "hash") evidence.artifacts[0].sha256 = "0".repeat(64);
+      const schema = JSON.parse(fs.readFileSync(process.env.SCHEMA, "utf8"));
+      if (!Compile(schema).Check(evidence)) code = 7;
+      else {
+        for (let i = 0; i < args.length; i++) if (args[i] === "--download") {
+          const [remote, destination] = args[++i].split("=");
+          if (remote.endsWith("/remote-evidence.json")) fs.writeFileSync(destination, JSON.stringify(evidence));
+          else fs.copyFileSync(root + "/payload.tar.gz", destination);
+        }
+      }
+    }
+  }
+  console.log("workspace owner released");
+  for (const value of [null,true,[],1,"message",{}]) console.log(JSON.stringify(value));
+  if (fault === "missing-timing") process.exit(code);
+  console.log(JSON.stringify({
+    provider:"aws", leaseId: fault === "lease" ? "cbx_ffffffffffff" : id,
+    runId: collection && fault !== "run-id" ? "run_collection" : "run_workload",
+    workdir: "/work/crabbox/" + id + (collection && fault === "workspace" ? "/other" : "/openclaw"),
+    repoPath: root, syncSkipped:collection, commandMs:collection ? 1 : 60000,
+    exitCode:code, errorKind: fault === "termination" ? "provider-error" : code ? "command-exit" : "",
+    runStatus:code ? "failed" : "succeeded"
+  }));
+  process.exit(code);
+} else process.exit(64);
+`,
+      },
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: client,
+    });
+  });
+
+  const SCRIPT = resolvePath("scripts/openclaw-performance-crabbox.sh");
+  const SCHEMA = ".github/crabbox/openclaw-performance-evidence.schema.json";
+
+  function sha256(value: Buffer): string {
+    return createHash("sha256").update(value).digest("hex");
+  }
+
+  function fixture() {
+    const root = tempDirs.make("openclaw-performance-crabbox-");
+    const artifact = ".artifacts/kova/reports/mock-provider/report.json";
+    const artifactPath = join(root, artifact);
+    const payload = join(root, "payload.tar.gz");
+    const evidence = join(root, "remote-evidence.json");
+    const timing = join(root, "timing.json");
+    const output = join(root, ".artifacts/performance-crabbox/evidence/mock-provider.json");
+    const contents = Buffer.from('{"status":"ok"}\n');
+    mkdirSync(join(root, ".artifacts/kova/reports/mock-provider"), { recursive: true });
+    writeFileSync(artifactPath, contents);
+    execFileSync("tar", ["-czf", payload, "-C", root, artifact]);
+    writeFileSync(
+      evidence,
+      JSON.stringify({
+        schemaVersion: 1,
+        lane: "mock-provider",
+        testedRef: "refs/pull/1/head",
+        openclawSha: "a".repeat(40),
+        kovaSha: "b".repeat(40),
+        workflow: { sha: "c".repeat(40), runId: "123", runAttempt: "1" },
+        crabbox: {
+          commit: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
+          version: "0.46.0+8ba71f913bbe",
+        },
+        command: {
+          name: "mock-provider",
+          argv: [
+            "profile=diagnostic",
+            "repeat=1",
+            "contract=canonical",
+            "include=scenario:fresh-install",
+            "failOnRegression=false",
+          ],
+          exitCode: 0,
+          startedAt: "2026-08-21T00:00:00Z",
+          finishedAt: "2026-08-21T00:01:00Z",
+        },
+        isolation: {
+          sutUser: "openclaw-sut",
+          trustedHarnessRootOwned: true,
+          noSudo: true,
+          imdsBlocked: true,
+          environmentClean: true,
+          cachesEmptyBefore: true,
+          tailscaleRequested: false,
+          tailscaleMetadataAbsent: true,
+        },
+        artifacts: [{ path: artifact, size: contents.length, sha256: sha256(contents) }],
+        lease: { provider: "aws", market: "on-demand", cleanupPolicy: "always" },
+      }),
+    );
+    writeFileSync(
+      timing,
+      JSON.stringify({
+        provider: "aws",
+        leaseId: "cbx_0123456789ab",
+        runId: "run_0123456789ab",
+        exitCode: 0,
+      }),
+    );
+    const expected = join(root, "expected.json");
+    writeFileSync(
+      expected,
+      JSON.stringify({
+        ...JSON.parse(readFileSync(evidence, "utf8")),
+        timing: JSON.parse(readFileSync(timing, "utf8")),
+        stopped: true,
+      }),
+    );
+    return { artifact, evidence, output, payload, root, timing, expected };
+  }
+
+  function externalRun(options: { status?: number; fault?: string }) {
+    const files = fixture();
+    const { root } = files;
+    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
+    const step = workflow.jobs.external_performance.steps.find(
+      (entry: { name: string }) => entry.name === "Attest and run candidate in disposable Crabbox",
+    );
+    const lane = "mock-provider";
+    const status = options.status ?? 17;
+    const output = join(root, "output");
+    const evidence = JSON.parse(readFileSync(files.evidence, "utf8"));
+    evidence.command.exitCode = status;
+    evidence.command.argv[4] = "failOnRegression=true";
+    writeFileSync(files.evidence, JSON.stringify(evidence));
+    mkdirSync(join(root, "scripts"));
+    copyFileSync(SCRIPT, join(root, "scripts/openclaw-performance-crabbox.sh"));
+    chmodSync(join(root, "scripts/openclaw-performance-crabbox.sh"), 0o755);
+    writeFileSync(
+      join(root, "crabbox"),
+      `#!/bin/sh\nexec "${process.execPath}" "${client}" "$@"\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    const body = (step.run as string)
+      .replaceAll("${{ matrix.lane }}", lane)
+      .replaceAll("${{ matrix.repeat }}", "1")
+      .replaceAll("${{ matrix.include_filters }}", "scenario:fresh-install")
+      .replaceAll("${{ matrix.expected_release_entries }}", "-")
+      .replaceAll("${{ inputs.fail_on_regression || 'false' }}", "true");
+    expect(body).not.toContain("${{");
+    const result = spawnSync("/bin/bash", ["-c", body], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        CI: "1",
+        RUNNER_TEMP: root,
+        FIXTURE_ROOT: root,
+        FAULT: options.fault ?? "",
+        SUT_EXIT: String(status),
+        LANE: lane,
+        SCHEMA: resolvePath(SCHEMA),
+        GITHUB_OUTPUT: output,
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        OPENCLAW_SHA: "a".repeat(40),
+        KOVA_SHA: "b".repeat(40),
+        WORKFLOW_SHA: "c".repeat(40),
+        TESTED_REF: "refs/pull/1/head",
+        PROFILE: "diagnostic",
+        REQUESTED_REPEAT: "1",
+        KOVA_CONFIG_CONTRACT: "canonical",
+        CRABBOX_VERSION: "0.46.0+8ba71f913bbe",
+        CRABBOX_COMMIT: "8ba71f913bbe57285ae29af45ef0d8ec6712477d",
+        KOVA_CANONICAL_CONFIG_REF: "b".repeat(40),
+        KOVA_LEGACY_LIST_CONFIG_REF: "b".repeat(40),
+        KOVA_ISOLATED_REF: "b".repeat(40),
+        PERFORMANCE_MODEL_ID: "fixture-model",
+      },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    return {
+      ...files,
+      result,
+      calls: readFileSync(join(root, "calls"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]),
+      available:
+        existsSync(output) && readFileSync(output, "utf8").includes("artifacts_available=true"),
+    };
+  }
+
+  it.each([
+    { name: "success", status: 0, available: true, runs: 1, exit: 0 },
+    { name: "configured role", fault: "configured-role", available: false, runs: 0, exit: 1 },
+    { name: "attached role", fault: "attached-role", available: false, runs: 0, exit: 1 },
+    { name: "unknown role attachment", fault: "unknown-role", available: false, runs: 0, exit: 1 },
+    { name: "Tailscale attachment", fault: "tailscale", available: false, runs: 0, exit: 1 },
+    { name: "gated failure", status: 17, available: true, runs: 2, exit: 17 },
+    { name: "missing reports", fault: "missing", available: false, runs: 2, exit: 7 },
+    { name: "malformed schema", fault: "schema", available: false, runs: 2, exit: 7 },
+    { name: "wrong hash", fault: "hash", available: false, runs: 2, exit: 1 },
+    { name: "wrong identity", fault: "identity", available: false, runs: 2, exit: 1 },
+    { name: "wrong original timing", fault: "timing", available: false, runs: 2, exit: 1 },
+    { name: "wrong lease", fault: "lease", available: false, runs: 1, exit: 1 },
+    { name: "missing timing", fault: "missing-timing", available: false, runs: 1, exit: 1 },
+    { name: "wrong workspace", fault: "workspace", available: false, runs: 2, exit: 1 },
+    { name: "reused run id", fault: "run-id", available: false, runs: 2, exit: 1 },
+    { name: "collection failure", fault: "collection", available: false, runs: 2, exit: 9 },
+    { name: "stop failure", fault: "stop", available: false, runs: 2, exit: 1 },
+    { name: "unsealed producer", fault: "incomplete", available: false, runs: 1, exit: 17 },
+    {
+      name: "missing collector receipt",
+      fault: "missing-receipt",
+      available: false,
+      runs: 1,
+      exit: 17,
+    },
+    { name: "hydrated workspace", fault: "hydration", available: false, runs: 1, exit: 17 },
+    { name: "uncertain termination", fault: "termination", available: false, runs: 1, exit: 1 },
+  ])("runs the real workflow with isolated collection: $name", (entry) => {
+    const run = externalRun(entry);
+    expect(run.result.status, run.result.stderr + run.result.stdout).toBe(entry.exit);
+    expect(run.available).toBe(entry.available);
+    expect(run.calls.filter((args) => args[0] === "run")).toHaveLength(entry.runs);
+    expect(run.calls.map((args) => args[0])).toEqual(
+      entry.fault === "configured-role"
+        ? ["config", "stop"]
+        : ["config", "warmup", "inspect", ...Array(entry.runs).fill("run"), "stop"],
+    );
+    if (entry.available) {
+      const exported = JSON.parse(readFileSync(run.output, "utf8"));
+      expect(exported.command.exitCode).toBe(entry.status);
+      expect(exported.command.finishedAt).toBe("2026-08-21T00:01:00Z");
+    }
+  });
+
+  it.each([
+    {
+      name: "exact-main with deep profiling requested",
+      external: false,
+      deep: true,
+      event: "workflow_dispatch",
+      enabled: [],
+    },
+    {
+      name: "external defaults",
+      external: true,
+      deep: false,
+      event: "workflow_dispatch",
+      enabled: ["mock-provider", "source"],
+    },
+    {
+      name: "external deep profiling",
+      external: true,
+      deep: true,
+      event: "workflow_dispatch",
+      enabled: ["mock-provider", "mock-deep-profile", "source"],
+    },
+    {
+      name: "external scheduled deep profiling",
+      external: true,
+      deep: false,
+      event: "schedule",
+      enabled: ["mock-provider", "mock-deep-profile", "source"],
+    },
+    {
+      name: "exact-main schedule",
+      external: false,
+      deep: false,
+      event: "schedule",
+      enabled: [],
+    },
+  ])("enables only requested external lanes: $name", (entry) => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8"));
+    const step = workflow.jobs.external_performance.steps.find(
+      (candidate: { name: string }) => candidate.name === "Decide external lane",
+    );
+    const run: unknown = step?.run;
+    if (typeof run !== "string") {
+      throw new Error("External lane decision must be a shell step");
+    }
+    const root = tempDirs.make("openclaw-performance-lane-");
+    for (const lane of ["mock-provider", "mock-deep-profile", "source"]) {
+      const output = join(root, lane);
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          run
+            .replaceAll("${{ matrix.lane }}", lane)
+            .replaceAll(
+              "${{ needs.resolve_target.outputs.external_required }}",
+              String(entry.external),
+            )
+            .replaceAll("${{ inputs.deep_profile || 'false' }}", String(entry.deep)),
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            GITHUB_EVENT_NAME: entry.event,
+            GITHUB_OUTPUT: output,
+          },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, `${lane}: ${result.stderr}`).toBe(0);
+      expect(readFileSync(output, "utf8"), lane).toBe(`run=${entry.enabled.includes(lane)}\n`);
+    }
+  });
+
+  it("keeps candidate bytes off Actions runners and stops every lease", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const parsed = parse(workflow) as {
+      jobs: Record<
+        string,
+        {
+          if?: string;
+          steps?: Array<{
+            name?: string;
+            env?: Record<string, string>;
+            run?: string;
+            uses?: string;
+            with?: Record<string, string>;
+          }>;
+        }
+      >;
+    };
+    const kova = expectDefined(parsed.jobs.kova, "kova job");
+    const sourcePerformance = expectDefined(
+      parsed.jobs.source_performance,
+      "source performance job",
+    );
+    const external = expectDefined(parsed.jobs.external_performance, "external performance job");
+    const checkout = external.steps?.find(
+      (step) => step.name === "Checkout trusted performance harness",
+    );
+    const checkouts = external.steps?.filter((step) => step.uses?.startsWith("actions/checkout@"));
+    const secretSteps = external.steps?.filter((step) =>
+      JSON.stringify(step.env ?? {}).includes("CRABBOX_COORDINATOR"),
+    );
+    const run = expectDefined(
+      external.steps?.find((step) => step.name === "Attest and run candidate in disposable Crabbox")
+        ?.run,
+      "external candidate run step",
+    );
+
+    expect(workflow).toContain("CRABBOX_COMMIT: 8ba71f913bbe57285ae29af45ef0d8ec6712477d");
+    expect(workflow).toContain("external_required:");
+    expect(workflow).toContain(
+      "--provider aws --target linux --arch amd64 --class beast --type c7a.24xlarge",
+    );
+    expect(workflow).toContain("--network public --tailscale=false");
+    expect(workflow).toContain("--tailscale-exit-node=");
+    expect(workflow).toContain("--tailscale-exit-node-allow-lan-access=false");
+    expect(workflow).not.toContain("--stop-after always");
+    expect(run).toContain("tailscale_requested=false tailscale_metadata=none");
+    expect(run).toContain("unset CRABBOX_AWS_INSTANCE_PROFILE");
+    expect(workflow).toContain("CRABBOX_ENV_ALLOW=CI");
+    expect(run.lastIndexOf("\nconfirm_cleanup")).toBeLessThan(
+      run.indexOf("scripts/openclaw-performance-crabbox.sh verify"),
+    );
+    expect(run).not.toContain('select(has("leaseStopped"))');
+    expect(workflow).toContain(
+      "CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
+    );
+    expect(workflow).toContain(
+      "CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
+    );
+    expect(workflow).toContain(
+      "if: ${{ always() && steps.execution.outputs.artifacts_available == 'true' }}",
+    );
+    expect(workflow).not.toContain("Checkout target metadata");
+    expect(workflow).not.toContain("TARGET_CHECKOUT_DIR");
+    expect(kova.if).toContain("needs.resolve_target.outputs.external_required != 'true'");
+    expect(sourcePerformance.if).toContain(
+      "needs.resolve_target.outputs.external_required != 'true'",
+    );
+    expect(external.if).toBe(
+      "${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.external_required == 'true' }}",
+    );
+    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkouts?.map((step) => step.with?.ref)).toEqual(["${{ github.workflow_sha }}"]);
+    expect(secretSteps?.map((step) => step.name)).toEqual([
+      "Attest and run candidate in disposable Crabbox",
+    ]);
   });
 });
