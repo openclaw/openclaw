@@ -555,6 +555,7 @@ describe("CommandPalette lifecycle", () => {
         harness.setConnected(false);
       } else if (replacement === "detach") {
         palette.remove();
+        harness.emit("chat.metadata.changed");
       } else if (replacement === "closed") {
         palette.togglePalette();
         harness.emit("chat.metadata.changed");

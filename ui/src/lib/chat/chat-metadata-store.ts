@@ -7,6 +7,7 @@ import type {
   CommandsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
 
 export type ChatMetadataResult = CommandsListResult;
 
@@ -243,6 +244,8 @@ export function invalidateChatMetadataStore(
   client: GatewayBrowserClient,
   scope?: ChatMetadataParams,
 ): void {
+  // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
+  invalidateModelCatalogCache(client, scope);
   const entries = chatMetadataCache.get(client)?.values();
   if (!entries) {
     return;

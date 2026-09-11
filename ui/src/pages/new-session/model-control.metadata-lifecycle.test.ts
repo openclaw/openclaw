@@ -303,10 +303,10 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("reads published models when the picker opens without acquiring providers", async () => {
+  it("reuses published models on picker open and refreshes after publication", async () => {
     const prepared = [{ id: "prepared", name: "Prepared", provider: "example" }];
     const published = [...prepared, { id: "published", name: "Published", provider: "example" }];
-    const { context, request } = contextWith(prepared);
+    const { context, request, emitCatalogChanged } = contextWith(prepared);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
     await vi.waitFor(() =>
@@ -321,6 +321,8 @@ describe("new-session model metadata lifecycle", () => {
       ".chat-controls__model-picker",
     )!;
     picker.querySelector("summary")!.click();
+    expect(request).toHaveBeenCalledTimes(1);
+    emitCatalogChanged();
     await vi.waitFor(() =>
       expect(
         renderControl(control, context).querySelector(
@@ -335,7 +337,7 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("reads current catalog state on remount after control teardown", async () => {
+  it("restores cached controls synchronously after teardown", async () => {
     const models: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -354,9 +356,8 @@ describe("new-session model metadata lifecycle", () => {
 
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true, { agent });
-    await vi.waitFor(() =>
-      expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth"),
-    );
+    expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth");
+    expect(remountedControl.isRestoringPreference()).toBe(false);
 
     const container = renderControl(remountedControl, context, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
@@ -365,7 +366,7 @@ describe("new-session model metadata lifecycle", () => {
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
     expect(container.textContent).toContain("No models available");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
     remountedControl.reset();
   });
 
