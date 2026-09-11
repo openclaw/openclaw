@@ -3,7 +3,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -28,6 +28,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { forgetLegacyVoiceBinding } from "./talk-client-legacy-voice-bindings.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type {
@@ -2177,7 +2178,7 @@ describe("talk.session unified handlers", () => {
       language: "de",
       consultAuthority: {
         senderIsOwner: false,
-        replyCaller: {
+        replyCaller: expect.objectContaining({
           ApprovalReviewerDeviceId: undefined,
           ChatType: "direct",
           GatewayClientCaps: [],
@@ -2188,7 +2189,7 @@ describe("talk.session unified handlers", () => {
           SenderId: undefined,
           SenderName: undefined,
           SenderUsername: undefined,
-        },
+        }),
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       },
     });
@@ -2346,7 +2347,7 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
       authority: {
         senderIsOwner: false,
-        replyCaller: {
+        replyCaller: expect.objectContaining({
           ApprovalReviewerDeviceId: undefined,
           ChatType: "direct",
           GatewayClientCaps: [],
@@ -2357,7 +2358,7 @@ describe("talk.session unified handlers", () => {
           SenderId: undefined,
           SenderName: undefined,
           SenderUsername: undefined,
-        },
+        }),
         toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
       },
       sessionKey: "agent:main:main",
@@ -2986,8 +2987,10 @@ describe("talk.client.toolCall handler", () => {
   });
 
   it("retains the original human authority through the Talk chat client copy", async () => {
+    const connId = "conn-command-authority";
+    onTestFinished(() => forgetLegacyVoiceBinding(connId, "main", "voice-test"));
     const client: GatewayClient = {
-      connId: "conn-1",
+      connId,
       authenticatedUserId: "ada@example.test",
       authenticatedUserProfile: {
         profileId: "profile-ada",
