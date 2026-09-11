@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json";
+import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import type { ModelCatalogResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -167,7 +167,14 @@ suite.define(() => {
           await model.click();
           expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
           for (const [index, refreshFailed] of [false, true, false].entries()) {
-            await gateway.setMethodResponse("models.list", { ...catalog, refreshFailed });
+            await gateway.setMethodResponse("models.list", {
+              ...catalog,
+              refreshFailed,
+              providerOutcomes: [
+                { provider: "openai", status: "ready" },
+                { provider: "github-copilot", status: refreshFailed ? "unavailable" : "ready" },
+              ],
+            });
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
             const notice = composer.locator("[data-chat-model-catalog-state]");
             await expect.poll(() => notice.count()).toBe(refreshFailed ? 1 : 0);
