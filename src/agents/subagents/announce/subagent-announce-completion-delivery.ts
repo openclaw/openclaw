@@ -2,10 +2,13 @@
  * Direct completion fallback and source-delivery evidence for subagent announcements.
  */
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
+import type { ChannelId } from "../../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveOutboundSessionRoute } from "../../../infra/outbound/outbound-session.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -29,6 +32,42 @@ import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 
 const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
+
+export async function resolveEquivalentMessagingToolTarget(
+  params: {
+    cfg: OpenClawConfig;
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+  },
+  target: MessagingToolDeliveryTarget,
+  expected: SourceDeliveryTarget,
+): Promise<string | undefined> {
+  const agentId = tryResolveSubagentRequesterAgentId(
+    params.cfg,
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
+  const channel = normalizeMessageChannel(expected.channel);
+  const provider = target.provider?.trim().toLowerCase();
+  if (
+    !channel ||
+    !agentId ||
+    !target.to?.trim() ||
+    (provider && provider !== "message" && provider !== channel) ||
+    (expected.accountId && target.accountId !== expected.accountId)
+  ) {
+    return undefined;
+  }
+  const route = await resolveOutboundSessionRoute({
+    cfg: params.cfg,
+    channel: channel as ChannelId,
+    agentId,
+    accountId: target.accountId ?? expected.accountId ?? null,
+    target: target.to,
+    threadId: target.threadId ?? null,
+  });
+  return route?.recipientSessionExact === true ? route.to : undefined;
+}
 
 export function isGatewayAgentRunPending(response: unknown): boolean {
   if (!response || typeof response !== "object") {
@@ -199,20 +238,35 @@ export async function deliverCompletionDirect(params: {
   }
 }
 
-export function hasMessagingToolDeliveryToSource(
-  result: {
-    didDeliverSourceReplyViaMessageTool?: unknown;
-    didSendViaMessagingTool?: unknown;
-    messagingToolSentTargets?: unknown;
-    messagingToolSourceReplyPayloads?: unknown;
-  },
-  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
-  options?: { requireFinalReply?: boolean },
-): boolean {
+export type MessagingToolDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[0];
+export type SourceDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[1];
+
+type MessagingToolDeliveryMatchOptions = {
+  requireFinalReply?: boolean;
+  /** Resolve provider-native delivery identities to the configured source target. */
+  resolveEquivalentTarget?: (
+    target: MessagingToolDeliveryTarget,
+    deliveryTarget: SourceDeliveryTarget,
+  ) => Promise<string | undefined>;
+};
+
+export type MessagingToolDeliveryResult = {
+  didDeliverSourceReplyViaMessageTool?: unknown;
+  didSendViaMessagingTool?: unknown;
+  messagingToolSentTargets?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
+export async function hasMessagingToolDeliveryToSource(
+  result: MessagingToolDeliveryResult,
+  deliveryTarget: SourceDeliveryTarget,
+  options?: MessagingToolDeliveryMatchOptions,
+): Promise<boolean> {
   const targets = Array.isArray(result.messagingToolSentTargets)
     ? result.messagingToolSentTargets
     : [];
-  const sourceTargets = targets.filter((target) => {
+  const sourceTargets: MessagingToolDeliveryTarget[] = [];
+  for (const target of targets) {
     if (
       !target ||
       typeof target !== "object" ||
@@ -220,16 +274,41 @@ export function hasMessagingToolDeliveryToSource(
       !deliveryTarget.channel ||
       !deliveryTarget.to
     ) {
-      return false;
+      continue;
     }
-    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
+    const record = target as MessagingToolDeliveryTarget;
     // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
     const sourceTarget =
       typeof record.to === "string" && record.to.trim()
         ? record
         : { ...record, to: deliveryTarget.to };
-    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
-  });
+    if (sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget)) {
+      sourceTargets.push(sourceTarget);
+      continue;
+    }
+    if (!options?.resolveEquivalentTarget || !record.to?.trim()) {
+      continue;
+    }
+    // The existing exact-match path preserves legacy receipts, but a provider
+    // lookup must never turn a missing account into a wildcard.
+    if (deliveryTarget.accountId && record.accountId !== deliveryTarget.accountId) {
+      continue;
+    }
+    // A provider-native conversation ID (for example Slack's D… DM channel)
+    // can represent the configured source user without being textually equal.
+    // Lookup failures are unverified evidence, not delivery failures.
+    try {
+      const equivalentTarget = await options.resolveEquivalentTarget(sourceTarget, deliveryTarget);
+      if (
+        equivalentTarget &&
+        sourceDeliveryTargetsMatch({ ...sourceTarget, to: equivalentTarget }, deliveryTarget)
+      ) {
+        sourceTargets.push({ ...sourceTarget, to: equivalentTarget });
+      }
+    } catch {
+      // Keep the completion owed when the provider cannot verify the recipient.
+    }
+  }
   if (options?.requireFinalReply) {
     const hasCommittedSourceDelivery =
       hasCommittedSourceReplyDeliveryEvidence(result) ||
@@ -256,4 +335,30 @@ export function hasMessagingToolDeliveryToSource(
   }
 
   return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+}
+
+export async function resolveMessagingToolDeliveryEvidence(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  result: MessagingToolDeliveryResult;
+  deliveryTarget: SourceDeliveryTarget;
+}): Promise<{ hasFinalMessagingToolDelivery: boolean; hasMessagingToolDelivery: boolean }> {
+  const resolveEquivalentTarget = resolveEquivalentMessagingToolTarget.bind(null, {
+    cfg: params.cfg,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterAgentId: params.requesterAgentId,
+  });
+  const matchOptions = { resolveEquivalentTarget };
+  const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
+    params.result,
+    params.deliveryTarget,
+    { ...matchOptions, requireFinalReply: true },
+  );
+  return {
+    hasFinalMessagingToolDelivery,
+    hasMessagingToolDelivery:
+      hasFinalMessagingToolDelivery ||
+      (await hasMessagingToolDeliveryToSource(params.result, params.deliveryTarget, matchOptions)),
+  };
 }
