@@ -165,25 +165,53 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("evaluates shared SDK imports before concurrent lazy CJS plugins require them", async () => {
-    const f = fixture();
-    writeFile(f.root, "dist/plugin-sdk/leaf.js", 'export const value = "dist";');
-    writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
-    const pluginDir = path.dirname(f.entry);
-    writeFile(pluginDir, "esm-plugin.mjs", 'export { value } from "openclaw/plugin-sdk/used";');
-    writeFile(pluginDir, "cjs-plugin.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
-    const entry = writeFile(
-      pluginDir,
-      "index.cjs",
-      `module.exports = { start: () => Promise.all([
-        import("./esm-plugin.mjs"), import("./cjs-plugin.cjs")
-      ]).then(modules => modules.map(module => module.value ?? module.default.value)) };`,
-    );
-    const load = createPluginModuleLoader({ devSourceRoot: f.root });
-    const plugin = load(entry) as { start: () => Promise<string[]> };
-    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
-    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
-  });
+  it.each(["alias", "relative"] as const)(
+    "evaluates shared SDK imports before concurrent lazy CJS plugins require them (%s)",
+    async (sdkImport) => {
+      const f = fixture();
+      writeFile(f.root, "dist/plugin-sdk/leaf.js", 'export const value = "dist";');
+      writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
+      const bundledEntry = writeFile(
+        f.root,
+        "dist/extensions/bundled/index.cjs",
+        `module.exports = { start: () => import("${sdkImport === "alias" ? "openclaw/plugin-sdk/used" : "../../plugin-sdk/used.js"}") };`,
+      );
+      const pluginDir = path.join(f.root, "external");
+      writeFile(pluginDir, "package.json", JSON.stringify({ name: "external-fixture" }));
+      writeFile(pluginDir, "lazy.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
+      const entry = writeFile(
+        pluginDir,
+        "index.cjs",
+        'module.exports = { start: () => import("./lazy.cjs") };',
+      );
+      const record = createPluginRecord({
+        id: "external",
+        rootDir: pluginDir,
+        source: entry,
+        origin: "global",
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(record);
+      const load = createPluginModuleLoader({ devSourceRoot: f.root });
+      const bundled = load(bundledEntry) as { start: () => Promise<{ value: string }> };
+      const external = load(entry, { record, rootDir: pluginDir, registry }) as {
+        start: () => Promise<{ default: { value: string } }>;
+      };
+      let reads: Promise<unknown>[] = [];
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          reads = [
+            bundled.start().then((module) => module.value),
+            external.start().then((module) => module.default.value),
+          ];
+          await expect(Promise.all(reads)).resolves.toEqual(["dist", "dist"]);
+        }
+      } finally {
+        await Promise.allSettled(reads);
+        await getPluginInstance(record)?.dispose();
+      }
+    },
+  );
 
   it.each([
     { specifier: "@openclaw/retry", target: "dist/retry/index.js" },
@@ -217,18 +245,51 @@ describe("native plugin alias preparation", () => {
     expect(read.mock.calls.some(([target]) => target === f.unused)).toBe(true);
   });
 
-  it("does not prepare aliases for unrelated requests or unregistered parents", () => {
+  it("does not prepare aliases for unrelated requests or unregistered parents", async () => {
     const f = fixture();
     const outside = fixture();
     const read = vi.spyOn(fs, "readFileSync");
     const load = createPluginModuleLoader({ devSourceRoot: f.root });
-    const metadata = load(f.entry) as { load: (name: string) => unknown };
+    const metadata = load(f.entry) as {
+      load: (name: string) => unknown;
+      loadEsm: (name: string) => Promise<unknown>;
+    };
     expect(metadata.load("node:path")).toHaveProperty("join");
     expect(() => metadata.load("@openclaw/plugin-sdk-other/used")).toThrow();
     expect(() => metadata.load("@openclaw/not-a-workspace/used")).toThrow();
     expect(() => createRequire(outside.entry).resolve("@openclaw/plugin-sdk/used")).toThrow();
+    for (const relative of ["./plain.js", "./plugin-sdk/unused.js"]) {
+      const target = writeFile(
+        path.dirname(f.entry),
+        relative,
+        "export const url = import.meta.url;",
+      );
+      await expect(metadata.loadEsm(relative)).resolves.toMatchObject({
+        url: pathToFileURL(target).href,
+      });
+    }
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
+
+  it.each(["query", "fragment", "unregistered"] as const)(
+    "keeps native SDK URL evaluation for %s imports",
+    async (kind) => {
+      const f = fixture();
+      const outside = fixture();
+      fs.writeFileSync(f.used, "await Promise.resolve(); export const url = import.meta.url;");
+      installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
+      const metadata = createRequire(kind === "unregistered" ? outside.entry : f.entry)(
+        kind === "unregistered" ? outside.entry : f.entry,
+      ) as { loadEsm: (name: string) => Promise<unknown> };
+      const url = pathToFileURL(f.used);
+      if (kind === "query") {
+        url.search = "?generation=1";
+      } else if (kind === "fragment") {
+        url.hash = "#generation-1";
+      }
+      await expect(metadata.loadEsm(url.href)).resolves.toMatchObject({ url: url.href });
+    },
+  );
 
   it.each([false, true])(
     "pins a native host across ambient changes and replaces a resolved=%s provider",

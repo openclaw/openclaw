@@ -55,12 +55,16 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "test/openai-model-discovery-auth-order.test.ts",
+  ...[
+    "test/openai-model-discovery-auth-order.test.ts",
+    "test/plugin-npm-runtime-build.test.ts",
+    "test/scripts/plugin-inventory-module-refs.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.tooling.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "",
-  },
+  })),
   {
     file: "src/channels/plugins/contracts/directory.registry-backed-shard-b.contract.test.ts",
     configs: ["test/vitest/vitest.contracts-channel-config.config.ts"],
@@ -80,12 +84,6 @@ const runtimeConsumers = [
     file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
     configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
     mode: "private-qa",
-    dir: "",
-  },
-  {
-    file: "test/scripts/plugin-inventory-module-refs.test.ts",
-    configs: ["test/vitest/vitest.tooling.config.ts"],
-    mode: "runtime",
     dir: "",
   },
   {

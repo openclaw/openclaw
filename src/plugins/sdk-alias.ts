@@ -1407,6 +1407,9 @@ export function preparePluginLoaderAliases(
     // These are all inputs to the three map builders; installed artifacts stay
     // stable for the loader lifecycle. Key the captured authority, not raw hints.
     cacheKey,
+    sdkRoots: packageRoot
+      ? context.orderedKinds.map((kind) => path.join(packageRoot, kind, "plugin-sdk"))
+      : [],
     getAliasMap,
     resolveAlias: (specifier: string): string | undefined => {
       if (!isPluginLoaderAliasSpecifier(specifier)) {

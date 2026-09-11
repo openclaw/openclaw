@@ -25,6 +25,7 @@ export type PluginRuntimeModuleResolution = {
 
 type PreparedPluginAliases = {
   cacheKey: string;
+  sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };
