@@ -107,6 +107,81 @@ describe("projectContextEngineAssemblyForCodex", () => {
     );
   });
 
+  it.each(["all", "latest-turn", "none"] as const)(
+    "selects photo history without changing transcripts or document pages (%s)",
+    async (imageHistory) => {
+      const image = (data: string) => ({ type: "image" as const, mimeType: "image/png", data });
+      const older = { role: "user" as const, content: [image("old")], timestamp: 1 };
+      const album = {
+        role: "user" as const,
+        content: "New album caption",
+        timestamp: 2,
+        __openclaw: {
+          media: [
+            { kind: "image", path: "/tmp/first.png" },
+            { kind: "image", path: "/tmp/second.png" },
+          ],
+        },
+      };
+      const document = textMessage("user", "Document caption");
+      const messages = [older, album, document];
+      const original = structuredClone(messages);
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: messages,
+        originalHistoryMessages: messages,
+        prompt: "What is in the latest picture?",
+        imageHistory,
+        maxRenderedContextChars: 4 * IMAGE_BLOCK_TOKENS * 4 + 2_000,
+        prepareFileContext: async (message) => ({
+          imageOnly: message !== document,
+          text:
+            message === older
+              ? "old.png"
+              : message === album
+                ? "first.png second.png"
+                : "Document text",
+          images:
+            message === older
+              ? [image("old")]
+              : message === album
+                ? [image("first"), image("second")]
+                : [image("document-page")],
+        }),
+      });
+      expect(result.images).toEqual([
+        ...(imageHistory === "all" ? [image("old")] : []),
+        ...(imageHistory !== "none" ? [image("first"), image("second")] : []),
+        image("document-page"),
+      ]);
+      expect(result.promptText).toContain("old.png");
+      expect(result.promptText).toContain("New album caption");
+      expect(result.promptText).toContain("Document text");
+      expect(messages).toEqual(original);
+    },
+  );
+
+  it("does not substitute an old image when the latest image cannot be hydrated", async () => {
+    const oldImage = { type: "image" as const, mimeType: "image/png", data: "old" };
+    const older = { role: "user" as const, content: [oldImage], timestamp: 1 };
+    const latest = {
+      role: "user" as const,
+      content: [{ ...oldImage, data: "latest" }],
+      timestamp: 2,
+    };
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [older, latest],
+      originalHistoryMessages: [],
+      prompt: "Describe the latest image",
+      imageHistory: "latest-turn",
+      prepareFileContext: async (message) =>
+        message === latest
+          ? { text: "[Attachment could not be read]", images: [], imageOnly: true }
+          : { text: "old.png", images: [oldImage], imageOnly: true },
+    });
+    expect(result.images).toBeUndefined();
+    expect(result.promptText).toContain("Attachment could not be read");
+  });
+
   it("retains document bytes when the saved caption duplicates the current prompt", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("user", "read this document")],

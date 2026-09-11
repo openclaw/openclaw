@@ -82,6 +82,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   } = connection;
   const { toolBridge } = attemptTools;
   let contextImages: ImageContent[] = [];
+  const imageHistory =
+    (params.messageChannel ?? params.messageProvider) === "telegram"
+      ? params.images?.length
+        ? "none"
+        : "latest-turn"
+      : "all";
   const currentUserTurnIdempotencyKey = params.userTurnTranscriptRecorder?.message?.idempotencyKey;
   const assertProjectionCurrent = () => {
     params.hostCapabilities.assertActive();
@@ -127,6 +133,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
       prepareFileContext,
       currentUserTurnIdempotencyKey,
+      imageHistory,
     });
     assertProjectionCurrent();
     contextImages = projection.images ?? [];
@@ -191,6 +198,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
       ...(projectionDecision.project ? { prepareFileContext } : {}),
       currentUserTurnIdempotencyKey,
+      imageHistory,
     });
     assertProjectionCurrent();
     contextImages = projectionDecision.project ? (projection.images ?? []) : [];

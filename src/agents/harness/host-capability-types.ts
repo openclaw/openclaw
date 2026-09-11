@@ -45,7 +45,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   prepareContextMedia?: (request: {
     message: import("../runtime/index.js").AgentMessage;
     maxChars: number;
-  }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
+  }) => Promise<{
+    text?: string;
+    images: import("../../llm/types.js").ImageContent[];
+    /** Whether the source contains only native image attachments, even if loading failed. */
+    imageOnly?: boolean;
+  }>;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
