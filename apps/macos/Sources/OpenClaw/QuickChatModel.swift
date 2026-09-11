@@ -1050,7 +1050,6 @@ extension QuickChatModel {
         guard self.canUseModelControls, let target = self.routingTarget,
               mode == nil || self.speed.supportsFastMode,
               mode != self.speed.override else { return }
-        self.retryIdentity = nil
         self.modelControlStatusMessage = nil
         self.startControlPatch(settings: .init(fastMode: .some(mode)), target: target)
     }
@@ -1251,6 +1250,12 @@ extension QuickChatModel {
         defer { self.clearControlPatchState(request: request) }
         do {
             _ = try await self.settingsPatchProvider(request.target, request.settings)
+            if request.settings.fastMode != nil,
+               self.retryIdentity?.sessionKey == request.target.sessionKey,
+               self.retryIdentity?.agentID == request.target.agentID
+            {
+                self.retryIdentity = nil
+            }
             guard self.controlPatchSettlementsByTarget[request.target]?.request == request else { return false }
             if self.isCurrentControlPatchPresentation(request) {
                 if let selectionID = request.selectionID {

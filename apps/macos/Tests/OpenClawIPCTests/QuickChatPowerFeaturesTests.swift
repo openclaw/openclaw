@@ -468,7 +468,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(patchCompleted)
     }
 
-    @Test func `speed writes settle before sending through the same target`() async throws {
+    @Test func `accepted speed writes settle before sending with a new retry key`() async throws {
         let patchStarted = AsyncTestGate()
         let finishPatch = AsyncTestGate()
         let choice = OpenClawChatModelChoice(
@@ -476,10 +476,11 @@ struct QuickChatPowerFeaturesTests {
             supportsFastMode: true)
         var session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
             #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice"}"#.utf8))
-        var sends = 0
+        var keys: [String] = []
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in
-                sends += 1
+            sendProvider: { _, _, _, _, key, _ in
+                keys.append(key)
+                if keys.count == 1 { throw URLError(.networkConnectionLost) }
                 return "ok"
             },
             controlsProvider: { target in
@@ -501,27 +502,30 @@ struct QuickChatPowerFeaturesTests {
         defer { model.endPresentation() }
         await model.refreshForPresentation(id: model.beginPresentation())
         model.text = "Hello"
+        #expect(await !model.send())
         model.selectSpeed(.on)
         let send = Task { await model.send() }
         await patchStarted.wait()
-        #expect(sends == 0)
+        #expect(keys.count == 1)
         #expect(model.isUpdatingModel)
         finishPatch.open()
         #expect(await send.value)
-        #expect(sends == 1)
+        try #require(keys.count == 2)
+        #expect(keys[0] != keys[1])
         #expect(model.speed.isEnabled)
     }
 
-    @Test func `a rejected speed write preserves published state and prevents the waiting send`() async throws {
+    @Test func `a rejected speed write preserves published state and the idempotent retry`() async throws {
         let choice = OpenClawChatModelChoice(
             modelID: "choice", name: "Fixture", provider: "fixture", contextWindow: nil,
             supportsFastMode: true)
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
             #"{"key":"agent:main:main","modelProvider":"fixture","model":"choice","fastMode":false}"#.utf8))
-        var sends = 0
+        var keys: [String] = []
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in
-                sends += 1
+            sendProvider: { _, _, _, _, key, _ in
+                keys.append(key)
+                if keys.count == 1 { throw URLError(.networkConnectionLost) }
                 return "ok"
             },
             controlsProvider: { target in
@@ -533,12 +537,16 @@ struct QuickChatPowerFeaturesTests {
         defer { model.endPresentation() }
         await model.refreshForPresentation(id: model.beginPresentation())
         model.text = "Hello"
+        #expect(await !model.send())
         model.selectSpeed(.on)
         #expect(await !model.send())
-        #expect(sends == 0)
+        #expect(keys.count == 1)
         #expect(model.speed.override == .off)
         #expect(!model.speed.isEnabled)
         #expect(model.modelControlStatusMessage != nil)
+        #expect(await model.send())
+        try #require(keys.count == 2)
+        #expect(keys[0] == keys[1])
     }
 
     @Test func `settings reload preserves explicit effort and published guidance when support is unknown`() async {
