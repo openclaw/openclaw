@@ -187,7 +187,7 @@ describe("command-registry", () => {
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "tasks"]) {
+    for (const name of ["status", "health", "ready", "sessions", "tasks"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 

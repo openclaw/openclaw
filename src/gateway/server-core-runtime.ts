@@ -433,16 +433,23 @@ export async function startGatewayCoreRuntime(input: {
       listPluginNodeCapabilities(pluginRuntime.registry),
       isCoreCanvasHostEnabled(getRuntimeConfig()),
     );
-  const replaceAttachedPluginRuntime = (loaded: {
-    pluginRegistry: typeof pluginRuntime.registry;
-    gatewayMethods: string[];
-    retireGatewayRuntimeBindings?: () => void;
-  }) => {
+  const replaceAttachedPluginRuntime = (
+    loaded: {
+      pluginRegistry: typeof pluginRuntime.registry;
+      gatewayMethods: string[];
+      retireGatewayRuntimeBindings?: () => void;
+    },
+    readinessConfig = getRuntimeConfig(),
+  ) => {
     adoptPluginHttpRouteHandoffs(pluginRuntime.registry, loaded.pluginRegistry);
     const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
     retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
     retirePreviousBindings();
     pluginRuntime.registry = loaded.pluginRegistry;
+    pluginRuntime.readinessSnapshot = pluginRuntime.makeState(
+      readinessConfig,
+      pluginRuntime.registry,
+    );
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
       delete attachedGatewayExtraHandlers[key];
@@ -589,7 +596,7 @@ export async function startGatewayCoreRuntime(input: {
             ambientEnvTriggers,
             resolveGatewayContext: resolvePluginGatewayContext,
           });
-          replaceAttachedPluginRuntime(loaded);
+          replaceAttachedPluginRuntime(loaded, params.nextConfig);
           releaseChannelStarts("published");
         }) ||
         !loaded

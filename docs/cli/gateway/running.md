@@ -15,6 +15,7 @@ Starting the Gateway process and reading its configured token. Part of the [`ope
 ```bash
 openclaw gateway
 openclaw gateway run   # equivalent, explicit form
+openclaw gateway run --hosting-profile container
 ```
 
 <AccordionGroup>
@@ -22,6 +23,8 @@ openclaw gateway run   # equivalent, explicit form
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
     - Startup automatically applies deterministic, prompt-free legacy-key migrations to eligible invalid single-file configs, including in non-interactive service runs. It writes only after full validation, including plugins, and keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer version are excluded. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
     - If automatic migration cannot make the config valid, an interactive terminal can offer to run `openclaw doctor --fix` and retry startup once after consent. Non-interactive runs print the command instead. If the repaired config is still invalid, startup remains stopped.
+    - `--hosting-profile <profile>` selects the [hosting profile](/gateway/hosting-profiles) used by status, health, and readiness. Config can also select the profile with `hosting.profile`. Profiles are opt-in: when none is selected, OpenClaw preserves the existing Gateway lifecycle readiness baseline.
+    - `OPENCLAW_INSTANCE_ID` may supply the opaque Gateway serving-lifecycle identity reported by canonical readiness. OpenClaw generates one when it is unset.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -51,6 +54,11 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--password-file <path>" type="string">
   Read the Gateway password from a file.
 </ParamField>
+<ParamField path="--hosting-profile <profile>" type="string">
+  Hosting profile for readiness evaluation: `local`, `container`, `reverse-proxy`, or `node-mode`.
+</ParamField>
+For controlled execution nodes, select `node-mode`. Its readiness result reports
+pairing, target inventory, command approval posture, and control-channel conditions.
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>

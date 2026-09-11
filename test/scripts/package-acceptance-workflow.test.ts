@@ -11530,6 +11530,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       ?.slice("package_acceptance_lanes=".length);
     expect(selectedLanes?.split(/\s+/u)).toEqual([
       "release-typed-onboarding",
+      "hosting-profiles",
       "doctor-switch",
       "update-channel-switch",
       "skill-install",

@@ -1,0 +1,1 @@
+export const MAX_READINESS_REASON_LENGTH = 128;

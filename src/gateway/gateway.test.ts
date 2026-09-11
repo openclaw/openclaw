@@ -166,6 +166,23 @@ describe("gateway e2e", () => {
     }
   });
 
+  it("rejects an invalid hosting profile from the environment before startup", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-invalid-hosting-profile-",
+      minimalGateway: true,
+    });
+    try {
+      setTestEnvValue("OPENCLAW_HOSTING_PROFILE", "unsupported");
+
+      await expect(startGatewayServer(await getGatewayE2ePortBlock())).rejects.toThrow(
+        'Invalid hosting profile from OPENCLAW_HOSTING_PROFILE: "unsupported".',
+      );
+    } finally {
+      envSnapshot.restore();
+      await removeGatewayTempHome(tempHome);
+    }
+  });
+
   it.each(["generated", "explicit-override", "secret-ref-override", "runtime-overrides"] as const)(
     "preserves %s auth across a safe direct gateway reload",
     async (authSource) => {

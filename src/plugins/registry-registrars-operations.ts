@@ -18,6 +18,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
+import { MAX_READINESS_REASON_LENGTH } from "../readiness/limits.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -30,6 +31,7 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginReadinessCriterion,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -328,6 +330,40 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const registerReadinessCriterion = (
+    record: PluginRecord,
+    criterion: OpenClawPluginReadinessCriterion,
+    pluginConfig?: Record<string, unknown>,
+  ) => {
+    const localId = criterion.id.trim().toLowerCase();
+    const id = `plugin.${record.id}.${localId}`;
+    if (
+      !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(localId) ||
+      record.id.length > 64 ||
+      id.length > MAX_READINESS_REASON_LENGTH
+    ) {
+      reportRegistrationError(
+        record,
+        `readiness criterion and plugin ids must be 1-64 lowercase letters, numbers, dots, dashes, or underscores, and the full criterion id must not exceed ${MAX_READINESS_REASON_LENGTH} characters: ${criterion.id}`,
+      );
+      return;
+    }
+    const existing = registry.readinessCriteria.find((entry) => entry.id === id);
+    if (existing) {
+      reportRegistrationError(record, `readiness criterion already registered: ${id}`);
+      return;
+    }
+    registry.readinessCriteria.push({
+      id,
+      pluginId: record.id,
+      pluginName: record.name,
+      criterion: { ...criterion, id: localId },
+      pluginConfig,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -449,6 +485,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeHostCommand,
     registerNodeInvokePolicy,
     registerSecurityAuditCollector,
+    registerReadinessCriterion,
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,

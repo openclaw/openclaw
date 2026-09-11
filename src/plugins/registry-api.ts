@@ -166,6 +166,8 @@ export function createPluginApiFactory(
               },
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
+              registerReadinessCriterion: (criterion) =>
+                bound.registerReadinessCriterion(criterion, params.pluginConfig),
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
               registerContextEngine: (id, factory) =>
                 bound.registerContextEngine(id, factory, registrationMode),

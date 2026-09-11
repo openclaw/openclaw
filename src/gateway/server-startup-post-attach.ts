@@ -126,13 +126,18 @@ function scheduleProviderAuthStatePrewarm(params: {
   };
   delayMs?: number;
   startupWarmEnabled: boolean;
-}): GatewayPostReadySidecarHandle {
+}): GatewayPostReadySidecarHandle & { requestRewarm: (reason: string) => void } {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
   let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
   let rewarmInFlight = false;
   let pendingRewarmReason: string | undefined;
+  let scheduleRewarm: ((reason: string) => void) | undefined;
   const isStopped = () => stopped;
+  const requestRewarm = (reason: string) => {
+    pendingRewarmReason = reason;
+    scheduleRewarm?.(reason);
+  };
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   const logProviderAuthWarmFailure = (operation: string, error: unknown) => {
     if (!isGatewayRestartDrainError(error)) {
@@ -195,6 +200,10 @@ function scheduleProviderAuthStatePrewarm(params: {
       }, PROVIDER_AUTH_REWARM_DELAY_MS);
       rewarmTimer.unref?.();
     };
+    scheduleRewarm = scheduleAuthMapRewarm;
+    if (pendingRewarmReason) {
+      scheduleAuthMapRewarm(pendingRewarmReason);
+    }
     if (isStopped()) {
       return;
     }
@@ -205,7 +214,7 @@ function scheduleProviderAuthStatePrewarm(params: {
         return;
       }
       clearCurrentProviderAuthState();
-      scheduleAuthMapRewarm("auth-profile-failure");
+      requestRewarm("auth-profile-failure");
     });
     // Keep the broad provider sweep explicit; default startup only retains
     // failure-triggered repair so discovery cannot starve gateway work.
@@ -240,8 +249,10 @@ function scheduleProviderAuthStatePrewarm(params: {
     logProviderAuthWarmFailure("pre-warm setup", error),
   );
   return {
+    requestRewarm,
     stop: () => {
       stopped = true;
+      scheduleRewarm = undefined;
       if (startupTimer) {
         clearTimeout(startupTimer);
         startupTimer = undefined;
@@ -1265,6 +1276,7 @@ export async function startGatewayPostAttachRuntime(
       enabled?: boolean;
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
+      onRewarmReady?: (requestRewarm: (reason: string) => void) => void;
     };
     waitForPostReadyWork?: () => Promise<void>;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
@@ -1593,14 +1605,14 @@ export async function startGatewayPostAttachRuntime(
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];
           if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
-            newGatewayLifetimeSidecars.push(
-              scheduleProviderAuthStatePrewarm({
-                getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
-                log: params.log,
-                delayMs: params.providerAuthPrewarm.delayMs,
-                startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
-              }),
-            );
+            const providerAuthPrewarm = scheduleProviderAuthStatePrewarm({
+              getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
+              log: params.log,
+              delayMs: params.providerAuthPrewarm.delayMs,
+              startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
+            });
+            params.providerAuthPrewarm.onRewarmReady?.(providerAuthPrewarm.requestRewarm);
+            newGatewayLifetimeSidecars.push(providerAuthPrewarm);
           }
           if (params.gatewayPluginConfigAtStart.transcripts?.autoStart?.length) {
             newGatewayLifetimeSidecars.push(

@@ -27,6 +27,7 @@ export const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_HOSTING_PROFILE",
 ] as const;
 
 export function nextGatewayId(prefix: string): string {

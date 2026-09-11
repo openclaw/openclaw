@@ -80,6 +80,26 @@ export class CronService implements CronServiceContract {
     lifecycleOps.stop(this.state);
   }
 
+  getReadinessSnapshot() {
+    if (!this.state.deps.cronEnabled) {
+      return { enabled: false, phase: "disabled" as const, recoveryPending: false };
+    }
+    const phase = this.state.stopped
+      ? ("stopped" as const)
+      : this.state.schedulingPaused
+        ? ("paused" as const)
+        : this.startInProgress > 0
+          ? ("starting" as const)
+          : this.state.schedulerStarted
+            ? ("started" as const)
+            : ("idle" as const);
+    return {
+      enabled: true,
+      phase,
+      recoveryPending: this.state.startupCatchup !== undefined,
+    };
+  }
+
   pauseScheduling() {
     lifecycleOps.pauseScheduling(this.state);
   }

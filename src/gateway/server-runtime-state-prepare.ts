@@ -5,11 +5,29 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
+import {
+  advisoryCriteriaForHostingProfile,
+  buildHostingProfileSubjects,
+  buildHostingProfileConditions,
+  requiredCriteriaForHostingProfile,
+  resolveHostingProfileSelection,
+} from "../hosting/profiles.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import {
+  buildRuntimeReadiness,
+  ReadinessEvaluationSupersededError,
+} from "../readiness/conditions.js";
+import { captureExecutionCapabilityReadinessSnapshot } from "../readiness/execution-capabilities.js";
+import {
+  createSelectedReadinessResolver,
+  reserveSelectedReadinessSubjects,
+} from "../readiness/selection.js";
+import { createGatewayReadinessIdentity } from "../readiness/subjects.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -19,12 +37,18 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import type { NodeSession } from "./node-registry.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  buildGatewayPluginReadinessInput,
+  createHostingProfileGatewayReadinessResolver,
+  resolveModelRouteReadinessStartupOptions,
+} from "./server-runtime-profile-readiness.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
@@ -85,9 +109,79 @@ export async function prepareGatewayKernelState(params: {
     pluginGatewayContext,
     resolvePluginGatewayContext,
   } = bootstrap;
+  const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
+    const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
+    return resolveGatewayRuntimeConfig({
+      cfg: cfgAtStart,
+      port,
+      bind: opts.bind,
+      host: opts.host,
+      controlUiEnabled: opts.controlUiEnabled,
+      auth: resolvedStartupAuthOverride,
+      tailscale: startupTailscaleOverride,
+    });
+  });
+  const {
+    bindHost,
+    controlUiEnabled,
+    controlUiBasePath,
+    controlUiRoot: controlUiRootOverride,
+    resolvedAuth,
+    tailscaleConfig,
+    tailscaleMode,
+  } = runtimeConfig;
+  if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
+    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
+      ensureStartupLocalCliPairing(),
+    );
+    if (pairingResult === "created") {
+      log.info("runtime-only gateway auth paired the local CLI device before readiness");
+    } else if (pairingResult === "unavailable") {
+      log.warn(
+        "runtime-only gateway auth could not prepare local CLI device credentials; configure gateway.auth.token or gateway.auth.password for CLI access",
+      );
+    }
+  }
+  const getResolvedAuth = () =>
+    resolveGatewayAuth({
+      authConfig:
+        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
+        getRuntimeConfig().gateway?.auth,
+      authOverride: resolvedStartupAuthOverride,
+      env: process.env,
+      tailscaleMode,
+    });
+  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => {
+    const profile = resolveHostingProfileSelection({
+      config,
+      env: process.env,
+      override: opts.hostingProfileOverride,
+    })?.profile;
+    const profileCriteria = profile
+      ? [
+          ...requiredCriteriaForHostingProfile(profile),
+          ...advisoryCriteriaForHostingProfile(profile),
+        ]
+      : [];
+    return {
+      config,
+      registry,
+      auth: getResolvedAuth(),
+      executionCapabilities: captureExecutionCapabilityReadinessSnapshot(
+        config,
+        undefined,
+        profileCriteria,
+      ),
+    };
+  };
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
+    makeState,
+    modelRouteReadinessStartupOptions: (config: OpenClawConfig) =>
+      resolveModelRouteReadinessStartupOptions(config, opts.hostingProfileOverride),
+    readinessSnapshot: makeState(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   const listGatewayStartupChannelPlugins = () =>
     listLoadedChannelPluginsForRegistry(pluginRuntime.registry);
@@ -256,52 +350,6 @@ export async function prepareGatewayKernelState(params: {
             method !== "worker.desktop.observe" &&
             method !== "worker.desktop.launch")),
     );
-  const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
-    const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
-    return resolveGatewayRuntimeConfig({
-      cfg: cfgAtStart,
-      port,
-      bind: opts.bind,
-      host: opts.host,
-      controlUiEnabled: opts.controlUiEnabled,
-      auth: resolvedStartupAuthOverride,
-      tailscale: startupTailscaleOverride,
-    });
-  });
-  const {
-    bindHost,
-    controlUiEnabled,
-    controlUiBasePath,
-    controlUiRoot: controlUiRootOverride,
-    resolvedAuth,
-    tailscaleConfig,
-    tailscaleMode,
-  } = runtimeConfig;
-  if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
-    const { ensureStartupLocalCliPairing } = await startupTrace.measure(
-      "runtime.local-cli-pairing-import",
-      () => import("./startup-local-cli-pairing.js"),
-    );
-    const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
-      ensureStartupLocalCliPairing(),
-    );
-    if (pairingResult === "created") {
-      log.info("runtime-only gateway auth paired the local CLI device before readiness");
-    } else if (pairingResult === "unavailable") {
-      log.warn(
-        "runtime-only gateway auth could not prepare local CLI device credentials; configure gateway.auth.token or gateway.auth.password for CLI access",
-      );
-    }
-  }
-  const getResolvedAuth = () =>
-    resolveGatewayAuth({
-      authConfig:
-        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
-        getRuntimeConfig().gateway?.auth,
-      authOverride: resolvedStartupAuthOverride,
-      env: process.env,
-      tailscaleMode,
-    });
   const resolveSharedGatewaySessionGenerationForConfig = (config: OpenClawConfig) =>
     resolveSharedGatewaySessionGeneration(
       resolveGatewayAuth({
@@ -418,7 +466,7 @@ export async function prepareGatewayKernelState(params: {
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
@@ -427,6 +475,87 @@ export async function prepareGatewayKernelState(params: {
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+  });
+  const readinessIdentity = createGatewayReadinessIdentity();
+  const resolveSelectedReadiness = createSelectedReadinessResolver();
+  const resolveNodeModeReadiness = createNodeModeReadinessEvidenceResolver();
+  const nodeReadiness = {
+    listConnected: (): NodeSession[] => [],
+  };
+  const evaluateRuntimeReadiness = async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const snapshot = pluginRuntime.readinessSnapshot;
+      const profileSelection = resolveHostingProfileSelection({
+        config: snapshot.config,
+        env: process.env,
+        override: opts.hostingProfileOverride,
+      });
+      const profile = profileSelection?.profile;
+      const auth = snapshot.auth;
+      const [nodeMode, contribution] = await Promise.all([
+        profile === "node-mode"
+          ? resolveNodeModeReadiness({
+              config: snapshot.config,
+              connectedNodes: nodeReadiness.listConnected(),
+            })
+          : Promise.resolve(undefined),
+        resolveSelectedReadiness({
+          config: snapshot.config,
+          registry: snapshot.registry,
+          executionCapabilities: snapshot.executionCapabilities,
+          env: process.env,
+          stateServices: {
+            scheduler: runtimeStateRef.current?.cronState.cron.getReadinessSnapshot(),
+          },
+          additionalAdvisoryCriteria: profile ? advisoryCriteriaForHostingProfile(profile) : [],
+          additionalRequiredCriteria: profile ? requiredCriteriaForHostingProfile(profile) : [],
+        }),
+      ]);
+      const profileConditions = profile
+        ? buildHostingProfileConditions(
+            profile,
+            {
+              bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
+              bindHost,
+              port,
+              authMode: auth.mode,
+              trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+              trustedProxySources: snapshot.config.gateway?.trustedProxies ?? [],
+              trustedProxyAllowLoopback: auth.trustedProxy?.allowLoopback === true,
+            },
+            nodeMode,
+          )
+        : [];
+      const profileSubjects = profileSelection
+        ? buildHostingProfileSubjects(profileSelection, nodeMode)
+        : [];
+      const boundedContribution = reserveSelectedReadinessSubjects(contribution, profileSubjects);
+      if (snapshot !== pluginRuntime.readinessSnapshot) {
+        continue;
+      }
+      return buildRuntimeReadiness({
+        identity: readinessIdentity,
+        configLoaded: true,
+        gateway: "responding",
+        plugins: buildGatewayPluginReadinessInput(snapshot.registry),
+        pluginsRequired:
+          profile !== undefined &&
+          requiredCriteriaForHostingProfile(profile).includes("openclaw.plugins-loaded"),
+        additionalConditions: [...profileConditions, ...boundedContribution.conditions],
+        additionalSubjects: [...profileSubjects, ...boundedContribution.subjects],
+      });
+    }
+    throw new ReadinessEvaluationSupersededError();
+  };
+  const getReadiness = createHostingProfileGatewayReadinessResolver({
+    getSnapshot: () => pluginRuntime.readinessSnapshot,
+    identity: readinessIdentity,
+    bind: opts.bind,
+    bindHost,
+    port,
+    hostingProfileOverride: opts.hostingProfileOverride,
+    evaluateGateway: getGatewayReadiness,
+    evaluateRuntime: evaluateRuntimeReadiness,
   });
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -506,6 +635,7 @@ export async function prepareGatewayKernelState(params: {
     ...bootstrap,
     bootId,
     pluginRuntime,
+    nodeReadiness,
     workerEnvironmentService,
     workerLiveEvents,
     bindDeviceNodeControl: bindDeviceNodeRuntime,
@@ -551,6 +681,7 @@ export async function prepareGatewayKernelState(params: {
     runtimeStateRef,
     cronStartState,
     gatewayTls,
+    getReadiness,
     readinessEventLoopHealth,
     startupState,
     lifecycle,

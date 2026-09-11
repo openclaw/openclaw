@@ -2478,6 +2478,7 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
+                      "gateway/hosting-profiles",
                       "gateway/doctor",
                       {
                         "group": "Doctor",
@@ -2768,6 +2769,7 @@
                       },
                       "cli/health",
                       "cli/logs",
+                      "cli/ready",
                       "cli/status"
                     ]
                   },

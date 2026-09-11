@@ -366,7 +366,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choices for channel consumers.
       // +3: public provider-owned asynchronous embedding batch contract.
-      4451,
+      // +4: composable readiness criterion, result, subject input, and collector contracts.
+      4455,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

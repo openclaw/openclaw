@@ -16,6 +16,7 @@ import {
   loadPendingSessionDeliveries,
   releaseSessionDeliveryClaim,
 } from "./session-delivery-queue-storage.js";
+import { getSessionDeliveryRuntimeReadiness } from "./session-delivery-runtime-readiness.js";
 
 const logger = {
   info: vi.fn(),
@@ -47,6 +48,35 @@ afterEach(() => {
 });
 
 describe("session delivery queue runtime", () => {
+  it("publishes lifecycle transitions without exposing runtime internals", async () => {
+    expect(getSessionDeliveryRuntimeReadiness().active).toBe(false);
+
+    const stop = startSessionDeliveryRuntime({ deliver: vi.fn(async () => {}), log: logger });
+    const active = getSessionDeliveryRuntimeReadiness();
+    expect(active.active).toBe(true);
+
+    await stop();
+    expect(getSessionDeliveryRuntimeReadiness()).toEqual({
+      active: false,
+      generation: active.generation + 1,
+    });
+  });
+
+  it("ignores a stale runtime stop after ownership changes", async () => {
+    const stopOld = startSessionDeliveryRuntime({ deliver: vi.fn(async () => {}), log: logger });
+    const stopCurrent = startSessionDeliveryRuntime({
+      deliver: vi.fn(async () => {}),
+      log: logger,
+    });
+    const active = getSessionDeliveryRuntimeReadiness();
+
+    await stopOld();
+    expect(getSessionDeliveryRuntimeReadiness()).toEqual(active);
+
+    await stopCurrent();
+    expect(getSessionDeliveryRuntimeReadiness().active).toBe(false);
+  });
+
   it("drains a newly scheduled durable entry", async () => {
     vi.useFakeTimers();
     await withRuntime(async (startRuntime) => {

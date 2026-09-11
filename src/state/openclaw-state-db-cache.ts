@@ -247,12 +247,27 @@ export function recordOpenClawStateDatabaseOpenFailure(
   error: Error,
   generation?: SqliteFileGeneration,
 ): boolean {
-  return terminalOpenLatch.record(pathname, error, generation);
+  const recorded = terminalOpenLatch.record(pathname, error, generation);
+  if (recorded) {
+    notifyOpenClawStateDatabaseLifecycle({
+      kind: "open-error",
+      path: path.resolve(pathname),
+      error,
+    });
+  }
+  return recorded;
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
 export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
-  terminalOpenLatch.clear(pathname);
+  const resolvedPath = path.resolve(pathname);
+  terminalOpenLatch.clear(resolvedPath);
+  const cached = cachedDatabases.get(resolvedPath);
+  notifyOpenClawStateDatabaseLifecycle(
+    cached?.db.isOpen
+      ? { kind: "opened", database: cached }
+      : { kind: "closed", path: resolvedPath },
+  );
 }
 
 /** Reject shared-state access after a process-local terminal failure. */

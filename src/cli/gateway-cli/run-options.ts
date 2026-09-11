@@ -9,6 +9,7 @@ export type GatewayRunOpts = {
   auth?: unknown;
   password?: unknown;
   passwordFile?: unknown;
+  hostingProfile?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
   allowUnconfigured?: boolean;
@@ -38,6 +39,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "auth",
   "password",
   "passwordFile",
+  "hostingProfile",
   "tailscale",
   "wsLog",
   "rawStreamPath",

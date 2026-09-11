@@ -55,6 +55,7 @@ export type HeartbeatStatus = {
 export type StatusSummary = {
   runtimeVersion?: string | null;
   hostDesktop?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
+  readiness?: import("../readiness/conditions.js").CanonicalReadinessResult;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   processMemory?: {
     rssBytes: number;

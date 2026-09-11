@@ -35,6 +35,7 @@ import {
   prepareRuntimeAvailableProviderAuth,
   type RuntimeProviderAuthLookup,
 } from "./model-auth.js";
+import { buildDefaultModelRouteAuthEvidence } from "./model-provider-auth-default-route.js";
 import {
   cancelCurrentProviderAuthWarmWorker,
   claimCurrentProviderAuthStateGeneration,
@@ -42,6 +43,7 @@ import {
   getCurrentProviderAuthStates,
   isCurrentProviderAuthStateGeneration,
   publishProviderAuthWarmSnapshot,
+  serializeProviderAuthStates,
   type PreparedProviderAuthState,
   type ProviderAuthWarmSnapshot,
 } from "./model-provider-auth-state.js";
@@ -336,18 +338,6 @@ export function createProviderAuthChecker(params: {
   );
 }
 
-function serializeProviderAuthStates(
-  states: ReadonlyMap<string, PreparedProviderAuthState>,
-): ProviderAuthWarmSnapshot {
-  return {
-    agents: [...states.values()].map((state) => ({
-      agentId: state.agentId,
-      configFingerprint: state.configFingerprint,
-      providers: [...state.providers.entries()],
-    })),
-  };
-}
-
 function resolveProviderConfigApi(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -401,21 +391,29 @@ export async function buildCurrentProviderAuthStateSnapshot(
       return { agents: [] };
     }
     const syntheticAuth = options.syntheticAuth?.get(agentId);
+    const syntheticMetadataSnapshot = syntheticAuth
+      ? restorePluginMetadataSnapshot(syntheticAuth.metadataSnapshot)
+      : undefined;
     const prepareState = async () => {
       const agentDir = resolveAgentDir(cfg, agentId);
       // Worker warmup is the only path that may need to construct a read-only catalog generation.
       // Keep the lifecycle graph out of foreground provider-auth module initialization.
-      const preparedOwner = syntheticAuth?.modelCatalog
-        ? { workspaceDir: syntheticAuth.workspaceDir, modelCatalog: syntheticAuth.modelCatalog }
-        : await (
-            await import("./prepared-model-catalog.js")
-          ).loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            agentId,
-            agentDir,
-            ...(syntheticAuth ? { workspaceDir: syntheticAuth.workspaceDir } : {}),
-            readOnly: true,
-          });
+      const preparedOwner =
+        syntheticAuth?.modelCatalog && syntheticMetadataSnapshot
+          ? {
+              workspaceDir: syntheticAuth.workspaceDir,
+              modelCatalog: syntheticAuth.modelCatalog,
+              metadataSnapshot: syntheticMetadataSnapshot,
+            }
+          : await (
+              await import("./prepared-model-catalog.js")
+            ).loadPreparedModelCatalogOwnerSnapshot({
+              config: cfg,
+              agentId,
+              agentDir,
+              ...(syntheticAuth ? { workspaceDir: syntheticAuth.workspaceDir } : {}),
+              readOnly: true,
+            });
       const workspaceDir = preparedOwner.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
       const catalog = preparedOwner.modelCatalog.entries;
       if (isWarmStale()) {
@@ -449,6 +447,16 @@ export async function buildCurrentProviderAuthStateSnapshot(
             config: cfg,
             externalCli,
           });
+      const defaultModelRoute = buildDefaultModelRouteAuthEvidence({
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        authStore: store,
+        runtimeAuthLookup,
+        metadataSnapshot: syntheticMetadataSnapshot ?? preparedOwner.metadataSnapshot,
+        modelCatalog: preparedOwner.modelCatalog,
+      });
       const state = new Map<string, boolean>();
       for (const provider of providers) {
         if (isWarmStale()) {
@@ -481,11 +489,12 @@ export async function buildCurrentProviderAuthStateSnapshot(
         agentId,
         configFingerprint,
         providers: state,
+        ...(defaultModelRoute ? { defaultModelRoute } : {}),
       });
     };
-    await (syntheticAuth
+    await (syntheticMetadataSnapshot
       ? withPluginRuntimeGenerationScope(
-          { metadataSnapshot: restorePluginMetadataSnapshot(syntheticAuth.metadataSnapshot) },
+          { metadataSnapshot: syntheticMetadataSnapshot },
           prepareState,
         )
       : prepareState());

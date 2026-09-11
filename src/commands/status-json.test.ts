@@ -100,6 +100,16 @@ function createExpectedStatusPayload() {
     gatewayService: { installed: false },
     nodeService: { installed: false },
     agents: [],
+    readiness: expect.objectContaining({
+      ready: false,
+      failures: [
+        "GatewayStartupNotChecked",
+        "GatewayAdmissionNotChecked",
+        "ChannelRuntimeNotChecked",
+        "GatewayUnavailable",
+      ],
+      advisories: ["EventLoopStatusUnavailable", "PluginStatusUnavailable"],
+    }),
     secretDiagnostics: [],
   };
 }

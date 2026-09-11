@@ -12,6 +12,7 @@ import {
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
+import { MAX_READINESS_REASON_LENGTH } from "../readiness/limits.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
@@ -51,6 +52,15 @@ function validateGatewayPublicOrigin(value: string): boolean {
   const url = new URL(value);
   return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
 }
+
+const ReadinessCriterionIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_READINESS_REASON_LENGTH)
+  .regex(/^(?:openclaw|plugin)\.[a-z0-9][a-z0-9._-]*$/, {
+    message: "criterion must be a namespaced openclaw.* or plugin.* identifier",
+  });
 
 export const GatewayConfigSchema = z
   .strictObject({
@@ -178,6 +188,23 @@ export const GatewayConfigSchema = z
       .strictObject({
         deny: z.array(z.string()).optional(),
         allow: z.array(z.string()).optional(),
+      })
+      .optional(),
+    readiness: z
+      .strictObject({
+        requiredCriteria: z.array(ReadinessCriterionIdSchema).max(64).optional(),
+        advisoryCriteria: z.array(ReadinessCriterionIdSchema).max(64).optional(),
+      })
+      .superRefine((value, ctx) => {
+        const required = new Set(value.requiredCriteria ?? []);
+        const duplicate = (value.advisoryCriteria ?? []).find((id) => required.has(id));
+        if (duplicate) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["advisoryCriteria"],
+            message: "criterion cannot be both required and advisory: " + duplicate,
+          });
+        }
       })
       .optional(),
     tailscale: z

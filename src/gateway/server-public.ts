@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { HostingProfileId } from "../hosting/types.js";
 import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -44,6 +45,8 @@ export type GatewayServerOptions = {
   startupOperation?: GatewayStartupOperation;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
+  /** Optional standard hosting profile selected by the current invocation. */
+  hostingProfileOverride?: HostingProfileId;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

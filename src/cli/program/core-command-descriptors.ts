@@ -124,6 +124,11 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: false,
   },
   {
+    name: "ready",
+    description: "Check whether the running gateway is ready to accept work",
+    hasSubcommands: false,
+  },
+  {
     name: "audit",
     description: "Inspect activity records and exact-run identity context",
     hasSubcommands: false,

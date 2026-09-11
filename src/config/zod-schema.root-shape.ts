@@ -19,6 +19,7 @@ import {
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { HostingConfigSchema } from "./zod-schema.hosting.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
@@ -108,6 +109,7 @@ export const OpenClawSchemaShape = {
       cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),
     })
     .optional(),
+  hosting: HostingConfigSchema,
   logging: z
     .strictObject({
       level: LoggingLevelSchema.optional(),
