@@ -36,7 +36,6 @@ import {
   chatSubmitKey,
   clearOwnedCommandComposerFallback,
   clearSubmittedComposerState,
-  prependReplyQuote,
   commandComposerFallbackRetainsAttachments,
   restoreFailedCommandComposer,
   snapshotChatAttachments,
