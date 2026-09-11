@@ -6,7 +6,7 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import { createServer } from "vite";
 import { expect, it } from "vitest";
-import type { desktopProofTestPhases } from "../../../scripts/lib/desktop-resize-proof.mts";
+import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
@@ -24,9 +24,14 @@ import {
   writeDesktopResizeProvider,
 } from "./desktop-resize-real.test-support.ts";
 
+type DesktopProofPhase = Exclude<
+  ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
+  "unknown"
+>;
+
 declare module "vitest" {
   interface TaskMeta {
-    desktopProofPhase?: (typeof desktopProofTestPhases)[number];
+    desktopProofPhase?: DesktopProofPhase;
   }
 }
 
@@ -124,7 +129,7 @@ suite.define(() => {
   it.skipIf(!fixturePath)(
     "matches a real XFCE display through the configured worker carrier and preserves controller ownership",
     async (context) => {
-      const phase = (value: (typeof desktopProofTestPhases)[number]) => {
+      const phase = (value: DesktopProofPhase) => {
         // A timed-out callback can continue while the suite joins its cleanup.
         if (!context.signal.aborted) {
           context.task.meta.desktopProofPhase = value;

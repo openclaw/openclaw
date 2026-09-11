@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   desktopProofAssets,
   desktopProofCommit,
@@ -69,6 +69,16 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("keeps the UI phase contract narrower than arbitrary reporter strings", () => {
+    type Phase = Exclude<
+      ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
+      "unknown"
+    >;
+    expectTypeOf<"node-admission">().toExtend<Phase>();
+    expectTypeOf<"unknown">().not.toExtend<Phase>();
+    expectTypeOf<"misspelled-phase">().not.toExtend<Phase>();
+  });
+
   it("records sshd runtime directory facts without modifying missing or unsafe paths", async () => {
     const root = dirs.make("desktop-sshd-runtime-");
     const directory = path.join(root, "runtime");

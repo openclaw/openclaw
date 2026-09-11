@@ -12,7 +12,7 @@ export const desktopResizeStages = [
 ] as const;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
-export const desktopProofTestPhases = [
+const desktopProofTestPhases = [
   "fixture",
   "gateway-config",
   "gateway-start",
@@ -114,7 +114,7 @@ export function desktopProofTestReport(value: unknown) {
             throw new Error("Invalid desktop assertion report");
           }
           const meta = isRecord(test.meta) ? test.meta : {};
-          const phase =
+          const phase: (typeof desktopProofTestPhases)[number] | "unknown" =
             desktopProofTestPhases.find((candidate) => candidate === meta.desktopProofPhase) ??
             "unknown";
           return {
