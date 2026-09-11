@@ -77,6 +77,9 @@ overrides:
   yauzl: 3.4.0
   protobufjs: 8.8.0
   uuid: 14.0.2
+  hono@<4.13.5: 4.13.7
+  joi@>=18.0.0 <18.2.5: 18.2.8
+  js-yaml@>=4.0.0 <4.3.2: 4.3.2
 
 allowBuilds:
   "@google/genai": true
