@@ -32,14 +32,16 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 
 ## Lifecycle invariants
 
-- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening, except during an active push-to-talk capture.
-- Overlay dismissal, including manual dismiss via the X button, always resumes the recognizer: `VoiceSessionCoordinator.overlayDidDismiss` calls `VoiceWakeRuntime.refresh(state:)` on every dismiss path. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
+- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening, except while push-to-talk or Talk Mode owns the microphone.
+- Overlay dismissal, including manual dismiss via the X button, requests a recognizer refresh. Listening resumes only after all active voice owners have released their pauses; dismissing an overlay cannot restart it during capture or Talk shutdown. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
 
 ## Push-to-talk specifics
 
-- Hotkey detection uses a global `.flagsChanged` monitor for right Option (`keyCode 61` + `.option`). It only observes events, never swallows them.
-- Capture lives in `VoicePushToTalk`: starts Speech immediately, streams partials to the overlay, and calls `VoiceWakeForwarder` on release.
-- Starting push-to-talk pauses the wake-word runtime to avoid dueling audio taps; it restarts automatically after release.
+- Hotkey detection observes `.flagsChanged` and the physical right-Option flag. Releasing right Option ends the hold even while left Option remains down. Events are never swallowed.
+- Capture lives in `VoicePushToTalk`: after permissions resolve, Speech starts only if the same hold remains active. Release allows up to 1.5 seconds for final Speech results before forwarding; an empty capture dismisses immediately.
+- Disabling push-to-talk or entering Talk Mode cancels pending or active capture without forwarding. Push-to-talk stays unavailable until Talk shutdown finishes, even if its preference changes meanwhile.
+- Starting push-to-talk pauses the wake-word runtime to avoid competing audio taps. The pause remains through the final Speech drain and is released after audio teardown.
+- A fresh hold adopts visible overlay text, including a previous capture still awaiting final Speech results, without forwarding the replaced capture twice.
 - Permissions: requires Microphone + Speech; receiving key events needs Accessibility/Input Monitoring approval.
 - External keyboards: some do not expose right Option as expected. Offer a fallback shortcut if users report misses.
 

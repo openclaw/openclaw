@@ -87,7 +87,7 @@ extension VoiceWakeOverlayController {
         if let delay {
             if delay <= 0 {
                 self.logger.log(level: .info, "overlay autoSend immediate token=\(token.uuidString)")
-                VoiceSessionCoordinator.shared.sendNow(token: token, reason: "autoSendImmediate")
+                self.actions()?.send(token, "autoSendImmediate")
             } else {
                 self.scheduleAutoSend(token: token, after: delay)
             }
@@ -151,7 +151,7 @@ extension VoiceWakeOverlayController {
     func requestSend(token: UUID? = nil, reason: String = "overlay_request") {
         guard self.guardToken(token, context: "requestSend") else { return }
         guard let active = token ?? self.activeToken else { return }
-        VoiceSessionCoordinator.shared.sendNow(token: active, reason: reason)
+        self.actions()?.send(active, reason)
     }
 
     func dismiss(token: UUID? = nil, reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
@@ -170,47 +170,33 @@ extension VoiceWakeOverlayController {
         self.model.isSending = false
         self.model.isEditing = false
 
-        if !self.enableUI {
-            self.model.isVisible = false
-            self.model.level = 0
-            self.lastLevelUpdate = 0
-            self.activeToken = nil
-            self.activeSource = nil
-            return
-        }
-        guard let window else {
-            if ProcessInfo.processInfo.isRunningTests {
-                self.model.isVisible = false
-                self.model.level = 0
-                self.activeToken = nil
-                self.activeSource = nil
-            }
-            return
-        }
-        let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            if let target {
-                window.animator().setFrame(target, display: true)
-            }
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            Task { @MainActor in
-                guard self.guardToken(dismissedToken, context: "dismissCompletion") else { return }
-                window.orderOut(nil)
+        // Retain the admitted notification owner through the animation. Resolving it
+        // later could lose cleanup when the graph is no longer available.
+        let actions = self.actions()
+        self.presentation.animateDismiss(self, reason, outcome) { completion in
+            switch completion {
+            case .disabledUI:
                 self.model.isVisible = false
                 self.model.level = 0
                 self.lastLevelUpdate = 0
                 self.activeToken = nil
                 self.activeSource = nil
-                if outcome == .empty {
-                    AppStateStore.shared.blinkOnce()
-                } else if outcome == .sent {
-                    AppStateStore.shared.celebrateSend()
+            case .missingWindow:
+                if ProcessInfo.processInfo.isRunningTests {
+                    self.model.isVisible = false
+                    self.model.level = 0
+                    self.activeToken = nil
+                    self.activeSource = nil
                 }
-                AppStateStore.shared.stopVoiceEars()
-                VoiceSessionCoordinator.shared.overlayDidDismiss(token: dismissedToken)
+            case let .animated(finishWindow):
+                guard self.guardToken(dismissedToken, context: "dismissCompletion") else { return }
+                finishWindow()
+                self.model.isVisible = false
+                self.model.level = 0
+                self.lastLevelUpdate = 0
+                self.activeToken = nil
+                self.activeSource = nil
+                actions?.didDismiss(dismissedToken, outcome)
             }
         }
     }
@@ -270,7 +256,7 @@ extension VoiceWakeOverlayController {
                 self.logger.log(
                     level: .info,
                     "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
-                VoiceSessionCoordinator.shared.sendNow(token: token, reason: "autoSendDelay")
+                self.actions()?.send(token, "autoSendDelay")
                 self.autoSendTask = nil
             }
         }

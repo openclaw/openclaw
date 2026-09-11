@@ -7,16 +7,17 @@ import SwiftUI
 final class StatusMenuController: NSObject, NSMenuDelegate {
     private let state: AppState
     private let updater: UpdaterProviding
-    private let menu = NSMenu()
-    private let gatewayManager = GatewayProcessManager.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
-    private let sessions = StatusMenuSessions.shared
-    private let approvals = ExecApprovalQueueStore.shared
-    private let summaries = StatusMenuSummaries.shared
-    private let nodes = NodesStore.shared
-    private let cron = CronJobsStore.shared
-    private let dashboard = DashboardManager.shared
+    private let hotkey: VoicePushToTalkHotkey
+    private lazy var menu = NSMenu()
+    private lazy var gatewayManager = GatewayProcessManager.shared
+    private lazy var controlChannel = ControlChannel.shared
+    private lazy var activityStore = WorkActivityStore.shared
+    private lazy var sessions = StatusMenuSessions.shared
+    private lazy var approvals = ExecApprovalQueueStore.shared
+    private lazy var summaries = StatusMenuSummaries.shared
+    private lazy var nodes = NodesStore.shared
+    private lazy var cron = CronJobsStore.shared
+    private lazy var dashboard = DashboardManager.shared
 
     private var statusItem: NSStatusItem?
     private var clickMonitor: Any?
@@ -27,14 +28,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var isChatWindowVisible = false
     private var observedPaused: Bool
     private var observedConnectionMode: AppState.ConnectionMode
-    private var observedPushToTalk: Bool
+    private var voiceObservationGeneration: UInt64 = 0
+    private var observingVoice = false
 
     init(state: AppState, updater: UpdaterProviding) {
         self.state = state
         self.updater = updater
+        self.hotkey = state.voiceRuntime.hotkey
         self.observedPaused = state.isPaused
         self.observedConnectionMode = state.connectionMode
-        self.observedPushToTalk = state.voicePushToTalkEnabled
         super.init()
     }
 
@@ -56,7 +58,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.installButton(in: item)
         self.installWindowCallbacks()
         self.approvals.start()
-        VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
+        self.startVoiceObservation()
 
         self.renderCachedMenu()
         self.updateStatusAppearance()
@@ -65,7 +67,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func stop() {
+        self.stopVoiceObservation()
         self.observationGeneration &+= 1
+        guard let statusItem else { return }
         self.refreshTask?.cancel()
         self.refreshTask = nil
         self.sessions.cancelPreviewTasks()
@@ -75,9 +79,33 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             NSEvent.removeMonitor(clickMonitor)
             self.clickMonitor = nil
         }
-        guard let statusItem else { return }
         self.statusItem = nil
         NSStatusBar.system.removeStatusItem(statusItem)
+    }
+
+    func startVoiceObservation() {
+        guard !self.observingVoice else { return }
+        self.observingVoice = true
+        self.observeVoiceChanges()
+    }
+
+    func stopVoiceObservation() {
+        self.observingVoice = false
+        self.voiceObservationGeneration &+= 1
+        self.hotkey.setEnabled(false)
+    }
+
+    private func observeVoiceChanges() {
+        let generation = self.voiceObservationGeneration
+        let enabled = withObservationTracking {
+            self.state.voicePushToTalkEnabled
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.observingVoice, self.voiceObservationGeneration == generation else { return }
+                self.observeVoiceChanges()
+            }
+        }
+        self.hotkey.setEnabled(voiceWakeSupported && enabled)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -232,7 +260,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.gatewayManager.status
             _ = self.controlChannel.state
             _ = self.state.voiceWakeMeterActive
-            _ = self.state.voicePushToTalkEnabled
             _ = self.state.quickChatEnabled
             _ = self.state.canvasEnabled
             _ = self.state.canvasPanelVisible
@@ -289,12 +316,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 }
             }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
-        }
-
-        let pushToTalk = self.state.voicePushToTalkEnabled
-        if pushToTalk != self.observedPushToTalk {
-            self.observedPushToTalk = pushToTalk
-            VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && pushToTalk)
         }
     }
 
