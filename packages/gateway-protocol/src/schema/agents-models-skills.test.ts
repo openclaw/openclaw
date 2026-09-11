@@ -186,23 +186,33 @@ describe("AgentsListResultSchema", () => {
     expectAccepted(AgentsListResultSchema, result);
   });
 
-  it("keeps the legacy default required while accepting additive ownership metadata", () => {
-    const legacy = {
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "ops" }, { id: "research" }],
-    };
-    const current = {
-      ...legacy,
-      ownership: "explicit",
-      selectionRequired: true,
-    };
+  it.each(["per-sender|main|unowned", "server-fingerprint:v2/Case+opaque=="])(
+    "keeps legacy defaults required while accepting opaque routing metadata %s",
+    (sessionRoutingContract) => {
+      const legacy = {
+        defaultId: "ops",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "ops" }, { id: "research" }],
+      };
+      const current = {
+        ...legacy,
+        ownership: "explicit",
+        selectionRequired: true,
+        sessionRoutingContract,
+      };
 
-    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
-    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
-    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
-  });
+      expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
+      expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
+      expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
+      for (const invalidContract of ["", null, 42, true, {}]) {
+        expectRejected(AgentsListResultSchema, {
+          ...current,
+          sessionRoutingContract: invalidContract,
+        });
+      }
+    },
+  );
 
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
     const result = {
