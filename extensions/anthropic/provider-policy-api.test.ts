@@ -164,7 +164,7 @@ describe("anthropic provider policy public artifact", () => {
   });
 
   it.each(["claude-fable-5", "claude-fable-5-1", "claude-mythos-5"])(
-    "exposes the mandatory-adaptive %s thinking profile",
+    "exposes only native efforts for the mandatory-adaptive %s thinking profile",
     (modelId) => {
       const profile = resolveThinkingProfile({
         provider: "anthropic",
@@ -172,15 +172,7 @@ describe("anthropic provider policy public artifact", () => {
       });
 
       expect(profile).toEqual({
-        levels: [
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          { id: "xhigh" },
-          { id: "adaptive" },
-          { id: "max" },
-        ],
+        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
         defaultLevel: "high",
         preserveWhenCatalogReasoningFalse: true,
       });

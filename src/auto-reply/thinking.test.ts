@@ -381,10 +381,8 @@ describe("listThinkingLevels", () => {
     ];
 
     expect(listThinkingLevels("microsoft-foundry", "company-fable", catalog)).toEqual([
-      "minimal",
       "low",
       "medium",
-      "adaptive",
       "high",
       "xhigh",
       "max",
@@ -866,6 +864,17 @@ describe("listThinkingLevels", () => {
         model: "gpt-4.1-mini",
         level: "xhigh",
       }),
+    ).toBe("high");
+  });
+
+  it("uses the provider default for a stored adaptive level when adaptive is not selectable", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: ["low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
+      defaultLevel: "high",
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({ provider: "proxy", model: "reasoner", level: "adaptive" }),
     ).toBe("high");
   });
 
