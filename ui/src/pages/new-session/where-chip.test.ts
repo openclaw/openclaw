@@ -6,6 +6,22 @@ import { icons } from "../../components/icons.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
+function hoverDetails(row: Element | null | undefined) {
+  return [
+    ...(row
+      ?.closest("openclaw-tooltip")
+      ?.querySelectorAll('[slot="content"] dd, [slot="content"] > div') ?? []),
+  ]
+    .map((detail) => detail.textContent?.trim())
+    .join(" · ");
+}
+
+function hoverDetail(row: Element | null | undefined, label: string) {
+  return [...(row?.closest("openclaw-tooltip")?.querySelectorAll("dt") ?? [])]
+    .find((term) => term.textContent?.trim() === label)
+    ?.nextElementSibling?.textContent?.trim();
+}
+
 function renderPicker(
   isAdmin: boolean,
   autoPlacementMode?: "least-busy" | "eligible-order",
@@ -148,6 +164,16 @@ describe("Where chip", () => {
         { cloudProfileId },
         { gatewayName: "Gateway Mac Studio" },
       );
+      if (value === "gateway") {
+        expect(
+          container.querySelector(".new-session-page__trigger-label")?.textContent?.trim(),
+        ).toBe("Gateway Mac Studio");
+        expect(
+          container
+            .querySelector('[data-value="gateway"] .session-menu__text')
+            ?.textContent?.trim(),
+        ).toBe("Gateway Mac Studio");
+      }
       const expected = document.createElement("div");
       render(icon, expected);
       const expectedSvg = expected.querySelector("svg")!;
@@ -230,7 +256,9 @@ describe("Where chip", () => {
         (row) => row.getAttribute("data-value"),
       ),
     ).toEqual(["gateway", "device:alpha", "device:zulu", "cloud:linux-worker"]);
-    expect(container.querySelector('[data-value="device:alpha"]')?.textContent).toContain("Linux");
+    expect(
+      hoverDetail(container.querySelector('[data-value="device:alpha"]'), "Operating system"),
+    ).toBe("Linux");
   });
 
   it("keeps Auto and Connect outside search results and reports an empty search", () => {
@@ -270,18 +298,14 @@ describe("Where chip", () => {
     ).toBe("true");
   });
 
-  it("keeps slot indicators and reserves the checkmark column when selecting a device", () => {
+  it("keeps concurrent session details and reserves the checkmark column when selecting a device", () => {
     const container = renderPicker(true, undefined, { deviceId: "runner" });
     const selected = container.querySelector('[data-value="device:runner"]');
     const unselected = container.querySelector('[data-value="device:alpha-device"]');
 
-    expect(selected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "1 of 2 slots busy",
-    );
+    expect(hoverDetail(selected, "Concurrent sessions")).toBe("1 running / 2 maximum");
     expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
-    expect(unselected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "0 of 1 slots busy",
-    );
+    expect(hoverDetail(unselected, "Concurrent sessions")).toBe("0 running / 1 maximum");
     expect(unselected?.querySelector(".session-menu__check")).not.toBeNull();
     expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
   });
@@ -299,7 +323,8 @@ describe("Where chip", () => {
 
     expect(automatic.getAttribute("role")).toBe("switch");
     expect(automatic.getAttribute("aria-checked")).toBe(String(autoDevice));
-    expect(automatic.textContent).toContain("Connected devices only");
+    expect(hoverDetails(automatic)).toContain("Connected devices only");
+    expect(automatic.querySelector(".session-menu__description")).toBeNull();
     automatic.click();
 
     expect(onToggleAutoDevice).toHaveBeenCalledExactlyOnceWith(!autoDevice);
@@ -329,9 +354,9 @@ describe("Where chip", () => {
     expect(onSelectDevice).not.toHaveBeenCalled();
     expect(onSelectCloudProfile).not.toHaveBeenCalled();
 
-    const meter = container.querySelector('[data-value="device:runner"] [role="img"]');
-    expect(meter?.getAttribute("aria-label")).toBe("1 of 2 slots busy");
-    expect(meter?.classList.contains("session-context-meter--stale")).toBe(false);
+    expect(
+      hoverDetail(container.querySelector('[data-value="device:runner"]'), "Concurrent sessions"),
+    ).toBe("1 running / 2 maximum");
 
     const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search.disabled).toBe(false);
@@ -440,7 +465,8 @@ describe("Where chip", () => {
     for (const os of ["macos", "windows/wsl2"]) {
       const row = container.querySelector<HTMLButtonElement>(`[data-value="os:${os}"]`);
       expect(row?.disabled).toBe(true);
-      expect(row?.textContent).toContain(reason);
+      expect(hoverDetails(row)).toBe(reason);
+      expect(row?.querySelector(".session-menu__description")).toBeNull();
     }
   });
 
@@ -495,7 +521,7 @@ describe("Where chip", () => {
       );
       expect(container.querySelector('[data-value="machine:custom"]')).not.toBeNull();
       const osRow = container.querySelector('[data-value="os:linux"]');
-      expect(osRow?.textContent).toContain("Default");
+      expect(hoverDetails(osRow)).toContain("Default");
       expect(osRow?.hasAttribute("data-popover")).toBe(false);
       expect(
         osRow?.compareDocumentPosition(container.querySelector('[data-value="machine:tiny"]')!),
@@ -523,10 +549,7 @@ describe("Where chip", () => {
     expect(state.kind).toBe("device");
     expect(state.label).toBe("Build runner");
     const row = renderPicker(false).querySelector('[data-value="device:runner"]');
-    expect(row?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "1 of 2 slots busy",
-    );
-    expect(row?.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(hoverDetail(row, "Concurrent sessions")).toBe("1 running / 2 maximum");
     expect(row?.textContent).not.toContain("Worker slots");
     expect(state.devices[0]?.workerSlots).toEqual({ total: 2, available: 1 });
     expect(state.devices[0]?.facts).toEqual([]);
@@ -538,24 +561,20 @@ describe("Where chip", () => {
     expect(autoRow?.textContent).toContain("Choose a device automatically");
     expect(autoRow?.getAttribute("role")).toBe("switch");
     expect(autoRow?.getAttribute("aria-checked")).toBe("false");
-    expect(autoRow?.querySelector(".session-menu__description")?.textContent).toContain(
-      "Least-busy device",
-    );
+    expect(hoverDetails(autoRow)).toContain("Least-busy device");
     const remoteExec = renderPicker(false, "eligible-order");
-    expect(
-      remoteExec.querySelector('[data-value="auto-device"] .session-menu__description')
-        ?.textContent,
-    ).toContain("First eligible device");
+    expect(hoverDetails(remoteExec.querySelector('[data-value="auto-device"]'))).toContain(
+      "First eligible device",
+    );
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
-    expect(
-      writer.querySelector('[data-value="device:alpha-device"] .session-menu__description')
-        ?.textContent,
-    ).toContain("alpha-de");
-    expect(
-      writer.querySelector('[data-value="device:beta-device"] .session-menu__description')
-        ?.textContent,
-    ).toContain("beta-dev");
+    expect(hoverDetails(writer.querySelector('[data-value="device:alpha-device"]'))).toContain(
+      "alpha-de",
+    );
+    expect(hoverDetails(writer.querySelector('[data-value="device:beta-device"]'))).toContain(
+      "beta-dev",
+    );
+    expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
     expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
     expect(writer.querySelector('[data-value="connect-machine"]')).toBeNull();
 
@@ -611,9 +630,10 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("This runtime does not support paired devices");
-    // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
-    expect(device?.title).toBe("This runtime does not support paired devices");
+    expect(device?.querySelector(".session-menu__description")).toBeNull();
+    // Unavailable capacity stays distinct from the actionable disabled reason.
+    expect(hoverDetail(device, "Concurrent sessions")).toBe("Slot utilization unavailable");
+    expect(hoverDetails(device)).toContain("This runtime does not support paired devices");
   });
 
   it("omits automatic placement when no devices are paired and Auto is off", () => {
@@ -715,8 +735,8 @@ describe("Where chip", () => {
 
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
-    expect(automatic?.title).toMatch(reason);
-    expect(automatic?.textContent).toMatch(reason);
+    expect(hoverDetails(automatic)).toMatch(reason);
+    expect(automatic?.querySelector(".session-menu__description")).toBeNull();
   });
 
   it.each([
@@ -730,8 +750,7 @@ describe("Where chip", () => {
       invocableCommands: ["codex.exec-server.stdio.v1"],
       commandState: "invocable" as const,
       disabled: false,
-      label: "1 of 1 slots busy",
-      tone: "warn",
+      label: "1 running / 1 maximum",
     },
     {
       name: "shows slot-less remote execution without a capacity claim",
@@ -744,7 +763,6 @@ describe("Where chip", () => {
       commandState: "invocable" as const,
       disabled: false,
       label: "Codex exec",
-      tone: undefined,
     },
     {
       name: "keeps worker execution capacity-gated",
@@ -755,7 +773,6 @@ describe("Where chip", () => {
       disabled: true,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       label: "Slot utilization unavailable",
-      tone: "stale",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",
@@ -770,7 +787,6 @@ describe("Where chip", () => {
       reason:
         "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
       label: "Slot utilization unavailable",
-      tone: "stale",
     },
   ])(
     "$name in the New Session picker",
@@ -782,7 +798,6 @@ describe("Where chip", () => {
       disabled,
       reason,
       label,
-      tone,
     }) => {
       const state = resolveWhereChip({
         environments: [
@@ -839,13 +854,9 @@ describe("Where chip", () => {
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
       expect(device?.disabled).toBe(disabled);
-      const meter = device?.querySelector('[role="img"]');
-      expect(meter?.getAttribute("aria-label")).toBe(label);
-      if (tone) {
-        expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
-      }
+      expect(hoverDetail(device, "Concurrent sessions")).toBe(label);
       if (reason) {
-        expect(device?.title).toBe(reason);
+        expect(hoverDetails(device)).toContain(reason);
       }
     },
   );

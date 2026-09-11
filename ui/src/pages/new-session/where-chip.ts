@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
+import { prettifyPlatform } from "../../lib/platform-label.ts";
 import {
   renderCloudProfileMenuItems,
   renderCloudMachineMenuItems,
@@ -209,6 +210,8 @@ export function renderWhereChip(params: {
           : environmentDeviceIcon(
               params.state.devices.find((device) => device.deviceId === params.deviceId),
             );
+  const label =
+    params.state.kind === "local" ? params.gatewayName || params.state.label : params.state.label;
   const query = params.environmentQuery.trim().toLocaleLowerCase();
   const matches = (...values: (string | undefined)[]) =>
     values.some((value) => value?.toLocaleLowerCase().includes(query));
@@ -254,7 +257,7 @@ export function renderWhereChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        aria-label="${t("newSession.where")}: ${params.state.label}"
+        aria-label="${t("newSession.where")}: ${label}"
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
         data-os=${params.os || nothing}
@@ -266,7 +269,7 @@ export function renderWhereChip(params: {
         @click=${params.onGuardTransition}
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
+        <span class="new-session-page__trigger-label">${label}</span>
         <span
           class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
           aria-hidden="true"
@@ -295,8 +298,16 @@ export function renderWhereChip(params: {
         }
         params.onPopoverShow();
       }}
-      @wa-hide=${params.onPopoverHide}
-      @wa-after-hide=${params.onPopoverAfterHide}
+      @wa-hide=${(event: Event) => {
+        if (event.target === event.currentTarget) {
+          params.onPopoverHide();
+        }
+      }}
+      @wa-after-hide=${(event: Event) => {
+        if (event.target === event.currentTarget) {
+          params.onPopoverAfterHide();
+        }
+      }}
     >
       <div class="new-session-page__picker-root new-session-page__environment-picker">
         <label class="new-session-page__environment-search">
@@ -316,7 +327,9 @@ export function renderWhereChip(params: {
           />
         </label>
         <div
-          class="new-session-page__environment-list ${params.autoDevice ? "new-session-page__environment-list--automatic" : ""}"
+          class="new-session-page__environment-list ${
+            params.autoDevice ? "new-session-page__environment-list--automatic" : ""
+          }"
         >
           ${
             showLocal
@@ -326,7 +339,7 @@ export function renderWhereChip(params: {
                     label: params.gatewayName || t("newSession.local"),
                     icon: icons.home,
                     description: t("newSession.gatewayHost"),
-                    stacked: true,
+                    compact: true,
                     checked: params.state.kind === "local",
                     title: gatewayTitle,
                     onSelect: () => params.onSelectDevice(""),
@@ -348,13 +361,39 @@ export function renderWhereChip(params: {
                 label: device.label,
                 sub: device.subtitle,
                 icon: environmentDeviceIcon(device),
-                facts: device.facts,
-                meter: capacity?.meter,
-                stacked: true,
+                facts: device.facts.filter(
+                  (fact) => fact !== prettifyPlatform(device.platform ?? ""),
+                ),
+                details: [
+                  ...(device.platform
+                    ? [
+                        {
+                          label: t("newSession.operatingSystem"),
+                          value: prettifyPlatform(device.platform),
+                        },
+                      ]
+                    : []),
+                  ...(capacity
+                    ? [
+                        {
+                          label: t("newSession.concurrentSessions"),
+                          value:
+                            device.selectable && device.workerSlots
+                              ? t("newSession.concurrentSessionsValue", {
+                                  used: String(
+                                    device.workerSlots.total - device.workerSlots.available,
+                                  ),
+                                  total: String(device.workerSlots.total),
+                                })
+                              : capacity.label,
+                        },
+                      ]
+                    : []),
+                ],
+                compact: true,
                 checked: params.state.kind === "device" && params.deviceId === device.deviceId,
                 disabled: !device.selectable,
-                title:
-                  [device.disabledReason, capacity?.title].filter(Boolean).join(" · ") || undefined,
+                title: device.disabledReason,
                 onSelect: () => params.onSelectDevice(device.deviceId),
               },
               destinationDisabled,
@@ -365,7 +404,7 @@ export function renderWhereChip(params: {
             selectedId: params.cloudProfileId,
             submitting: destinationDisabled,
             icon: icons.cloud,
-            stacked: true,
+            compact: true,
             disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
             disabledReason: params.cloudDisabledReason,
             profileDisabledReason: params.cloudProfileDisabledReason,
@@ -379,7 +418,7 @@ export function renderWhereChip(params: {
                     label: t("newSession.cloudWorker", { profile: params.cloudProfileId }),
                     icon: icons.cloud,
                     description: t("newSession.catalogUnavailable"),
-                    stacked: true,
+                    compact: true,
                     checked: true,
                     disabled: true,
                     title: t("newSession.catalogUnavailable"),
@@ -427,33 +466,41 @@ export function renderWhereChip(params: {
           params.state.devices.length > 0 || params.autoDevice
             ? html`
                 <div class="new-session-page__environment-auto">
-                  <button
-                    type="button"
-                    class="session-menu__item new-session-page__auto-device"
-                    data-value="auto-device"
-                    role="switch"
-                    aria-checked=${String(params.autoDevice === true)}
-                    aria-label=${t("newSession.autoDeviceChoose")}
-                    title=${params.state.autoDeviceDisabledReason ?? nothing}
-                    ?disabled=${busy || (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))}
-                    @click=${() => params.onToggleAutoDevice(!params.autoDevice)}
+                  <openclaw-tooltip
+                    class="new-session-page__environment-details"
+                    placement="right-start"
                   >
-                    <span class="session-menu__icon" aria-hidden="true">${shuffleIcon}</span>
-                    <span class="session-menu__text">
-                      ${t("newSession.autoDeviceChoose")}
-                      <span class="session-menu__description"
-                        >${
+                    <button
+                      type="button"
+                      class="session-menu__item new-session-page__auto-device"
+                      data-value="auto-device"
+                      role="switch"
+                      aria-checked=${String(params.autoDevice === true)}
+                      aria-label=${t("newSession.autoDeviceChoose")}
+                      ?disabled=${
+                        busy ||
+                        (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))
+                      }
+                      @click=${() => params.onToggleAutoDevice(!params.autoDevice)}
+                    >
+                      <span class="session-menu__icon" aria-hidden="true">${shuffleIcon}</span>
+                      <span class="session-menu__text"> ${t("newSession.autoDeviceChoose")} </span>
+                      <span class="new-session-page__auto-switch" aria-hidden="true"></span>
+                    </button>
+                    <div slot="content" class="new-session-page__environment-card">
+                      <strong>${t("newSession.autoDeviceChoose")}</strong>
+                      <div>
+                        ${
                           params.state.autoDeviceDisabledReason ??
                           `${t("newSession.autoDeviceScope")} · ${t(
                             params.autoPlacementMode === "eligible-order"
                               ? "newSession.autoDeviceSubEligible"
                               : "newSession.autoDeviceSub",
                           )}`
-                        }</span
-                      >
-                    </span>
-                    <span class="new-session-page__auto-switch" aria-hidden="true"></span>
-                  </button>
+                        }
+                      </div>
+                    </div>
+                  </openclaw-tooltip>
                 </div>
               `
             : nothing

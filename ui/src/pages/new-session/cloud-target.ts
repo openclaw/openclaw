@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
+import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
@@ -32,29 +33,27 @@ type SessionMenuItemOptions = {
   icon?: unknown;
   sub?: string;
   facts?: readonly string[];
-  meter?: TemplateResult;
   checked: boolean;
   disabled?: boolean;
   title?: string;
   keepOpen?: boolean;
-  stacked?: boolean;
+  compact?: boolean;
+  details?: readonly { label: string; value: string }[];
   onSelect: () => void;
 };
 
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
-  const description = params.stacked
-    ? [params.description, params.sub, ...(params.facts ?? [])].filter(Boolean).join(" · ")
-    : params.description;
-  return html`
+  const description = params.compact ? undefined : params.description;
+  const row = html`
     <button
       type="button"
-      class="session-menu__item ${description ? "session-menu__item--described" : ""} ${
-        params.stacked ? "new-session-page__environment-option" : ""
-      }"
+      class="session-menu__item ${
+        description ? "session-menu__item--described" : ""
+      } ${params.compact ? "new-session-page__environment-option" : ""}"
       data-value=${params.value}
       data-popover=${params.keepOpen ? nothing : "close"}
       aria-pressed=${String(params.checked)}
-      title=${params.title ?? nothing}
+      title=${params.compact ? nothing : (params.title ?? nothing)}
       ?disabled=${submitting || (params.disabled ?? false)}
       @click=${params.onSelect}
     >
@@ -72,7 +71,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         }
       </span>
       ${
-        !params.stacked && (params.facts?.length || params.meter)
+        !params.compact && params.facts?.length
           ? html`<span class="new-session-page__menu-meta">
               ${
                 params.facts?.length
@@ -83,17 +82,45 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
                     </span>`
                   : nothing
               }
-              ${params.meter ?? nothing}
             </span>`
           : nothing
       }
-      ${!params.stacked && params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
-      ${params.stacked ? (params.meter ?? nothing) : nothing}
+      ${
+        !params.compact && params.sub
+          ? html`<span class="session-menu__sub">${params.sub}</span>`
+          : nothing
+      }
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
     </button>
   `;
+  return params.compact
+    ? html`<openclaw-tooltip class="new-session-page__environment-details" placement="right-start">
+        ${row}
+        <div slot="content" class="new-session-page__environment-card">
+          <strong>${params.label}</strong>
+          <dl>
+            ${params.details?.map(
+              (detail) =>
+                html`<dt>${detail.label}</dt>
+                  <dd>${detail.value}</dd>`,
+            )}
+            ${[
+              ...new Set(
+                [params.description, params.sub, ...(params.facts ?? []), params.title].filter(
+                  Boolean,
+                ),
+              ),
+            ].map(
+              (detail) =>
+                html`<dt>${t("newSession.environmentDetails")}</dt>
+                  <dd>${detail}</dd>`,
+            )}
+          </dl>
+        </div>
+      </openclaw-tooltip>`
+    : row;
 }
 
 export function renderConnectMachineMenuItem(params: { disabled: boolean; onSelect: () => void }) {
@@ -121,7 +148,7 @@ export function renderCloudProfileMenuItems(params: {
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  stacked?: boolean;
+  compact?: boolean;
   onSelect: (profileId: string) => void;
 }) {
   return params.profiles.map((profile) => {
@@ -131,7 +158,7 @@ export function renderCloudProfileMenuItems(params: {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
-        stacked: params.stacked,
+        compact: params.compact,
         facts:
           profile.trust === "disposable"
             ? [t("newSession.environmentDisposable")]
@@ -173,6 +200,7 @@ export function renderCloudMachineMenuItems(params: {
     renderSessionMenuItem(
       {
         value: `machine:${machine.id}`,
+        compact: true,
         label: machine.label,
         sub: machineShapeText(machine),
         facts: machine.default ? [t("newSession.machineDefault")] : undefined,
@@ -195,6 +223,7 @@ export function renderCloudOsMenuItems(params: {
     renderSessionMenuItem(
       {
         value: `os:${os.id}`,
+        compact: true,
         label: os.label,
         description: os.disabledReason,
         disabled: Boolean(os.disabledReason),

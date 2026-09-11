@@ -120,6 +120,8 @@ class Tooltip extends OpenClawLitElement {
 
   @property() content = "";
 
+  @property() placement: WaTooltip["placement"] = "top";
+
   @property({ type: Number }) closeDelay = RICH_CONTENT_CLOSE_DELAY;
 
   @property({ type: Number }) delay?: number;
@@ -647,7 +649,12 @@ class Tooltip extends OpenClawLitElement {
   override render() {
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.#tooltipId} trigger="manual" @wa-hide=${() => this.close()}>
+      <wa-tooltip
+        id=${this.#tooltipId}
+        placement=${this.placement}
+        trigger="manual"
+        @wa-hide=${() => this.close()}
+      >
         <span class="tooltip-content">${this.content}</span>
         <span
           class="tooltip-rich-content"

@@ -26,7 +26,7 @@ describe("cloud target menu", () => {
       machine: { id: "custom", label: "Custom" },
       expected: undefined,
     },
-  ])("renders $name without an empty sub-line", ({ machine, expected }) => {
+  ])("exposes $name on hover while keeping the machine row compact", ({ machine, expected }) => {
     const container = document.createElement("div");
     render(
       renderCloudMachineMenuItems({
@@ -38,10 +38,12 @@ describe("cloud target menu", () => {
       container,
     );
 
-    expect(container.querySelector(".session-menu__sub")?.textContent).toBe(expected);
+    expect(container.querySelector('[slot="content"] dd')?.textContent?.trim()).toBe(expected);
+    expect(container.querySelector("button")?.hasAttribute("title")).toBe(false);
+    expect(container.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
   });
 
-  it("renders the default badge before the machine shape", () => {
+  it("preserves the default and machine shape in hover details", () => {
     const container = document.createElement("div");
     render(
       renderCloudMachineMenuItems({
@@ -53,9 +55,14 @@ describe("cloud target menu", () => {
       container,
     );
 
-    const badge = container.querySelector(".new-session-page__menu-facts");
-    const shape = container.querySelector(".session-menu__sub");
-    expect(badge?.compareDocumentPosition(shape as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const button = container.querySelector("button");
+    expect(
+      [...container.querySelectorAll('[slot="content"] dd')].map((detail) =>
+        detail.textContent?.trim(),
+      ),
+    ).toEqual(["32 vCPU · 64 GB", "Default"]);
+    expect(button?.textContent?.trim()).toBe("Standard");
+    expect(container.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {
