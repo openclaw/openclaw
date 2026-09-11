@@ -1,11 +1,14 @@
+import type { Router } from "@openclaw/uirouter";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
-import type { ApplicationRouter } from "../app-routes.ts";
 import type { ApplicationContext } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 
 /** Resume interrupted session reads without retiring already mounted conversations. */
 export function startSessionRouteRecovery(
-  router: ApplicationRouter,
+  router: Pick<
+    Router<RouteId, ApplicationContext<RouteId>, unknown, unknown>,
+    "getState" | "subscribe" | "navigate"
+  >,
   context: ApplicationContext<RouteId>,
 ): () => void {
   let stopped = false;
