@@ -37,7 +37,7 @@ describe("markdown session links", () => {
       titler.refresh();
 
       expect(anchor.dataset.sessionKey).toBe(sessionKey);
-      expect(anchor.textContent?.trim()).toBe("Research");
+      expect(anchor.textContent).toBe("Research");
       expect(anchor.dataset.sessionHref).toBe(href);
       expect(anchor.getAttribute("href")).toBe(`${pathname}${suffix}`);
       expect(anchor.nextSibling?.textContent).toBe("重新解读");

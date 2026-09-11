@@ -49,7 +49,11 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
             // display name (an agent's main session IS the agent); the titler
             // still stamps the href but leaves pre-titled text alone.
             html`<span>${t("chat.messages.forwardedFrom")}</span>
-              ${sourceAgentPrefix ? html`<span>${sourceAgentPrefix} —</span>` : nothing}
+              ${
+                sourceAgentPrefix
+                  ? html`<span class="chat-reply-attribution__source">${sourceAgentPrefix} —</span>`
+                  : nothing
+              }
               <a
                 class="markdown-session-link${
                   sourceMainLabel ? " markdown-session-link--titled" : ""
@@ -64,8 +68,8 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
               ></a>`
           : sourceSessionKey
             ? html`<span>${t("chat.messages.forwardedFrom")}</span>
-                <span>${sourceSessionKey}</span>`
-            : html`<span
+                <span class="chat-reply-attribution__source">${sourceSessionKey}</span>`
+            : html`<span class="chat-reply-attribution__source"
                 >${
                   group.senderSession?.agentId
                     ? t("chat.messages.forwardedFromAgent", {

@@ -457,7 +457,7 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[data-session-key="${sessionKey}"]`,
         );
         await link.waitFor({ state: "visible" });
-        await expect.poll(async () => (await link.textContent())?.trim()).toBe("Other session");
+        await expect.poll(() => link.textContent()).toBe("Other session");
         expect(await link.getAttribute("href")).toBe("/chat/main/other-session");
         await link.hover();
         await card.waitFor({ state: "visible" });

@@ -830,12 +830,16 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-reply-attribution {
   display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: baseline;
   gap: 5px;
+  max-width: 100%;
   margin-bottom: var(--space-1);
   color: var(--muted);
   font-size: 12px;
+}
+
+.chat-reply-attribution__source {
+  overflow-wrap: anywhere;
 }
 
 .chat-reply-attribution__icon,
