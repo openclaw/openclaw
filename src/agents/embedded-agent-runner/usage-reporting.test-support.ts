@@ -320,6 +320,7 @@ describe("runEmbeddedAgent usage reporting", () => {
 
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
+      logicalRef: { provider: "openrouter", model: "openai/gpt-5.4" },
       model: {
         id: "openai/gpt-5.4",
         provider: "openrouter",

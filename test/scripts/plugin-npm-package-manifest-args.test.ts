@@ -1,8 +1,9 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseRunArgs } from "../../scripts/lib/plugin-npm-package-manifest.mts";
 
 const usage =
-  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir>] -- <command> [args...]";
 
 describe("plugin-npm-package-manifest run args", () => {
   it("parses package-scoped run commands", () => {
@@ -20,6 +21,29 @@ describe("plugin-npm-package-manifest run args", () => {
       command: "",
       args: [],
     });
+  });
+
+  it("binds an explicit ClawHub metadata source without treating it as a command argument", () => {
+    expect(
+      parseRunArgs([
+        "--run",
+        "extensions/demo",
+        "--clawhub-metadata",
+        "tooling/extensions/demo",
+        "--",
+        "clawhub",
+        "package",
+        "pack",
+      ]),
+    ).toEqual({
+      packageDir: "extensions/demo",
+      clawhubMetadataDir: resolve("tooling/extensions/demo"),
+      command: "clawhub",
+      args: ["package", "pack"],
+    });
+    expect(() =>
+      parseRunArgs(["--run", "extensions/demo", "--clawhub-metadata", "--", "npm", "pack"]),
+    ).toThrow("unexpected plugin npm package manifest run argument");
   });
 
   it("rejects missing or option-looking package dirs", () => {

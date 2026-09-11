@@ -1552,6 +1552,7 @@ jobs:
               }
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              runnerBackend: runnerProfile,
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
             });
@@ -1567,6 +1568,7 @@ jobs:
           // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
             changedNodeTestShards === null ||
+            changedNodeTestShards.some((shard) => shard.requiresDist) ||
             typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
             changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
           const changedScopeHasQaImpact =
@@ -2851,6 +2853,8 @@ jobs:
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
             ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
+            ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
+            ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
             ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
@@ -3062,6 +3066,7 @@ jobs:
               pnpm check:assertion-safety --base "$base_ref"
               pnpm config:docs:check
               pnpm plugins:inventory:check
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"

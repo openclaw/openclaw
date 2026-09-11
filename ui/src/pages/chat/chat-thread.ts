@@ -265,7 +265,7 @@ function sameChatItemsStructuralInput(
     previous.queue === next.queue &&
     previous.pendingInputs === next.pendingInputs &&
     previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
-    previous.workerSetupPendingRunIds === next.workerSetupPendingRunIds &&
+    previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&

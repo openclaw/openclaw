@@ -256,12 +256,8 @@ describe("pairing setup code", () => {
     options?: ResolveSetupOptions;
     expectedError: string;
   }) {
-    try {
-      const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
-      expectResolvedSetupError(resolved, params.expectedError);
-    } catch (error) {
-      expect(String(error)).toContain(params.expectedError);
-    }
+    const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
+    expectResolvedSetupError(resolved, params.expectedError);
   }
 
   async function expectResolveCustomGatewayRejects(params: {
@@ -516,7 +512,35 @@ describe("pairing setup code", () => {
       expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
-    await expectResolvedSetupFailureCase({ config, options, expectedError });
+    await expect(resolvePairingSetupFromConfig(config, options)).rejects.toThrow(expectedError);
+  });
+
+  it.each(["none", "trusted-proxy"] as const)(
+    "names gateway.auth.mode %s when setup code generation lacks a shared secret",
+    async (mode) => {
+      await expectResolvedSetupFailureCase({
+        config: createCustomGatewayConfig({ mode }),
+        options: { env: {} },
+        expectedError: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+      });
+      expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the unconfigured-auth error when gateway.auth.mode is unset", async () => {
+    await expectResolvedSetupFailureCase({
+      config: createCustomGatewayConfig({}),
+      options: { env: {} },
+      expectedError: "Gateway auth is not configured (no token or password).",
+    });
+  });
+
+  it("keeps the configured-password fallback for trusted-proxy mode", async () => {
+    await expectResolvedCustomGatewaySetupOk({
+      auth: { mode: "trusted-proxy", password: "secret" },
+      env: {},
+      expectedAuthLabel: "password",
+    });
   });
 
   async function resolveInferredModeWithPasswordEnv(token: SecretInput) {

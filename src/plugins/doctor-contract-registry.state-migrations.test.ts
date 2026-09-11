@@ -66,7 +66,7 @@ describe("doctor-contract-registry state migrations", () => {
     clearPluginDoctorContractRegistryCache();
   });
 
-  it("freezes dynamic and declared live actions in selected registry order", () => {
+  it("freezes dynamic and declared live actions in stable owner order", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),
@@ -104,8 +104,72 @@ describe("doctor-contract-registry state migrations", () => {
     expect(
       resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
     ).toEqual([
-      { pluginId: "dynamic-owner", id: "dynamic-action" },
       { pluginId: "declared-owner", id: "declared-action" },
+      { pluginId: "dynamic-owner", id: "dynamic-action" },
+    ]);
+  });
+
+  it("uses stable owner order while preserving each owner's declaration order", () => {
+    const acpxRoot = makeTempDir();
+    const codexRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(acpxRoot, "doctor-contract-api.cjs"),
+      `module.exports = { stateMigrations: [
+  { id: "z-prepare", label: "ACPX prepare", detectLegacyState: () => null, migrateLegacyState: () => ({ changes: [], warnings: [] }) },
+  { id: "a-finalize", label: "ACPX finalize", detectLegacyState: () => null, migrateLegacyState: () => ({ changes: [], warnings: [] }) },
+] };\n`,
+    );
+    fs.writeFileSync(
+      path.join(codexRoot, "doctor-contract-api.cjs"),
+      `module.exports = { stateMigrations: [
+  { id: "codex-only", label: "Codex only", detectLegacyState: () => null, migrateLegacyState: () => ({ changes: [], warnings: [] }) },
+] };\n`,
+    );
+    const codexRecord = {
+      id: "codex",
+      origin: "config" as const,
+      rootDir: codexRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { stateMigrations: [{ id: "codex-only" }] },
+    };
+    const acpxRecord = {
+      id: "acpx",
+      origin: "bundled" as const,
+      rootDir: acpxRoot,
+      channels: [],
+      providers: [],
+      doctorContract: {
+        stateMigrations: [{ id: "z-prepare" }, { id: "a-finalize" }],
+      },
+    };
+    let discoveryOrder = [codexRecord, acpxRecord];
+    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
+      // Deliberately model a config-selected Codex alias preceding bundled ACPX.
+      plugins: discoveryOrder,
+      diagnostics: [],
+    }));
+
+    expect(
+      resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
+    ).toEqual([
+      { pluginId: "acpx", id: "z-prepare" },
+      { pluginId: "acpx", id: "a-finalize" },
+      { pluginId: "codex", id: "codex-only" },
+    ]);
+
+    discoveryOrder = [acpxRecord, codexRecord];
+    expect(
+      listPluginDoctorStateMigrationEntries({ config: {}, env: {} }).map(
+        ({ pluginId, migration }) => ({
+          pluginId,
+          id: migration.id,
+        }),
+      ),
+    ).toEqual([
+      { pluginId: "acpx", id: "z-prepare" },
+      { pluginId: "acpx", id: "a-finalize" },
+      { pluginId: "codex", id: "codex-only" },
     ]);
   });
 

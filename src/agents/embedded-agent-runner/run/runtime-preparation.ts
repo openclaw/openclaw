@@ -564,6 +564,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       agentHarness,
       pluginHarnessOwnsTransport,
       effectiveModel: models.effective,
+      modelContextWindow: models.runtime.contextWindow,
       contextTokenBudget,
       authoredContextTokenCap,
       contextWindowInfo,

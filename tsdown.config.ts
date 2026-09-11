@@ -20,6 +20,10 @@ import {
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "./scripts/lib/runtime-process-core-build-entries.mts";
+import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
 } from "./scripts/lib/state-schema-inline-plugin.mts";
@@ -31,7 +35,7 @@ import {
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
-import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
+import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -414,11 +418,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "config/sessions/session-model-context.worker":
       "src/config/sessions/session-model-context.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
-    "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
-    "system-agent/setup-inference-detection.worker":
-      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -815,7 +816,7 @@ const configs: UserConfig[] = [
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: {
-        ...unifiedDistEntries,
+        ...sharedRuntimeProcessBuildEntries(unifiedDistEntries),
         "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
       },
       deps: unifiedDeps,
@@ -827,6 +828,16 @@ const configs: UserConfig[] = [
         createGatewayRunChunkMetadataPlugin(),
         createRuntimeDependencyOwnershipBuildPlugin(),
       ],
+    },
+    false,
+  ),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      entry: standaloneRuntimeProcessBuildEntries,
+      deps: unifiedDeps,
+      outputOptions: { codeSplitting: false },
+      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),

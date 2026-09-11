@@ -537,11 +537,11 @@ export async function runAgentHarnessAttempt(
                       : input;
                   },
               (prepared) =>
-                pluginAttempt.runWithHostScope(() => {
+                pluginAttempt.runWithHostScope(async () => {
                   if (prepared.trigger !== "user" || !prepared.sessionKey) {
                     return runAgentHarnessLifecycleAttempt(harness, prepared);
                   }
-                  const note = claimHeartbeatContextForUserRun({
+                  const note = await claimHeartbeatContextForUserRun({
                     ...prepared,
                     agentId: resolveSessionAgentIds(prepared).sessionAgentId,
                     storePath: prepared.sessionTarget?.storePath,
@@ -592,6 +592,12 @@ export async function runAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
+      runtimeContext: {
+        provider: internalParams.provider,
+        modelId: internalParams.modelId,
+        modelContextWindow: internalParams.modelContextWindow,
+        tokenBudget: internalParams.contextTokenBudget,
+      },
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;

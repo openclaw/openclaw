@@ -11,6 +11,7 @@ import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import {
@@ -22,7 +23,10 @@ import {
   type DevUpdateTarget,
   UPDATE_DEV_TARGET_REF_ENV,
 } from "../../infra/update-dev-target.js";
-import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -61,6 +65,7 @@ import {
   admitMutableUpdateSignalRun,
   withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   resolveOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
@@ -126,11 +131,35 @@ async function resolveUpdateCommandAdmissionEnv(params: {
   return env;
 }
 
+/** Package admission must not open history or launch diagnostics on a retained operation. */
+export function assertUpdatePackageActivationAdmission(
+  root: string,
+  options?: Parameters<typeof assertNoPendingPackageActivation>[1],
+): void {
+  try {
+    assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
+  } catch (cause) {
+    throw new UpdateCommandPendingRecoveryFailure(
+      {
+        status: "error",
+        mode: "unknown",
+        root,
+        reason: "update-recovery-pending",
+        steps: [],
+        durationMs: 0,
+      },
+      formatErrorMessage(cause),
+      { cause },
+    );
+  }
+}
+
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+  assertUpdatePackageActivationAdmission(params.root);
   const env = await resolveUpdateCommandAdmissionEnv(params);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
@@ -441,6 +470,23 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());
   }
+  const discoveredRoot = await resolveUpdateRoot();
+  const installKind = await resolveUpdateInstallKind(discoveredRoot);
+  // A post-core marker cannot bypass pending recovery without the live original
+  // owner. Check both roots before config/autostart preparation or history.
+  assertUpdatePackageActivationAdmission(discoveredRoot, {
+    continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+  });
+  const servicePlan =
+    installKind === "package"
+      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
+      : undefined;
+  if (servicePlan?.rootRedirect) {
+    assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
+      continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+    });
+  }
+  opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
@@ -448,18 +494,13 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     });
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
-  const discoveredRoot = await resolveUpdateRoot();
+  opts.run?.executorFence?.assertCurrent();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
     throw new Error(
       `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
     );
   }
-  const installKind = await resolveUpdateInstallKind(discoveredRoot);
-  const servicePlan =
-    installKind === "package"
-      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
-      : undefined;
   if (opts.dryRun !== true) {
     try {
       assertConfigWriteAllowedInCurrentMode();

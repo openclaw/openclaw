@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,7 +48,7 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       import {runUtf8CommandWithTimeout} from ${JSON.stringify(new URL("../../process/exec.ts", import.meta.url).href)};
       const input=JSON.parse(fs.readFileSync(0,"utf8"));
       await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
-        const result=await withUpdateCommandExecutorChild(fence,(grant,beforeInput)=>runUtf8CommandWithTimeout(
+        const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
           [process.execPath,"--import",${JSON.stringify(loader)},"--input-type=module","-e",${JSON.stringify(leaf)}],
           {input:JSON.stringify({...input,grant}),beforeInput,timeoutMs:15000,killProcessTree:true,
            requireProcessTreeExtinction:true,onOutputChunk:chunk=>{process.stdout.write(chunk);}}));
@@ -60,7 +61,7 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
     let admitted = false;
     const run = withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
-      const pending = withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+      const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
         runUtf8CommandWithTimeout(
           [process.execPath, "--import", loader, "--input-type=module", "-e", intermediate],
           {
@@ -145,4 +146,246 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       expect(fs.existsSync(effect)).toBe(false);
     }
   },
+);
+
+// Compose real root -> spawner -> registered receiver -> native/config writers.
+// Only database LOCATION and scheduling barriers are fixtures, never authority.
+it
+  .skipIf(process.platform === "win32")
+  .each([
+    "healthy-upgrade",
+    "original-replaced",
+    "spawner-replaced",
+    "spawner-killed",
+    "config-precommit-replaced",
+  ] as const)(
+  "composed native/config effects retain original authority: %s",
+  async (fault) => {
+    const root = fs.realpathSync(dirs.make("native-composed-owner-"));
+    const control = path.join(root, "control");
+    fs.mkdirSync(control);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const target = fs.realpathSync(process.cwd());
+    const config = path.join(root, "openclaw.json");
+    const plist = path.join(root, "gateway.plist");
+    const effect = path.join(root, "native-effect");
+    const before = {
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        auth: { mode: "token", token: "disposable-proof-token" },
+      },
+    };
+    fs.writeFileSync(config, JSON.stringify(before));
+    fs.writeFileSync(plist, "previous-definition");
+    const file = (name: string) => path.join(root, name);
+    const receiver = `
+    import fs from "node:fs";
+    import {setTimeout} from "node:timers/promises";
+    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(new URL("../daemon-cli/update-executor.ts", import.meta.url).href)};
+    import {execFileUtf8} from ${JSON.stringify(new URL("../../daemon/exec-file.ts", import.meta.url).href)};
+    import {publishLaunchAgentPlist} from ${JSON.stringify(new URL("../../daemon/launchd-service-files.ts", import.meta.url).href)};
+    import {assertGatewayServiceUpdateCurrent} from ${JSON.stringify(new URL("../../daemon/service-update-authority.ts", import.meta.url).href)};
+    import {createConfigIO} from ${JSON.stringify(new URL("../../config/io.factory.ts", import.meta.url).href)};
+    const root=${JSON.stringify(root)}, fault=${JSON.stringify(fault)};
+    const wait=async name=>{while(!fs.existsSync(root+"/"+name))await setTimeout(10);};
+    try { await runGatewayServiceUpdateCommand("run","install",async()=>{
+      fs.writeFileSync(root+"/ready",String(process.pid));
+      await wait("proceed");
+      const results={};
+      const attempt=async(name,fn)=>{try{await fn();results[name]="ok";}catch(e){results[name]=e.message;}};
+      const io=createConfigIO({configPath:root+"/openclaw.json",env:{...process.env,OPENCLAW_STATE_DIR:root,OPENCLAW_CONFIG_PATH:root+"/openclaw.json"},observe:false,shellEnvFallback:"defer"});
+      await attempt("config",()=>io.writeConfigFile({gateway:{mode:"local",port:18789,auth:{mode:"token",token:"disposable-proof-token"}}},{observe:false,beforeCommit:async()=>{
+        if(fault==="config-precommit-replaced"){fs.writeFileSync(root+"/precommit","ready");await wait("publish");}
+        assertGatewayServiceUpdateCurrent();
+      }}));
+      await attempt("native",async()=>{const r=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);if(r.code!==0)throw new Error(r.stderr);});
+      await attempt("definition",()=>publishLaunchAgentPlist({label:${JSON.stringify("ai.openclaw.proof." + randomUUID())},plistPath:root+"/gateway.plist",contents:"next-definition"}));
+      fs.writeFileSync(root+"/done",JSON.stringify(results));
+      await wait("release");
+    });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
+  `;
+    const spawner = `
+    import fs from "node:fs";
+    import {spawn} from "node:child_process";
+    import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(new URL("./update-command-executor.ts", import.meta.url).href)};
+    import {runUtf8CommandWithTimeout} from ${JSON.stringify(new URL("../../process/exec.ts", import.meta.url).href)};
+    const input=JSON.parse(fs.readFileSync(0,"utf8"));
+    try{await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
+      const result=await withUpdateCommandExecutorChild(fence,input.grant.root,async(grant,beforeInput)=>{
+        fs.writeFileSync(${JSON.stringify(file("binding"))},JSON.stringify(grant));
+        if (${JSON.stringify(fault)} === "spawner-killed") {
+          const stderr=fs.openSync(${JSON.stringify(file("receiver.stderr"))},"a");
+          return new Promise((resolve,reject)=>{
+            const child=spawn(process.execPath,["--import",${JSON.stringify(path.resolve("scripts/tsx.mjs"))},"--input-type=module","-e",${JSON.stringify(receiver)}],{stdio:["pipe","ignore",stderr],detached:true});
+            fs.closeSync(stderr);
+            child.once("error",reject);
+            child.once("spawn",()=>{try{beforeInput(child.pid);child.stdin.end(JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}));}catch(e){child.kill("SIGKILL");reject(e);}});
+            child.once("exit",code=>resolve({code,stderr:"receiver exited"}));
+          });
+        }
+        return runUtf8CommandWithTimeout([process.execPath,"--import",${JSON.stringify(path.resolve("scripts/tsx.mjs"))},"--input-type=module","-e",${JSON.stringify(receiver)}],{
+          input:JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}),beforeInput,timeoutMs:30000,killProcessTree:true,requireProcessTreeExtinction:true});
+      });
+      if(result.code!==0)throw new Error(result.stderr);
+    });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
+  `;
+    let leaf: number | undefined;
+    const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      return withUpdateCommandExecutorChild<{
+        code: number | null;
+        stderr: string;
+        cleanup?: string;
+      }>(fence, target, (grant, beforeInput) => {
+        if (fault === "spawner-killed") {
+          // Bypass the transport's stronger whole-tree teardown only in this
+          // fixture, so the genuine receiver can survive its dead spawner.
+          return new Promise<{ code: number | null; stderr: string; cleanup: string }>(
+            (resolve, reject) => {
+              const child = spawn(
+                process.execPath,
+                ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "-e", spawner],
+                { stdio: ["pipe", "ignore", "pipe"], detached: true },
+              );
+              let stderr = "";
+              child.stderr.on("data", (chunk) => {
+                stderr += String(chunk);
+              });
+              child.once("error", reject);
+              child.once("spawn", () => {
+                try {
+                  beforeInput(child.pid!);
+                  child.stdin.end(JSON.stringify({ grant }));
+                } catch (error) {
+                  child.kill("SIGKILL");
+                  reject(
+                    error instanceof Error
+                      ? error
+                      : new Error("Child binding failed", { cause: error }),
+                  );
+                }
+              });
+              child.once("exit", (code) => resolve({ code, stderr, cleanup: "normal" }));
+            },
+          );
+        }
+        return runUtf8CommandWithTimeout(
+          [
+            process.execPath,
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            "--input-type=module",
+            "-e",
+            spawner,
+          ],
+          {
+            input: JSON.stringify({ grant }),
+            beforeInput,
+            timeoutMs: 40_000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        );
+      });
+    });
+    // A killed intermediate may settle before the retained receiver: join below.
+    const outcome = work.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await vi.waitFor(() => expect(fs.existsSync(file("ready"))).toBe(true), {
+        timeout: 20_000,
+        interval: 25,
+      });
+      leaf = Number(fs.readFileSync(file("ready"), "utf8"));
+      const grant = JSON.parse(fs.readFileSync(file("binding"), "utf8"));
+      expect(grant.originalParent.key).toBe(root);
+      expect(grant.parent.key).toBe(target);
+      expect(grant.spawner.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
+      const revoke = (key: string) => {
+        const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+        try {
+          db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
+            "revoked",
+            key,
+          );
+        } finally {
+          db.close();
+        }
+      };
+      if (fault === "original-replaced") {
+        revoke(root);
+      }
+      if (fault === "spawner-replaced") {
+        revoke(grant.spawner.key);
+      }
+      if (fault === "spawner-killed") {
+        process.kill(grant.spawner.executor.pid, "SIGKILL");
+        await vi.waitFor(
+          () => expect(pidAlive.isPidDefinitelyDead(grant.spawner.executor.pid)).toBe(true),
+          { timeout: 5000 },
+        );
+        expect(createManagedHandoffLeaseStore().release(grant.spawner)).toBe(false);
+      }
+      fs.writeFileSync(file("proceed"), "go");
+      if (fault === "config-precommit-replaced") {
+        await vi.waitFor(() => expect(fs.existsSync(file("precommit"))).toBe(true), {
+          timeout: 15_000,
+        });
+        revoke(root);
+        fs.writeFileSync(file("publish"), "go");
+      }
+      await vi.waitFor(() => expect(fs.existsSync(file("done"))).toBe(true), {
+        timeout: 20_000,
+        interval: 25,
+      });
+      const results = JSON.parse(fs.readFileSync(file("done"), "utf8"));
+      const store = createManagedHandoffLeaseStore();
+      expect(store.acquire(root, "unrelated-updater", { kind: "update" }).kind).toBe("busy");
+      expect(store.acquire(target, "unrelated-updater", { kind: "update" }).kind).toBe("busy");
+      if (fault === "healthy-upgrade") {
+        expect(results).toEqual({ config: "ok", native: "ok", definition: "ok" });
+        expect(JSON.parse(fs.readFileSync(config, "utf8"))).toMatchObject({
+          gateway: { ...before.gateway, mode: "local" },
+        });
+        expect(fs.readFileSync(effect, "utf8")).toBe("owned");
+        expect(fs.readFileSync(plist, "utf8")).toBe("next-definition");
+      } else {
+        expect(Object.values(results)).toHaveLength(3);
+        for (const result of Object.values(results)) {
+          expect(result).toMatch(/ownership.*current/);
+        }
+        expect(fs.readFileSync(config, "utf8")).toBe(JSON.stringify(before));
+        expect(fs.existsSync(effect)).toBe(false);
+        expect(fs.readFileSync(plist, "utf8")).toBe("previous-definition");
+      }
+      fs.writeFileSync(file("release"), "go");
+      const settled = await outcome;
+      if (fault === "healthy-upgrade") {
+        expect(settled).toMatchObject({ value: { code: 0, cleanup: "normal" } });
+        expect(store.read(root)).toEqual({ kind: "absent" });
+        expect(store.read(target)).toEqual({ kind: "absent" });
+        // Recovery uses a fresh original owner after all native work joined.
+        await withUpdateCommandExecutor(randomUUID(), async (executor) =>
+          (await executor.enter(root)).assertCurrent(),
+        );
+      } else {
+        expect("error" in settled || settled.value.code !== 0).toBe(true);
+      }
+    } finally {
+      fs.writeFileSync(file("proceed"), "go");
+      fs.writeFileSync(file("publish"), "go");
+      fs.writeFileSync(file("release"), "go");
+      await outcome;
+      if (leaf && !pidAlive.isPidDefinitelyDead(leaf)) {
+        process.kill(leaf, "SIGKILL");
+        await vi.waitFor(() => expect(pidAlive.isPidDefinitelyDead(leaf!)).toBe(true), {
+          timeout: 5000,
+        });
+      }
+    }
+  },
+  60_000,
 );

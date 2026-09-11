@@ -1,11 +1,11 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnv } from "../test-utils/env.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
@@ -733,15 +733,16 @@ describe("loadOpenClawPlugins", () => {
               dir: globalDir,
               filename: "index.cjs",
             });
-            writePersistedInstalledPluginIndexInstallRecordsSync(
-              {
+            refreshPersistedInstalledPluginIndex({
+              stateDir,
+              reason: "source-changed",
+              installRecords: {
                 "demo-installed-duplicate": {
                   source: "npm",
                   installPath: globalDir,
                 },
               },
-              { stateDir },
-            );
+            });
 
             return loadOpenClawPlugins({
               cache: false,
@@ -785,15 +786,16 @@ describe("loadOpenClawPlugins", () => {
                 dir: globalDir,
                 filename: "index.cjs",
               });
-              writePersistedInstalledPluginIndexInstallRecordsSync(
-                {
+              refreshPersistedInstalledPluginIndex({
+                stateDir,
+                reason: "source-changed",
+                installRecords: {
                   "demo-dev-source-duplicate": {
                     source: "npm",
                     installPath: globalDir,
                   },
                 },
-                { stateDir },
-              );
+              });
 
               return loadOpenClawPlugins({
                 cache: false,
@@ -1512,8 +1514,10 @@ describe("loadOpenClawPlugins", () => {
             dir: pluginDir,
             filename: "index.cjs",
           });
-          writePersistedInstalledPluginIndexInstallRecordsSync(
-            {
+          refreshPersistedInstalledPluginIndex({
+            stateDir,
+            reason: "source-changed",
+            installRecords: {
               [plugin.id]: {
                 source: "npm",
                 spec: "@example/tracked-symlink-install@1.0.0",
@@ -1528,8 +1532,7 @@ describe("loadOpenClawPlugins", () => {
                 version: "1.0.0",
               },
             },
-            { stateDir },
-          );
+          });
 
           const warnings: string[] = [];
           const registry = loadOpenClawPlugins({

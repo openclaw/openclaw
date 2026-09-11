@@ -64,6 +64,41 @@ keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
 
+### One turn, several durable claims
+
+A channel that answers several inbound events as one turn holds one durable
+claim per event, and every one of them has to reach a terminal disposition.
+`fanInChannelIngressLifecycles(lifecycles)`, from
+`openclaw/plugin-sdk/channel-ingress-runtime`, returns a single
+`ChannelIngressLifecycle` that fans each callback out across all of them, plus
+`settle`, `abandon`, and `cancel` for the paths that finish outside a callback.
+Pass the events' lifecycles in the order they were claimed; `undefined` entries
+are skipped, and an empty input yields `lifecycle: undefined` so a caller can
+fall back to the single-claim path without branching. Adopting the combined
+lifecycle adopts every claim, and abandoning it returns every claim to its retry
+budget — no claim is left half-settled. Adoption runs in the order the claims
+were passed, and a claim whose adoption is rejected — the drain raises that when
+another owner has taken it — fails itself and every claim behind it while the
+claims already adopted stay adopted, so a rejection reaches the caller with
+nothing left held.
+
+Use it only when one agent turn genuinely consumes several claims. A channel
+that answers each event on its own keeps passing that event's lifecycle
+directly.
+
+### Start slots and deferral
+
+`drain.startLimit` bounds how many deliveries the drain starts at once. A
+delivery that defers normally keeps its slot, because a deferred delivery on the
+default `deferredLaneOccupancy: "hold"` still serializes its lane. A drain that
+declares `deferredLaneOccupancy: "release"` gives the lane up on deferral, so
+its deferred deliveries also give their start slot back, bounded by a budget
+equal to `startLimit`: open delivery callbacks stay within `startLimit` plus that
+budget, and past it a deferral keeps its slot. Without the release, a handful of
+deferred deliveries would hold every slot and stall the other lanes. How much
+handed-off deferred work may be pending at once stays the drain owner's
+semantics, unchanged by this budget.
+
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
@@ -243,6 +278,14 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+A `suppressed` result is ambiguous when its reason is
+`adapter_returned_no_identity`, or any payload outcome records a send, an
+identityless send, or a failure with `sentBeforeError`. Check the whole batch
+before treating suppression as intentional non-delivery. For a known omission,
+an action can return `{ status: "suppressed", reason: result.reason }` without
+a tool error or a fabricated receipt. Keep free-form hook diagnostics private.
+Suppression does not recover an earlier failed send.
+
 Failure is not permission to send the same payload through another path.
 Once admitted, the queue owns retry or reconciliation until its exact owner
 acknowledges or terminally retires the intent. Pending custody is not a
@@ -334,3 +377,11 @@ Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migratio
 This subpath is not tied to the next Plugin SDK major, and eligibility does not
 itself remove an export. External imports do not emit a runtime warning; update
 plugin imports rather than waiting for one.
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive side that records and dispatches before a reply is sent
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver that produces the participant identity a send is attributed to
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — which subpath exports each helper
+- [Plugin SDK migration](/plugins/sdk-migration) — removal-eligibility windows for legacy outbound exports

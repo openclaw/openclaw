@@ -591,7 +591,7 @@ describe("runAgentHarnessAttempt", () => {
         storePath: path.join(root, "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...target,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -649,7 +649,9 @@ describe("runAgentHarnessAttempt", () => {
       expect(JSON.stringify(await loadTranscriptEvents(target))).not.toContain(
         "ISOLATED_OUTCOME_731",
       );
-      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" })).toBeUndefined();
+      expect(
+        await claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" }),
+      ).toBeUndefined();
     },
   );
 
@@ -665,7 +667,7 @@ describe("runAgentHarnessAttempt", () => {
         storePath: path.join(root, "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...target,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -685,7 +687,7 @@ describe("runAgentHarnessAttempt", () => {
         await runAgentHarnessAttempt(params);
         expect(agentRunAttempt.mock.calls.at(-1)?.[0].currentInboundContext).toBeUndefined();
       }
-      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" })?.summary).toBe(
+      expect((await claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" }))?.summary).toBe(
         "Retained outcome",
       );
     },
@@ -1167,6 +1169,9 @@ describe("runAgentHarnessAttempt", () => {
         storePath: admission.storePath,
       };
       params.bootstrapContextRunKind = "heartbeat";
+      params.model = { ...params.model, contextWindow: 180_000 };
+      params.modelContextWindow = 200_000;
+      params.contextTokenBudget = 180_000;
       params.userTurnTranscriptRecorder =
         boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
@@ -1181,6 +1186,12 @@ describe("runAgentHarnessAttempt", () => {
             promptError: false,
             aborted: false,
             yieldAborted: false,
+            runtimeContext: {
+              provider: params.provider,
+              modelId: params.modelId,
+              modelContextWindow: 200_000,
+              tokenBudget: 180_000,
+            },
           }),
         );
       } else {

@@ -10,6 +10,7 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import {
   resolveOwnedManagedUpdateEnv,
   stripGatewayServiceMarkerEnv,
+  withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 
 export type OwnedManagedUpdateContext = {
@@ -65,38 +66,6 @@ export async function revalidateUpdateDatabaseContext(
     );
   }
   return current;
-}
-
-/** Run one update phase under the managed Gateway's authoritative environment. */
-export async function withOwnedManagedUpdateEnv<T>(
-  env: NodeJS.ProcessEnv | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (!env) {
-    return await run();
-  }
-  // Update finalization is a single serialized CLI phase. Some plugin/config owners still read
-  // process.env, so switch the complete phase atomically and restore the caller afterward.
-  const previousEnv = { ...process.env };
-  for (const key of Object.keys(process.env)) {
-    delete process.env[key];
-  }
-  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
-  const phaseEnv = env === process.env ? previousEnv : env;
-  for (const [key, value] of Object.entries(phaseEnv)) {
-    // Node stringifies undefined on assignment; unset selectors must remain absent.
-    if (value !== undefined) {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const key of Object.keys(process.env)) {
-      delete process.env[key];
-    }
-    Object.assign(process.env, previousEnv);
-  }
 }
 
 export async function captureOwnedManagedUpdateContext(params: {

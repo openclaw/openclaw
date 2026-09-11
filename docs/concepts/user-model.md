@@ -148,10 +148,20 @@ Keep the superseded entry next to its replacement so the current directive is un
 
 ## Keep it compact
 
-`USER.md` has a deliberately smaller bootstrap budget than general workspace files. When it becomes crowded, remove stale superseded entries and move project detail that does not change behavior into daily memory or `MEMORY.md`.
+`USER.md` has a fixed 4,000-character bootstrap cap, smaller than the general per-file budget. The `agents.defaults.bootstrapMaxChars` and `agents.entries.*.bootstrapMaxChars` settings can only lower this cap for `USER.md`; they cannot raise it. Profile guidance is meant to stay directive-sized so it cannot crowd project rules or durable facts out of the shared prompt budget.
+
+When `USER.md` approaches the cap:
+
+1. Remove stale superseded entries (keep the replacement next to the old entry so the current directive stays unambiguous).
+2. Move durable facts and lessons that do not change how you should be assisted into `MEMORY.md`.
+3. Move detailed observations and running project context into daily `memory/YYYY-MM-DD.md` files.
+4. Use [standing intents](/concepts/standing-intents) for event-conditioned future actions, so the trigger stays injected without the full detail.
+
+`MEMORY.md` is injected with the workspace bootstrap under the normal per-file budget in eligible private sessions — subagent, cron, group, and channel sessions omit root memory, and memory without trusted provenance is filtered out (see [Memory provenance](/concepts/memory-provenance)). Daily memory files are retrieved on demand, so detail moved to daily memory stays reachable without spending the always-injected `USER.md` budget. When the fixed cap limits `USER.md`, `openclaw doctor` names the cap and recommends compacting the file. If the shared total budget also limits injection, Doctor keeps the advice to reduce total bootstrap content or tune `bootstrapTotalMaxChars`.
 
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Standing intents](/concepts/standing-intents)
 - [Agent workspace](/concepts/agent-workspace)

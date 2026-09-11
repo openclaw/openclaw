@@ -283,6 +283,12 @@ describe("accepted context-engine turn finalization", () => {
       promptError: false,
       aborted: false,
       yieldAborted: false,
+      runtimeContext: {
+        provider: "test",
+        modelId: "model",
+        modelContextWindow: 200_000,
+        tokenBudget: 180_000,
+      },
     };
 
     await finalizeAcceptedContextEngineTurn({ facts: baseFacts, lease });
@@ -290,6 +296,7 @@ describe("accepted context-engine turn finalization", () => {
     expect(commitTurn).toHaveBeenCalledOnce();
     expect(commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({
+        runtimeContext: baseFacts.runtimeContext,
         messages: [
           expect.objectContaining({ role: "user", content: "current" }),
           expect.objectContaining({ role: "assistant", content: "answer" }),

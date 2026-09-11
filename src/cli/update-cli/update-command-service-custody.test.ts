@@ -1,12 +1,24 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as entrypoints from "../../daemon/gateway-entrypoint.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  forceKillChildProcessTree,
+  isChildProcessTreeAlive,
+  shouldDetachChildForProcessTree,
+} from "../../process/child-process-tree.js";
+import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import {
+  withUpdateCommandExecutorChild,
+  withUpdateCommandExecutor,
+} from "./update-command-executor.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,11 +71,11 @@ it.each([
     else if(mode==="check" && ${JSON.stringify(supported)}==="legacy") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1"}));
     }
-    else try { await runGatewayServiceUpdateCommand(mode,"stop",async()=>{
+    else try { await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
       const result=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);
       if(result.code!==0)throw new Error(result.stderr);
-      process.stdout.write(JSON.stringify({action:"stop",ok:true,result:"stopped"}));
+      process.stdout.write(JSON.stringify({action:"restart",ok:true,result:"restarted"}));
     }); } catch(error) { process.stderr.write(error.message); process.exitCode=1; }
   `,
     );
@@ -78,7 +90,7 @@ it.each([
           invocationEnv: process.env,
           timeoutMs: 20_000,
         },
-        "stop",
+        "restart",
       );
     });
     if (supported === true && destination !== "foreign") {
@@ -99,6 +111,172 @@ it.each([
     expect(probe.pid).not.toBe(process.pid);
     expect(probe.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
     expect(probe.boundStart).toBe(probe.actualStart);
+    expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+  },
+);
+
+it.each(["receiver-root", "original-lineage", "stripped-lineage"] as const)(
+  "refuses substituted native authority: %s",
+  async (substitution) => {
+    const scratch = dirs.make("native-receiver-grant-root-");
+    const root = await fs.realpath(scratch);
+    const receiverRoot = await fs.realpath(process.cwd());
+    const control = path.join(root, "control");
+    await fs.mkdir(control);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const effect = path.join(root, "effect");
+    const receiver = `
+    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(new URL("../daemon-cli/update-executor.ts", import.meta.url).href)};
+    import {execFileUtf8} from ${JSON.stringify(new URL("../../daemon/exec-file.ts", import.meta.url).href)};
+    try {
+      await runGatewayServiceUpdateCommand("run", "restart", async () => {
+        const result = await execFileUtf8(process.execPath, ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"wrong-root")`)}]);
+        if (result.code !== 0) throw new Error(result.stderr);
+      });
+    } catch (error) { process.stderr.write(error.message); process.exitCode = 1; }
+  `;
+    const result = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      return withUpdateCommandExecutorChild(
+        fence,
+        substitution === "receiver-root" ? root : receiverRoot,
+        (grant, beforeInput) =>
+          runUtf8CommandWithTimeout(
+            [
+              process.execPath,
+              "--import",
+              path.resolve("scripts/tsx.mjs"),
+              "--input-type=module",
+              "-e",
+              receiver,
+            ],
+            {
+              input: JSON.stringify({
+                action: "restart",
+                targetRoot: receiverRoot,
+                executor:
+                  substitution === "receiver-root"
+                    ? grant
+                    : {
+                        ...grant,
+                        originalParent:
+                          substitution === "stripped-lineage" ? undefined : grant.parent,
+                        spawner: grant.parent,
+                        originalChildKey:
+                          substitution === "stripped-lineage" ? undefined : grant.childKey,
+                      },
+              }),
+              beforeInput,
+              cwd: receiverRoot,
+              timeoutMs: 30_000,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+            },
+          ),
+      );
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/UPDATE_NATIVE_AUTHORITY/);
+    await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+  },
+);
+
+it.each([false, true])(
+  "refuses equal lease rows in a retargeted database (strip pin=%s)",
+  async (stripPin) => {
+    const scratch = dirs.make("native-database-correlation-");
+    const root = await fs.realpath(scratch);
+    const receiverRoot = await fs.realpath(process.cwd());
+    const control = path.join(root, "control");
+    await fs.mkdir(control);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const effect = path.join(root, "effect");
+    const copy = path.join(control, "copied.sqlite");
+    const receiver = `
+    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(new URL("../daemon-cli/update-executor.ts", import.meta.url).href)};
+    import {execFileUtf8} from ${JSON.stringify(new URL("../../daemon/exec-file.ts", import.meta.url).href)};
+    try {
+      await runGatewayServiceUpdateCommand("run", "restart", async () => {
+        const result = await execFileUtf8(process.execPath, ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"copied-database")`)}]);
+        if (result.code !== 0) throw new Error(result.stderr);
+      });
+    } catch (error) { process.stderr.write(error.message); process.exitCode = 1; }
+  `;
+    const result = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      return withUpdateCommandExecutorChild(
+        fence,
+        receiverRoot,
+        (grant, beforeInput) =>
+          new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+            const child = spawn(
+              process.execPath,
+              ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "-e", receiver],
+              {
+                cwd: receiverRoot,
+                stdio: ["pipe", "ignore", "pipe"],
+                detached: shouldDetachChildForProcessTree(),
+              },
+            );
+            let stderr = "";
+            const watchdog = setTimeout(() => forceKillChildProcessTree(child), 30_000);
+            child.stderr.on("data", (chunk) => {
+              stderr += String(chunk);
+            });
+            child.once("error", reject);
+            child.once("spawn", () => {
+              try {
+                beforeInput(child.pid!);
+                // Copy only after actual PID binding has committed and closed. No
+                // lease facts or process identities are fabricated in the copy.
+                fsSync.copyFileSync(grant.databasePath, copy);
+                child.stdin.end(
+                  JSON.stringify({
+                    action: "restart",
+                    targetRoot: receiverRoot,
+                    executor: {
+                      ...grant,
+                      databasePath: copy,
+                      databaseIdentity: stripPin
+                        ? undefined
+                        : captureManagedUpdateLeaseDatabaseIdentity(copy),
+                    },
+                  }),
+                );
+              } catch (error) {
+                forceKillChildProcessTree(child);
+                reject(
+                  error instanceof Error
+                    ? error
+                    : new Error("Fixture input failed", { cause: error }),
+                );
+              }
+            });
+            child.once("close", (code) => {
+              clearTimeout(watchdog);
+              void vi
+                .waitFor(() => expect(isChildProcessTreeAlive(child)).toBe(false), {
+                  timeout: 5000,
+                })
+                .then(
+                  () => resolve({ code, stderr }),
+                  (error: unknown) => {
+                    forceKillChildProcessTree(child);
+                    reject(
+                      error instanceof Error
+                        ? error
+                        : new Error("Fixture tree did not settle", { cause: error }),
+                    );
+                  },
+                );
+            });
+          }),
+      );
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("UPDATE_NATIVE_AUTHORITY");
+    await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
     expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
   },
 );

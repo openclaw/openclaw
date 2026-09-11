@@ -170,6 +170,7 @@ const EXCLUDED_PROJECT_CONFIGS = new Set([
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
+const CLI_NODE_TEST_RUNNER = "blacksmith-16vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
@@ -823,7 +824,7 @@ function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
   }
   return expandedGroups;
 }
-const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+export const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 // The full matrix is capped at 28 jobs. Admit the consistently slow serial
@@ -2283,7 +2284,7 @@ export function createNodeTestShardBundles(
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
   if (compactMode !== undefined) {
-    return createCompactNodeTestShardBundles(options, compactMode);
+    return createCompactNodeTestShardBundles(createNodeTestShards(options), options, compactMode);
   }
 
   const shards = createNodeTestShards(options);
@@ -2625,14 +2626,56 @@ export function packNodeTestGroups<Group>(
   return bins;
 }
 
+/** Select complete tooling files without losing their canonical process and artifact owners. */
+export function createToolingNodeTestShardBundles(
+  targets: readonly string[],
+  options: Pick<NodeTestPlanOptions, "runnerBackend"> = {},
+): CompactNodeTestShard[] | null {
+  const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+  const selected = new Set(targets);
+  const owners = new Set<NodeTestShard>();
+  for (const target of selected) {
+    const plans = buildVitestRunPlans([target]);
+    const matches = shards.filter(
+      (shard) =>
+        shard.configs.length === 1 &&
+        shard.configs[0] === TOOLING_CONFIG &&
+        shard.includePatterns?.includes(target),
+    );
+    if (
+      plans.length !== 1 ||
+      plans[0]?.config !== TOOLING_CONFIG ||
+      plans[0].watchMode ||
+      plans[0].forwardedArgs.length > 0 ||
+      plans[0].includePatterns?.length !== 1 ||
+      plans[0].includePatterns[0] !== target ||
+      matches.length !== 1
+    ) {
+      return null;
+    }
+    owners.add(matches[0]!);
+  }
+  if (owners.size === 0) {
+    return null;
+  }
+  return createCompactNodeTestShardBundles(
+    shards.filter((shard) => owners.has(shard) || shard.requiresDist),
+    options,
+    "pull-request",
+    selected,
+  );
+}
+
 function createCompactNodeTestShardBundles(
+  sourceShards: readonly NodeTestShard[],
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
+  selectedToolingFiles?: ReadonlySet<string>,
   splitHostedToolingTails = false,
   balancedHostedToolingTailParents?: ReadonlySet<string>,
 ): CompactNodeTestShard[] {
   const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
-  const shards = createNodeTestShards(options).filter(
+  const shards = sourceShards.filter(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
@@ -2659,7 +2702,7 @@ function createCompactNodeTestShardBundles(
       partition?.runtimeFiles.length && partition.otherFiles.length ? partition : undefined;
     // Resolve whole-config ownership before splitting so ordinary files do not
     // inherit a runtime build. Keep consumers together and split the remaining work.
-    const plannedGroups =
+    let plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
       COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
       runtimePartition !== undefined ||
@@ -2672,6 +2715,28 @@ function createCompactNodeTestShardBundles(
             balancedHostedToolingTailParents,
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
+    const selectedTooling = selectedToolingFiles && group.configs.includes(TOOLING_CONFIG);
+    if (selectedTooling) {
+      // Keep the parent's admission cost and partition policy, but never report
+      // a precise subset as a sample of the complete canonical stripe.
+      plannedGroups = plannedGroups.flatMap((planned) => {
+        const includePatterns = planned.group.includePatterns?.filter((file) =>
+          selectedToolingFiles.has(file),
+        );
+        return includePatterns?.length
+          ? [{ ...planned, group: { ...planned.group, includePatterns } }]
+          : [];
+      });
+      const generation = createCompactSplitTimingGeneration({
+        configs: group.configs,
+        env: group.env,
+        parentShardName: group.shard_name,
+        stripes: plannedGroups.map((planned) => planned.group.includePatterns!),
+      });
+      plannedGroups.forEach((planned, index) => {
+        planned.group.timing_key = generation.timingKeys[index]!;
+      });
+    }
     for (const planned of plannedGroups) {
       planned.group.runner = resolveCiNodeTestRunner(
         {
@@ -2690,7 +2755,7 @@ function createCompactNodeTestShardBundles(
       // The current complete-file membership always retains its parent-derived
       // floor. A matching child sample may raise it, but an old partition must
       // never erase newly assigned work.
-      if (planned.group.shard_name !== group.shard_name) {
+      if (selectedTooling || planned.group.shard_name !== group.shard_name) {
         synthesizedSplitSeconds.set(compactGroupTimingKey(planned.group), planned.seconds);
       }
     }
@@ -2883,13 +2948,16 @@ function createCompactNodeTestShardBundles(
       bin.every(isParallelCompactGroup)
         ? 2
         : 1;
-    // Tooling's nested compilers need host capacity while keeping serial isolation.
+    // Tooling and the full CLI need host capacity while keeping serial isolation.
     // Promote only the emitted runner so packing, names and timing keys stay stable.
     const capacityRunner =
+      runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
       planConcurrency === 2 ||
       (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
         ? EXTRA_LARGE_NODE_TEST_RUNNER
-        : runner;
+        : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
+          ? CLI_NODE_TEST_RUNNER
+          : runner;
     compactJobs.push({
       checkName,
       groups: bin,
@@ -2910,7 +2978,13 @@ function createCompactNodeTestShardBundles(
     if (packsHostedTooling && !splitHostedToolingTails) {
       // Repartition once at the file owner so timing identities and build costs
       // describe the smaller tails before the same admission checks pack them.
-      return createCompactNodeTestShardBundles(options, compactMode, true);
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        true,
+      );
     }
     if (packsHostedTooling && balancedHostedToolingTailParents === undefined) {
       // Only failed half-budget overflow bins select the final construction.
@@ -2927,7 +3001,14 @@ function createCompactNodeTestShardBundles(
           .map(([group]) => group.shard_name.replace(/-hosted-\d+$/u, "")),
       );
       if (overflowTailParents.size > 0) {
-        return createCompactNodeTestShardBundles(options, compactMode, true, overflowTailParents);
+        return createCompactNodeTestShardBundles(
+          sourceShards,
+          options,
+          compactMode,
+          selectedToolingFiles,
+          true,
+          overflowTailParents,
+        );
       }
     }
     throw new Error(

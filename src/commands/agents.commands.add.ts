@@ -420,7 +420,6 @@ export async function agentsAddCommand(
         profileId,
         credential,
       })),
-      validateCatalog: false,
     });
 
     const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });

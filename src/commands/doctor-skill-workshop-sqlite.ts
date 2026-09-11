@@ -21,6 +21,7 @@ import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { readAppliedSkillProposalEvents } from "../skills/workshop/store-sqlite-event.js";
 import {
   parseSkillProposalRow,
   readStoredProposal,
@@ -37,7 +38,11 @@ import {
   validateSkillProposalRecord,
   validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
-import type { SkillProposalRecord, SkillProposalRollback } from "../skills/workshop/types.js";
+import type {
+  SkillProposalEvent,
+  SkillProposalRecord,
+  SkillProposalRollback,
+} from "../skills/workshop/types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -46,6 +51,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  inspectWorkshopAutomationReferences,
+  type WorkshopAutomationReference,
+} from "./doctor-skill-workshop-automations.js";
 import {
   listPendingLegacyCollectionBackupRoots,
   listWorkspaceOwnerAgentIds,
@@ -99,6 +108,7 @@ export type LegacyWorkshopMigrationInspection = {
   externalProposalDetails?: string[];
   legacyBackupRootCount: number;
   preservedLegacyBackupRootCount: number;
+  automationReferences?: WorkshopAutomationReference[];
 };
 
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
@@ -117,6 +127,7 @@ export async function inspectLegacySkillWorkshopMigration(params: {
   const env = params.env ?? process.env;
   const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
   let records: LegacyWorkshopProposal[] = [];
+  let appliedEvents: SkillProposalEvent[] = [];
   try {
     if (database && tableExists(database.db, "skill_workshop_proposals")) {
       const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
@@ -134,6 +145,9 @@ export async function inspectLegacySkillWorkshopMigration(params: {
           return [];
         }
       });
+      if (tableExists(database.db, "skill_workshop_proposal_events")) {
+        appliedEvents = readAppliedSkillProposalEvents(database.db);
+      }
     }
   } finally {
     database?.walMaintenance.close();
@@ -141,6 +155,12 @@ export async function inspectLegacySkillWorkshopMigration(params: {
   // Lint needs ownership counts, not adoption verification through writable recovery readers.
   const { external } = classifyWorkshopRelocation(records, params.config, env);
   const backups = await listPendingLegacyCollectionBackupRoots(params.config, env);
+  const automationReferences = await inspectWorkshopAutomationReferences({
+    config: params.config,
+    env,
+    records,
+    appliedEvents,
+  });
   return {
     externalProposalCount: external.length,
     externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
@@ -164,6 +184,7 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       : {}),
     legacyBackupRootCount: backups.length,
     preservedLegacyBackupRootCount: backups.filter((backup) => "warning" in backup).length,
+    ...(automationReferences.length > 0 ? { automationReferences } : {}),
   };
 }
 

@@ -26,7 +26,7 @@ const completion = vi.hoisted(() => ({
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: completion.complete,
-  acquireSimpleCompletionModel: completion.prepare,
+  acquireSimpleCompletionModelWithSelection: completion.prepare,
 }));
 
 const model = {

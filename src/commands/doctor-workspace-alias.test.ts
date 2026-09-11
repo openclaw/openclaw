@@ -65,20 +65,20 @@ async function runWorkspaceRepair(params: { cfg: OpenClawConfig; prompter: Docto
   await repair!(params.cfg);
 }
 
-function repointAlias(params: { seedAttestedFile?: boolean }): {
+async function repointAlias(params: { seedAttestedFile?: boolean }): Promise<{
   alias: string;
   original: string;
   replacement: string;
-} {
+}> {
   const original = testState!.workspaceDir;
   const alias = testState!.path("workspace-link");
   const replacement = testState!.path("replacement-workspace");
   fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
-  mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+  await mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
   if (params.seedAttestedFile) {
     const content = "seeded bootstrap content";
     fs.writeFileSync(path.join(original, "BOOTSTRAP.md"), content);
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: alias,
       attestedAtMs: 1_000,
       generatedHashes: new Map([
@@ -95,7 +95,7 @@ function repointAlias(params: { seedAttestedFile?: boolean }): {
 
 describe("doctor workspace alias repair", () => {
   it("leaves state intact when configuration changes during confirmation", async () => {
-    const { alias, original, replacement } = repointAlias({ seedAttestedFile: true });
+    const { alias, original, replacement } = await repointAlias({ seedAttestedFile: true });
     const cfg = buildAliasCfg(alias);
     await testState!.writeConfig(cfg);
     const prompter = buildPrompter({
@@ -107,12 +107,12 @@ describe("doctor workspace alias repair", () => {
       }),
     });
     await expect(runWorkspaceRepair({ cfg, prompter })).rejects.toThrow();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
-    expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(false);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(replacement)).setupExists).toBe(false);
   });
 
   it("does not adopt a target substituted during confirmation", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: true });
+    const { alias, original } = await repointAlias({ seedAttestedFile: true });
     const changed = testState!.path("changed-target");
     fs.mkdirSync(changed);
     const prompter = buildPrompter({
@@ -123,12 +123,12 @@ describe("doctor workspace alias repair", () => {
       }),
     });
     await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
-    expect(readWorkspaceStateSnapshot(changed).setupExists).toBe(false);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(changed)).setupExists).toBe(false);
   });
 
-  it("reports a repointed alias as a warning finding", () => {
-    const { alias } = repointAlias({ seedAttestedFile: false });
+  it("reports a repointed alias as a warning finding", async () => {
+    const { alias } = await repointAlias({ seedAttestedFile: false });
 
     const findings = collectRepointedWorkspaceAliasFindings(buildAliasCfg(alias));
 
@@ -140,26 +140,26 @@ describe("doctor workspace alias repair", () => {
     });
   });
 
-  it("reports nothing when aliases are intact", () => {
+  it("reports nothing when aliases are intact", async () => {
     const dir = testState!.workspaceDir;
-    mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
 
     expect(collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
   });
 
   it("requires explicit confirmation even when generated hashes match", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: true });
+    const { alias, original } = await repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter();
 
     await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
 
     const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
-    const snapshot = readWorkspaceStateSnapshot(alias);
+    const snapshot = await readWorkspaceStateSnapshot(alias);
     expect(snapshot.setupExists).toBe(true);
     expect(snapshot.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
 
@@ -173,7 +173,7 @@ describe("doctor workspace alias repair", () => {
   });
 
   it("requires the explicit operator gate when continuity is unproven", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: false });
+    const { alias, original } = await repointAlias({ seedAttestedFile: false });
     const prompter = buildPrompter();
 
     await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
@@ -181,28 +181,32 @@ describe("doctor workspace alias repair", () => {
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     // Declined: stored state stays with the original canonical target.
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
 
     const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
-    expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(alias)).setupExists).toBe(true);
   });
 
   it("refuses to merge when the current target already owns state", async () => {
-    const { alias, original, replacement } = repointAlias({ seedAttestedFile: false });
-    mergeWorkspaceSetupState(replacement, { bootstrapSeededAt: "2026-07-16T02:00:00.000Z" }, 2_000);
+    const { alias, original, replacement } = await repointAlias({ seedAttestedFile: false });
+    await mergeWorkspaceSetupState(
+      replacement,
+      { bootstrapSeededAt: "2026-07-16T02:00:00.000Z" },
+      2_000,
+    );
     const prompter = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
 
     await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
-    expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(replacement)).setupExists).toBe(true);
   });
 
   it("does not move records from diagnostic mode", async () => {
-    const { original } = repointAlias({ seedAttestedFile: true });
+    const { original } = await repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter({
       shouldRepair: false,
       confirmRuntimeRepair: vi.fn(async () => true),
@@ -219,11 +223,11 @@ describe("doctor workspace alias repair", () => {
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
   });
 
   it("refuses to transfer state while another configured agent uses the stored target", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: false });
+    const { alias, original } = await repointAlias({ seedAttestedFile: false });
     const prompter = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     const cfg = {
       agents: {
@@ -237,6 +241,6 @@ describe("doctor workspace alias repair", () => {
     await expect(runWorkspaceRepair({ cfg, prompter })).rejects.toThrow();
 
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(original)).setupExists).toBe(true);
   });
 });

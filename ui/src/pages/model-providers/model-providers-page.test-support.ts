@@ -6,9 +6,13 @@ import type {
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type {
+  RuntimeConfigExternalMutationOptions,
+  RuntimeConfigExternalMutationResult,
+} from "../../lib/config/config-gateway-operations.ts";
+import type { ModelBehaviorConfig } from "./config-mutation.ts";
 import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelBehaviorConfig } from "./model-behavior.ts";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
@@ -34,7 +38,6 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
-  saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
 };
 
@@ -59,6 +62,31 @@ export function createAuthStatus(
       ...overrides,
     })),
   };
+}
+
+export function createApiKeyProviderData(): ModelProvidersData {
+  return {
+    ...EMPTY_MODEL_PROVIDERS_DATA,
+    config: {},
+    authStatus: {
+      ...createAuthStatus([
+        {
+          profiles: [
+            { profileId: "openai:key", type: "api_key", status: "static", logoutSupported: true },
+          ],
+        },
+      ]),
+      providerCapabilities: [{ provider: "openai", apiKeySupported: true, quickApiKeySetup: true }],
+    },
+  };
+}
+
+export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
+  page.data = createApiKeyProviderData();
+  page.keyEditorProvider = "openai";
+  page.keyDraft = value;
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
 }
 
 export function deferred<T>() {
@@ -161,6 +189,28 @@ export function createHarness(initialScopeId: string) {
     },
     ensureLoaded: vi.fn(async (): Promise<void> => undefined),
     patch: vi.fn(async () => true),
+    beforeExternalDispatch: vi.fn(async (): Promise<void> => undefined),
+    runExternalMutation: vi.fn(
+      async <T>(
+        task: (client: GatewayBrowserClient) => Promise<T>,
+        options: RuntimeConfigExternalMutationOptions<T> = {},
+      ): Promise<RuntimeConfigExternalMutationResult<T>> => {
+        await runtimeConfig.beforeExternalDispatch();
+        const client = snapshot.client;
+        if (!client || (options.canDispatch && !options.canDispatch())) {
+          return { ok: false, reason: "unavailable", error: "Scope changed before dispatch" };
+        }
+        const value = await task(client);
+        await runtimeConfig.refresh();
+        return {
+          ok: true,
+          value,
+          refresh: runtimeConfig.state.lastError
+            ? { ok: false, error: runtimeConfig.state.lastError }
+            : { ok: true },
+        };
+      },
+    ),
     patchForm: vi.fn(),
     removeFormValue: vi.fn(),
     refresh: vi.fn(async () => undefined),

@@ -2,9 +2,9 @@ import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
@@ -61,7 +61,7 @@ import {
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
-function createOllamaModelResolver(): typeof resolveModelAsync {
+function createOllamaModelResolver(): SimpleCompletionModelResolver {
   return vi.fn(async (provider, modelId, _agentDir, _cfg, options) => ({
     model: {
       provider,
@@ -115,7 +115,7 @@ beforeEach(() => {
 it("keeps route rematerialization and runtime auth on the supplied generation", async () => {
   const observedModelGenerations: string[] = [];
   const observedRuntimeAuthGenerations: string[] = [];
-  const modelResolver: typeof resolveModelAsync = vi.fn(
+  const modelResolver: SimpleCompletionModelResolver = vi.fn(
     async (provider, modelId, _agentDir, cfg, options) => {
       if (!options?.authStorage || !options.modelRegistry) {
         throw new Error("prepared stores were not bound");
@@ -308,3 +308,61 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     }
   }
 });
+
+it.each(["/", "entry"])(
+  "materializes a bare default once through actual agent acquisition (override=%s)",
+  async (modelRef) => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "default-normalizer",
+          modelIdNormalization: {
+            providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "ollama-local",
+      source: "local marker",
+      mode: "api-key",
+    });
+    const release = vi.fn();
+    mocks.acquireRuntimeLease.mockResolvedValue({ snapshot: preparedModelRuntime, release });
+    const resolveModel = createOllamaModelResolver();
+    const modelResolver: SimpleCompletionModelResolver = async (...args) => {
+      const resolved = await resolveModel(...args);
+      return args[1] === "middle"
+        ? resolved
+        : { ...resolved, model: undefined, error: `Unexpected selected model: ${args[1]}` };
+    };
+    const result = await acquireSimpleCompletionModelForAgent({
+      cfg: { agents: { entries: { main: {} }, defaults: { model: "entry" } } },
+      agentId: "main",
+      modelRef,
+      modelResolver,
+    });
+
+    try {
+      expect(result).toMatchObject({
+        selection: { provider: "openai", modelId: "middle" },
+        model: { provider: "openai", id: "middle", contextWindow: 8192 },
+      });
+      expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePluginSelections: [{ provider: "openai", modelId: "middle", agentId: "main" }],
+        }),
+        expect.objectContaining({
+          catalogMode: "static",
+          pluginMetadataSnapshot: metadataSnapshot,
+        }),
+      );
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
+    expect(release).toHaveBeenCalledOnce();
+  },
+);

@@ -121,7 +121,7 @@
   display: none;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__mobile-close {
+.shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon {
   display: inline-grid;
   width: 36px;
   height: 36px;
@@ -132,7 +132,7 @@
   transition: transform 140ms var(--ease-out);
 }
 
-.shell--mobile-nav .sidebar-issues-panel__mobile-close:active {
+.shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon:active {
   transform: scale(0.97);
 }
 
@@ -303,7 +303,9 @@
 }
 
 footer.sidebar-issues-panel__mentions-note {
+  padding: 12px;
   border-block-start: 1px solid var(--border);
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-issues-panel__update > .sidebar-issues-panel__details {

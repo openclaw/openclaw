@@ -193,8 +193,8 @@ export type ChatStreamSegment = {
   persisted?: true;
   /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
   retiredItemId?: string;
-  /** Original cumulative prefix when the item overtook its final chat delta. */
-  pendingStreamText?: string;
+  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
+  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };

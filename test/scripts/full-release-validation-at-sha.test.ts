@@ -87,6 +87,7 @@ function createDispatchFixture(
     artifactMetadata?: Record<string, unknown>;
     exactArtifactMetadata?: Record<string, unknown>;
     artifactReadError?: "metadata" | "archive";
+    archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
     archiveFailure?: "oversized" | "truncated" | "corrupt" | "digest";
     inventoryError?: string;
@@ -501,6 +502,14 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     throw new Error("artifact reads require exact-host GET without response headers");
   }
   const archive = endpoint.endsWith("/zip");
+  if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "unsupported" && args.includes("--allow-escape-sequences")) {
+    console.error("unknown flag: --allow-escape-sequences");
+    process.exit(1);
+  }
+  if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "required" && !args.includes("--allow-escape-sequences")) {
+    console.error("refusing to output binary content without --allow-escape-sequences");
+    process.exit(1);
+  }
   if (${JSON.stringify(options.artifactReadError ?? "")} === (archive ? "archive" : "metadata")) {
     console.error("artifact read denied (HTTP 403)");
     process.exit(1);
@@ -1358,7 +1367,11 @@ describe("full-release-validation-at-sha", () => {
   ])(
     "reads witness bytes through $ghRoute CLI without Node fetch (token=$tokenPresent)",
     ({ ghRoute, tokenPresent }) => {
-      const fixture = createDispatchFixture({ ghRoute, tokenPresent });
+      const fixture = createDispatchFixture({
+        archiveEscapeFlag: "required",
+        ghRoute,
+        tokenPresent,
+      });
       try {
         const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
         expect(result.status, result.stderr).toBe(0);
@@ -1386,6 +1399,7 @@ describe("full-release-validation-at-sha", () => {
         expect(ghApiEndpoint(reads[1].args)).toBe(
           "repos/openclaw/openclaw/actions/artifacts/9001/zip",
         );
+        expect(reads[1].args).toContain("--allow-escape-sequences");
         expect(fixture.readCalls(fixture.pathGhCallsPath)).toEqual(ghRoute === "path" ? calls : []);
         expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8")).phase).toBe("observed");
       } finally {
@@ -1393,6 +1407,45 @@ describe("full-release-validation-at-sha", () => {
       }
     },
   );
+
+  it("falls back once when gh does not support the binary-output flag", () => {
+    const fixture = createDispatchFixture({ archiveEscapeFlag: "unsupported" });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      const archiveReads = readFileSync(fixture.artifactTransportPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter(({ args }) => ghApiEndpoint(args).endsWith("/zip"));
+      expect(archiveReads).toHaveLength(2);
+      expect(archiveReads[0].args).toContain("--allow-escape-sequences");
+      expect(archiveReads[1].args).not.toContain("--allow-escape-sequences");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not retry unrelated witness archive failures", () => {
+    const fixture = createDispatchFixture({
+      archiveEscapeFlag: "required",
+      artifactReadError: "archive",
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("dispatch=unknown");
+      const archiveReads = readFileSync(fixture.artifactTransportPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter(({ args }) => ghApiEndpoint(args).endsWith("/zip"));
+      expect(archiveReads).toHaveLength(1);
+      expect(archiveReads[0].args).toContain("--allow-escape-sequences");
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it.each([
     { name: "nonpositive ID", artifactMetadata: { id: 0 } },

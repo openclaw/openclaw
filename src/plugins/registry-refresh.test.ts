@@ -3,10 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import {
-  refreshPluginRegistryAfterConfigMutation,
-  refreshPluginRegistryForPreparedConfig,
-} from "./registry-refresh.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 describe("plugin registry refresh config ownership", () => {
@@ -180,14 +177,13 @@ describe("plugin registry refresh config ownership", () => {
     );
   });
 
-  it("keeps staged probe config and install receipts separate from the file, then restores disk policy", async () => {
+  it("preserves the installed index when config is invalid, then refreshes restored disk policy", async () => {
     await withOpenClawTestState(
-      { label: "registry-refresh-probe", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      { label: "registry-refresh-invalid-config", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const pluginDir = state.path("staged-plugin");
+        const pluginDir = state.path("installed-plugin");
         await fs.mkdir(pluginDir);
         createColdPluginFixture({ rootDir: pluginDir, pluginId: "fixture-plugin" });
-        await state.writeConfig({ plugins: { enabled: false } });
         const config = {
           plugins: {
             load: { paths: [pluginDir] },
@@ -201,17 +197,17 @@ describe("plugin registry refresh config ownership", () => {
             installPath: pluginDir,
           },
         };
-        await refreshPluginRegistryForPreparedConfig({
-          config,
+        await state.writeConfig(config);
+        await refreshPluginRegistryAfterConfigMutation({
           installRecords,
           reason: "source-changed",
           invalidateRuntimeCache: false,
         });
-        const stagedIndex = readPersistedInstalledPluginIndexSync();
-        expect(stagedIndex?.plugins).toContainEqual(
+        const installedIndex = readPersistedInstalledPluginIndexSync();
+        expect(installedIndex?.plugins).toContainEqual(
           expect.objectContaining({ pluginId: "fixture-plugin", enabled: true }),
         );
-        expect(stagedIndex?.installRecords).toEqual(installRecords);
+        expect(installedIndex?.installRecords).toEqual(installRecords);
 
         await fs.writeFile(state.configPath, "{ invalid config");
         const warn = vi.fn();
@@ -223,7 +219,7 @@ describe("plugin registry refresh config ownership", () => {
         expect(warn).toHaveBeenCalledWith(
           expect.stringContaining("Plugin registry refresh failed: Config invalid:"),
         );
-        expect(readPersistedInstalledPluginIndexSync()).toEqual(stagedIndex);
+        expect(readPersistedInstalledPluginIndexSync()).toEqual(installedIndex);
 
         await state.writeConfig({ plugins: { enabled: false } });
         await refreshPluginRegistryAfterConfigMutation({

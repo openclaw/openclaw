@@ -25,6 +25,8 @@ const uiE2eIncludePatterns = [
   automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
@@ -81,6 +83,8 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
+  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",

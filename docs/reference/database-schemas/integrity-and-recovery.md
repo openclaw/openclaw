@@ -32,6 +32,13 @@ Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
+The background verifier retains its child through native exit and IPC disconnect,
+including when sending work fails. Failed native launches settle after closure
+without requiring an exit event. If the operating system refuses a termination
+request, the verifier logs the failure and keeps waiting for native exit; an
+undelivered signal does not mean the child has stopped. The original worker or
+IPC error remains the reported failure even if termination also fails.
+
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.

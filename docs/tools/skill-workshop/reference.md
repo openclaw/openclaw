@@ -130,6 +130,21 @@ verifies the saved manifest and all copied files before removing the old copy.
 Skills that were symlinked into a workspace stay where they are as workspace
 skills; the migration marks their proposals stale instead of moving them.
 
+Doctor also checks saved automation command arguments, working directories,
+condition scripts, and agent messages for literal references to relocated
+Workshop skills. It names each affected automation and field during Doctor
+repair and on later checks. Retained apply history must establish the original
+skill directory; Doctor does not guess it from the current workspace or skill
+name when that history is unavailable.
+
+Review each reported field before updating the automation. Doctor offers a
+replacement for a complete argument or working-directory path only when the
+mapped target exists inside the relocated skill. For paths embedded in scripts
+or messages, it reports the directory relocation separately and leaves the
+complete target unresolved for manual review. Missing or ambiguous targets also
+stay unresolved. Doctor does not rewrite automation content, change schedules,
+or run the automation to check it.
+
 If moving the skills empties a workspace, migration retires obsolete
 workspace-survival evidence only when saved pre-move facts prove that the same
 directory contained only those skills and every moved file is intact.

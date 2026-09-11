@@ -16,29 +16,6 @@ import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.li
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 
-// Exercise the managed producer at the existing input boundary without enabling RUN disposal.
-vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../prepared-model-runtime.js")>();
-  return {
-    ...actual,
-    acquireAgentRunPreparedModelRuntime: (
-      input: Parameters<typeof actual.acquireAgentRunPreparedModelRuntime>[0],
-      options: Parameters<typeof actual.acquireAgentRunPreparedModelRuntime>[1],
-    ) =>
-      actual.acquireReadOnlyPreparedModelRuntime(
-        {
-          ...input,
-          loadRuntimePlugins: true,
-          runtimePluginSelections: [
-            { provider: "queued-resource-fixture", modelId: "model", agentId: "main" },
-          ],
-        },
-        options?.abortSignal,
-        "static",
-      ),
-  };
-});
-
 it("keeps an actual prepared registration alive through queued engine maintenance and disposal", async () => {
   await withOpenClawTestState(
     { prefix: "openclaw-queued-registration-", layout: "split" },

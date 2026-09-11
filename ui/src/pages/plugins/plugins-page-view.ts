@@ -212,13 +212,12 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         error: discovery.error ?? model.error,
                         remoteError: discovery.remoteError,
                         categories: discovery.categories,
-                        categoriesError: discovery.categoriesError,
                         featured: discovery.featured,
                         featuredLoading: discovery.featuredLoading,
-                        featuredError: discovery.featuredError,
                         trending: discovery.trending,
                         trendingLoading: discovery.trendingLoading,
-                        trendingError: discovery.trendingError,
+                        loadingMore: discovery.loadingMore,
+                        loadMoreError: discovery.loadMoreError,
                         intent: discovery.intent,
                         category: discovery.category,
                         query: discovery.query,
@@ -234,15 +233,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                             pathname: pathForPluginCatalogEntry(id, context.basePath),
                           }),
                         onInstall: actions.installCatalogEntry,
+                        onLoadMore: () => void discovery.loadMore(),
                         onRetry: () => void discovery.refresh(),
-                        onRetryGrouped: () => {
-                          void Promise.all([
-                            discovery.refresh(),
-                            discovery.refreshFeatured(),
-                            discovery.refreshTrending(),
-                          ]);
-                        },
-                        onRetryCategories: () => void discovery.refreshCategories(),
                       }),
                       { wide: true, carapace: true },
                     )

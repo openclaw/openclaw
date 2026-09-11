@@ -697,7 +697,13 @@ describe("cron trigger evaluation", () => {
     const harness = await createHarness({ evaluateCronTrigger });
     try {
       const job = await harness.cron.add(watcher());
+      const pendingSlot = job.state.nextRunAtMs;
+      expect(pendingSlot).toEqual(expect.any(Number));
       expect(await harness.cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
+      expect(harness.cron.getJob(job.id)?.state).toMatchObject({
+        nextRunAtMs: pendingSlot,
+        forcePreservedNextRunAtMs: pendingSlot,
+      });
       expect(evaluateCronTrigger).not.toHaveBeenCalled();
       expect(harness.runIsolatedAgentJob).toHaveBeenCalledOnce();
       expect(harness.events.find((event) => event.action === "finished")).toMatchObject({

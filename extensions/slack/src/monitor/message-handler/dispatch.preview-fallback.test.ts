@@ -1222,6 +1222,38 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it.each([false, true])(
+    "delivers literal authored fallback normally with native streaming %s",
+    async (nativeStreaming) => {
+      mockedNativeStreaming = nativeStreaming;
+      finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
+      const payload = {
+        text: "Run /inspect *literal* <!channel>, then check the report.",
+        presentationTextMode: "fallback" as const,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                { label: "Inspect", action: { type: "command" as const, command: "/inspect" } },
+              ],
+            },
+          ],
+        },
+      };
+      mockedDispatchSequence = [{ kind: "final", payload }];
+
+      await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(startSlackStreamMock).not.toHaveBeenCalled();
+      expect(appendSlackStreamMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: [payload] }),
+      );
+    },
+  );
+
   it("forwards durable ingress ownership into reply options", async () => {
     const turnAdoptionLifecycle = {
       admission: "exclusive",

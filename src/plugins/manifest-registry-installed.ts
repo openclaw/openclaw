@@ -497,6 +497,44 @@ export function selectInstalledPluginManifestRecords(
   );
 }
 
+/** Prepares transient candidates without loading a registry or Doctor artifact bytes. */
+export function prepareInstalledPluginCandidateResolver(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): (plugin: InstalledPluginIndexRecord) => PluginCandidate {
+  const env = params.env ?? process.env;
+  // These selections belong to this process, not the persisted installation inventory.
+  const sourceRoots = new Set(
+    listBundledSourceOverlayDirs({ bundledRoot: resolveBundledPluginsDir(env), env }).map(
+      (root) => pluginCacheRealpathSync(root) ?? root,
+    ),
+  );
+  const loadPaths = params.config?.plugins?.load?.paths ?? [];
+  const configuredSources = new Set(
+    loadPaths.length > 0
+      ? discoverConfiguredPluginLoadPaths({
+          loadPaths,
+          env,
+          workspaceDir: params.workspaceDir,
+        }).candidates.map(
+          (candidate) => pluginCacheRealpathSync(candidate.source) ?? candidate.source,
+        )
+      : [],
+  );
+  return (plugin) => {
+    const candidate = toPluginCandidate(plugin, env);
+    if (
+      candidate.origin === "bundled" &&
+      (sourceRoots.has(pluginCacheRealpathSync(candidate.rootDir) ?? candidate.rootDir) ||
+        configuredSources.has(pluginCacheRealpathSync(candidate.source) ?? candidate.source))
+    ) {
+      candidate.sourcePreferred = true;
+    }
+    return candidate;
+  };
+}
+
 export function loadPluginManifestRegistryForInstalledIndex(params: {
   registryPath?: string;
   index: InstalledPluginIndex;
@@ -533,38 +571,15 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           diagnostics: [...diagnostics],
         };
       }
-      // These selections belong to this process, not the persisted installation inventory.
-      const sourceRoots = new Set(
-        listBundledSourceOverlayDirs({ bundledRoot: resolveBundledPluginsDir(env), env }).map(
-          (root) => pluginCacheRealpathSync(root) ?? root,
-        ),
-      );
-      const loadPaths = params.config?.plugins?.load?.paths ?? [];
-      const configuredSources = new Set(
-        loadPaths.length > 0
-          ? discoverConfiguredPluginLoadPaths({
-              loadPaths,
-              env,
-              workspaceDir: params.workspaceDir,
-            }).candidates.map(
-              (candidate) => pluginCacheRealpathSync(candidate.source) ?? candidate.source,
-            )
-          : [],
-      );
+      const resolveCandidate = prepareInstalledPluginCandidateResolver({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+      });
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-        .map((plugin) => {
-          const candidate = toPluginCandidate(plugin, env);
-          if (
-            candidate.origin === "bundled" &&
-            (sourceRoots.has(pluginCacheRealpathSync(candidate.rootDir) ?? candidate.rootDir) ||
-              configuredSources.has(pluginCacheRealpathSync(candidate.source) ?? candidate.source))
-          ) {
-            candidate.sourcePreferred = true;
-          }
-          return candidate;
-        });
+        .map(resolveCandidate);
       return loadPluginManifestRegistryCore({
         registryPath: params.registryPath,
         config: params.config,

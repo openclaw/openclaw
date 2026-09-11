@@ -3,7 +3,6 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
-import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -29,6 +28,7 @@ import {
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -74,7 +74,7 @@ type RegistryInfo = {
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
   normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
-  channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
+  channelSchemaSelection?: ReadonlySet<string>;
   channelSchemas?: Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
@@ -137,7 +137,8 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
+  const copilotConfig = removeLegacyCopilotDiscovery(raw);
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
     homedir: params?.homedir,
@@ -165,8 +166,7 @@ function validateConfigObjectWithPluginMode(
     params?.env,
     manifestRegistry?.plugins,
   );
-  const config = materialized.config;
-  return { ...result, config };
+  return { ...result, config: materialized.config };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
@@ -350,6 +350,16 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const ensureChannelSchemaSelection = (): ReadonlySet<string> => {
+    const info = ensureLoadedRegistryInfo();
+    info.channelSchemaSelection ??= resolveChannelSchemaSelection(
+      info.registry,
+      parsedConfig,
+      opts.env,
+    );
+    return info.channelSchemaSelection;
+  };
+
   const ensureChannelSchemas = (): Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
@@ -361,7 +371,7 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
-      const selection = resolveChannelSchemaSelection(info.registry, parsedConfig, opts.env);
+      const selection = ensureChannelSchemaSelection();
       for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
@@ -380,25 +390,15 @@ function validateConfigObjectWithPluginsBase(
     return info.channelSchemas;
   };
 
-  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
-    const info = ensureLoadedRegistryInfo();
-    info.channelDmAllowFromModes ??= new Map(
-      collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
-        entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
-      ),
-    );
-    return info.channelDmAllowFromModes;
-  };
-
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
   // so account inheritance matches the per-channel Zod refinements.
-  warnings.push(
-    ...(hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
-      ? collectChannelDmPolicyDependencyWarnings(parsedConfig, {
-          dmAllowFromModes: ensureChannelDmAllowFromModes(),
-        })
-      : collectChannelDmPolicyDependencyWarnings(parsedConfig)),
-  );
+  const dmPolicyMetadata = hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
+    ? collectChannelDmPolicyMetadata(
+        ensureLoadedRegistryInfo().registry,
+        ensureChannelSchemaSelection(),
+      )
+    : undefined;
+  warnings.push(...collectChannelDmPolicyDependencyWarnings(parsedConfig, { dmPolicyMetadata }));
 
   let mutatedConfig = config;
   let channelsCloned = false;

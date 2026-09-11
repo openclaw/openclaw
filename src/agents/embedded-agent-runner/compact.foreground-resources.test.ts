@@ -47,8 +47,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
           loadRuntimePlugins: true,
           runtimePluginSelections: [{ provider, modelId: "model", agentId: "main" }],
         },
-        options?.abortSignal,
-        "static",
+        { abortSignal: options?.abortSignal, catalogMode: "static" },
       );
     },
   };

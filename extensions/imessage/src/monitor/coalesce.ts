@@ -1,11 +1,7 @@
 // Imessage plugin module implements the same-sender inbound debounce merge.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { IMessagePayload } from "./types.js";
-
-// Keep the merge contract narrow (caps, ID tracking, reply-context preference)
-// so a future SDK lift into `openclaw/plugin-sdk/channel-inbound` is a
-// mechanical extraction instead of a behavioral redesign.
+import type { IMessageAttachment, IMessagePayload } from "./types.js";
 
 /**
  * Bounds on the merged output when multiple inbound iMessage payloads are
@@ -50,87 +46,84 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     return first;
   }
 
-  const last = expectDefined(payloads.at(-1), "last iMessage payload to coalesce");
-
-  // Cap entries: keep first (preserves command/context) + most recent
-  // (preserves latest payload) when a flood exceeds the cap.
-  const boundedPayloads =
-    payloads.length > MAX_COALESCED_ENTRIES
-      ? [...payloads.slice(0, MAX_COALESCED_ENTRIES - 1), last]
-      : payloads;
-
-  // Combine text across bounded entries, skipping duplicate message text.
   const seenTexts = new Set<string>();
   const textParts: string[] = [];
-  for (const payload of boundedPayloads) {
-    const text = (payload.text ?? "").trim();
-    if (!text) {
-      continue;
-    }
-    const normalized = text.toLowerCase();
-    if (seenTexts.has(normalized)) {
-      continue;
-    }
-    seenTexts.add(normalized);
-    textParts.push(text);
-  }
-  let combinedText = textParts.join(" ");
-  if (combinedText.length > MAX_COALESCED_TEXT_CHARS) {
-    combinedText = `${sliceUtf16Safe(combinedText, 0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
-  }
-
-  // Merge attachments across bounded entries, capped to keep downstream media
-  // fan-out proportional to a single message.
-  const allAttachments = boundedPayloads
-    .flatMap((p) => p.attachments ?? [])
-    .slice(0, MAX_COALESCED_ATTACHMENTS);
-
-  // Latest `created_at` (lexically max ISO-8601 string) so downstream sees
-  // the freshest activity timestamp. Falls back to `first.created_at` if no
-  // entries carry a usable timestamp.
-  const createdAts = payloads
-    .map((p) => p.created_at)
-    .filter((c): c is string => typeof c === "string" && c.length > 0);
-  const latestCreatedAt =
-    createdAts.length > 0 ? createdAts.reduce((a, b) => (a > b ? a : b)) : first.created_at;
-
+  const allAttachments: IMessageAttachment[] = [];
+  const seenGuids = new Set<string>();
+  const coalescedMessageGuids: string[] = [];
+  let textLength = 0;
+  let latestCreatedAt: string | undefined;
   let maxRowid = -Infinity;
   let maxDateMs = -Infinity;
+  let reply: IMessagePayload | undefined;
+  let payloadIndex = 0;
   for (const payload of payloads) {
+    const keepContent =
+      payloadIndex < MAX_COALESCED_ENTRIES - 1 || payloadIndex === payloads.length - 1;
+    payloadIndex += 1;
+    // Preserve lexical timestamp selection independently of the parsed recovery timestamp.
+    const createdAt = payload.created_at;
+    if (
+      typeof createdAt === "string" &&
+      createdAt.length > 0 &&
+      (latestCreatedAt === undefined || createdAt > latestCreatedAt)
+    ) {
+      latestCreatedAt = createdAt;
+    }
     if (typeof payload.id === "number" && Number.isFinite(payload.id)) {
       maxRowid = Math.max(maxRowid, payload.id);
     }
-    const dateMs =
-      typeof payload.created_at === "string" ? Date.parse(payload.created_at) : Number.NaN;
+    const dateMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
     if (Number.isFinite(dateMs)) {
       maxDateMs = Math.max(maxDateMs, dateMs);
     }
-  }
-
-  // Walk the unbounded `payloads` so even GUIDs whose text/attachments were
-  // dropped by the cap are still remembered for downstream dedupe.
-  const seenGuids = new Set<string>();
-  const coalescedMessageGuids: string[] = [];
-  for (const payload of payloads) {
     const guid = payload.guid?.trim();
-    if (!guid || seenGuids.has(guid)) {
+    if (guid && !seenGuids.has(guid)) {
+      seenGuids.add(guid);
+      coalescedMessageGuids.push(guid);
+    }
+    if (!reply && (payload.thread_originator_guid != null || payload.reply_to_guid != null)) {
+      reply = payload;
+    }
+
+    // Only content is capped to the first entries plus the last; every row contributes metadata.
+    if (!keepContent) {
       continue;
     }
-    seenGuids.add(guid);
-    coalescedMessageGuids.push(guid);
+    const text = textLength <= MAX_COALESCED_TEXT_CHARS ? (payload.text ?? "").trim() : "";
+    if (text) {
+      const normalized = seenTexts.size > 0 ? text.toLowerCase() : undefined;
+      if (normalized === undefined || !seenTexts.has(normalized)) {
+        const separatorLength = textParts.length > 0 ? 1 : 0;
+        // One lookahead code unit preserves the final surrogate-safe cut and proves overflow.
+        const part = text.slice(0, MAX_COALESCED_TEXT_CHARS + 1 - textLength - separatorLength);
+        textParts.push(part);
+        textLength += separatorLength + part.length;
+        if (textLength <= MAX_COALESCED_TEXT_CHARS) {
+          seenTexts.add(normalized ?? text.toLowerCase());
+        }
+      }
+    }
+    if (allAttachments.length < MAX_COALESCED_ATTACHMENTS) {
+      for (const attachment of payload.attachments ?? []) {
+        allAttachments.push(attachment);
+        if (allAttachments.length === MAX_COALESCED_ATTACHMENTS) {
+          break;
+        }
+      }
+    }
   }
-
-  // Keep both parent GUIDs and their quote fields attached to the same source.
-  const reply =
-    payloads.find(
-      (payload) => payload.thread_originator_guid != null || payload.reply_to_guid != null,
-    ) ?? first;
+  let combinedText = textParts.join(" ");
+  if (textLength > MAX_COALESCED_TEXT_CHARS) {
+    combinedText = `${sliceUtf16Safe(combinedText, 0, MAX_COALESCED_TEXT_CHARS)}…[truncated]`;
+  }
+  reply ??= first;
 
   return {
     ...first,
     text: combinedText,
     attachments: allAttachments.length > 0 ? allAttachments : null,
-    created_at: latestCreatedAt,
+    created_at: latestCreatedAt ?? first.created_at,
     thread_originator_guid: reply.thread_originator_guid ?? null,
     reply_to_guid: reply.reply_to_guid ?? null,
     reply_to_text: reply.reply_to_text ?? null,

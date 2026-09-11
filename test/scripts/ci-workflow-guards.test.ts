@@ -5386,12 +5386,15 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
   });
 
   it.each([
-    { buildImpact: false, uiE2e: false },
-    { buildImpact: true, uiE2e: true },
+    { buildImpact: false, uiE2e: false, distRequired: false },
+    { buildImpact: true, uiE2e: true, distRequired: false },
+    { buildImpact: false, uiE2e: false, distRequired: true },
   ])(
-    "composes dedicated suite coverage before precise planning (build=$buildImpact, UI=$uiE2e)",
-    ({ buildImpact, uiE2e }) => {
+    "composes dedicated suite coverage before precise planning (build=$buildImpact, UI=$uiE2e, dist=$distRequired)",
+    ({ buildImpact, uiE2e, distRequired }) => {
+      const runnerProfile = distRequired ? "hybrid" : "blacksmith";
       const manifest = runCiManifestFixture({
+        runnerProfile,
         bundledPlanner: true,
         eventName: "pull_request",
         changedPaths: [buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts"],
@@ -5403,7 +5406,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
             buildImpact
               ? "[]"
               : `[{ checkName: "changed-boundary", shardName: "changed-boundary",
-            configs: ["test/vitest/vitest.boundary.config.ts"], requiresDist: false,
+            configs: ["test/vitest/vitest.boundary.config.ts"], requiresDist: ${distRequired},
             runner: "ubuntu-24.04" }]`
           };
         };
@@ -5427,6 +5430,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         "precise planner coverage input",
       );
       expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
+        runnerBackend: runnerProfile,
         dedicatedContractShards: dedicated,
         dedicatedUiE2e: uiE2e,
       });
@@ -5445,10 +5449,12 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
       ).include;
       expect(nodeRows).toEqual(
-        buildImpact ? [] : [expect.objectContaining({ shard_name: "changed-boundary" })],
+        buildImpact || distRequired
+          ? []
+          : [expect.objectContaining({ shard_name: "changed-boundary" })],
       );
-      expect(manifest.outputs.run_build_artifacts).toBe(String(buildImpact));
-      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(buildImpact));
+      expect(manifest.outputs.run_build_artifacts).toBe(String(buildImpact || distRequired));
+      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(buildImpact || distRequired));
     },
   );
 
@@ -7380,7 +7386,9 @@ server.listen(0, "127.0.0.1", () => {
     for (const pipeline of pipelines) {
       // Each profile starts independently; a slow/full declaration build cannot hold up UI readers.
       expect(pipeline.needs).toBe("validate_selected_ref");
-      expect(pipeline.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+      expect(pipeline.if).toBe(
+        "(!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''",
+      );
       expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
       expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
       expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
@@ -13379,6 +13387,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
+      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",

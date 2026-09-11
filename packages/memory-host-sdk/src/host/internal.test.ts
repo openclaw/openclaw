@@ -108,7 +108,7 @@ describe("memory host SDK package internals", () => {
       await expect(listMemoryFiles(workspaceDir, [upperPath])).resolves.toEqual([]);
       await expect(
         readMemoryFile({ workspaceDir, extraPaths: [upperPath], relPath: upperPath }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
     },
   );
 

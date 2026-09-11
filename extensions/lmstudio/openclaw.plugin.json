@@ -1,6 +1,6 @@
 {
   "id": "lmstudio",
-  "categories": ["models", "memory"],
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

@@ -181,6 +181,9 @@ export function loadManifestModelCatalog(params: {
   fallbackToMetadataScan?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
+  if (params.config.models?.mode === "replace") {
+    return [];
+  }
   const resolvedSnapshot =
     params.metadataSnapshot ??
     (params.fallbackToMetadataScan === false
@@ -321,15 +324,19 @@ export async function buildPreparedModelCatalogSnapshot(
       config: cfg,
       selection: "supplemental",
     });
-    const supplementalManifestKeys = new Set(
-      supplementalManifestPlan.rows.map((entry) =>
-        buildModelCatalogMergeKey(entry.provider, entry.id),
+    const dynamicManifestKeys = new Set(
+      supplementalManifestPlan.entries.flatMap((entry) =>
+        entry.discovery === "runtime" || entry.discovery === "refreshable"
+          ? entry.rows.map((row) => buildModelCatalogMergeKey(row.provider, row.id))
+          : [],
       ),
     );
     const runtimeDiscoveryProviders = new Set([
       ...observedProviders,
       ...supplementalManifestPlan.entries.flatMap((entry) =>
-        entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
+        entry.discovery === "runtime" || entry.discovery === "refreshable"
+          ? [normalizeProviderId(entry.provider)]
+          : [],
       ),
     ]);
     // Runtime declarations describe possible models, not account entitlement.
@@ -337,7 +344,8 @@ export async function buildPreparedModelCatalogSnapshot(
     const discoveredKeys = new Set(models.map(resolveModelCatalogIdentityKey));
     const manifestModels = declaredManifestModels.filter(
       (entry) =>
-        supplementalManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id)) &&
+        (params.includeProviderPluginAugmentation === false ||
+          !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
         (!observedProviders.has(entry.provider) ||
           discoveredKeys.has(resolveModelCatalogIdentityKey(entry))),
     );
@@ -352,7 +360,11 @@ export async function buildPreparedModelCatalogSnapshot(
     const configuredModels = buildConfiguredModelCatalog(configuredCatalogParams);
     logStage("configured-models-prepared", `entries=${models.length}`);
 
-    if (!params.readOnly && params.includeProviderPluginAugmentation !== false) {
+    if (
+      cfg.models?.mode !== "replace" &&
+      !params.readOnly &&
+      params.includeProviderPluginAugmentation !== false
+    ) {
       const augmentEntries = [...models];
       if (configuredModels.length > 0) {
         mergeCatalogEntries(augmentEntries, configuredModels, {
@@ -472,11 +484,4 @@ export async function buildPreparedModelCatalogSnapshot(
  */
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "image");
-}
-
-/**
- * Check if a model supports native document/PDF input based on its catalog entry.
- */
-export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
-  return modelCatalogEntrySupportsInput(entry, "document");
 }

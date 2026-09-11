@@ -559,8 +559,10 @@ describe("verified npm provenance", () => {
   });
 });
 
-describe("bounded historical publication runner headers", () => {
-  const historicalSha = "01403169248346f2a6d6dd02955fc956fa9e1fe9";
+describe.each([
+  "01403169248346f2a6d6dd02955fc956fa9e1fe9",
+  "458f9980c2bfdcc4f15279d20db400815406f2e8",
+])("bounded historical publication runner headers at %s", (historicalSha) => {
   const scenarios = [
     { name: "Publish", number: 20, file: "npm-publish-body.txt", job: "publish_openclaw_npm" },
     {

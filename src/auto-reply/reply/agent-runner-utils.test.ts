@@ -254,6 +254,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.runBaseParams.runId).toBe("run-1");
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
+    expect(resolved.runBaseParams.requestedRouteResolution).toBe("resolved");
   });
 
   it("uses the queued conversation policy snapshot", async () => {

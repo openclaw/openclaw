@@ -186,7 +186,18 @@ function sessionProjectionKey(
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
     profiles.pinnedProfileId ?? "",
+    profiles.profileProvider ?? "",
+    profiles.runtimeOverride ?? "",
   ].join("\0");
+}
+
+function hasSessionCatalogContext(profiles: ReturnType<typeof resolveSessionCatalogProfiles>) {
+  return (
+    profiles.preferredProfileId !== undefined ||
+    profiles.pinnedProfileId !== undefined ||
+    profiles.profileProvider !== undefined ||
+    profiles.runtimeOverride !== undefined
+  );
 }
 
 async function defaultBuildCommands(params: {
@@ -271,14 +282,14 @@ export function createGatewayChatMetadataRuntime(params: {
   ): Promise<PreparedAgentProjection> => {
     assertOpen();
     assertCurrent?.();
-    const profiles = resolveSessionCatalogProfiles(sessionEntry);
-    const neutral =
-      profiles.preferredProfileId === undefined && profiles.pinnedProfileId === undefined;
+    const profiles = resolveSessionCatalogProfiles(sessionEntry, agent.owner.config, agent.agentId);
+    const neutral = !hasSessionCatalogContext(profiles);
     const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
     // Personal selections and credentials can change without publishing a shared auth
     // generation. Keep those projections request-local, including linked session pins.
     const requestScoped =
-      (neutral && defaultProfileId) || isUserModelAuthProfileId(profiles.preferredProfileId ?? "");
+      (!profiles.preferredProfileId && defaultProfileId) ||
+      isUserModelAuthProfileId(profiles.preferredProfileId ?? "");
     const projections = requestScoped
       ? new Map<string, AgentProjectionEntry>()
       : neutral
@@ -347,7 +358,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const entry: AgentProjectionEntry = { state: "pending", promise: projection };
     projections.set(key, entry);
     if (!neutral) {
-      // Neutral projections belong to the published generation. Only request-derived profile
+      // Neutral projections belong to the published generation. Only request-derived session
       // variants are bounded; evicting neutral entries puts catalog work back on startup reads.
       pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
     }
@@ -600,7 +611,12 @@ export function createGatewayChatMetadataRuntime(params: {
   const readStartup = async (
     readParams: ChatStartupProjectionReadParams,
   ): Promise<ChatStartupProjectionResult | undefined> => {
-    const profiles = resolveSessionCatalogProfiles(readParams.sessionEntry);
+    const profiles = resolveSessionCatalogProfiles(
+      readParams.sessionEntry,
+      deps.getConfig(),
+      readParams.agentId,
+    );
+    const hasSessionContext = hasSessionCatalogContext(profiles);
     const assemble = (
       neutral: PreparedAgentProjection,
       session: PreparedAgentProjection,
@@ -623,7 +639,7 @@ export function createGatewayChatMetadataRuntime(params: {
         );
       }
       const readNeutral = await projectAgent(generation, agent);
-      const readSession = profiles.preferredProfileId
+      const readSession = hasSessionContext
         ? await projectAgent(
             generation,
             agent,
@@ -636,7 +652,7 @@ export function createGatewayChatMetadataRuntime(params: {
         read: () => assemble(readNeutral, readSession),
       };
     };
-    if (readParams.readPolicy !== "ready" && profiles.preferredProfileId) {
+    if (readParams.readPolicy !== "ready" && hasSessionContext) {
       return readCurrent(projectStartup);
     }
     if (isUserModelAuthProfileId(profiles.preferredProfileId ?? "")) {
@@ -659,7 +675,7 @@ export function createGatewayChatMetadataRuntime(params: {
     }
     const agentId = normalizeAgentId(readParams.agentId);
     const neutral = generation.neutralProjectionByAgentId.get(agentId);
-    const session = profiles.preferredProfileId
+    const session = hasSessionContext
       ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
       : neutral;
     if (

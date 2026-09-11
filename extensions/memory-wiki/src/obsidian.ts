@@ -32,7 +32,8 @@ type ObsidianCliDeps = {
 async function isExecutableFile(inputPath: string): Promise<boolean> {
   try {
     await fs.access(inputPath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    return true;
+    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
+    return (await fs.stat(inputPath)).isFile();
   } catch {
     return false;
   }

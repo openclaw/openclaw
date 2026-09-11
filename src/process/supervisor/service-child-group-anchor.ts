@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -36,7 +36,7 @@ function commandStdio(start: ServiceChildStart): {
   while (stdio.length <= lineageFd) {
     stdio.push("ignore");
   }
-  stdio[lineageFd] = "pipe";
+  stdio[lineageFd] = start.lineageFd ?? "pipe";
   return { stdio, lineageFd };
 }
 
@@ -60,6 +60,7 @@ export function runServiceChildGroupAnchor(): void {
   let stdoutDrained = false;
   let stderrDrained = false;
   let lineageClosed = false;
+  let markHostLineageClosed: (() => void) | undefined;
   let forceCleanup = false;
   const forceCleanupRequested = createDeferredCore();
   const lineageDone = createDeferredCore();
@@ -96,9 +97,9 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     state = "closed";
-    if (hardKill) {
-      // Killing the observer cannot confirm descendant death. Missing closure
-      // leaves the host's existing ownership receipt uncertain.
+    // Retained hosts have no observer outside this group. Killing the local
+    // reader with unresolved lineage must not certify escaped descendants gone.
+    if (hardKill && start.lineageFd === undefined && !lineageClosed) {
       process.kill(0, "SIGKILL");
       return;
     }
@@ -122,7 +123,8 @@ export function runServiceChildGroupAnchor(): void {
     if (
       remainingMs <= 0 ||
       !(await Promise.race([retirementReady.promise, delay(remainingMs).then(() => false)])) ||
-      Date.now() >= deadline
+      Date.now() >= deadline ||
+      hardKill
     ) {
       process.kill(0, "SIGKILL");
       return;
@@ -201,7 +203,9 @@ export function runServiceChildGroupAnchor(): void {
       }
       await Promise.race([delay(nextObservationMs), forceCleanupRequested.promise]);
     }
-    await closeAuthority(reason, true, cleanupDeadline);
+    // Forced retirement needs the same bounded receipt join, even after TERM
+    // grace expires. Only the outside-group host can certify extinction after KILL.
+    await closeAuthority(reason, true);
   };
 
   const onControlMessage = (message: ServiceChildControlMessage) => {
@@ -230,6 +234,10 @@ export function runServiceChildGroupAnchor(): void {
     lastHostSequence = message.sequence;
     if (message.type === "startup-error-ack") {
       startupErrorAcknowledged.resolve();
+      return;
+    }
+    if (message.type === "lineage-closed") {
+      markHostLineageClosed?.();
       return;
     }
     void requestCleanup("cancel", message.signal);
@@ -299,14 +307,10 @@ export function runServiceChildGroupAnchor(): void {
       // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
       await once(command, "spawn");
     } catch (error) {
+      if (start.lineageFd !== undefined) {
+        closeSync(start.lineageFd);
+      }
       await reportStartupFailure(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    // SAFETY: lineageFd was reserved as a pipe in this exact command stdio array.
-    const lineage = command.stdio[lineageFd] as Readable | null;
-    if (!lineage) {
-      await send({ type: "startup-error", error: "command lineage pipe was not created" });
-      await requestCleanup("lineage-lost", "SIGKILL");
       return;
     }
     const markLineageClosed = () => {
@@ -335,9 +339,24 @@ export function runServiceChildGroupAnchor(): void {
         })();
       }
     };
-    lineage.once("end", markLineageClosed);
-    lineage.once("close", markLineageClosed);
-    lineage.once("error", markLineageClosed);
+    if (start.lineageFd !== undefined) {
+      // Install the notification consumer before releasing the duplicate writer;
+      // actual EOF is observed by the host even when this group is killed.
+      markHostLineageClosed = markLineageClosed;
+      closeSync(start.lineageFd);
+    } else {
+      // Retained --no-restart hosts still delegate observation to the anchor.
+      // SAFETY: without a host descriptor, commandStdio reserves this entry as a pipe.
+      const lineage = command.stdio[lineageFd] as Readable | null;
+      if (!lineage) {
+        await send({ type: "startup-error", error: "command lineage pipe was not created" });
+        await requestCleanup("lineage-lost", "SIGKILL");
+        return;
+      }
+      lineage.once("end", markLineageClosed);
+      lineage.once("close", markLineageClosed);
+      lineage.once("error", markLineageClosed);
+    }
     const settleRoot = async () => {
       if (rootSettlementStarted || !rootResultDelivery || !stdoutDrained || !stderrDrained) {
         return;

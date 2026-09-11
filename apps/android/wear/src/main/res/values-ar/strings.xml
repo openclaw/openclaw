@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يُقبل الإجراء"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدث خطأ ما"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدِّث القوائم وحاول مرة أخرى."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"تعذّر تحديث بعض النماذج. لا تزال النماذج المدرجة متاحة."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"حدّث OpenClaw على هاتفك وحدّث Gateway لاختيار نماذج لهذه المحادثة."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حاول مجددًا من الساعة."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحديث مطلوب"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"حدّث OpenClaw على كل من الهاتف والساعة."</string>

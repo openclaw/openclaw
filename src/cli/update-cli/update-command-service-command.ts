@@ -55,29 +55,32 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   if (!entrypoint) {
     return false;
   }
-  const check = await withUpdateCommandExecutorChild(params.executor, (_grant, beforeInput) =>
-    runCommandWithTimeout(
-      [
-        params.nodeRunner ?? resolveNodeRunner(),
-        entrypoint,
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-      ],
-      {
-        input: "",
-        beforeInput,
-        baseEnv: {},
-        cwd: params.root,
-        env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        ...(params.signal ? { signal: params.signal } : {}),
-        maxOutputBytes: 64 * 1024,
-      },
-    ),
+  const check = await withUpdateCommandExecutorChild(
+    params.executor,
+    params.root,
+    (_grant, beforeInput) =>
+      runCommandWithTimeout(
+        [
+          params.nodeRunner ?? resolveNodeRunner(),
+          entrypoint,
+          "gateway",
+          "install",
+          "--update-executor",
+          "check",
+        ],
+        {
+          input: "",
+          beforeInput,
+          baseEnv: {},
+          cwd: params.root,
+          env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
+          timeoutMs: 30_000,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          ...(params.signal ? { signal: params.signal } : {}),
+          maxOutputBytes: 64 * 1024,
+        },
+      ),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -110,7 +113,7 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     serviceLoadBoundary?: UpdateServiceLoadBoundary;
   },
-  action: "install" | "restart" | "stop",
+  action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<"accepted" | "unverified"> {
   const run = params.opts.run;
@@ -133,7 +136,7 @@ export async function runUpdatedInstallGatewayCommand(
     );
   }
   const args = ["gateway", action];
-  if (installing || action === "stop") {
+  if (installing) {
     args.push("--force");
   } else if (preserveDefinition) {
     args.push("--preserve-definition");
@@ -219,7 +222,7 @@ export async function runUpdatedInstallGatewayCommand(
       },
     );
   const res = executor
-    ? await withUpdateCommandExecutorChild(executor, runChild)
+    ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
   params.signal?.throwIfAborted();
   assertCurrent();
@@ -234,9 +237,8 @@ export async function runUpdatedInstallGatewayCommand(
   if (exited && res.code === 0) {
     return response?.action === action &&
       response.ok === true &&
-      ((action === "restart" &&
-        (response.result === "restarted" || response.result === "scheduled")) ||
-        (action === "stop" && (response.result === "stopped" || response.result === "not-loaded")))
+      action === "restart" &&
+      (response.result === "restarted" || response.result === "scheduled")
       ? "accepted"
       : "unverified";
   }

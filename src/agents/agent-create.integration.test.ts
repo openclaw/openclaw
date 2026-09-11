@@ -187,7 +187,7 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       expect.soft(await fs.stat(stagedFile).catch(() => null)).toBeNull();
       if (phase !== "config") {
         expect.soft(await fs.readdir(workspace)).toEqual([]);
-        expect.soft(readWorkspaceStateSnapshot(workspace).setupExists).toBe(false);
+        expect.soft((await readWorkspaceStateSnapshot(workspace)).setupExists).toBe(false);
         expect.soft(prepareConfigCommit).not.toHaveBeenCalled();
         expect.soft(await fs.stat(state.sessionsDir("prepared")).catch(() => null)).toBeNull();
       } else {

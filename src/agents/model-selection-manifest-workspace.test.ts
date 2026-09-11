@@ -31,6 +31,17 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
 }));
 
+const defaultNormalizationSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "default-normalizer",
+      modelIdNormalization: {
+        providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
+      },
+    },
+  ],
+});
+
 describe("configured model manifest workspace scope", () => {
   beforeEach(() => {
     loadManifestMetadataSnapshotMock.mockReset();
@@ -399,6 +410,149 @@ describe("configured model manifest workspace scope", () => {
     ).toEqual({ provider: "openai", model: "ops" });
     expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
   });
+
+  it.each(["snapshot", "plugins"] as const)(
+    "normalizes unresolved bare defaults once with captured %s metadata",
+    (source) => {
+      const snapshot = defaultNormalizationSnapshot;
+      const manifestPlugins = source === "snapshot" ? snapshot : snapshot.plugins;
+      for (const primary of ["entry", "entry@work"]) {
+        expect(
+          resolveConfiguredModelRef({
+            cfg: { agents: { defaults: { model: { primary } } } },
+            defaultProvider: "openai",
+            defaultModel: "unused",
+            manifestPlugins,
+            allowPluginNormalization: false,
+          }),
+        ).toEqual({ provider: "openai", model: "middle" });
+      }
+      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "explicit", primary: "openai/entry", models: undefined },
+    { name: "inferred", primary: "entry", models: { "openai/entry": {} } },
+    {
+      name: "configured alias",
+      primary: "friendly",
+      models: { "openai/entry": { alias: "friendly" } },
+    },
+  ])("does not renormalize the $name selection", ({ primary, models }) => {
+    const manifestPlugins = defaultNormalizationSnapshot;
+    expect(
+      resolveConfiguredModelRef({
+        cfg: { agents: { defaults: { model: { primary }, models } } },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        manifestPlugins,
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+  });
+
+  it.each([false, true])(
+    "keeps absent metadata raw and honors explicitly empty metadata (captured=%s)",
+    (captured) => {
+      normalizeProviderModelIdWithRuntimeMock.mockReturnValue("runtime-entry");
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: "entry" } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          ...(captured ? { manifestPlugins: [] } : {}),
+        }),
+      ).toEqual({ provider: "openai", model: captured ? "runtime-entry" : "entry" });
+      expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledTimes(captured ? 1 : 0);
+      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { manifest: true, runtime: true, expected: "runtime-middle" },
+    { manifest: true, runtime: false, expected: "middle" },
+    { manifest: false, runtime: true, expected: "runtime-entry" },
+    { manifest: false, runtime: false, expected: "entry" },
+  ])(
+    "honors captured normalization flags (manifest=$manifest, runtime=$runtime)",
+    ({ manifest, runtime, expected }) => {
+      normalizeProviderModelIdWithRuntimeMock.mockImplementation(
+        ({ context }: { context: { modelId: string } }) => `runtime-${context.modelId}`,
+      );
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: "entry" } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          manifestPlugins: defaultNormalizationSnapshot,
+          allowManifestNormalization: manifest,
+          allowPluginNormalization: runtime,
+        }),
+      ).toEqual({ provider: "openai", model: expected });
+      expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledTimes(runtime ? 1 : 0);
+      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reuses metadata captured during unsuccessful provider inference", () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(defaultNormalizationSnapshot);
+    expect(
+      resolveConfiguredModelRef({
+        cfg: { agents: { defaults: { model: "entry", models: { "custom/unrelated": {} } } } },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the configured native API owner for a captured bare default", () => {
+    normalizeProviderModelIdWithRuntimeMock.mockReturnValue("wrong-runtime-model");
+    expect(
+      resolveConfiguredModelRef({
+        cfg: {
+          agents: { defaults: { model: "entry@work" } },
+          models: {
+            providers: {
+              openai: { api: "ollama", baseUrl: "https://fixture.invalid", models: [] },
+            },
+          },
+        },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        manifestPlugins: defaultNormalizationSnapshot,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { primary: "@work", expected: "@work" },
+    { primary: "entry@", expected: "entry@" },
+    { primary: "   ", expected: "unused" },
+    { primary: "/", expected: "unused" },
+  ])(
+    "keeps existing parser behavior for captured malformed input '$primary'",
+    ({ primary, expected }) => {
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: { primary } } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          manifestPlugins: [],
+          allowPluginNormalization: false,
+        }),
+      ).toEqual({ provider: "openai", model: expected });
+      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not load manifest metadata for statically resolved primary models", () => {
     const cases: Array<{ cfg: OpenClawConfig; expected: { provider: string; model: string } }> = [

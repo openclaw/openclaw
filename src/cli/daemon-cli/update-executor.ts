@@ -54,6 +54,9 @@ export async function runGatewayServiceUpdateCommand(
       typeof input.executor.databasePath !== "string" ||
       typeof input.executor.childKey !== "string" ||
       !isRecord(input.executor.parent) ||
+      !isRecord(input.executor.originalParent) ||
+      !isRecord(input.executor.databaseIdentity) ||
+      typeof input.executor.originalChildKey !== "string" ||
       !isRecord(input.executor.spawner)
     ) {
       throw new Error("Invalid native update executor input.");
@@ -62,7 +65,11 @@ export async function runGatewayServiceUpdateCommand(
     const grant = input.executor as UpdateCommandChildGrant;
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const targetRoot = input.targetRoot;
-    if (!root || resolveUpdateInstallRoot(root) !== targetRoot) {
+    if (
+      !root ||
+      resolveUpdateInstallRoot(root) !== targetRoot ||
+      resolveUpdateInstallRoot(grant.root) !== targetRoot
+    ) {
       throw new Error("Native update receiver installation binding does not match its target.");
     }
     // Destination admission never replaces the original installation's live authority.

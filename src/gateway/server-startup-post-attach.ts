@@ -1,4 +1,4 @@
-import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -20,10 +20,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import {
-  isGatewayRestartDrainError,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -56,8 +53,6 @@ import {
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
-const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
-const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
@@ -84,174 +79,12 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
-/** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
-async function measureProviderAuthWarm(run: () => Promise<void>): Promise<{
-  elapsedMs: number;
-  eventLoopMaxMs: number;
-}> {
-  const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
-  eventLoopDelay.enable();
-  const startMs = performance.now();
-  try {
-    await run();
-  } finally {
-    eventLoopDelay.disable();
-  }
-  return {
-    elapsedMs: performance.now() - startMs,
-    eventLoopMaxMs: eventLoopDelay.max / 1_000_000,
-  };
-}
-
-function formatProviderAuthWarmMetrics(metrics: {
-  elapsedMs: number;
-  eventLoopMaxMs: number;
-}): string {
-  return `in ${metrics.elapsedMs.toFixed(0)}ms eventLoopMax=${metrics.eventLoopMaxMs.toFixed(1)}ms`;
-}
-
 function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
   return !env.VITEST && env.NODE_ENV !== "test";
 }
 
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnvValue(env[SKIP_STARTUP_MODEL_PREWARM_ENV]);
-}
-
-function scheduleProviderAuthStatePrewarm(params: {
-  getConfig: () => OpenClawConfig;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-  };
-  delayMs?: number;
-  startupWarmEnabled: boolean;
-}): GatewayPostReadySidecarHandle {
-  let stopped = false;
-  let startupTimer: ReturnType<typeof setTimeout> | undefined;
-  let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
-  let rewarmInFlight = false;
-  let pendingRewarmReason: string | undefined;
-  const isStopped = () => stopped;
-  const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
-  const logProviderAuthWarmFailure = (operation: string, error: unknown) => {
-    if (!isGatewayRestartDrainError(error)) {
-      params.log.warn(`provider auth state ${operation} failed: ${String(error)}`);
-    }
-  };
-  void runWithGatewayIndependentRootWorkAdmission(async () => {
-    const [{ setAuthProfileFailureHook }, { clearCurrentProviderAuthState }] = await Promise.all([
-      import("../agents/auth-profiles/failure-hook.js"),
-      import("../agents/model-provider-auth-state.js"),
-    ]);
-    const loadProviderAuthWarmModule = () => import("../agents/model-provider-auth.js");
-    const runRewarm = async (reason: string) => {
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (isStopped()) {
-          return;
-        }
-        const cfg = params.getConfig();
-        rewarmInFlight = true;
-        try {
-          const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
-          const metrics = await measureProviderAuthWarm(() =>
-            warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
-          );
-          if (isStopped()) {
-            return;
-          }
-          params.log.info(
-            `provider auth state re-warmed (${reason}) ${formatProviderAuthWarmMetrics(metrics)}`,
-          );
-        } catch (err) {
-          logProviderAuthWarmFailure("rewarm", err);
-        } finally {
-          rewarmInFlight = false;
-          const nextReason = pendingRewarmReason;
-          pendingRewarmReason = undefined;
-          if (nextReason && !isStopped()) {
-            scheduleAuthMapRewarm(nextReason);
-          }
-        }
-      }, "runtime:provider-auth-rewarm");
-    };
-    const scheduleAuthMapRewarm = (reason: string) => {
-      // Collapse repeated auth-profile failures into one rewarm turn while a
-      // previous rewarm is queued or running.
-      if (isStopped()) {
-        return;
-      }
-      pendingRewarmReason = reason;
-      if (rewarmTimer || rewarmInFlight) {
-        return;
-      }
-      rewarmTimer = setTimeout(() => {
-        rewarmTimer = undefined;
-        const nextReason = pendingRewarmReason ?? reason;
-        pendingRewarmReason = undefined;
-        void runRewarm(nextReason).catch((error: unknown) =>
-          logProviderAuthWarmFailure("rewarm", error),
-        );
-      }, PROVIDER_AUTH_REWARM_DELAY_MS);
-      rewarmTimer.unref?.();
-    };
-    if (isStopped()) {
-      return;
-    }
-    setAuthProfileFailureHook((reason) => {
-      // Rate-limit cooldowns change profile selection, not credential presence.
-      // Keep the prepared catalog usable instead of rebuilding it after each 429.
-      if (isStopped() || reason === "rate_limit") {
-        return;
-      }
-      clearCurrentProviderAuthState();
-      scheduleAuthMapRewarm("auth-profile-failure");
-    });
-    // Keep the broad provider sweep explicit; default startup only retains
-    // failure-triggered repair so discovery cannot starve gateway work.
-    if (!params.startupWarmEnabled) {
-      return;
-    }
-    startupTimer = setTimeout(
-      () => {
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          if (isStopped()) {
-            return;
-          }
-          const cfg = params.getConfig();
-          const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
-          const metrics = await measureProviderAuthWarm(() =>
-            warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
-          );
-          if (isStopped()) {
-            return;
-          }
-          params.log.info(
-            `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
-          );
-        }, "startup:provider-auth-prewarm").catch((error: unknown) =>
-          logProviderAuthWarmFailure("pre-warm", error),
-        );
-      },
-      Math.max(0, delayMs),
-    );
-    startupTimer.unref?.();
-  }, "startup:provider-auth").catch((error: unknown) =>
-    logProviderAuthWarmFailure("pre-warm setup", error),
-  );
-  return {
-    stop: () => {
-      stopped = true;
-      if (startupTimer) {
-        clearTimeout(startupTimer);
-        startupTimer = undefined;
-      }
-      if (rewarmTimer) {
-        clearTimeout(rewarmTimer);
-        rewarmTimer = undefined;
-      }
-    },
-  };
 }
 
 function schedulePostReadySidecarTask(params: {
@@ -1261,11 +1094,6 @@ export async function startGatewayPostAttachRuntime(
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
     sidecarStartup?: GatewaySidecarStartupMode;
-    providerAuthPrewarm?: {
-      enabled?: boolean;
-      delayMs?: number;
-      getConfig?: () => OpenClawConfig;
-    };
     waitForPostReadyWork?: () => Promise<void>;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
   },
@@ -1592,16 +1420,6 @@ export async function startGatewayPostAttachRuntime(
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];
-          if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
-            newGatewayLifetimeSidecars.push(
-              scheduleProviderAuthStatePrewarm({
-                getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
-                log: params.log,
-                delayMs: params.providerAuthPrewarm.delayMs,
-                startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
-              }),
-            );
-          }
           if (params.gatewayPluginConfigAtStart.transcripts?.autoStart?.length) {
             newGatewayLifetimeSidecars.push(
               scheduleTranscriptsAutoStartSidecar({
@@ -1749,14 +1567,12 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
-  providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
   hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,
   publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
-  scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,
 };

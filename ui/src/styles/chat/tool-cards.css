@@ -222,6 +222,12 @@
   flex-shrink: 0;
 }
 
+.chat-tool-msg-summary__icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
 .chat-tool-msg-summary__icon svg {
   width: 16px;
   height: 16px;
@@ -838,7 +844,6 @@
 }
 
 .chat-tool-card__preview[data-has-widget-actions] {
-  margin-top: 40px;
   overflow: visible;
 }
 
@@ -852,11 +857,14 @@
 .chat-tool-card__preview-actions {
   position: absolute;
   z-index: 2;
-  top: -34px;
-  right: 0;
+  top: 0;
+  left: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
+  width: max-content;
   gap: 4px;
+  padding-left: 4px;
 }
 
 .chat-tool-card__preview-panel {
@@ -869,9 +877,14 @@
   flex-shrink: 0;
 }
 
-/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
-   active widget row so closing its top-layer menu cannot move the disclosure. */
-.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+/* Keep outside actions reachable and avoid restoring stale row geometry when
+   the active widget's top-layer menu closes. */
+.chat-virtual-row:has(
+  .chat-tool-card__preview:hover,
+  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview[data-widget-actions-above],
+  .chat-tool-card__widget-actions[open]
+) {
   content-visibility: visible;
 }
 
@@ -891,41 +904,40 @@
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
-.chat-tool-card__widget-actions-trigger,
-.chat-tool-card__widget-action {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+.chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
+  top: auto;
+  bottom: 100%;
+  left: auto;
+  right: 0;
+  flex-direction: row;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 88%, transparent);
-  box-shadow: var(--shadow-sm);
-  color: var(--muted);
-}
-
-.chat-tool-card__widget-actions-trigger:hover,
-.chat-tool-card__widget-actions-trigger:focus-visible,
-.chat-tool-card__widget-action:hover,
-.chat-tool-card__widget-action:focus-visible {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.chat-tool-card__widget-actions-trigger svg,
-.chat-tool-card__widget-action svg {
-  width: 16px;
-  height: 16px;
+  opacity: 0.6;
+  pointer-events: auto;
 }
 
 [data-widget-actions] {
-  opacity: 0.45;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease-out;
 }
 
 .chat-tool-card__preview:hover [data-widget-actions],
-.chat-tool-card__preview:focus-within [data-widget-actions] {
+.chat-tool-card__preview:focus-within [data-widget-actions],
+[data-widget-actions]:has(.chat-tool-card__widget-actions[open]) {
   opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch keeps actions reachable; focus, hover, and an open menu reveal them. */
+@media (hover: none) {
+  [data-widget-actions] {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+
+  .chat-virtual-row:has(.chat-tool-card__preview[data-has-widget-actions]) {
+    content-visibility: visible;
+  }
 }
 
 .chat-tool-card__widget-action[data-pinned] {

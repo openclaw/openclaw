@@ -266,12 +266,19 @@ export function createEmbeddedRunFailoverRetryController(input: {
         delayMs,
         reason: retry.reason,
       });
-      // Provider floors can exceed one native timer; the shared helper owns abort errors.
-      let remainingMs = delayMs;
-      while (remainingMs > 0) {
-        const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
-        await sleepWithAbort(chunkMs, params.abortSignal);
-        remainingMs -= chunkMs;
+      const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
+      let completed = false;
+      try {
+        // Provider floors can exceed one native timer; protect the whole wait.
+        let remainingMs = delayMs;
+        while (remainingMs > 0) {
+          const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
+          await sleepWithAbort(chunkMs, params.abortSignal);
+          remainingMs -= chunkMs;
+        }
+        completed = true;
+      } finally {
+        closeRetryWait?.(completed);
       }
       transientRetryCount += 1;
       return true;

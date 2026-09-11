@@ -332,6 +332,48 @@ for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
 retention, principal attribution or admission authority.
 
+### Slow worktree cleanup
+
+With process diagnostics and info-level logging enabled, two subsystems log
+operations lasting at least one second after they return or throw:
+
+- `agents/worktrees`: `slow managed worktree removal` measures removal through
+  allocation-lease settlement. `admissionMs` covers acquisition attempts,
+  backoff, setup, and scheduling before the removal callback starts. `bodyMs`
+  covers that callback; `finalizeMs` covers drainage, final authority checks,
+  lease release, and completion delivery. Create and restore operations do not
+  emit this record.
+- `git/ref-mutation`: `slow Git ref mutation` measures shared Git-ref queue
+  operations. `resolveMs` covers common-directory resolution; `queueWaitMs`
+  covers time from enqueue to callback entry; `queuedOperationMs` covers the
+  callback and delivery of its settlement. It can include multiple Git commands
+  and does not identify a queue holder or every predecessor.
+
+Both records include `durationMs` in integer milliseconds, `callbackEntered`, and
+`outcome` (`returned` or `threw`). Removal that never enters its callback reports
+all elapsed time as `admissionMs` and omits `bodyMs` and `finalizeMs`. Git directory
+resolution failure reports `resolveMs` and omits unreached queue and operation
+durations. Phase durations partition each record's interval before rounding.
+These intervals include asynchronous waits: admission is not pure lock wait,
+and queued operation time is not child-process CPU time. They nest within
+broader operations such as session-patch `worktreeCleanup`; do not add nested
+durations to the enclosing total.
+
+Each subsystem has a separate fixed budget of 60 records per 60-second window
+per JavaScript runtime isolate. Bursts across window boundaries remain possible.
+`omittedObservations` reports suppressed records on the next emitted record,
+then resets. Pending operations emit nothing until they settle; disabled
+diagnostics, log levels, thresholds, and budgets can also leave no record.
+Missing records never prove there was no delay.
+
+The added fields are fixed scalar timings, outcomes, counts, `pid`, `threadId`,
+and `isMainThread`. They omit repository paths, refs, arguments, raw errors, and
+command output. Records preserve an existing valid diagnostic trace when
+available; they create no trace, operation identity, or private-identity hash.
+Use the trace to associate nested records, without treating elapsed time as CPU
+attribution. These diagnostics measure cleanup without changing its ordering or
+completion behavior.
+
 ### Slow agent database opens
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
@@ -447,6 +489,51 @@ preparation failed; absent fields were not completed. These fields do not change
 the warning threshold or prove that a nearby request caused the work. Rounding
 and work outside the measured subphases can leave a difference from
 `writerExecutionMs`; do not assign that remainder to a specific phase.
+
+For `session.history.archive-prune`, the same slow or failure warning can include
+one bounded `archivePruning` object. Its `trigger` is recorded at the call site:
+`initial`, `after-eviction`, or `final`. It distinguishes pruning passes within
+the maintenance flow; it does not identify the request that caused maintenance.
+
+The object aggregates observations across the pruning pass:
+
+- `admissionMs`, `cachedAdmissions`, and `asyncAdmissions` measure database
+  acquisition and count its observed modes. Admission time ends at callback entry
+  or acquisition failure and can include shared admission and integrity-check waits.
+  A refusal before mode selection adds admission time without incrementing either mode count.
+- `checkpointMs`, `checkpointMaxMs`, and `checkpointCalls` report total time,
+  longest call, and calls entered. `checkpointIncomplete` counts calls returning
+  false, which can mean a busy checkpoint or an error; it does not identify a lock
+  holder or distinguish those outcomes. A thrown checkpoint contributes to call
+  count and time without incrementing `checkpointIncomplete`.
+- `vacuumMs`, `vacuumPasses`, and `vacuumPagesRequested` measure incremental vacuum
+  calls and their requested page counts. Requested pages are not confirmed
+  reclaimed pages.
+- `queryMs` covers existing archive-presence, candidate, unpublished-name, and
+  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  transaction.
+- `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
+  existing file-removal outcomes. `removedFiles` counts successful canonical and
+  legacy removals. `missingFiles` counts canonical removal attempts that return
+  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  under `failedRemovals`; the legacy count includes missing paths, non-files,
+  and stat or removal failures.
+- `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
+  including failures and time queued for the measurement Worker, scanning, and
+  returning the result. `legacyInventoryMs` covers legacy file inventory,
+  filtering, and sorting.
+
+All durations are wall time, including asynchronous waits, rather than CPU
+measurements. `completed: false` retains partial observations when pruning
+throws; an absent stage timing field means that stage was not entered.
+`completed: true` means the pruning pass returned normally. It does not prove
+that every checkpoint completed, every removal succeeded, or the high-water
+target was reached. Rounding and unmeasured work can leave a remainder relative
+to `writerExecutionMs`; `checkpointMaxMs` is already included in `checkpointMs`.
+
+These fields reuse existing operations without additional store reads, per-file
+records, paths, names, or content. They do not change the warning threshold,
+checkpoint mode or timeout, or archive-retention behavior.
 
 ### Slow reply preparation
 

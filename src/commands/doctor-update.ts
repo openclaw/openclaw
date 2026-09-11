@@ -9,7 +9,6 @@ import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { tryResolveInvocationCwd, UpdatePreMutationError } from "../cli/update-cli/shared.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
-import { withOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-managed-context.js";
 import {
   continueMigratedUpdateInFreshProcess,
   inspectActivatedUpdateState,
@@ -27,6 +26,7 @@ import {
 } from "../cli/update-cli/update-command-run.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "../cli/update-cli/update-command-service-command.js";
 import {
+  withOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
   resolveUpdatedInstallCommandEnv,
 } from "../cli/update-cli/update-command-service-env.js";

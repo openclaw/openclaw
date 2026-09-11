@@ -1,6 +1,6 @@
 {
   "id": "lobster",
-  "categories": ["tools"],
+  "categories": ["agent-orchestration"],
   "activation": {
     "onStartup": true
   },

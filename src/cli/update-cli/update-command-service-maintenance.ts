@@ -26,7 +26,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
@@ -333,7 +332,7 @@ type ManagedServiceStopParams = {
     PreManagedServiceStop,
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
-  activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
+  allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 };
@@ -371,6 +370,22 @@ async function stopManagedServiceBeforeMutableUpdate(
   const assertCurrent = () => {
     assertNative?.();
     assertExecutor();
+  };
+  // A Linux systemd scope changes cgroup ownership, not Unix ancestry. Reprove
+  // the exact current handoff lease at each boundary that can stop its ancestor.
+  const resolveAncestryBlock = async (state: GatewayServiceState) => {
+    const blockMessage = gatewayMaintenanceBlockMessage(state, params.root);
+    if (
+      !blockMessage ||
+      ((params.phase === "inspect" || process.platform === "linux") &&
+        (await isCurrentManagedServiceUpdateHandoffProcess({
+          root: params.root,
+          runId: params.updateRun?.runId,
+        })))
+    ) {
+      return undefined;
+    }
+    return blockMessage;
   };
   assertCurrent();
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -424,6 +439,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     root: params.root,
     state: serviceState,
     preManagedServiceStop: params.expectedService,
+    allowInstallRootChange: params.allowInstallRootChange,
   });
   assertCurrent();
   if (params.phase) {
@@ -492,17 +508,8 @@ async function stopManagedServiceBeforeMutableUpdate(
   }
   if (params.phase === "inspect") {
     const blockMessage = params.handoffFromGateway
-      ? gatewayMaintenanceBlockMessage(serviceState, params.root)
+      ? await resolveAncestryBlock(serviceState)
       : undefined;
-    if (
-      blockMessage &&
-      (await isCurrentManagedServiceUpdateHandoffProcess({
-        root: params.root,
-        runId: params.updateRun?.runId,
-      }))
-    ) {
-      return inspected;
-    }
     return blockMessage ? { ...inspected, blockMessage } : inspected;
   }
   const suspendTask = async () => {
@@ -547,7 +554,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
   }
-  const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root);
+  const blockMessage = await resolveAncestryBlock(serviceState);
   if (blockMessage) {
     return { ...inspected, blockMessage };
   }
@@ -568,20 +575,15 @@ async function stopManagedServiceBeforeMutableUpdate(
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
-    await revalidateManagedGatewayServiceAfterUpdate({
+    const currentVerdict = await revalidateManagedGatewayServiceAfterUpdate({
       state: currentState,
       root: params.root,
-      preManagedServiceStop: {
-        serviceManagerUid: inspected.serviceManagerUid,
-        serviceEnv: serviceState.env,
-        serviceUpdateVerdict:
-          serviceUpdateVerdict.kind === "owned"
-            ? { ...serviceUpdateVerdict, refreshDefinition: false }
-            : serviceUpdateVerdict,
-      },
+      preManagedServiceStop: inspected,
+      allowInstallRootChange: params.allowInstallRootChange,
     });
+    assertGatewayServiceAdmissionUnchanged(inspected, currentVerdict);
     assertCurrent();
-    const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
+    const currentBlockMessage = await resolveAncestryBlock(currentState);
     if (currentBlockMessage) {
       throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
     }
@@ -591,39 +593,13 @@ async function stopManagedServiceBeforeMutableUpdate(
         env: params.updateRun.env,
       });
     }
-    const stop = async (assertStopCurrent: () => void) => {
-      if (params.activatedInstall) {
-        // Activation Doctor may have stamped newer config. Keep its service stop
-        // in that runtime too; the old parent's destructive-action guard is valid.
-        const stopped = await runUpdatedInstallGatewayCommand(
-          {
-            result: { root: params.root },
-            opts: { json: params.jsonMode, run: params.updateRun },
-            invocationEnv: process.env,
-            serviceEnv: currentState.env,
-            timeoutMs: params.timeoutMs,
-            nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
-            invocationCwd: params.activatedInstall.invocationCwd,
-            assertCurrent: assertStopCurrent,
-          },
-          "stop",
-        );
-        if (stopped !== "accepted") {
-          throw new Error(
-            "Updated Gateway CLI did not confirm the service stopped for plugin maintenance.",
-          );
-        }
-      } else {
-        await service.stop({
-          env: currentState.env,
-          stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
-          assertCurrent: assertStopCurrent,
-          // Native stop may unload the service before a later port check fails.
-          onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
-        });
-      }
-    };
-    await stop(assertCurrent);
+    await service.stop({
+      env: currentState.env,
+      stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+      assertCurrent,
+      // Native stop may unload the service before a later port check fails.
+      onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
+    });
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);

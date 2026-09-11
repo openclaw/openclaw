@@ -9,7 +9,6 @@ import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
 // Region close collapses the detail slot but leaves sidebarContent set, so
 // "task content exists" is not "panel visible"; consumers (panel render, rail
@@ -31,7 +30,6 @@ export function renderChatDetailSlot(params: {
   content: SidebarContent;
   host: ChatPageHost;
   layout: SidebarLayout;
-  transcript: ChatTranscriptController;
 }): TemplateResult {
   const { content, host } = params;
   const taskId = openTaskDetailId(content, params.layout);
@@ -41,10 +39,9 @@ export function renderChatDetailSlot(params: {
         ? html``
         : renderTaskDetailPanel({
             backgroundTasks: params.backgroundTasks,
-            chat: params.chat,
             host,
+            loadFullAssistantMessage: params.chat.loadFullAssistantMessage,
             task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
-            transcript: params.transcript,
           }),
   };
   return (

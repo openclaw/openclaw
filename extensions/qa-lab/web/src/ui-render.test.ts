@@ -84,6 +84,32 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
   };
 }
 
+function rawRequestCaptureState(params: { payload: string; contentType: string }): UiState {
+  return evidenceState({
+    activeTab: "capture",
+    captureDetailView: "payload",
+    capturePayloadDetailLayout: "raw",
+    captureEvents: [
+      {
+        contentType: params.contentType,
+        dataText: params.payload,
+        direction: "outbound",
+        flowId: "flow-1",
+        host: "api.example.test",
+        id: 1,
+        kind: "request",
+        method: "POST",
+        path: "/v1/messages",
+        payloadPreview: params.payload,
+        protocol: "https",
+        provider: "mock",
+        ts: 1,
+      },
+    ],
+    selectedCaptureEventKey: "1:flow-1:1:request",
+  });
+}
+
 describe("QA Lab UI evidence render", () => {
   it("keeps same-id conversations isolated by account and kind", () => {
     const selectedConversationKey = JSON.stringify(["account-a", "channel", "shared"]);
@@ -521,29 +547,7 @@ describe("QA Lab UI evidence render", () => {
     const payload =
       '{"message":"visible context","message":"duplicate context","completion_tokens":100,"cookies":["session=abc"],"apiToken":"secret-token","tokenValue":"token-value-secret","authTokens":["auth-token-secret"],"tokens":{"refresh":"refresh-token-secret"},"AWS_SECRET_ACCESS_KEY":"aws-secret","secretAccessKey":"access-secret","x-goog-api-key":"goog-secret","nested":{"password":"secret-password"}}';
     const html = renderQaLabUi(
-      evidenceState({
-        activeTab: "capture",
-        captureDetailView: "payload",
-        capturePayloadDetailLayout: "raw",
-        captureEvents: [
-          {
-            contentType: "application/json",
-            dataText: payload,
-            direction: "outbound",
-            flowId: "flow-1",
-            host: "api.example.test",
-            id: 1,
-            kind: "request",
-            method: "POST",
-            path: "/v1/messages",
-            payloadPreview: payload,
-            protocol: "https",
-            provider: "mock",
-            ts: 1,
-          },
-        ],
-        selectedCaptureEventKey: "1:flow-1:1:request",
-      }),
+      rawRequestCaptureState({ payload, contentType: "application/json" }),
     );
 
     expect(html).toContain("visible context");
@@ -636,29 +640,7 @@ describe("QA Lab UI evidence render", () => {
   it("redacts secret-like fields when capture cuts inside a JSON value", () => {
     const payload = '{"apiToken":"secret-token';
     const html = renderQaLabUi(
-      evidenceState({
-        activeTab: "capture",
-        captureDetailView: "payload",
-        capturePayloadDetailLayout: "raw",
-        captureEvents: [
-          {
-            contentType: "application/json",
-            dataText: payload,
-            direction: "outbound",
-            flowId: "flow-1",
-            host: "api.example.test",
-            id: 1,
-            kind: "request",
-            method: "POST",
-            path: "/v1/messages",
-            payloadPreview: payload,
-            protocol: "https",
-            provider: "mock",
-            ts: 1,
-          },
-        ],
-        selectedCaptureEventKey: "1:flow-1:1:request",
-      }),
+      rawRequestCaptureState({ payload, contentType: "application/json" }),
     );
 
     expect(html).toContain("[redacted]");
@@ -669,31 +651,7 @@ describe("QA Lab UI evidence render", () => {
     ["head", `${"a".repeat(279)}😀${"b".repeat(200)}`],
     ["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`],
   ])("keeps the bounded capture %s free of lone surrogates", (_edge, payload) => {
-    const html = renderQaLabUi(
-      evidenceState({
-        activeTab: "capture",
-        captureDetailView: "payload",
-        capturePayloadDetailLayout: "raw",
-        captureEvents: [
-          {
-            contentType: "text/plain",
-            dataText: payload,
-            direction: "outbound",
-            flowId: "flow-1",
-            host: "api.example.test",
-            id: 1,
-            kind: "request",
-            method: "POST",
-            path: "/v1/messages",
-            payloadPreview: payload,
-            protocol: "https",
-            provider: "mock",
-            ts: 1,
-          },
-        ],
-        selectedCaptureEventKey: "1:flow-1:1:request",
-      }),
-    );
+    const html = renderQaLabUi(rawRequestCaptureState({ payload, contentType: "text/plain" }));
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
     expect(html).not.toMatch(loneSurrogate);

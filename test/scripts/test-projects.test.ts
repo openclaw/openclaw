@@ -460,7 +460,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    "src/system-agent/setup-inference-persist.ts",
+    "src/system-agent/setup-inference-turn.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",

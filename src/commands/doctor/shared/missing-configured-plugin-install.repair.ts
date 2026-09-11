@@ -76,6 +76,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
    * the disk-loaded install-record snapshot. Pass the in-memory records
@@ -91,6 +92,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
@@ -139,10 +141,35 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
-  // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, () =>
-    repairMissingPluginInstallsWithLease(params),
-  );
+  // Install attempts can normalize exceptions into ordinary repair outcomes.
+  // Preserve the initiating owner's first refusal, including transient read
+  // failures, across that conversion and every later persistent effect.
+  let effectFailure: { error: unknown } | undefined;
+  const beforePersistentEffect = params.beforePersistentEffect
+    ? async () => {
+        if (effectFailure) {
+          throw effectFailure.error;
+        }
+        try {
+          await params.beforePersistentEffect?.();
+        } catch (error) {
+          effectFailure ??= { error };
+          throw effectFailure.error;
+        }
+      }
+    : undefined;
+  try {
+    // Baseline, awaited review, package publication, and the index write share one generation.
+    const result = await withPluginLifecycleLease({ env: params.env }, () =>
+      repairMissingPluginInstallsWithLease({ ...params, beforePersistentEffect }),
+    );
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    return result;
+  } catch (error) {
+    throw effectFailure ? effectFailure.error : error;
+  }
 }
 
 async function repairMissingPluginInstallsWithLease(
@@ -407,6 +434,8 @@ async function repairMissingPluginInstallsWithLease(
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
+        // Authority refusal is not a recoverable package-cleanup warning.
+        await params.beforePersistentEffect?.();
         try {
           await rm(removalPath, { recursive: true, force: true });
         } catch (error) {

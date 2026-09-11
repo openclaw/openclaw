@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -287,17 +295,73 @@ function runReleaseInputCapture(params: {
   const outputPath = path.join(tempDir, "output");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   try {
+    const tooling = path.join(tempDir, "workflow");
+    for (const file of [
+      "scripts/preflight-frozen-target-contracts.mjs",
+      "scripts/lib/frozen-target-source.mjs",
+      "scripts/lib/docker-e2e-plan.mts",
+      "scripts/lib/docker-e2e-scenarios.mts",
+      "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/frozen-target-compat.sh",
+      "scripts/resolve-frozen-codex-live-suite.mjs",
+      "scripts/resolve-fs-safe-native-contract.mjs",
+      "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
+      "scripts/windows-cmd-helpers.mjs",
+      "package.json",
+      "pnpm-lock.yaml",
+      "scripts/plan-release-workflow-matrix.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/plugin-prerelease-test-plan.mts",
+      "scripts/plan-targeted-docker-lane-groups.mjs",
+      "scripts/lib/numeric-options.mjs",
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+      "scripts/github/validate-release-suite-filters.sh",
+      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
+    ]) {
+      mkdirSync(path.dirname(path.join(tooling, file)), { recursive: true });
+      cpSync(file, path.join(tooling, file), { recursive: true });
+    }
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "-C",
+          tooling,
+          ...args,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "candidate tooling fixture");
+    const toolingSha = git("rev-parse", "HEAD");
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      cwd: tempDir,
       encoding: "utf8",
       env: {
         ...process.env,
         ...stepEnv,
+        ADMISSION_TOOLING_ROOT: tooling,
+        ADMISSION_TOOLING_SHA: toolingSha,
         CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
         GITHUB_OUTPUT: outputPath,
         RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
         RELEASE_CROSS_OS_SUITE_FILTER_INPUT: "",
         RELEASE_FAIL_FAST_INPUT: "false",
-        RELEASE_FILTER_VALIDATOR: path.resolve("scripts/github/validate-release-suite-filters.sh"),
+        RELEASE_FILTER_VALIDATOR: path.join(
+          tooling,
+          "scripts/github/validate-release-suite-filters.sh",
+        ),
         RELEASE_LIVE_SUITE_FILTER_INPUT: "",
         RELEASE_MODE_INPUT: "both",
         RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",

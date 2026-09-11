@@ -1,7 +1,18 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  resolveManagedServiceUpdateFailureExitCode,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import {
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -10,6 +21,7 @@ import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
+  writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
@@ -170,6 +182,60 @@ export async function recordVerifiedUpdatePackageCleanup(
     );
   }
   return undefined;
+}
+
+export async function reportPreMutationUpdateFailure(params: {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  reason: string;
+  message?: string;
+  opts: UpdateCommandOptions;
+  controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+}): Promise<never> {
+  const run = params.opts.run;
+  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  if (run && active && params.message) {
+    recordUpdateRunPhase(
+      run.runId,
+      active.phase,
+      { origin: { nextAction: params.message } },
+      { env: run.env },
+    );
+  }
+  const result = completeUpdateCommandRun(
+    {
+      status: "error",
+      mode: params.installKind === "git" ? "git" : "unknown",
+      root: params.root,
+      reason: params.reason,
+      ...(params.opts.dryRun !== true
+        ? {
+            recovery: await (params.installKind === "git"
+              ? readCurrentGitUpdateRecovery(params.root)
+              : verifyPackageUpdateRecovery(params.root)),
+          }
+        : {}),
+      steps: [],
+      durationMs: 0,
+    },
+    params.opts.run,
+  );
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
+  if (params.opts.json && params.message) {
+    defaultRuntime.error(params.message);
+  }
+  printResult(result, params.opts, { nextAction: params.message });
+  throw new UpdateCommandFailure(
+    result,
+    resolveManagedServiceUpdateFailureExitCode(result),
+    params.message,
+  );
 }
 
 /** Write the terminal ledger and its visible result together after settlement. */

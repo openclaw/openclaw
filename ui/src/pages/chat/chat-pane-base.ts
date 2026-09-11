@@ -288,7 +288,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     onReaderScroll: () => this.state && handleChatScrollTakeover(this.state),
   });
-  protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
     target: () => {

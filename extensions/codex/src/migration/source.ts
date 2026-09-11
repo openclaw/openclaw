@@ -89,7 +89,7 @@ type PluginReadResult =
       error: string;
     };
 
-function defaultCodexHome(): string {
+export function defaultCodexHome(): string {
   const configuredHome = process.env.CODEX_HOME;
   // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
   return resolveHomePath(

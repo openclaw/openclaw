@@ -11,10 +11,12 @@ import {
   validatePluginsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
   fetchClawHubPluginDetail,
+  fetchClawHubPluginOverview,
+  type ClawHubPluginCatalogEntry,
+  type ClawHubPluginCategory,
 } from "../../infra/clawhub-plugin-catalog.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -185,21 +187,15 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
       const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
-      let published: Awaited<ReturnType<typeof fetchAllOfficialClawHubPlugins>> = [];
-      let publicationError: string | undefined;
-      if (includeBundledOnly) {
-        // Bundled distributions are first-party, so any published match belongs to ClawHub's
-        // official catalog. Read every page before classifying an unmatched entry as bundled-only.
-        try {
-          published = await fetchAllOfficialClawHubPlugins();
-        } catch (error) {
-          publicationError = `ClawHub is unavailable: ${formatErrorMessage(error)}. Bundled publication status could not be verified.`;
-        }
-      }
-      const canIncludeBundledOnly = includeBundledOnly && !publicationError;
       try {
-        const remote =
-          intent === "bundled"
+        const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+        const remote: {
+          items: ClawHubPluginCatalogEntry[];
+          categories?: ClawHubPluginCategory[];
+          nextCursor?: string;
+        } = overviewRequest
+          ? await fetchClawHubPluginOverview()
+          : intent === "bundled"
             ? { items: [] }
             : await fetchClawHubPluginCatalog({
                 query,
@@ -210,9 +206,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
               });
         const items = joinClawHubPluginCatalog({
           remote: remote.items,
-          published,
           local,
-          includeBundledOnly: canIncludeBundledOnly,
+          includeBundledOnly,
           intent,
           category: params.category,
           query: params.query,
@@ -223,8 +218,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           true,
           {
             items,
+            ...(overviewRequest ? { categories: remote.categories } : {}),
             ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
-            ...(publicationError ? { remoteError: publicationError } : {}),
           },
           undefined,
         );
@@ -234,27 +229,21 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           {
             items: joinClawHubPluginCatalog({
               remote: [],
-              published,
               local,
-              includeBundledOnly: canIncludeBundledOnly,
+              includeBundledOnly,
               intent,
               category: params.category,
               query: params.query,
               cursor: params.cursor,
             }),
             ...(params.cursor ? { nextCursor: params.cursor } : {}),
-            remoteError: [
-              publicationError,
-              `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-                canIncludeBundledOnly
-                  ? " Bundled plugins remain available."
-                  : intent === "all"
-                    ? " Installed plugins remain available."
-                    : ""
-              }`,
-            ]
-              .filter(Boolean)
-              .join(" "),
+            remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+              includeBundledOnly
+                ? " Bundled plugins remain available."
+                : intent === "all"
+                  ? " Installed plugins remain available."
+                  : ""
+            }`,
           },
           undefined,
         );

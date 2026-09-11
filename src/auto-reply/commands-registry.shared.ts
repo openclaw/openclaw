@@ -234,11 +234,9 @@ export function buildBuiltinChatCommands(
         ],
       },
     ),
-    defineBuiltinCommand("login", "Pair Codex login.", "management", "standard", {
+    defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
       nativeProviders: ["discord", "slack", "telegram"],
-      args: [
-        defineCommandArgument("provider", "Provider to pair", { choices: ["codex", "openai"] }),
-      ],
+      args: [defineCommandArgument("provider", "Provider or connection method")],
     }),
     defineBuiltinCommand(
       "openclaw",

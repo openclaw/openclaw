@@ -144,6 +144,48 @@ function fixture(
   return { root, selected, tooling, run, bin };
 }
 
+function survivorFiles(version = "2026.7.33", recipe = "config-recipe.mjs") {
+  const dir = "scripts/e2e/lib/upgrade-survivor";
+  const inertModule = [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync("selected-code-executed", "executed");',
+    'throw new Error("selected scenario executed");',
+  ].join("\n");
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ type: "module", version }),
+    [`${dir}/run.sh`]: "printf executed > selected-code-executed\nexit 97\n",
+    [`${dir}/assertions.mjs`]: inertModule,
+    [`${dir}/probe-gateway.mjs`]: inertModule,
+    [`${dir}/${recipe}`]: inertModule,
+  };
+  for (const section of [
+    "agents",
+    "channels-discord",
+    "channels-feishu",
+    "channels-matrix",
+    "channels-telegram",
+    "channels-whatsapp",
+    "gateway",
+    "models-openai",
+    "plugins-configured-installs",
+    "plugins-feishu",
+    "plugins",
+    "skills",
+  ]) {
+    files[`${dir}/config-recipe/${section}.json`] = "{}";
+  }
+  for (const path of [
+    "scripts/lib/npm-publish-plan.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/e2e/lib/plugin-index-sqlite.mjs",
+    "scripts/e2e/lib/env-limits.mjs",
+    "scripts/e2e/lib/text-file-utils.mjs",
+  ]) {
+    files[path] = `// ${path}\n${inertModule}`;
+  }
+  return files;
+}
+
 describe("frozen admission Docker consumer aliases", () => {
   const cliMetadata = "scripts/print-cli-backend-live-metadata.ts";
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
@@ -156,7 +198,7 @@ describe("frozen admission Docker consumer aliases", () => {
       legacy: "// Released metadata without the package resolver.",
       mode: "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE",
     },
-    ...["mcp-channels", "kitchen-sink-rpc"].map((lane) => ({
+    ...["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
       lane,
       consumer: "plugins",
       path: pluginAssertions,
@@ -257,14 +299,20 @@ describe("frozen admission Docker consumer aliases", () => {
     },
   );
 
-  it("deduplicates both plugin aliases without selecting kitchen-sink-plugin files", () => {
+  it("deduplicates plugin aliases without selecting kitchen-sink-plugin files", () => {
     const f = fixture({
       [pluginAssertions]: `${executionSentinel}\nexport function assertPluginTgzRemoved() {}\n`,
     });
-    const result = f.run({ docker: { lanes: ["mcp-channels", "kitchen-sink-rpc"] } });
+    const result = f.run({
+      docker: { lanes: ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"] },
+    });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker.lanes.toSorted()).toEqual(["kitchen-sink-rpc", "mcp-channels"]);
+    expect(record.docker.lanes.toSorted()).toEqual([
+      "kitchen-sink-rpc",
+      "mcp-channels",
+      "plugins-offline",
+    ]);
     expect(record.selection.consumers).toEqual(["plugins"]);
     expect(record.contracts).toEqual([
       {
@@ -288,6 +336,7 @@ describe("frozen admission Docker consumer aliases", () => {
     { lane: "live-gateway", removed: [pluginAssertions], consumer: "live-cli-backend" },
     { lane: "mcp-channels", removed: [cliMetadata], consumer: "plugins" },
     { lane: "kitchen-sink-rpc", removed: [cliMetadata], consumer: "plugins" },
+    { lane: "plugins-offline", removed: [cliMetadata], consumer: "plugins" },
     { lane: "docker-package-install", removed: [cliMetadata, pluginAssertions], consumer: null },
   ])("keeps unreadable unrelated contracts inert for $lane", ({ lane, removed, consumer }) => {
     const f = fixture({
@@ -308,6 +357,166 @@ describe("frozen admission Docker consumer aliases", () => {
     );
     expect(record.selectedSha).toBe(f.selected.sha);
     expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
+});
+
+describe("frozen admission upgrade Docker aliases", () => {
+  const lanes = ["root-managed-vps-upgrade", "update-restart-auth"];
+  const companion = "scripts/e2e/lib/plugin-index-sqlite.mjs";
+  const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
+
+  it.each(
+    lanes.flatMap((lane) =>
+      [
+        {
+          shape: "malformed version",
+          version: "invalid",
+          error: "selected upgrade target has an invalid release version",
+        },
+        {
+          shape: "unsupported correction",
+          version: "2026.7.33-1",
+          error: "unsupported extended-stable correction",
+        },
+        {
+          shape: "missing scenario",
+          version: "2026.7.33",
+          error: "selected extended-stable target lacks its scenario",
+        },
+        {
+          shape: "missing companion blob",
+          version: "2026.7.33",
+          error: "unable to read selected source",
+        },
+      ].map((value) => Object.assign({}, value, { lane })),
+    ),
+  )("rejects $lane with $shape before emitting admission", ({ lane, shape, version, error }) => {
+    const files =
+      shape === "missing companion blob"
+        ? survivorFiles(version)
+        : { "package.json": JSON.stringify({ type: "module", version }) };
+    const f = fixture(files);
+    if (shape === "missing companion blob") {
+      const tree = f.selected.git("rev-parse", "HEAD^{tree}");
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${companion}`);
+      for (const path of Object.keys(files).filter((file) => file !== companion)) {
+        expect(f.selected.git("rev-parse", `${f.selected.sha}:${path}`), path).not.toBe(oid);
+      }
+      f.selected.git("config", "remote.origin.url", "fixture::unavailable");
+      f.selected.git("config", "remote.origin.promisor", "true");
+      f.selected.git("config", "extensions.partialClone", "origin");
+      f.selected.git("config", "protocol.fixture.allow", "always");
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(readFileSync(join(f.selected.root, companion), "utf8")).toBe(files[companion]);
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(result.stdout).toBe("");
+    for (const root of [f.root, f.selected.root, f.tooling.root]) {
+      expect(existsSync(join(root, "selected-code-executed"))).toBe(false);
+    }
+    const currentOnly = f.run(
+      { docker: { lanes: [lane] } },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(currentOnly.status, currentOnly.stderr).toBe(0);
+    expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
+  });
+
+  it.each(
+    lanes.flatMap((lane) =>
+      [
+        { version: "2026.6.35", recipe: "config-recipe.mjs", train: "extended-stable" },
+        { version: "2026.7.33", recipe: "config-recipe.mts", train: "extended-stable" },
+        { version: "2026.9.9", recipe: "", train: "stable" },
+      ].map((value) => Object.assign({}, value, { lane })),
+    ),
+  )("admits $lane with committed $version contracts", ({ lane, version, recipe, train }) => {
+    const files = recipe
+      ? survivorFiles(version, recipe)
+      : { "package.json": JSON.stringify({ type: "module", version }) };
+    const f = fixture({
+      ...files,
+      [pluginAssertions]: "throw new Error('unselected plugin code executed');",
+    });
+    const oid = f.selected.git("rev-parse", `${f.selected.sha}:${pluginAssertions}`);
+    rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
+    expect(record.contracts).toHaveLength(1);
+    expect(record.contracts[0].modes).toEqual({
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      releaseTrain: train,
+    });
+    expect(record.selectedSha).toBe(f.selected.sha);
+    expect(record.toolingSha).toBe(f.tooling.sha);
+    expect(record.contracts[0].files).toHaveLength(recipe ? 5 : 0);
+    if (recipe) {
+      expect(record.contracts[0].files).toContainEqual({ source: "selected", path: companion });
+    } else {
+      expect(existsSync(join(f.selected.root, "scripts/e2e/lib/upgrade-survivor"))).toBe(false);
+    }
+    for (const root of [f.root, f.selected.root, f.tooling.root]) {
+      expect(existsSync(join(root, "selected-code-executed"))).toBe(false);
+      expect(existsSync(join(root, "node_modules"))).toBe(false);
+    }
+  });
+
+  it("deduplicates upgrade aliases and existing family without dropping the plugin consumer", () => {
+    const f = fixture({ "package.json": '{"type":"module","version":"2026.9.9"}' });
+    const selected = [...lanes, "upgrade-survivor", "plugins-offline"];
+    const result = f.run({ docker: { lanes: selected } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker.lanes.toSorted()).toEqual(selected.toSorted());
+    expect(record.selection.consumers).toEqual(["plugins", "upgrade-survivor"]);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual([
+      "plugins",
+      "upgrade-survivor",
+    ]);
+  });
+
+  it.each([
+    "plugins-offline",
+    "docker-package-install",
+    "live-cli-backend-claude",
+    "live-cli-backend-gemini",
+    "update-first-hop-compat",
+    "update-run-package-self-upgrade",
+    "release-user-journey",
+    "release-upgrade-user-journey",
+  ])("keeps unselected upgrade contracts inert for %s", (lane) => {
+    const files: Record<string, string> = {
+      "package.json": '{"type":"module","version":"invalid"}',
+      "src/infra/clawhub-install-trust.ts": "throw new Error('unselected upgrade code executed');",
+      "scripts/print-cli-backend-live-metadata.ts":
+        "throw new Error('unselected CLI code executed');",
+    };
+    if (lane === "update-first-hop-compat") {
+      files["scripts/runtime-postbuild.mts"] =
+        `throw new Error("selected postbuild executed");\n${readFileSync("scripts/runtime-postbuild.mts", "utf8")}`;
+    }
+    const f = fixture(files);
+    for (const path of [
+      "src/infra/clawhub-install-trust.ts",
+      "scripts/print-cli-backend-live-metadata.ts",
+    ]) {
+      const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
+      rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    }
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
+    expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
+      record.selection.consumers,
+    );
   });
 });
 
@@ -862,38 +1071,8 @@ describe("frozen admission entry", () => {
     "checks the selected survivor directory closure: %s",
     (shape) => {
       const dir = "scripts/e2e/lib/upgrade-survivor";
-      const files: Record<string, string> = {
-        [`${dir}/run.sh`]: "do not execute",
-        [`${dir}/assertions.mjs`]: "throw new Error('do not execute');",
-        [`${dir}/probe-gateway.mjs`]: "throw new Error('do not execute');",
-        [`${dir}/config-recipe.mjs`]: "throw new Error('do not execute');",
-      };
-      for (const section of [
-        "agents",
-        "channels-discord",
-        "channels-feishu",
-        "channels-matrix",
-        "channels-telegram",
-        "channels-whatsapp",
-        "gateway",
-        "models-openai",
-        "plugins-configured-installs",
-        "plugins-feishu",
-        "plugins",
-        "skills",
-      ]) {
-        files[`${dir}/config-recipe/${section}.json`] = "{}";
-      }
+      const files = survivorFiles();
       const companion = "scripts/e2e/lib/plugin-index-sqlite.mjs";
-      for (const path of [
-        "scripts/lib/npm-publish-plan.mjs",
-        "scripts/windows-cmd-helpers.mjs",
-        companion,
-        "scripts/e2e/lib/env-limits.mjs",
-        "scripts/e2e/lib/text-file-utils.mjs",
-      ]) {
-        files[path] = `// selected ${path}`;
-      }
       if (shape === "missing run") {
         delete files[`${dir}/run.sh`];
       }

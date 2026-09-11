@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  browser: TranslationMap & { errors: TranslationMap };
   configPage: TranslationMap;
   connection: TranslationMap;
   configView: TranslationMap;
@@ -1008,7 +1009,7 @@ export const en: TranslationMap & {
     browse: "Browse folders",
     browseRequiresAdmin:
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-    connectMachine: "Connect a machine…",
+    connectMachine: "Connect a machine",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",
@@ -2332,15 +2333,7 @@ export const en: TranslationMap & {
       "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
     inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
     annotationSent: "Annotation added to the chat composer.",
-    errors: {
-      requestFailed: "Browser request failed: {error}",
-      screenshotPathMissing: "Browser screenshot did not return a media path.",
-      screenshotFetchTimedOut: "Screenshot fetch timed out.",
-      screenshotFetchFailed: "Screenshot fetch failed ({status}).",
-      screenshotReadFailed: "Screenshot read failed.",
-      screenshotDecodeFailed: "Screenshot decode failed.",
-      canvasUnavailable: "Canvas 2D context unavailable.",
-    },
+    errors: {},
     annotatePrompt: {
       browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
@@ -3106,6 +3099,8 @@ export const en: TranslationMap & {
     noFeaturedResults: "No featured plugins are available right now.",
     exploreTitle: "Explore plugins",
     loadingDiscovery: "Loading ClawHub plugins…",
+    loadMore: "Load more",
+    loadingMore: "Loading more…",
     discoveryOffline: "Connect to browse plugins from ClawHub.",
     noDiscoveryResults: "No ClawHub plugins match this view.",
     searchClawHub: "Search ClawHub plugins",
@@ -4067,8 +4062,7 @@ export const en: TranslationMap & {
       dismissing: "Dismissing…",
       emptyTitle: "No mentions yet",
       emptyBody: "When someone mentions you in a chat, it appears here.",
-      retention:
-        "Mentions are kept for up to seven days. Gateway restarts preserve your Inbox and dismissals.",
+      retention: "Mentions expire after 7 days.",
       notifications: "Notification settings",
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
@@ -4652,6 +4646,7 @@ export const en: TranslationMap & {
       tokensWrittenToCache: "Tokens written to cache",
       tokensReadFromCache: "Tokens read from cache",
       noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
       systemPromptBreakdown: "System Prompt Breakdown",
       collapse: "Collapse",
       collapseAll: "Collapse All",
@@ -5626,7 +5621,7 @@ export const en: TranslationMap & {
       positionUserMessage: "User message",
       positionAssistantMessage: "Assistant message",
       positionMarkerHint:
-        "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
+        "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
@@ -5964,6 +5959,9 @@ export const en: TranslationMap & {
       statusRunningMany: "{count} running tasks",
       statusPreviewMore: "+{count} more",
       stopTask: "Stop {title}",
+      now: "Now",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
       toolUseOne: "1 tool use",
       toolUseMany: "{count} tool uses",
       detailLoading: "Loading task details…",

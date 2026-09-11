@@ -124,31 +124,36 @@ type PolicyDigest = {
   omittedLines: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+function resolveBootstrapCharLimit(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | null | undefined,
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  fallback: number,
+): number {
   const raw =
     cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapMaxChars ??
-        cfg.agents?.defaults?.bootstrapMaxChars)
-      : cfg?.agents?.defaults?.bootstrapMaxChars;
+      ? (resolveAgentConfig(cfg, agentId)?.[key] ?? cfg.agents?.defaults?.[key])
+      : cfg?.agents?.defaults?.[key];
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
-  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+  return fallback;
+}
+
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "bootstrapMaxChars", DEFAULT_BOOTSTRAP_MAX_CHARS);
 }
 
 export function resolveBootstrapTotalMaxChars(
   cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
-  const raw =
-    cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapTotalMaxChars ??
-        cfg.agents?.defaults?.bootstrapTotalMaxChars)
-      : cfg?.agents?.defaults?.bootstrapTotalMaxChars;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+  return resolveBootstrapCharLimit(
+    cfg,
+    agentId,
+    "bootstrapTotalMaxChars",
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  );
 }
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {

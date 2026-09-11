@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   replaceSessionEntry,
@@ -90,6 +91,9 @@ describe("current cron delivery origin", () => {
         sql.includes('from "session_nodes"') ? "sessions" : null,
       );
       const jobs = Array.from({ length: 53 }, (_, index) => ({ ...job, id: `preview-${index}` }));
+      const agentsRoot = path.dirname(path.dirname(path.dirname(storePath)));
+      // Observe the real filesystem call; the discovery owner and its results stay intact.
+      const rosterReads = vi.spyOn(fs, "readdirSync");
       try {
         const previews = await resolveCronDeliveryPreviews({ cfg, jobs });
         expect(Object.keys(previews)).toEqual(jobs.map((entry) => entry.id));
@@ -100,8 +104,12 @@ describe("current cron delivery origin", () => {
         ).toBe(true);
         // One store-sized read scope, independent of the number of repeated jobs.
         expect(reads.rowCounts.sessions).toBeLessThanOrEqual(4 * 65);
+        expect(
+          rosterReads.mock.calls.filter(([directory]) => directory === agentsRoot),
+        ).toHaveLength(1);
       } finally {
         reads.restore();
+        rosterReads.mockRestore();
       }
       await replaceSessionEntry(
         { agentId: "main", storePath, sessionKey: job.sessionKey! },
@@ -113,12 +121,20 @@ describe("current cron delivery origin", () => {
           }),
         },
       );
-      const refreshed = await resolveCronDeliveryPreviews({ cfg, jobs });
-      expect(
-        Object.values(refreshed).every(
-          (preview) => preview.label === "announce -> telegram:recipient",
-        ),
-      ).toBe(true);
+      const refreshedRosterReads = vi.spyOn(fs, "readdirSync");
+      try {
+        const refreshed = await resolveCronDeliveryPreviews({ cfg, jobs });
+        expect(
+          Object.values(refreshed).every(
+            (preview) => preview.label === "announce -> telegram:recipient",
+          ),
+        ).toBe(true);
+        expect(
+          refreshedRosterReads.mock.calls.filter(([directory]) => directory === agentsRoot),
+        ).toHaveLength(1);
+      } finally {
+        refreshedRosterReads.mockRestore();
+      }
     });
   });
 

@@ -775,7 +775,7 @@ describe("prepareCliRunContext", () => {
       };
       try {
         const before = await fixture.prepare(input);
-        persistHeartbeatOutcome({
+        await persistHeartbeatOutcome({
           ...sessionTarget,
           runSessionKey: "agent:main:main:heartbeat",
           occurredAt: 1,
@@ -829,7 +829,7 @@ describe("prepareCliRunContext", () => {
     "does not consume silent heartbeat context for %s CLI preparation",
     async (kind) => {
       const { sessionTarget, dir } = fixture.session;
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...sessionTarget,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -857,9 +857,9 @@ describe("prepareCliRunContext", () => {
             "Retained CLI outcome",
           );
         }
-        expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-          "Retained CLI outcome",
-        );
+        expect(
+          (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+        ).toBe("Retained CLI outcome");
       } finally {
         admission.close();
       }
@@ -868,7 +868,7 @@ describe("prepareCliRunContext", () => {
 
   it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
     const { sessionTarget } = fixture.session;
-    persistHeartbeatOutcome({
+    await persistHeartbeatOutcome({
       ...sessionTarget,
       runSessionKey: "agent:main:main:heartbeat",
       occurredAt: 1,
@@ -890,9 +890,9 @@ describe("prepareCliRunContext", () => {
         sessionKey: sessionTarget.sessionKey,
       }),
     ).rejects.toThrow("authority");
-    expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-      "Keep revoked-owner outcome",
-    );
+    expect(
+      (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
+    ).toBe("Keep revoked-owner outcome");
   });
 
   it("carries the session-key-derived workspace owner into prepared params", async () => {

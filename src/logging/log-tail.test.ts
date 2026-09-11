@@ -187,6 +187,38 @@ describe("readConfiguredLogTail", () => {
     expect(fileShrink.skippedBytes).toBeUndefined();
   });
 
+  it.each(["missing", "empty"])(
+    "resets a positive cursor when its file becomes %s",
+    async (state) => {
+      const { readConfiguredLogTail } = await import("./log-tail.js");
+      const file = path.join(tempDirs.make("openclaw-log-tail-"), "configured.log");
+      await fs.writeFile(file, "retired record\n");
+      setLoggerOverride({ file });
+      const initial = await readConfiguredLogTail();
+
+      if (state === "missing") {
+        await fs.unlink(file);
+      } else {
+        await fs.writeFile(file, "");
+      }
+      const cleared = await readConfiguredLogTail({ cursor: initial.cursor });
+      expect.soft(cleared).toMatchObject({ cursor: 0, size: 0, lines: [], reset: true });
+      for (const cursor of [undefined, 0]) {
+        expect(await readConfiguredLogTail({ cursor })).toMatchObject({
+          cursor: 0,
+          lines: [],
+          reset: false,
+        });
+      }
+
+      await fs.writeFile(file, "replacement record\n");
+      expect(await readConfiguredLogTail({ cursor: cleared.cursor })).toMatchObject({
+        lines: ["replacement record"],
+        reset: false,
+      });
+    },
+  );
+
   it("keeps the first line when the byte window starts exactly after a newline", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");

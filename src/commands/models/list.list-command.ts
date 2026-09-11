@@ -14,11 +14,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../../gateway/call.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { resolveModelsTargetAgent } from "./shared.js";
+import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
 // The catalog worker permits three minutes; leave room for connection and result projection.
 const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;

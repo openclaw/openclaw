@@ -82,9 +82,10 @@ export function createWarmProvider(
   > = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(
-    async (params) => params?.binary ?? "crabbox",
-  );
+  vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
+    binary: params?.binary ?? "crabbox",
+    version: "0.55.0",
+  }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
   const provider = createCrabboxWorkerProvider({

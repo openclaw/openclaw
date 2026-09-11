@@ -16,7 +16,7 @@ import {
 import { toolsEffectiveTestDependencies } from "../gateway/server-methods/tools-effective.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { refreshPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { refreshPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
@@ -309,7 +309,7 @@ module.exports = {
       const manifest: Record<string, unknown> = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
       manifest.syntheticAuthRefs = [provider];
       fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
-      refreshPersistedInstalledPluginIndexSync({
+      refreshPersistedInstalledPluginIndex({
         config,
         workspaceDir,
         stateDir: state.stateDir,
@@ -599,7 +599,7 @@ describe("cold dynamic-model effective inventory", () => {
       expect(fixture.connections).toHaveLength(1);
       const rootConnection = fixture.connections[0]!;
       const controller = new AbortController();
-      const first = acquireReadOnlyPreparedModelRuntime(input, controller.signal);
+      const first = acquireReadOnlyPreparedModelRuntime(input, { abortSignal: controller.signal });
       let replacement: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       let pendingReplacement: ReturnType<typeof acquireReadOnlyPreparedModelRuntime> | undefined;
       try {

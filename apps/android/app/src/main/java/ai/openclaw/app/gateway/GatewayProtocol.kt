@@ -933,6 +933,9 @@ enum class GatewayMethod(
   PluginsCatalogGet("plugins.catalog.get"),
   TasksHistory("tasks.history"),
   EnvironmentsPrepare("environments.prepare"),
+  ModelsAuthRefresh("models.authRefresh"),
+  ModelsAuthLogin("models.authLogin"),
+  ModelsAuthSetApiKey("models.authSetApiKey"),
 }
 
 enum class GatewayEvent(

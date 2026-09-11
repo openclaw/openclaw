@@ -54,7 +54,7 @@ export type SourceModelFields = ReadonlyMap<
   { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
 >;
 
-type ProviderModelCatalog = {
+export type ProviderModelCatalog = {
   api?: string;
   baseUrl?: string;
   headers?: ProviderConfig["headers"];
@@ -74,6 +74,22 @@ type ProviderModelMergeOptions = {
   sourceModelFields?: SourceModelFields;
   preserveConfiguredModelMembership?: boolean;
 };
+
+export function buildSourceModelFields(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+): SourceModelFields {
+  return new Map(
+    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
+      (provider.models ?? []).map(
+        (model) =>
+          [
+            JSON.stringify([providerId, model.id.trim()]),
+            { inputOmitted: !Object.hasOwn(model, "input"), cost: model.cost },
+          ] as const,
+      ),
+    ),
+  );
+}
 
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {

@@ -211,9 +211,9 @@ async function runDoctorHealthFlowWithResult(
           env: process.env,
         }),
       });
-      const { assertConfiguredWorkspaceStateReady } =
+      const { assertConfiguredWorkspaceStateReadyForDoctor } =
         await import("../agents/workspace-state-dirs.js");
-      assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
+      await assertConfiguredWorkspaceStateReadyForDoctor({ cfg: ctx.cfg });
       const { assertNoPendingLegacyExecApprovals } =
         await import("../infra/exec-approvals-migration-gate.js");
       assertNoPendingLegacyExecApprovals({ operation: "doctor" });

@@ -2,7 +2,10 @@
 import path from "node:path";
 import { vi } from "vitest";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
-import { withUpdateCommandExecutorChild } from "../cli/update-cli/update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutorChild,
+} from "../cli/update-cli/update-command-executor.js";
 
 export async function runDoctorUpdateChild(
   run: NonNullable<UpdateCommandOptions["run"]>,
@@ -23,30 +26,34 @@ export async function runDoctorUpdateChild(
     const {grant,payload}=JSON.parse(fs.readFileSync(0,"utf8"));
     await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{${body}});
   `;
-  return withUpdateCommandExecutorChild(fence, async (grant, beforeInput) => {
-    const result = await runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        "--import",
-        path.resolve("scripts/tsx.mjs"),
-        "--input-type=module",
-        "-e",
-        script,
-      ],
-      {
-        input: JSON.stringify({ grant, payload }),
-        beforeInput,
-        baseEnv: {},
-        env: run.env,
-        timeoutMs: 20_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        onOutputChunk: (chunk) => onOutput?.(chunk.toString()),
-      },
-    );
-    if (result.code !== 0 || result.cleanup !== "normal") {
-      throw new Error(result.stderr || "Doctor child did not settle normally");
-    }
-    return result;
-  });
+  return withUpdateCommandExecutorChild(
+    fence,
+    captureUpdateCommandExecutorAuthority(fence).installKey,
+    async (grant, beforeInput) => {
+      const result = await runUtf8CommandWithTimeout(
+        [
+          process.execPath,
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          "--input-type=module",
+          "-e",
+          script,
+        ],
+        {
+          input: JSON.stringify({ grant, payload }),
+          beforeInput,
+          baseEnv: {},
+          env: run.env,
+          timeoutMs: 20_000,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          onOutputChunk: (chunk) => onOutput?.(chunk.toString()),
+        },
+      );
+      if (result.code !== 0 || result.cleanup !== "normal") {
+        throw new Error(result.stderr || "Doctor child did not settle normally");
+      }
+      return result;
+    },
+  );
 }

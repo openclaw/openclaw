@@ -321,6 +321,7 @@ describe("prepared model catalog access", () => {
       mocks.prepareSnapshot.mockResolvedValue(snapshot);
       mocks.refreshStaleCatalog.mockResolvedValue(staleCatalog);
       setPreparedModelFullCatalogAuth(staleCatalog, {
+        providerAuthLabels: new Map(),
         authStore: fullSnapshot.authStore,
         authModes: fullSnapshot.authModes,
       });
@@ -355,6 +356,7 @@ describe("prepared model catalog access", () => {
       mocks.prepareSnapshot.mockResolvedValue(snapshot);
       mocks.refreshStaleCatalog.mockRejectedValue(new Error("full discovery was awaited"));
       setPreparedModelFullCatalogAuth(snapshot.modelCatalog, {
+        providerAuthLabels: new Map(),
         authStore: fullSnapshot.authStore,
         authModes: fullSnapshot.authModes,
       });
@@ -425,7 +427,11 @@ describe("prepared model catalog access", () => {
       routeVariants: [],
     };
     const { authStore, ...snapshotFacts } = fullSnapshot;
-    setPreparedModelFullCatalogAuth(discoveredCatalog, { authStore, authModes: {} });
+    setPreparedModelFullCatalogAuth(discoveredCatalog, {
+      authStore,
+      authModes: {},
+      providerAuthLabels: new Map(),
+    });
     const loadFullModelCatalog = vi.fn(async () => discoveredCatalog);
     const snapshot = {
       ...snapshotFacts,
@@ -601,6 +607,7 @@ describe("prepared model catalog access", () => {
       loadFullModelCatalog: vi.fn().mockRejectedValue(new Error("unrequested discovery")),
     };
     setPreparedModelFullCatalogAuth(completedCatalog, {
+      providerAuthLabels: new Map(),
       authStore: fullSnapshot.authStore,
       authModes: fullSnapshot.authModes,
     });

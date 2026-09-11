@@ -14,8 +14,8 @@ import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-} from "./models-config.providers.normalize.js";
+} from "./models-config.providers.catalog.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 

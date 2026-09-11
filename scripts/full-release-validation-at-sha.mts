@@ -3,6 +3,7 @@
 import {
   execFileSync,
   spawnSync,
+  type ExecFileSyncOptionsWithBufferEncoding,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -321,6 +322,19 @@ function commandFailureMessage(error: unknown): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function isUnsupportedAllowEscapeSequencesFlag(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = (error as Error & { stderr?: unknown }).stderr;
+  const text =
+    typeof stderr === "string" ? stderr : Buffer.isBuffer(stderr) ? stderr.toString("utf8") : "";
+  return text
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .some((line) => line.trim() === "unknown flag: --allow-escape-sequences");
 }
 
 function createTemporaryRef(ref: string, sha: string, dryRun: boolean) {
@@ -1167,19 +1181,31 @@ async function readDispatchWitness(request: DispatchRequest, observed: DispatchR
     "Dispatch witness metadata changed from its exact artifact tuple",
   );
   // Keep credentials and redirects owned by the selected CLI; ZIP bytes must not be decoded.
-  const archiveBytes = execPlainGh(
-    [
-      "api",
-      "--method",
-      "GET",
-      `${artifactEndpoint}/zip`,
-      "--hostname",
-      "github.com",
-      "-H",
-      GH_NO_CACHE_HEADER,
-    ],
-    { ...GH_READ_OPTIONS, encoding: null, maxBuffer: MAX_WITNESS_ARCHIVE_BYTES },
-  );
+  const archiveArgs = [
+    "api",
+    "--method",
+    "GET",
+    `${artifactEndpoint}/zip`,
+    "--hostname",
+    "github.com",
+    "-H",
+    GH_NO_CACHE_HEADER,
+  ];
+  const archiveOptions = {
+    ...GH_READ_OPTIONS,
+    encoding: null,
+    maxBuffer: MAX_WITNESS_ARCHIVE_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  } satisfies ExecFileSyncOptionsWithBufferEncoding;
+  let archiveBytes: Uint8Array<ArrayBuffer>;
+  try {
+    archiveBytes = execPlainGh([...archiveArgs, "--allow-escape-sequences"], archiveOptions);
+  } catch (error) {
+    if (!isUnsupportedAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    archiveBytes = execPlainGh(archiveArgs, archiveOptions);
+  }
   requireDispatch(
     archiveBytes.byteLength === metadata.size_in_bytes &&
       `sha256:${createHash("sha256").update(archiveBytes).digest("hex")}` === metadata.digest,

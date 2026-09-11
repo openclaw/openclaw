@@ -233,7 +233,10 @@ export function isActiveRunSafeCommandTurn(params: {
             ? resolveTextCommand(`/${commandTurn.commandName}`, params.cfg)
             : null)
         )?.command;
-  return command?.activeRunSafe === true;
+  return (
+    command?.activeRunSafe === true ||
+    (command?.key === "login" && /^\/login\s+cancel$/iu.test(commandTurn.body?.trim() ?? ""))
+  );
 }
 
 /** Formats a command and optional raw argument string as slash-command text. */

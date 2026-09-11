@@ -189,10 +189,10 @@ describe("classifyControlUiRequest", () => {
         { kind: "not-control-ui" as const },
       ],
       [
-        "keeps the plugin HTTP root outside the SPA catch-all",
+        "serves the marketplace document at the plugin root",
         "/plugins",
         "GET",
-        { kind: "not-control-ui" as const },
+        { kind: "serve" as const, spaFallback: true },
       ],
       [
         "keeps API routes outside the SPA catch-all",

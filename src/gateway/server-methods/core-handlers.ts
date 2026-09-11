@@ -61,6 +61,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
   "models-auth-status": () =>
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
+  "models-auth-login": () =>
+    import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),

@@ -7,9 +7,9 @@ import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
   resolveVitestWorkerDeclaration,
-  vitestWorkerDeclarationEntries,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
+import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.

@@ -45,6 +45,8 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI d
 openclaw logs --follow
 ```
 
+If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail; filesystem read errors remain visible.
+
 ### Verbose vs. log levels
 
 - **File logs** are controlled exclusively by `logging.level`.
@@ -168,6 +170,23 @@ The gateway prints WebSocket protocol logs in two modes:
 
 - **Normal mode (no `--verbose`)**: only "interesting" RPC results print - errors (`ok=false`), slow calls (default threshold: `>= 50ms`), and parse errors.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
+
+With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
+handlers taking at least one second also emit `slow session list`. The record
+includes process/thread identity, the request trace, and `cacheRole`: a completed
+cache hit, an in-flight follower, a projection owner, or `unreached` if the handler
+failed before selecting a cache path. Followers can include `workTraceId` and
+`workSpanId` to identify the request producing their shared result. Successful
+list results report `selectedRowCount` for every cache role.
+
+Projection owners report phase totals, visibility-repair counts, synchronous
+preparation/row time, and `yieldWaitMs`/`yieldCount` for time spent awaiting the
+event loop. Hits and followers omit those projection counters. `rows` includes
+its synchronous and yielded intervals; do not add those details to the phase
+total again. `handlerElapsedMs` starts before parameter validation and excludes
+admission before the handler. The `response` phase includes the synchronous response callback. These are elapsed
+durations, not CPU time or proof of client receipt. No query text or session
+contents are included.
 
 ### WS log style
 

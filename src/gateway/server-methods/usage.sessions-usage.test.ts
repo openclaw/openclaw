@@ -105,9 +105,9 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
-import { testApi, usageHandlers } from "./usage.js";
+import { usageHandlers } from "./usage.js";
 
-const TEST_RUNTIME_CONFIG = {
+let TEST_RUNTIME_CONFIG = {
   agents: {
     list: [{ id: "main", default: true }, { id: "opus" }],
   },
@@ -215,7 +215,7 @@ async function withUsageState(
 
 describe("sessions.usage", () => {
   beforeEach(() => {
-    testApi.sessionsUsageCache.clear();
+    TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     vi.useRealTimers();
     vi.clearAllMocks();
   });

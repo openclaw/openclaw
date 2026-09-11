@@ -72,7 +72,7 @@ function resolveProviderModelRef(params: {
 }
 
 /** Preserve shipped self-prefixed context refs after exact configured-row selection. */
-export function resolveConfiguredProviderModel(
+function resolveConfiguredProviderModel(
   cfg: OpenClawConfig | null | undefined,
   provider: string,
   model: string,
@@ -176,6 +176,59 @@ export function resolveAnthropicFixedContextWindow(
     : ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
+/** Resolves an authored cap without lowering it to discovered model metadata. */
+export function resolveConfiguredContextTokenLimits(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "modelProvider"> & {
+    provider: string;
+    model: string;
+  },
+  // Guards require whole finite tokens; cache lookup retains its existing numeric projection.
+  normalize: (value: number | undefined) => number | null | undefined = (value) =>
+    typeof value === "number" && value > 0 ? value : undefined,
+): {
+  effectiveConfiguredTokens?: number;
+  configuredContextWindow?: number;
+  fixedContextWindow?: number;
+} {
+  const provider = params.provider.trim();
+  const model = params.model.trim();
+  const configuredModel = resolveConfiguredRuntimeModel(
+    params.cfg,
+    provider,
+    params.modelProvider,
+    model,
+  );
+  const extraParamSources = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider: normalizeProviderId(provider),
+    modelId: model,
+  });
+  const effectiveContext1M =
+    extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
+      ? extraParamSources.modelParams.context1m
+      : extraParamSources.defaultParams?.context1m;
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(
+    normalizeProviderId(provider),
+    model,
+    { claudeCli1M: effectiveContext1M === true },
+  );
+  const configuredContextTokens = normalize(configuredModel?.contextTokens) ?? undefined;
+  const configuredContextWindow = normalize(configuredModel?.contextWindow) ?? undefined;
+  // Fixed provider contracts deliberately ignore materialized catalog windows.
+  // Other runtimes must still keep an authored effective cap below its native window.
+  const configuredTokenLimit = fixedContextWindow ?? configuredContextWindow;
+  return {
+    configuredContextWindow,
+    fixedContextWindow,
+    effectiveConfiguredTokens:
+      configuredContextTokens === undefined
+        ? undefined
+        : configuredTokenLimit === undefined
+          ? configuredContextTokens
+          : Math.min(configuredContextTokens, configuredTokenLimit),
+  };
+}
+
 export function resolveContextTokensForModelFromCache(
   params: ContextTokenResolutionParams,
   lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
@@ -185,36 +238,15 @@ export function resolveContextTokensForModelFromCache(
   const explicitProvider = params.provider?.trim();
 
   if (ref && explicitProvider) {
-    const configuredModel = resolveConfiguredRuntimeModel(
-      params.cfg,
-      explicitProvider,
-      params.modelProvider,
-      ref.model,
-    );
-    const extraParamSources = resolveModelExtraParamSources({
-      config: params.cfg,
-      provider: ref.provider,
-      modelId: ref.model,
-    });
-    const effectiveContext1M =
-      extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
-        ? extraParamSources.modelParams.context1m
-        : extraParamSources.defaultParams?.context1m;
-    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model, {
-      claudeCli1M: effectiveContext1M === true,
-    });
-    const configuredContextTokens = readAuthoredModelContextTokens(configuredModel);
-    const configuredContextWindow =
-      typeof configuredModel?.contextWindow === "number" && configuredModel.contextWindow > 0
-        ? configuredModel.contextWindow
-        : undefined;
-    // Fixed provider contracts deliberately ignore materialized catalog windows.
-    // Other runtimes must still keep an authored effective cap below its native window.
-    const configuredTokenLimit = fixedContextWindow ?? configuredContextWindow;
-    if (configuredContextTokens !== undefined) {
-      return configuredTokenLimit === undefined
-        ? configuredContextTokens
-        : Math.min(configuredContextTokens, configuredTokenLimit);
+    const { effectiveConfiguredTokens, configuredContextWindow, fixedContextWindow } =
+      resolveConfiguredContextTokenLimits({
+        cfg: params.cfg,
+        provider: explicitProvider,
+        modelProvider: params.modelProvider,
+        model: ref.model,
+      });
+    if (effectiveConfiguredTokens !== undefined) {
+      return effectiveConfiguredTokens;
     }
     if (fixedContextWindow !== undefined) {
       return fixedContextWindow;

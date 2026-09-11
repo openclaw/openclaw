@@ -2,6 +2,7 @@
 import type { MemorySearchDeadlineControlOptions } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { EmbeddingProviderBatchRuntime } from "./embedding-provider-runtime-types.js";
 
 /** Input accepted by embedding providers, including multimodal inline-data parts. */
 export type EmbeddingInput =
@@ -30,7 +31,7 @@ export type EmbeddingProviderRuntime = {
   }>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
-};
+} & Partial<EmbeddingProviderBatchRuntime>;
 
 /** Provider-owned canonical identity and exact aliases for persisted indexes. */
 export type EmbeddingProviderIndexIdentity = {
