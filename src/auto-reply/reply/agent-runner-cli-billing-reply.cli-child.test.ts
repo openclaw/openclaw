@@ -69,6 +69,8 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
+  // Harness auth selection reads the run's agentDir while CLI prepare resolves
+  // the state-derived dir, so the fixture must align them before seeding.
   async function seedAuthProfile(profileId: string, credential: AuthProfileCredential) {
     await updateAuthProfileStoreWithLock({
       agentDir,
@@ -125,6 +127,8 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
   function createClaudeCliFollowupRun() {
     const followupRun = createFollowupRun();
     followupRun.run.agentId = "agent";
+    // Credential selection and CLI prepare must see the same profile store.
+    followupRun.run.agentDir = agentDir;
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = claudeCliModel;
     followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };
@@ -132,11 +136,12 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
     return followupRun;
   }
 
-  async function runTurnAndReadFailureReplyText(): Promise<string> {
+  async function runTurnAndReadFailureReplyText(
+    followupRun: ReturnType<typeof createClaudeCliFollowupRun>,
+  ): Promise<string> {
     registerBillingFailureClaudeCliBackend();
     runRealCliRunnerForOnce();
     useClaudeCliFallback();
-    const followupRun = createClaudeCliFollowupRun();
     followupRun.run.authProfileId = "claude-cli:work";
     followupRun.run.authProfileIdSource = "auto";
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -156,6 +161,7 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
   }
 
   it("reports subscription billing copy when a subscription-backed CLI run fails billing", async () => {
+    const followupRun = createClaudeCliFollowupRun();
     await seedAuthProfile("claude-cli:work", {
       type: "oauth",
       provider: "claude-cli",
@@ -164,7 +170,7 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
       expires: Date.now() + 3_600_000,
     });
 
-    const replyText = await runTurnAndReadFailureReplyText();
+    const replyText = await runTurnAndReadFailureReplyText(followupRun);
 
     expect(replyText).toContain("check your account for subscription or usage limits");
     expect(replyText).toContain(`claude-cli (${claudeCliModel})`);
@@ -172,13 +178,14 @@ describe("executeAgentTurn: CLI billing failure reply copy", () => {
   }, 60_000);
 
   it("keeps the API-key billing copy for an API-key-backed CLI run", async () => {
+    const followupRun = createClaudeCliFollowupRun();
     await seedAuthProfile("claude-cli:work", {
       type: "api_key",
       provider: "claude-cli",
       key: "test-claude-key",
     });
 
-    const replyText = await runTurnAndReadFailureReplyText();
+    const replyText = await runTurnAndReadFailureReplyText(followupRun);
 
     expect(replyText).toContain("API key has run out of credits");
     expect(replyText).not.toContain("check your account for subscription or usage limits");
