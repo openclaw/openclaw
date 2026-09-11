@@ -64,6 +64,8 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
   processToolAvailabilityRef?: { value?: boolean };
+  /** Final run-local availability of dedicated file-writing tools (write/edit/apply_patch). */
+  fileWriteToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
