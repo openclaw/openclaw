@@ -181,7 +181,7 @@ export async function preflightOpenClawAgentDatabaseTargets(params: {
   for (let index = 0; index < params.inspectionTargets.length; index += 1) {
     const failure = failures.get(index);
     if (failure !== undefined) {
-      throw failure instanceof Error ? failure : new Error(String(failure));
+      throw failure;
     }
   }
   params.signal?.throwIfAborted();
