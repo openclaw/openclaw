@@ -835,6 +835,25 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards canonical session exec policy to embedded worker placement", async () => {
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-session-exec-policy",
+      sessionEntry: {
+        execHost: "node",
+        execNode: "session-node",
+        execCwd: "/session/worktree",
+        permissionMode: "guarded",
+      },
+    });
+
+    expect(embedded.execSession).toMatchObject({
+      execHost: "node",
+      execNode: "session-node",
+      execCwd: "/session/worktree",
+      permissionMode: "guarded",
+    });
+  });
+
   it.each(["cli", "embedded"] as const)(
     "preserves recovered dashboard authoring through the %s runtime without inline capability",
     async (runtime) => {

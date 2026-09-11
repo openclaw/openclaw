@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
+import type { ExecSessionDefaults } from "../exec-defaults.js";
+import type { SessionPlacementTurnParams } from "../session-placement-admission.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -186,6 +189,19 @@ function makeDispatchInput(
   } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
 }
 
+async function dispatchExecSession(execSession: ExecSessionDefaults) {
+  const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+  input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
+  input.runInput.runParams.execSession = execSession;
+  input.runInput.runParams.toolsAllow = ["exec", "process"];
+  if (execSession.sandbox === "required") {
+    input.runInput.runParams.config = { agents: { defaults: { sandbox: { mode: "all" } } } };
+  }
+
+  const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+  return dispatchedAttempt;
+}
+
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
@@ -225,6 +241,58 @@ describe("embedded run retry dispatch", () => {
       expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
     },
   );
+
+  it.each([
+    {
+      name: "node-bound",
+      execSession: {
+        execHost: "node",
+        execNode: "session-node",
+        execCwd: "/remote/default",
+      } satisfies ExecSessionDefaults,
+    },
+    {
+      name: "sandbox-required",
+      execSession: { sandbox: "required" } satisfies ExecSessionDefaults,
+    },
+  ])("forwards the $name exec session through the attempt projection", async ({ execSession }) => {
+    const result = await dispatchExecSession(execSession);
+
+    expect(result.preparedAttempt.execSession).toBe(execSession);
+  });
+
+  it("resolves a projected node session with its node and cwd", async () => {
+    const result = await dispatchExecSession({
+      execHost: "node",
+      execNode: "session-node",
+      execCwd: "/remote/default",
+    });
+
+    const authority = resolveWorkerToolAuthority({
+      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
+    });
+
+    expect(authority.exec).toEqual({
+      host: "node",
+      security: "full",
+      ask: "off",
+      node: "session-node",
+      nodeCwd: "/remote/default",
+      safeBins: [],
+    });
+  });
+
+  it("resolves a projected sandbox-required session as sandbox", async () => {
+    const result = await dispatchExecSession({ sandbox: "required" });
+
+    const authority = resolveWorkerToolAuthority({
+      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
+    });
+
+    expect(authority.exec).toEqual({ host: "sandbox", security: "deny", ask: "off", safeBins: [] });
+  });
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
     const flushStarted = createDeferred();

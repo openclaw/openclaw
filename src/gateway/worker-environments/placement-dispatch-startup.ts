@@ -2,10 +2,7 @@ import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import {
-  supportsWorkerExecutionContextLaunch,
-  verifyWorkerAdmissionHandshake,
-} from "./admission.js";
+import { supportsCurrentWorkerLaunch, verifyWorkerAdmissionHandshake } from "./admission.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
@@ -83,10 +80,10 @@ function requireProvisionedEnvironment(
     environment.environmentId !== expectedEnvironmentId ||
     environment.destroyRequestedAtMs !== null ||
     !environment.bootstrapReceipt ||
-    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
+    !supportsCurrentWorkerLaunch(environment.bootstrapReceipt)
   ) {
     throw new Error(
-      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+      `Worker environment is not dispatchable with the current worker launch contract: ${environment.state}`,
     );
   }
   if (
@@ -227,7 +224,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         !environment.nodeDeviceId ||
         !environment.leaseId ||
         !environment.bootstrapReceipt ||
-        !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) ||
+        !supportsCurrentWorkerLaunch(environment.bootstrapReceipt) ||
         !verifyWorkerAdmissionHandshake(environment.bootstrapReceipt, expectedBuild)
       ) {
         continue;

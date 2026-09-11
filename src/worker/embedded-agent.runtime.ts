@@ -18,7 +18,10 @@ import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
-import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
+import {
+  projectEffectiveExecPolicy,
+  resolveSessionPermissionCoreToolPolicy,
+} from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -45,6 +48,7 @@ import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
   WORKER_TOOL_NAMES,
+  type WorkerToolAuthority,
   type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
@@ -101,6 +105,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
+  execAuthority: WorkerToolAuthority["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
@@ -188,8 +193,18 @@ async function runWorkerEmbeddedTurnWithResources(
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
+  // Exec security/ask are host-relative, and workers have no Gateway transport for node RPC:
+  // snapshotNodeWorkerEnv strips the Gateway URL/token, so resolveNodeExecutionTarget ->
+  // callGatewayTool has no loopback. Fail closed; the descriptor still carries audit authority.
+  const execUnavailable =
+    params.execAuthority === undefined ||
+    params.execAuthority.host === "sandbox" ||
+    params.execAuthority.host === "node";
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  if (execUnavailable) {
+    allowedToolNameSet.delete("exec");
+    allowedToolNameSet.delete("process");
+  }
   const permissionToolPolicy = params.permissionMode
     ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
     : undefined;
@@ -199,15 +214,32 @@ async function runWorkerEmbeddedTurnWithResources(
   const activeToolNames = WORKER_TOOL_NAMES.filter(
     (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
   );
+  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
+  // The Gateway resolves effective exec policy before dispatch; deriving it from the worker's
+  // isolated config would reconstruct restricted turns with wider authority.
+  const execAuthority = params.execAuthority ?? {
+    host: "gateway" as const,
+    security: "deny" as const,
+    ask: "off" as const,
+  };
+  const {
+    security: execSecurity,
+    ask: execAsk,
+    mode: execMode,
+  } = projectEffectiveExecPolicy({
+    base: execAuthority,
+    overrides: execAuthority,
+    permissionPolicy: params.permissionMode ? { mode: params.permissionMode } : undefined,
+  });
   const coreTools = createCoreCodingTools({
     skillsSnapshot,
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    shellTools: execUnavailable ? "patch-only" : "full",
     workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
     readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
@@ -220,12 +252,16 @@ async function runWorkerEmbeddedTurnWithResources(
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
-      bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
-      host: "gateway",
-      mode: permissionToolPolicy?.execMode ?? "full",
-      security: "full",
-      ask: "off",
-      // Safe clamp v1 keeps allowlist hits local but denies misses before review.
+      bypassHostApprovalFloors:
+        permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
+      safeBins: execAuthority.safeBins ?? [],
+      host: execAuthority.host,
+      node: execAuthority.host === "node" ? execAuthority.node : undefined,
+      nodeCwd: execAuthority.host === "node" ? execAuthority.nodeCwd : undefined,
+      security: execSecurity,
+      ask: execAsk,
+      ...(execMode ? { mode: execMode } : {}),
+      // Host-specific approvals are not portable; misses require local execution.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
       nonInteractiveApproval: Boolean(
         permissionToolPolicy && permissionToolPolicy.execMode !== "full",
@@ -309,7 +345,10 @@ async function runWorkerEmbeddedTurnWithResources(
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-        if (omittedToolNames?.has(toolName)) {
+        if (
+          omittedToolNames?.has(toolName) ||
+          (execUnavailable && (toolName === "exec" || toolName === "process"))
+        ) {
           continue;
         }
         if (!discoveredToolNames.has(toolName)) {

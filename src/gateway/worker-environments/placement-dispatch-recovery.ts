@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -211,7 +211,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             exactEnvironment.state === "provisioning" ||
             exactEnvironment.state === "bootstrapping" ||
             ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
-              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+              supportsCurrentWorkerLaunch(exactEnvironment.bootstrapReceipt)))
         ) {
           // Transient provider or node-enrollment failure retains its exact durable operation.
           continue;

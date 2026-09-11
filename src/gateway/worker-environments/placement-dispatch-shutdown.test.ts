@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
 import {
@@ -21,7 +24,10 @@ describe("worker placement shutdown replay", () => {
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     });
     const interrupted = createDeferredCore<never>();
     const provisionStarted = createDeferredCore();

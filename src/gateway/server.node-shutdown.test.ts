@@ -1,6 +1,9 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
@@ -198,7 +201,10 @@ test.for(["direct", "restart"] as const)(
               bootstrapReceipt: {
                 bundleHash: BUNDLE_HASH,
                 openclawVersion: "2026.8.19",
-                protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+                protocolFeatures: [
+                  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+                  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+                ],
                 installKind: "bundle",
               },
               credential: {

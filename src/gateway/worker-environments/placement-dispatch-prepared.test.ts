@@ -5,7 +5,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -51,11 +54,15 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 
 const PREPARATION_KEY = "c".repeat(64);
-const FEATURES = [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE];
+const FEATURES = [
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+];
 
 function preparedHarness(
   options: {
     reserve?: boolean;
+    protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
     liveBindingFails?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
@@ -65,6 +72,7 @@ function preparedHarness(
     >;
   } = {},
 ) {
+  const protocolFeatures = options.protocolFeatures ?? FEATURES;
   const executionMode = options.executionMode ?? "worker-turn";
   const reserve = options.reserve !== false;
   let nodeCurrent = true;
@@ -117,7 +125,7 @@ function preparedHarness(
             workerBundleHash: support.BUNDLE_HASH,
             workerArchiveSha256: "b".repeat(64),
             openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-            protocolFeatures: FEATURES,
+            protocolFeatures,
           },
         },
       },
@@ -152,13 +160,13 @@ function preparedHarness(
       sharedHost: false,
       ...support.readyPatch(environmentId, {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: FEATURES,
+        protocolFeatures,
       }),
     },
   });
   vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
     ...support.BUNDLE_ARTIFACT,
-    protocolFeatures: FEATURES,
+    protocolFeatures,
   });
   const liveEvents = support.createLiveEvents({
     bindSession: vi.fn(() => !options.liveBindingFails),
@@ -358,10 +366,13 @@ describe("prepared worker dispatch", () => {
     );
   });
 
-  it.each(["build", "node"] as const)(
+  it.each(["build", "node", "exec-authority"] as const)(
     "uses the cold path when a candidate's %s proof is stale",
     async (stale) => {
-      const { harness, store, ready, request, revokeNode } = preparedHarness();
+      const { harness, store, ready, request, revokeNode } = preparedHarness({
+        protocolFeatures:
+          stale === "exec-authority" ? [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE] : undefined,
+      });
       if (stale === "build") {
         const environment = harness.environments.get(ready.environmentId)!;
         vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue([
@@ -370,7 +381,7 @@ describe("prepared worker dispatch", () => {
             bootstrapReceipt: { ...ready.bootstrapReceipt!, bundleHash: "9".repeat(64) },
           },
         ]);
-      } else {
+      } else if (stale === "node") {
         revokeNode();
       }
 

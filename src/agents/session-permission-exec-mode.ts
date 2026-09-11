@@ -2,9 +2,12 @@ import {
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
+  type ExecTarget,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 const EXEC_MODE_BY_PERMISSION_MODE = {
@@ -57,4 +60,27 @@ export function resolveSessionPermissionExecPolicy(
   const ask = maxAsk(base.ask, maxAsk(override.ask, overrides?.ask ?? "off"));
   // Retaining a changed mode would make downstream normalization erase the tightening.
   return { mode: security === base.security && ask === base.ask ? mode : undefined, security, ask };
+}
+
+/** Pure final projection shared by local tool construction and worker dispatch. */
+export function projectEffectiveExecPolicy(params: {
+  base: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
+  overrides?: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
+  permissionPolicy?: Pick<PreparedSessionPermissionPolicy, "mode">;
+  scheduledExecTarget?: ScheduledToolPolicyContext["execTarget"];
+}) {
+  const policy = params.permissionPolicy
+    ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
+    : applyExecPolicyLayer(params.base, params.overrides);
+  const target = params.scheduledExecTarget;
+  return {
+    host: target?.host ?? params.overrides?.host ?? params.base.host,
+    mode: target?.ask ? undefined : policy.mode,
+    security: policy.security,
+    ask: target?.ask ?? policy.ask,
+    bypassHostApprovalFloors:
+      target?.ask !== "always" &&
+      params.permissionPolicy?.mode === "full" &&
+      policy.security === "full",
+  };
 }

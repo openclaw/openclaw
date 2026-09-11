@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { logWarn } from "../logger.js";
 import type {
@@ -101,7 +100,7 @@ import {
 } from "./scheduled-tool-policy.js";
 import {
   resolveSessionPermissionCoreToolPolicy,
-  resolveSessionPermissionExecPolicy,
+  projectEffectiveExecPolicy,
 } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
@@ -645,13 +644,13 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
   const execDefaults = options?.exec ?? {};
-  const effectiveExecPolicy = sessionPermissionPolicy
-    ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
-    : applyExecPolicyLayer(execConfig, options?.exec);
-  // A scheduled cap narrows the rebuilt exec tool to its captured policy.
-  // Its approval floor outranks a reused full session; the wrapper below
-  // prevents caller arguments from weakening either restriction.
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
+  const effectiveExecPolicy = projectEffectiveExecPolicy({
+    base: execConfig,
+    overrides: options?.exec,
+    permissionPolicy: sessionPermissionPolicy,
+    scheduledExecTarget,
+  });
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
@@ -659,7 +658,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,
-    includeShellTools,
+    shellTools: includeShellTools ? "full" : "disabled",
     workspaceOnly,
     readOnly,
     sandbox,
@@ -674,14 +673,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
-      bypassHostApprovalFloors:
-        scheduledExecTarget?.ask !== "always" &&
-        sessionCoreToolPolicy?.bypassHostApprovalFloors &&
-        effectiveExecPolicy.security === "full",
-      host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
-      mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
-      security: effectiveExecPolicy.security,
-      ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
+      ...effectiveExecPolicy,
       config: execRuntimeConfig,
       preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
@@ -877,10 +869,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
             execOverrides: {
-              host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
-              mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
+              host: effectiveExecPolicy.host,
+              mode: effectiveExecPolicy.mode,
               security: effectiveExecPolicy.security,
-              ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
+              ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
