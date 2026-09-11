@@ -2192,6 +2192,7 @@
     "hosted-git-info": "10.1.1",
     "iconv-lite": "0.7.3",
     "ignore": "7.0.7",
+    "import-meta-resolve": "4.2.0",
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",

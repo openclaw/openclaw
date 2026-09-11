@@ -8,6 +8,7 @@ import { createContextEngineLogicalTurnLease } from "../agents/harness/context-e
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -81,10 +82,10 @@ it.each([
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-source-"));
   const databasePath = path.join(directory, "source.sqlite");
   const database = new DatabaseSync(databasePath);
-  const source = new PluginRegistryInspectionResources();
+  const source = new PluginRegistryInspectionResources(retireInspectionInstances);
   const donor = createEmptyPluginRegistry();
   const supplyingView = createEmptyPluginRegistry();
-  const viewSource = new PluginRegistryInspectionResources();
+  const viewSource = new PluginRegistryInspectionResources(retireInspectionInstances);
   const plugin = { id: "engine-source-fixture", source: path.join(directory, "plugin.cjs") };
   donor.plugins.push(createPluginRecord(plugin));
   supplyingView.plugins.push(createPluginRecord(plugin));
@@ -413,7 +414,7 @@ it("disposes a shared engine once while releasing both factory source claims", a
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-alias-"));
   const database = new DatabaseSync(path.join(directory, "source.sqlite"));
   const registry = createEmptyPluginRegistry();
-  const resources = new PluginRegistryInspectionResources();
+  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
   resources.attach(registry);
   const sourceDisposed = createDeferred();
   const finishTail = createDeferred();

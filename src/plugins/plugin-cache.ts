@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
   createPluginCacheArtifacts,
   createPluginRootArtifacts,
@@ -13,12 +15,11 @@ import type {
   PluginFileCacheEntry,
   PluginPathCacheEntry,
 } from "./plugin-cache-files.types.js";
-import {
-  createPluginCacheManagement,
-  type PluginCacheManagement,
-} from "./plugin-cache-management.js";
-import { createPluginCacheMetadata, type PluginCacheMetadata } from "./plugin-cache-metadata.js";
+import type { PluginCacheManagement } from "./plugin-cache-management.js";
+import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import { createPluginCacheSdk, type PluginCacheSdk } from "./plugin-cache-sdk.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 
 export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
   rootDir: string;
@@ -37,26 +38,102 @@ export interface PluginCache
   roots: Map<string, PluginRootCacheRecord>;
   rootAliases: Map<string, string>;
   sdk: PluginCacheSdk;
+  retireRegistryLoads?: () => Promise<PluginHostCleanupResult>;
+  setupModules: Map<string, PluginModuleLoaderOwner>;
+  instances: Set<PluginInstanceResource>;
+  retirement?: Promise<PluginHostCleanupResult>;
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
   scope: AsyncLocalStorage<PluginCache>;
   snapshotOwners: WeakMap<object, PluginCache>;
+  retirements: Array<{
+    cache: PluginCache;
+    completion: Promise<PromiseSettledResult<PluginHostCleanupResult>>;
+  }>;
 }>(Symbol.for("openclaw.pluginCache"), () => ({
   scope: new AsyncLocalStorage<PluginCache>(),
   snapshotOwners: new WeakMap(),
+  retirements: [],
 }));
 
-/** A cache generation owns progressively acquired facts, never mutable activation state. */
+const cacheRetainers = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginCacheRetainers"),
+  () =>
+    new WeakMap<
+      PluginCache,
+      {
+        references: Set<object>;
+        settled: ReturnType<typeof createDeferredCore<void>>;
+        retirement?: Promise<PluginHostCleanupResult>;
+      }
+    >(),
+);
+
+/** Admitted generations keep their exact prepared facts through publication replacement. */
+export function retainPluginCache(cache: PluginCache): () => void {
+  if (cache.retirement || cacheRetainers.get(cache)?.retirement) {
+    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+  }
+  let retained = cacheRetainers.get(cache);
+  if (!retained || retained.references.size === 0) {
+    retained = { references: new Set(), settled: createDeferredCore() };
+    cacheRetainers.set(cache, retained);
+  }
+  const reference = {};
+  retained.references.add(reference);
+  return () => {
+    if (retained.references.delete(reference) && retained.references.size === 0) {
+      retained.settled.resolve();
+    }
+  };
+}
+
+export function getPluginCacheRetention(cache: PluginCache): Promise<void> | undefined {
+  const retained = cacheRetainers.get(cache);
+  return retained?.references.size ? retained.settled.promise : undefined;
+}
+
+/** Each inventory owns its acquired facts and reusable load results; publication owns activation. */
 export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}): PluginCache {
   return {
+    async [Symbol.asyncDispose]() {
+      await retirePluginCache(this);
+    },
     kind: options.kind ?? "operation",
     roots: new Map(),
     rootAliases: new Map(),
     sdk: createPluginCacheSdk(),
-    ...createPluginCacheMetadata(),
-    ...createPluginCacheManagement<PluginCache>(),
+    setupModules: new Map(),
+    instances: new Set(),
+    metadata: {
+      current: {
+        snapshot: undefined,
+        owner: "operation",
+        configFingerprint: undefined,
+        envFingerprint: undefined,
+        defaultDiscoveryCompatible: false,
+        compatiblePolicyHashes: undefined,
+        compatibleConfigFingerprints: undefined,
+        revision: Symbol("plugin-metadata-snapshot"),
+        configIdentities: new WeakSet(),
+      },
+      snapshots: new Map(),
+      discovery: new Map(),
+      projections: new WeakMap(),
+      projectionSources: new WeakMap(),
+      completions: new WeakMap(),
+      indexFacts: new WeakMap(),
+      channelAdapters: new WeakMap(),
+      bundledChannelCatalogs: new Map(),
+      staticCatalogStates: new WeakMap(),
+      modelSuppressionResolvers: new WeakMap(),
+    },
+    installRecords: new Map(),
+    persistedInstalledIndex: new Map(),
+    dependencyStatus: new WeakMap(),
     ...createPluginCacheArtifacts(),
   };
 }
@@ -96,7 +173,137 @@ export function getPluginMetadataSnapshotCache(snapshot: object): PluginCache {
 export function resetPluginCache(): void {
   const previous = state.current;
   state.current = undefined;
-  previous?.disposeModules?.();
+  if (previous) {
+    // Public libraries refresh synchronously; managed instances keep their separate retirement.
+    for (const source of previous.sources.values()) {
+      source.disposeModule?.();
+    }
+    state.retirements.push({
+      cache: previous,
+      completion: retirePluginCache(previous).then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason: unknown) => ({ status: "rejected", reason }),
+      ),
+    });
+  }
+}
+
+/** Failed loaders retain their real completion under the cache that admitted them. */
+export function retirePluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache = getPluginCache(),
+): Promise<void> {
+  cache.instances.add(instance);
+  // A registration caller may receive a self-retirement acknowledgment; this owner must join fully.
+  const completion = pluginInstanceInvocation
+    .exit(() => instance.dispose())
+    .then((result) => {
+      // Failed outcomes stay available to the cache's existing disposal aggregator.
+      if (result.errors.length === 0) {
+        cache.instances.delete(instance);
+      }
+    });
+  void completion.catch(() => {});
+  return completion;
+}
+
+/** Stop new setup calls immediately; the owner awaits in-flight calls and graph cleanup. */
+export function retirePluginCache(
+  cache: PluginCache,
+  beforeRetire?: () => void,
+): Promise<PluginHostCleanupResult> {
+  const retained = cacheRetainers.get(cache);
+  if (retained?.retirement) {
+    return retained.retirement;
+  }
+  if (retained?.references.size) {
+    return (retained.retirement = retained.settled.promise.then(() =>
+      beginPluginCacheRetirement(cache, beforeRetire),
+    ));
+  }
+  return beginPluginCacheRetirement(cache, beforeRetire);
+}
+
+function beginPluginCacheRetirement(
+  cache: PluginCache,
+  beforeRetire?: () => void,
+): Promise<PluginHostCleanupResult> {
+  if (cache.retirement) {
+    return cache.retirement;
+  }
+  // Registry retirement can synchronously notify listeners; close admission before those callbacks.
+  const retirement = createDeferredCore<PluginHostCleanupResult>();
+  cache.retirement = retirement.promise;
+  const cleanup = async () => {
+    beforeRetire?.();
+    const registries = cache.retireRegistryLoads?.();
+    const resources = new Set([...cache.setupModules.values(), ...cache.instances]);
+    for (const resource of resources) {
+      resource.quiesce();
+    }
+    // Registry teardown owns host hooks before instance disposal; then join remaining cleanup.
+    const [registry] = await Promise.allSettled([registries]);
+    const outcomes = await Promise.allSettled(
+      [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
+    );
+    cache.setupModules.clear();
+    cache.instances.clear();
+    const unexpected = [
+      ...(registry.status === "rejected" ? [registry.reason] : []),
+      ...outcomes.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    ];
+    if (unexpected.length) {
+      throw new AggregateError(unexpected, "Plugin cache resources failed to retire");
+    }
+    const host = registry.status === "fulfilled" ? registry.value : undefined;
+    const failures = [...(host?.failures ?? [])];
+    for (const outcome of outcomes) {
+      if (outcome.status !== "fulfilled") {
+        continue;
+      }
+      const { resource, result } = outcome.value;
+      for (const error of result.errors) {
+        // A registry join may have already included this same instance's outcome.
+        if (
+          !failures.some(
+            (failure) =>
+              failure.pluginId === resource.pluginId &&
+              failure.hookId === "instance" &&
+              failure.error === error,
+          )
+        ) {
+          failures.push({ pluginId: resource.pluginId, hookId: "instance", error });
+        }
+      }
+    }
+    return { cleanupCount: host?.cleanupCount ?? 0, failures };
+  };
+  void cleanup().then(retirement.resolve, retirement.reject);
+  return retirement.promise;
+}
+
+/** Consume retirements initiated by synchronous config/setup cache invalidation. */
+export async function waitForPluginCacheRetirement(
+  includeBorrowed = false,
+): Promise<PluginHostCleanupResult> {
+  const ready = state.retirements.filter(
+    ({ cache }) => includeBorrowed || cache.kind !== "process" || !getPluginCacheRetention(cache),
+  );
+  state.retirements = state.retirements.filter((retirement) => !ready.includes(retirement));
+  const results = await Promise.all(ready.map((retirement) => retirement.completion));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Plugin cache retirement failed");
+  }
+  const completed = results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+  return {
+    cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
+    failures: completed.flatMap((result) => result.failures),
+  };
 }
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {

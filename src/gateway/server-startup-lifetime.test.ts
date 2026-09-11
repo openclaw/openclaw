@@ -4,12 +4,22 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import {
   getLegacyPluginSdkResourceHost,
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
+import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -78,6 +88,118 @@ function registerSecretsClearFailure(
 }
 
 describe("Gateway startup lifetime", () => {
+  it.each(["close", "startup failure"] as const)(
+    "releases idle prepared donor custody before registry retirement during %s",
+    async (entry) => {
+      const state = await createStartupTestState(`gateway-idle-donor-${entry}`);
+      const port = await getFreePort();
+      const token = "gateway-idle-donor-token";
+      await state.writeConfig({
+        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+      });
+      state.applyEnv();
+      const previous = captureActivePluginRegistrySnapshot();
+      const bootstrapModule = await import("./server-startup-bootstrap.js");
+      const stateModule = await import("./server-runtime-state-prepare.js");
+      const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
+      const disposalEntered = createDeferred<{ modelClosed: boolean; sdkClosed: boolean }>();
+      const disposed = vi.fn();
+      const sdkReads: Array<{ value: string; modelClosed: boolean }> = [];
+      let modelClosed = false;
+      let sdkClosed = false;
+      let releaseModel: (() => Promise<void>) | undefined;
+      let sdkHost: LegacyPluginSdkResourceHost | undefined;
+      let server: GatewayServer | undefined;
+      let outcome: Promise<unknown> | undefined;
+      const startupError = new Error("synthetic kernel state preparation failed");
+      const bootstrapSpy = vi
+        .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
+        .mockImplementation(async (...args) => {
+          const result = await bootstrap(...args);
+          const registry = createEmptyPluginRegistry();
+          result.pluginBootstrap.pluginRegistry = registry;
+          const record = createPluginRecord({ id: "idle-shutdown-donor" });
+          registry.plugins.push(record);
+          const instance = new PluginInstance(record.id, { record, registry });
+          instance.lifecycle.onDispose(disposed);
+          setActivePluginRegistry(registry);
+          const primary = createEmptyPluginRegistry();
+          const view = bindPluginRegistryResourceOwner({ ...primary, plugins: [record] }, primary);
+          const inspection = new PluginRegistryInspectionResources(retireInspectionInstances);
+          inspection.attach(primary);
+          inspection.attach(view);
+          inspection.adoptInvocations(view, registry);
+          releaseModel = async () => {
+            await inspection.release();
+            modelClosed = true;
+          };
+          const unregister = registerPreparedModelRuntimeClose(async () => {
+            await releaseModel?.();
+            unregister();
+          });
+          sdkHost = getLegacyPluginSdkResourceHost();
+          const consumer = instance.retainConsumer();
+          const read = consumer.wrap(instance.wrap(() => "donor available"));
+          sdkHost.adopt(consumer, {
+            release: async () => {
+              try {
+                sdkReads.push({ value: read(), modelClosed });
+              } finally {
+                consumer.release();
+                sdkClosed = true;
+              }
+            },
+          });
+          const dispose = instance.dispose.bind(instance);
+          vi.spyOn(instance, "dispose").mockImplementation((...disposeArgs) => {
+            disposalEntered.resolve({ modelClosed, sdkClosed });
+            return dispose(...disposeArgs);
+          });
+          return result;
+        });
+      const stateSpy =
+        entry === "startup failure"
+          ? vi.spyOn(stateModule, "prepareGatewayKernelState").mockRejectedValue(startupError)
+          : undefined;
+      try {
+        const options = {
+          auth: { mode: "token" as const, token },
+          bind: "loopback" as const,
+          controlUiEnabled: false,
+          sidecarStartup: "defer" as const,
+        };
+        if (entry === "close") {
+          const { startGatewayServerCore } = await import("./server-start.js");
+          server = await startGatewayServerCore(port, options);
+          await server.startupSettled;
+          outcome = server.close().catch((error: unknown) => error);
+        } else {
+          outcome = createGatewayKernel(port, options).catch((error: unknown) => error);
+        }
+        const boundary = await Promise.race([
+          disposalEntered.promise,
+          outcome.then(() => {
+            throw new Error("Gateway cleanup omitted its donor");
+          }),
+        ]);
+        expect(boundary).toEqual({ modelClosed: true, sdkClosed: true });
+        expect(await outcome).toBe(entry === "startup failure" ? startupError : undefined);
+        expect(sdkReads).toEqual([{ value: "donor available", modelClosed: false }]);
+        expect(disposed).toHaveBeenCalledOnce();
+      } finally {
+        // On the broken ordering, release only this fixture's idle claims so close can join.
+        await sdkHost?.close();
+        await releaseModel?.();
+        await outcome;
+        await server?.close();
+        stateSpy?.mockRestore();
+        bootstrapSpy.mockRestore();
+        restoreActivePluginRegistrySnapshot(previous);
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each([
     { disposalFails: false, clearFails: false },
     { disposalFails: true, clearFails: false },
@@ -95,13 +217,22 @@ describe("Gateway startup lifetime", () => {
       const secretsModule = await import("../secrets/runtime-state.js");
       const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
       const retainMetadata = metadataModule.retainGatewayPluginMetadata;
-      const releases: Array<ReturnType<typeof vi.fn<() => void>>> = [];
+      const metadataOwners: Array<{
+        owner: ReturnType<typeof retainMetadata>;
+        released: ReturnType<typeof vi.fn>;
+      }> = [];
       const metadataSpy = vi
         .spyOn(metadataModule, "retainGatewayPluginMetadata")
         .mockImplementation(() => {
-          const release = vi.fn(retainMetadata());
-          releases.push(release);
-          return release;
+          const owner = retainMetadata();
+          const released = vi.fn();
+          const close = owner.close.bind(owner);
+          vi.spyOn(owner, "close").mockImplementation(async (...args) => {
+            await close(...args);
+            released();
+          });
+          metadataOwners.push({ owner, released });
+          return owner;
         });
       const clearSecretsSpy = vi.spyOn(secretsModule, "clearSecretsRuntimeSnapshotState");
       const clearError = new Error("synthetic registered secrets clear failure");
@@ -121,7 +252,7 @@ describe("Gateway startup lifetime", () => {
         .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
         .mockImplementation(async (...args) => {
           sdkHost = getLegacyPluginSdkResourceHost();
-          const inspection = new PluginRegistryInspectionResources();
+          const inspection = new PluginRegistryInspectionResources(async () => {});
           inspection.attach(createEmptyPluginRegistry());
           inspection.register("startup-provider", {
             id: "native",
@@ -147,8 +278,8 @@ describe("Gateway startup lifetime", () => {
       try {
         await entered.promise;
         expect(database.isOpen).toBe(true);
-        expect(releases).toHaveLength(1);
-        expect(releases[0]).not.toHaveBeenCalled();
+        expect(metadataOwners).toHaveLength(1);
+        expect(metadataOwners[0]?.released).not.toHaveBeenCalled();
         expect(clearSecretsSpy).not.toHaveBeenCalled();
         resume.resolve();
         const failure = await outcome;
@@ -178,7 +309,7 @@ describe("Gateway startup lifetime", () => {
         expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
         expect(database.isOpen).toBe(false);
         expect(clearSecretsSpy).toHaveBeenCalledOnce();
-        expect(releases[0]).toHaveBeenCalledOnce();
+        expect(metadataOwners[0]?.released).toHaveBeenCalledOnce();
       } finally {
         stopClearFailure?.();
         resume.resolve();
@@ -191,8 +322,8 @@ describe("Gateway startup lifetime", () => {
           database.close();
         }
         secretsModule.clearSecretsRuntimeSnapshotState();
-        for (const release of releases) {
-          release();
+        for (const { owner } of metadataOwners) {
+          await owner.close();
         }
         await state.cleanup();
       }

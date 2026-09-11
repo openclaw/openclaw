@@ -44,12 +44,12 @@ const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
-let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
+let withPluginDiagnosticsReport: typeof import("./status.js").withPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
-let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
+let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
 let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
@@ -134,11 +134,14 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/default-workspace",
 }));
 
+let preparedReport: ReturnType<typeof createPluginLoadResult>;
+
 function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
   const result = createPluginLoadResult({
     plugins: [],
     ...overrides,
   });
+  preparedReport = result;
   loadOpenClawPluginsMock.mockReturnValue(result);
   loadPluginMetadataRegistrySnapshotMock.mockReturnValue(result);
 }
@@ -155,9 +158,9 @@ function setSinglePluginLoadResult(
 
 function expectInspectReport(
   pluginId: string,
-  options: Omit<Parameters<typeof buildPluginInspectReport>[0], "id"> = {},
+  options: Partial<Omit<Parameters<typeof buildPluginInspectReport>[0], "id">> = {},
 ): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
-  const inspect = buildPluginInspectReport({ id: pluginId, ...options });
+  const inspect = buildPluginInspectReport({ id: pluginId, report: preparedReport, ...options });
   if (inspect === null) {
     throw new Error(`expected inspect report for ${pluginId}`);
   }
@@ -191,19 +194,7 @@ function expectPluginLoaderCall(params: {
   logger?: unknown;
   loadModules?: boolean;
 }) {
-  expectMockCalledWithFields(loadOpenClawPluginsMock, {
-    ...(params.config !== undefined ? { config: params.config } : {}),
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    ...(params.autoEnabledReasons !== undefined
-      ? { autoEnabledReasons: params.autoEnabledReasons }
-      : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.logger !== undefined ? { logger: params.logger } : {}),
-    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-  });
+  expectMockCalledWithFields(loadOpenClawPluginsMock, params);
 }
 
 function expectMetadataSnapshotLoaderCall(params: {
@@ -214,16 +205,7 @@ function expectMetadataSnapshotLoaderCall(params: {
   logger?: unknown;
   loadModules?: boolean;
 }) {
-  expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
-    ...(params.config !== undefined ? { config: params.config } : {}),
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.logger !== undefined ? { logger: params.logger } : {}),
-    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-  });
+  expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, params);
 }
 
 function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
@@ -251,7 +233,7 @@ function expectBundledCompatChainApplied(params: {
   expectMetadataSnapshotLoaderCall({ config: params.enabledConfig, loadModules: false });
 }
 
-function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
+async function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
   const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
     {
       demo: { enabled: true },
@@ -279,9 +261,11 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
     },
   );
 
-  expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-    createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-  ]);
+  await withPluginDiagnosticsReport({ config: rawConfig }, (report) => {
+    expect(buildPluginCompatibilityNotices({ report })).toEqual([
+      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+    ]);
+  });
 
   expectAutoEnabledStatusLoad({
     rawConfig,
@@ -295,16 +279,15 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
 }
 
 function expectNoCompatibilityWarnings() {
-  expect(buildPluginCompatibilityNotices()).toStrictEqual([]);
-  expect(buildPluginCompatibilityWarnings()).toStrictEqual([]);
+  expect(buildPluginCompatibilityNotices({ report: preparedReport })).toStrictEqual([]);
 }
 
 function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
   if (params.notices) {
-    expect(buildPluginCompatibilityNotices()).toEqual(params.notices);
+    expect(buildPluginCompatibilityNotices({ report: preparedReport })).toEqual(params.notices);
   }
   if (params.warnings) {
-    expect(buildPluginCompatibilityWarnings()).toEqual(params.warnings);
+    expect(buildPluginCompatibilityWarnings({ report: preparedReport })).toEqual(params.warnings);
   }
 }
 
@@ -357,9 +340,9 @@ describe("plugin status reports", () => {
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
-      buildPluginCompatibilitySnapshotNotices,
-      buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
+      buildPluginCompatibilitySnapshotNotices,
+      withPluginDiagnosticsReport,
       buildPluginInspectReport,
       buildPluginSnapshotReport,
       formatPluginCompatibilityNotice,
@@ -451,18 +434,23 @@ describe("plugin status reports", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("reuses a supplied metadata snapshot for scoped diagnostics", () => {
+  it("reuses a supplied metadata snapshot for scoped diagnostics", async () => {
     const metadataSnapshot = loadPluginMetadataSnapshotMock({
       index: createInstalledPluginIndexSnapshot([]),
     });
     loadPluginMetadataSnapshotMock.mockClear();
 
-    buildPluginDiagnosticsReport({
-      config: {},
-      workspaceDir: "/workspace",
-      onlyPluginIds: ["demo"],
-      metadataSnapshot: metadataSnapshot as never,
-    });
+    await withPluginDiagnosticsReport(
+      {
+        config: {},
+        workspaceDir: "/workspace",
+        onlyPluginIds: ["demo"],
+        metadataSnapshot: metadataSnapshot as never,
+      },
+      () => {
+        expect(mockInput(loadOpenClawPluginsMock).cache).toBe(true);
+      },
+    );
 
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
@@ -544,11 +532,12 @@ describe("plugin status reports", () => {
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expectPluginLoaderCall({ loadModules: true });
+    expectAutoEnabledStatusLoad({ rawConfig });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("preserves raw config activation context for compatibility-derived reports", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
+  it("preserves raw config activation context for compatibility-derived reports", async () => {
+    await expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -567,7 +556,7 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("normalizes bundled plugin versions to the core base release", () => {
+  it("normalizes bundled plugin versions to the core base release", async () => {
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "whatsapp",
@@ -579,14 +568,17 @@ describe("plugin status reports", () => {
       }),
     );
 
-    const report = buildPluginDiagnosticsReport({
-      config: {},
-      env: {
-        OPENCLAW_VERSION: "2026.3.23-1",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(report.plugins[0]?.version).toBe("2026.3.23");
+    await withPluginDiagnosticsReport(
+      {
+        config: {},
+        env: {
+          OPENCLAW_VERSION: "2026.3.23-1",
+        } as NodeJS.ProcessEnv,
+      },
+      (report) => {
+        expect(report.plugins[0]?.version).toBe("2026.3.23");
+      },
+    );
   });
 
   it("marks plugins as imported when runtime or facade state has loaded them", () => {
@@ -610,7 +602,7 @@ describe("plugin status reports", () => {
     expect(pluginsById.get("cold-plugin")?.imported).toBe(false);
   });
 
-  it("marks snapshot-loaded plugin modules as imported during full report loads", () => {
+  it("marks snapshot-loaded plugin modules as imported during full report loads", async () => {
     setPluginLoadResult({
       plugins: [
         createPluginRecord({ id: "runtime-loaded" }),
@@ -618,24 +610,24 @@ describe("plugin status reports", () => {
       ],
     });
 
-    const report = buildPluginDiagnosticsReport({ config: {} });
-
-    const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
-    expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
-    expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
+    await withPluginDiagnosticsReport({ config: {} }, (report) => {
+      const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
+      expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
+      expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
+    });
   });
 
-  it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
+  it("marks errored plugin modules as imported when full diagnostics already evaluated them", async () => {
     setPluginLoadResult({
       plugins: [createPluginRecord({ id: "broken-plugin", status: "error" })],
     });
     listImportedRuntimePluginIdsMock.mockReturnValue(["broken-plugin"]);
 
-    const report = buildPluginDiagnosticsReport({ config: {} });
-
-    const plugin = report.plugins.find((entry) => entry.id === "broken-plugin");
-    expect(plugin?.status).toBe("error");
-    expect(plugin?.imported).toBe(true);
+    await withPluginDiagnosticsReport({ config: {} }, (report) => {
+      const plugin = report.plugins.find((entry) => entry.id === "broken-plugin");
+      expect(plugin?.status).toBe("error");
+      expect(plugin?.imported).toBe(true);
+    });
   });
 
   it.each(["google", "GoOgLe"])(
@@ -701,7 +693,7 @@ describe("plugin status reports", () => {
         { level: "warn", pluginId, message: "watch this surface" },
       ]);
       expect(inspect.plugin.id).toBe(pluginId);
-      expect(buildAllPluginInspectReports()).toEqual([inspect]);
+      expect(buildAllPluginInspectReports({ report: preparedReport })).toEqual([inspect]);
     },
   );
 
@@ -729,7 +721,7 @@ describe("plugin status reports", () => {
     expect(expectInspectReport("microsoft").plugin.id).toBe("microsoft");
     expect(expectInspectReport("Microsoft").plugin.id).toBe("microsoft");
 
-    const inspect = buildAllPluginInspectReports();
+    const inspect = buildAllPluginInspectReports({ report: preparedReport });
 
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
     expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
@@ -812,7 +804,7 @@ describe("plugin status reports", () => {
       capabilityCount: 1,
       capabilities: [{ kind: "gateway-discovery", ids: ["bonjour"] }],
     });
-    expect(mockInput(loadOpenClawPluginsMock).activate).toBe(false);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {
@@ -966,32 +958,28 @@ describe("plugin status reports", () => {
     expectNoCompatibilityWarnings();
   });
 
-  it.each([false, true])(
-    "keeps compatibility notices ordered and attributed to their plugin (supplied report: %s)",
-    (suppliedReport) => {
-      const report = createPluginLoadResult({
-        plugins: [
-          createPluginRecord({ id: "old", hookCount: 1 }),
-          createPluginRecord({ id: "api", providerIds: ["api"] }),
-          createPluginRecord({ id: "bundled", origin: "bundled", error: "sessionFile missing" }),
-          createPluginRecord({ id: "unrelated" }),
-        ],
-        hooks: [createCustomHook({ pluginId: "old", events: ["message"] })],
-        diagnostics: [
-          { level: "error", pluginId: "api", message: "saveSessionStore missing" },
-          { level: "error", message: "sessionFile missing" },
-          { level: "error", pluginId: "old", message: "sessionFile missing" },
-        ],
-      });
-      setPluginLoadResult(suppliedReport ? { plugins: [] } : report);
+  it("keeps compatibility notices ordered and attributed to their plugin", () => {
+    const report = createPluginLoadResult({
+      plugins: [
+        createPluginRecord({ id: "old", hookCount: 1 }),
+        createPluginRecord({ id: "api", providerIds: ["api"] }),
+        createPluginRecord({ id: "bundled", origin: "bundled", error: "sessionFile missing" }),
+        createPluginRecord({ id: "unrelated" }),
+      ],
+      hooks: [createCustomHook({ pluginId: "old", events: ["message"] })],
+      diagnostics: [
+        { level: "error", pluginId: "api", message: "saveSessionStore missing" },
+        { level: "error", message: "sessionFile missing" },
+        { level: "error", pluginId: "old", message: "sessionFile missing" },
+      ],
+    });
 
-      expect(buildPluginCompatibilityNotices(suppliedReport ? { report } : undefined)).toEqual([
-        createCompatibilityNotice({ pluginId: "old", code: "hook-only" }),
-        createCompatibilityNotice({ pluginId: "old", code: "removed-session-transcript-file-api" }),
-        createCompatibilityNotice({ pluginId: "api", code: "removed-session-transcript-file-api" }),
-      ]);
-    },
-  );
+    expect(buildPluginCompatibilityNotices({ report })).toEqual([
+      createCompatibilityNotice({ pluginId: "old", code: "hook-only" }),
+      createCompatibilityNotice({ pluginId: "old", code: "removed-session-transcript-file-api" }),
+      createCompatibilityNotice({ pluginId: "api", code: "removed-session-transcript-file-api" }),
+    ]);
+  });
 
   it("does not warn for explicit startup-lazy metadata", () => {
     setSinglePluginLoadResult(

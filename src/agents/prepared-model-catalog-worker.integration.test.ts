@@ -52,6 +52,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import {
   markPluginMetadataSnapshotProvided,
@@ -125,12 +126,15 @@ async function createStaticSnapshot(
     providedMetadataSnapshot,
   ).pending;
   const build = results[0]!;
+  const releaseGeneration = retainPreparedPluginGeneration(build.pluginGeneration);
+  retireAfterTest(releaseGeneration);
   return {
     ...fixture,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
     isCurrent,
     supersede,
+    releaseGeneration,
   };
 }
 
@@ -238,7 +242,9 @@ describe("prepared model catalog worker boundary", () => {
     let snapshot: Awaited<typeof build.pending>[number]["snapshot"] | undefined;
     let driftedAgentDir: string | undefined;
     try {
-      snapshot = (await build.pending)[0]!.snapshot;
+      const result = (await build.pending)[0]!;
+      retireAfterTest(retainPreparedPluginGeneration(result.pluginGeneration));
+      snapshot = result.snapshot;
       const modelCatalog = await snapshot.loadFullModelCatalog!();
       expect(modelCatalog.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
@@ -503,7 +509,10 @@ describe("prepared model catalog worker boundary", () => {
         await waitForMarker(started);
         if (retirement === "process close") {
           let closed = false;
-          closing = drainGlobalSingletonLifecycleState("close").then(() => {
+          closing = Promise.all([
+            fixture.releaseGeneration(),
+            drainGlobalSingletonLifecycleState("close"),
+          ]).then(() => {
             closed = true;
           });
           await nextTurn();
@@ -545,13 +554,11 @@ describe("prepared model catalog worker boundary", () => {
     );
 
     const catalog = await fixture.snapshot.loadFullModelCatalog?.();
-    expect(catalog?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "post-startup-auth-model",
-        }),
-      ]),
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "post-startup-auth-model",
+      }),
     );
     expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
       authStore: {
@@ -971,14 +978,11 @@ describe("prepared model catalog worker boundary", () => {
         }),
       );
       await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
-      await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
+      const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+      expect(refreshedCatalog?.entries).toContainEqual(
         expect.objectContaining({
-          entries: expect.arrayContaining([
-            expect.objectContaining({
-              provider: PROVIDER_ID,
-              id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
-            }),
-          ]),
+          provider: PROVIDER_ID,
+          id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
         }),
       );
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");

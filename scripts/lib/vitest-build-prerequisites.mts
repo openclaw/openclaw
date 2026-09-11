@@ -26,6 +26,90 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "src/plugins/loader.test.ts",
+    configs: ["test/vitest/vitest.bundled.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "src/plugins/setup-registry.migrations.test.ts",
+    "src/plugins/source-checkout-runtime.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.unit-fast.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  ...[
+    "extensions/deepinfra/provider.contract.test.ts",
+    "extensions/google-meet/src/transports/chrome-startup.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.extensions.config.ts"],
+    mode: "runtime" as const,
+    dir: "extensions",
+  })),
+  {
+    file: "src/node-host/linux-node-plugin.integration.test.ts",
+    configs: ["test/vitest/vitest.unit.config.ts", "test/vitest/vitest.unit-src.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "test/openai-model-discovery-auth-order.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/channels/plugins/contracts/directory.registry-backed-shard-b.contract.test.ts",
+    configs: ["test/vitest/vitest.contracts-channel-config.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "src/channels/plugins/contracts/directory.registry-backed-shard-d.contract.test.ts",
+    "src/channels/plugins/contracts/surfaces-only.registry-backed-shard-d.contract.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.contracts-channel-session.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  {
+    file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
+    configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
+  {
+    file: "test/scripts/plugin-inventory-module-refs.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
+    configs: ["test/vitest/vitest.plugin-sdk.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  ...[
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    "src/agents/prepared-model-catalog-worker.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/agents",
+  })),
+  {
+    file: "src/plugins/plugin-module-generation.sdk.test.ts",
+    configs: ["test/vitest/vitest.plugins.config.ts"],
+    mode: "runtime",
+    dir: "src/plugins",
+  },
+  {
     file: "test/agent-exec-code-mode.live.test.ts",
     configs: ["test/vitest/vitest.live.config.ts"],
     mode: "runtime",

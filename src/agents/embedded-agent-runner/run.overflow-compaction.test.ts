@@ -189,7 +189,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
-      release: vi.fn(),
+      async [Symbol.asyncDispose]() {},
     });
     completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],

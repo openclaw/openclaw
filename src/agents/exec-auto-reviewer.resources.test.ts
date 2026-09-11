@@ -229,7 +229,7 @@ it.each(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const
                 expect.soft(drained).toBe(false);
               }
             } finally {
-              second.release();
+              await second[Symbol.asyncDispose]();
             }
             finishWork.resolve();
             if (mode === "overlap") {
@@ -248,7 +248,7 @@ it.each(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const
             try {
               expect(create.mock.calls.length).toBe(builds + 1);
             } finally {
-              after.release();
+              await after[Symbol.asyncDispose]();
             }
           } finally {
             finishWork.resolve();

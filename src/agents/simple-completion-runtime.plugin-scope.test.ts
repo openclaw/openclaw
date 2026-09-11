@@ -44,6 +44,7 @@ function createTransportOwnerFixture(
     providerId: "completion-owner-provider",
   });
   const reconcileFailureMarker = path.join(rootDir, "fail-reconcile");
+  const ownerEvent = `completion-owner:${rootDir}`;
   const createStreamSource = registerProviderStream
     ? `createStreamFn() {
         const source = getApiProvider("openai-completions");
@@ -64,6 +65,7 @@ fs.writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded", "utf8");
 module.exports = {
   id: ${JSON.stringify(fixture.pluginId)},
   register(api) {
+    process.on(${JSON.stringify(ownerEvent)}, () => {});
     api.registerProvider({
       id: ${JSON.stringify(fixture.providerId)}, label: owner, auth: [],
       async prepareRuntimeAuth() { return { apiKey: "fixture-auth-" + owner }; },
@@ -87,7 +89,7 @@ module.exports = {
 `,
     "utf8",
   );
-  return { ...fixture, reconcileFailureMarker };
+  return { ...fixture, reconcileFailureMarker, ownerEvent };
 }
 
 afterEach(async () => {
@@ -179,7 +181,7 @@ module.exports = {
       OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
     };
 
-    let release: (() => void) | undefined;
+    let acquiredResource: AsyncDisposable | undefined;
     try {
       const result = await withEnvAsync(env, async () => {
         if (mode === "agent") {
@@ -190,7 +192,7 @@ module.exports = {
             modelResolver,
           });
           if (!("error" in acquired)) {
-            release = acquired.release;
+            acquiredResource = acquired;
           }
           return acquired;
         }
@@ -202,7 +204,7 @@ module.exports = {
           modelId: expectedModelId,
         });
         if (!("error" in acquired)) {
-          release = acquired.release;
+          acquiredResource = acquired;
         }
         return acquired;
       });
@@ -218,7 +220,7 @@ module.exports = {
         selected.pluginId,
       ]);
     } finally {
-      release?.();
+      await acquiredResource?.[Symbol.asyncDispose]();
     }
   });
 
@@ -335,7 +337,7 @@ module.exports = {
                   },
                   { catalogMode: "static" },
                 );
-          let releasePreparedModel: (() => void) | undefined;
+          let preparedResource: AsyncDisposable | undefined;
           try {
             if (mode === "empty") {
               expect(lease?.snapshot.pluginRegistry).toBeUndefined();
@@ -370,7 +372,7 @@ module.exports = {
             } else {
               const acquired = await acquireSimpleCompletionModel(modelParams);
               if (!("error" in acquired)) {
-                releasePreparedModel = acquired.release;
+                preparedResource = acquired;
               }
               prepared = acquired;
             }
@@ -378,6 +380,13 @@ module.exports = {
               throw new Error(prepared.error);
             }
             if (mode === "acquired") {
+              const repeatedPreparation = await acquireSimpleCompletionModel(modelParams);
+              if ("error" in repeatedPreparation) {
+                throw new Error(repeatedPreparation.error);
+              }
+              await using repeated = repeatedPreparation;
+              expect(repeated).not.toHaveProperty("error");
+              expect(process.listenerCount(selected.ownerEvent)).toBe(1);
               activateAmbient();
             }
             // Callers use the logical API before dispatch, including CLI system-prompt selection.
@@ -404,8 +413,8 @@ module.exports = {
               "public SDK loading must preserve registered host metadata readers",
             ).toEqual(metadataReaders);
           } finally {
-            releasePreparedModel?.();
-            lease?.release();
+            await preparedResource?.[Symbol.asyncDispose]();
+            await lease?.[Symbol.asyncDispose]();
           }
         });
       } finally {
@@ -424,7 +433,7 @@ module.exports = {
     const tempRoot = fs.realpathSync(tempRoots.makeTempDir());
     const selected = createTransportOwnerFixture(path.join(tempRoot, "selected"), "A", false);
     const requestPaths: string[] = [];
-    let releasePreparedModel: (() => void) | undefined;
+    let preparedResource: AsyncDisposable | undefined;
     const server = createServer((request, response) => {
       request.resume();
       const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -510,7 +519,7 @@ module.exports = {
         if ("error" in prepared) {
           throw new Error(prepared.error);
         }
-        releasePreparedModel = prepared.release;
+        preparedResource = prepared;
         const completionTransport = getModelCompletionTransport(prepared.model);
         if (!completionTransport) {
           throw new Error("Managed completion transport was not prepared");
@@ -555,7 +564,7 @@ module.exports = {
         expect(modelRequestIndex).toBeGreaterThan(reloadIndex);
       }
     } finally {
-      releasePreparedModel?.();
+      await preparedResource?.[Symbol.asyncDispose]();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

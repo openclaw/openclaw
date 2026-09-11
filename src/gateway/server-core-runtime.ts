@@ -442,7 +442,7 @@ export async function startGatewayCoreRuntime(input: {
     const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
     retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
     retirePreviousBindings();
-    pluginRuntime.registry = loaded.pluginRegistry;
+    pluginRuntime.publish(loaded.pluginRegistry);
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
       delete attachedGatewayExtraHandlers[key];

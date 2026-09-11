@@ -183,7 +183,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 },
               });
             } finally {
-              probe.release();
+              await probe[Symbol.asyncDispose]();
             }
           })();
           expect(

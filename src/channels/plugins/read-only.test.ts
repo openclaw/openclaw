@@ -32,14 +32,6 @@ import {
   resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 
-const moduleLoaderParams = vi.hoisted(
-  () =>
-    [] as Array<{
-      modulePath: string;
-      tryNative?: boolean;
-    }>,
-);
-
 function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfig>): string[] {
   return plugins.map((entry) => entry.id);
 }
@@ -81,21 +73,6 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
     ...actual,
     resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
       env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
-  };
-});
-
-vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../plugins/plugin-module-loader-cache.js")>();
-  return {
-    ...actual,
-    getCachedPluginModuleLoader: ((params) => {
-      moduleLoaderParams.push({
-        modulePath: params.modulePath,
-        tryNative: params.tryNative,
-      });
-      return actual.getCachedPluginModuleLoader(params);
-    }) satisfies typeof actual.getCachedPluginModuleLoader,
   };
 });
 
@@ -427,7 +404,6 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  moduleLoaderParams.length = 0;
   resetPluginLoaderTestStateForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -755,10 +731,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     );
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
-    expect(moduleLoaderParams).toContainEqual({
-      modulePath: fs.realpathSync(path.join(pluginDir, "setup-entry.cjs")),
-      tryNative: true,
-    });
   });
 
   it("uses activation source config to discover channel setup metadata after secret stripping", () => {

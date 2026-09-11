@@ -21,14 +21,15 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { borrowOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
+import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import {
-  clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
   type MemoryEmbeddingBootstrapDebug,
@@ -42,6 +43,7 @@ import {
 import {
   isTransientMemoryIndexManagerPurpose,
   MemoryManagerRegistry,
+  type MemoryManagerProviderFactory,
   normalizeMemoryIndexManagerPurpose,
   resolveMemoryIndexManagerCacheKey,
   type MemoryIndexManagerPurpose,
@@ -62,25 +64,35 @@ import {
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 const log = createSubsystemLogger("memory");
-const INDEX_MANAGER_REGISTRY = new MemoryManagerRegistry<MemoryIndexManager>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
-  clearMemoryEmbeddingProbeCache();
-  await INDEX_MANAGER_REGISTRY.closeAll();
+  getMemoryIndexManagerRegistry().embeddingProbeCache.clear();
+  await getMemoryIndexManagerRegistry().closeAll();
 }
 
 export async function closeMemoryIndexManagersForAgent(params: { agentId: string }): Promise<void> {
-  await INDEX_MANAGER_REGISTRY.closeForAgent({
-    agentId: params.agentId,
-    purpose: "default",
-  });
-  await INDEX_MANAGER_REGISTRY.closeForAgent({
-    agentId: params.agentId,
-    purpose: "maintenance",
-  });
+  const registry = getMemoryIndexManagerRegistry();
+  for (const purpose of ["default", "maintenance"] as const) {
+    await registry.closeForAgent({ ...params, purpose });
+  }
 }
 
 export class MemoryIndexManager extends MemorySearchOrchestration implements MemorySearchManager {
+  private readonly managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
+  protected readonly createProvider: MemoryManagerProviderFactory = (adapter, create) =>
+    this.managerRegistry.createProvider(this, adapter, create);
+  protected releaseProvider(provider: EmbeddingProvider): void {
+    this.managerRegistry.releaseProvider(this, provider);
+  }
+  protected canPublishEmbeddingProbe(): boolean {
+    return this.managerRegistry.canPublishProbe(this);
+  }
+  protected getEmbeddingProbeOwners() {
+    return this.managerRegistry.getProbeOwners(this);
+  }
+  protected get embeddingProbeCache() {
+    return this.managerRegistry.embeddingProbeCache;
+  }
   protected readonly cacheKey: string;
   protected readonly purpose: MemoryIndexManagerPurpose;
   protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -134,7 +146,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const cfg = source?.cfg ?? params.cfg;
     const agentId = source?.agentId ?? normalizeAgentId(params.agentId);
     const purpose = normalizeMemoryIndexManagerPurpose(params.purpose);
-    return await INDEX_MANAGER_REGISTRY.acquire(
+    const managerRegistry = source?.managerRegistry ?? getMemoryIndexManagerRegistry();
+    return await managerRegistry.acquire(
       { agentId, purpose },
       {
         prepare: () => {
@@ -162,6 +175,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             key,
             create: async () => {
               const manager = new MemoryIndexManager({
+                managerRegistry,
                 cacheKey: key,
                 cfg,
                 agentId,
@@ -172,10 +186,24 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 acquireLocalService: params.acquireLocalService,
                 maintenanceSource: source,
               });
-              if (params.inspectSources) {
-                await manager.inspectDiagnosticSourceState();
+              managerRegistry.track(manager, key);
+              try {
+                if (params.inspectSources) {
+                  await manager.inspectDiagnosticSourceState();
+                }
+                return manager;
+              } catch (error) {
+                try {
+                  await manager.close();
+                } catch (cleanupError) {
+                  throw new AggregateError(
+                    [error, cleanupError],
+                    "Memory manager preparation cleanup failed",
+                    { cause: cleanupError },
+                  );
+                }
+                throw error;
               }
-              return manager;
             },
             reuse: (manager) => !manager.closing && !manager.closed && manager.db.isOpen,
           };
@@ -185,6 +213,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private constructor(params: {
+    managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
     cacheKey: string;
     cfg: OpenClawConfig;
     agentId: string;
@@ -196,6 +225,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     maintenanceSource?: MemoryIndexManager;
   }) {
     super();
+    this.managerRegistry = params.managerRegistry;
     const source = params.maintenanceSource;
     const effectiveSettings =
       source?.settings ?? resolveEffectiveMemorySearchSettings(params.settings);
@@ -628,7 +658,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.closePromise = closeOperation;
     try {
       await closeOperation;
-      INDEX_MANAGER_REGISTRY.deleteIfCurrent(this.cacheKey, this);
+      this.managerRegistry.deleteIfCurrent(this.cacheKey, this);
     } catch (err) {
       if (this.closePromise === closeOperation) {
         this.closePromise = null;
@@ -693,4 +723,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.closeTeardownComplete = true;
     }
   }
+}
+
+const managerRegistryStore = createPluginRuntimeStore<MemoryManagerRegistry<MemoryIndexManager>>({
+  key: "memory-core:manager-registry",
+  errorMessage: "Memory manager registry is not initialized",
+});
+
+function getMemoryIndexManagerRegistry(): MemoryManagerRegistry<MemoryIndexManager> {
+  let registry = managerRegistryStore.tryGetRuntime();
+  if (!registry) {
+    registry = new MemoryManagerRegistry(getMemoryManagerLifecycle());
+    managerRegistryStore.setRuntime(registry);
+  }
+  return registry;
 }

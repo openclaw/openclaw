@@ -599,13 +599,12 @@ export async function startGatewaySidecars(params: {
       stop: (options) => {
         pluginServicesStopRequested = true;
         // Share the service owner, never a caller's expired replacement deadline.
-        const stopPromise = ownedPluginServices.promise.then(async (handle) => {
-          await handle?.stop(options);
-        });
-        if (!options?.strict) {
+        const stopPromise = ownedPluginServices.promise.then((handle) => handle?.stop(options));
+        const deadlineAtMs = options?.strict ? options.deadlineAtMs : undefined;
+        if (deadlineAtMs === undefined) {
           return stopPromise;
         }
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<Awaited<ReturnType<PluginServicesHandle["stop"]>>>((resolve, reject) => {
           const timer = setTimeout(
             () => {
               reject(
@@ -615,12 +614,12 @@ export async function startGatewaySidecars(params: {
                 ),
               );
             },
-            Math.max(0, options.deadlineAtMs - Date.now()),
+            Math.max(0, deadlineAtMs - Date.now()),
           );
           void stopPromise.then(
-            () => {
+            (result) => {
               clearTimeout(timer);
-              resolve();
+              resolve(result);
             },
             (error: unknown) => {
               clearTimeout(timer);

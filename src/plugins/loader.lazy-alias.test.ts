@@ -13,12 +13,7 @@ import {
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommands } from "./cli.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
-import {
-  createPluginCache,
-  getPluginCache,
-  resetPluginCache,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 
@@ -521,33 +516,36 @@ describe("native plugin alias preparation", () => {
     });
   });
 
-  it.each([undefined, "shared", ""])(
-    "preserves explicit alias contents and shared scope %s",
-    (sharedCacheScopeKey) => {
-      const f = fixture();
-      const owner = createPluginCache();
-      const target = writeFile(
+  it("captures explicit aliases before lazy evaluation", () => {
+    const f = fixture();
+    const owner = createPluginCache();
+    const target = writeFile(
+      f.root,
+      "target.ts",
+      'import { value } from "fixture-alias"; export const marker = value;',
+    );
+    const params = {
+      modulePath: target,
+      importerUrl: import.meta.url,
+      tryNative: false,
+      cacheScopeKey: "explicit-aliases",
+    };
+    withPluginCache(owner, () => {
+      const aliases = { "fixture-alias": f.used };
+      const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
+      aliases["fixture-alias"] = f.unused;
+      const loaded = first(target);
+      expect(loaded).toMatchObject({ marker: "dist" });
+      expect(same(target)).toBe(loaded);
+      const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      const nextTarget = writeFile(
         f.root,
-        "target.ts",
+        "next-target.ts",
         'import { value } from "fixture-alias"; export const marker = value;',
       );
-      const params = {
-        modulePath: target,
-        importerUrl: import.meta.url,
-        tryNative: false,
-        sharedCacheScopeKey,
-      };
-      withPluginCache(owner, () => {
-        const aliases = { "fixture-alias": f.used };
-        const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
-        expect(same).toBe(first);
-        aliases["fixture-alias"] = f.unused;
-        expect(first(target)).toMatchObject({ marker: "dist" });
-        const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        expect(next === first).toBe(sharedCacheScopeKey !== undefined);
-        expect(getPluginCache().sdk.contexts.size).toBe(0);
-      });
-    },
-  );
+      expect(next(nextTarget)).toMatchObject({ marker: "unused" });
+      expect(first(target)).toBe(loaded);
+    });
+  });
 });

@@ -135,8 +135,10 @@ async function waitForProviderStart(
 ): Promise<void> {
   await Promise.race([
     started,
-    operation.then(() => {
-      throw new Error("Music operation settled before invoking the native provider");
+    operation.then((outcome) => {
+      throw new Error("Music operation settled before invoking the native provider", {
+        cause: outcome,
+      });
     }),
   ]);
 }
@@ -332,7 +334,7 @@ describe("music generation registration resources", () => {
   });
 
   it.each(["managed", "managed-getter", "raw"] as const)(
-    "preserves the existing %s registration owner during generation",
+    "keeps %s registration resources until the operation settles",
     async (ownership) => {
       const fixture = createNativeMusicFixture();
       try {
@@ -363,12 +365,25 @@ describe("music generation registration resources", () => {
             (error: unknown) => ({ value: undefined, error }),
           );
           try {
+            if (ownership === "managed-getter") {
+              fixture.resume.resolve();
+              const outcome = await settled;
+              expect(projectionRelease).toBeDefined();
+              expect(outcome.value).toBeUndefined();
+              expect(outcome.error).toMatchObject({
+                message: expect.stringContaining(
+                  "Plugin native-music-owner was reloaded or disabled",
+                ),
+              });
+              await projectionRelease;
+              expect(fixture.connections).toHaveLength(1);
+              expect(fixture.connections[0]!.reads).toEqual([42]);
+              expect(fixture.connections[0]!.database.isOpen).toBe(false);
+              expect(fixture.connections[0]!.disposals).toBe(1);
+              return;
+            }
             await waitForProviderStart(fixture.started.promise, settled);
             expect(fixture.connections).toHaveLength(1);
-            if (ownership === "managed-getter") {
-              expect(projectionRelease).toBeDefined();
-              await projectionRelease;
-            }
             await inspection?.release();
             expect(fixture.connections[0]!.database.isOpen).toBe(true);
             fixture.resume.resolve();

@@ -43,7 +43,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
-    release: releaseSnapshotMock,
+    [Symbol.asyncDispose]: releaseSnapshotMock,
   }),
 }));
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({

@@ -1,8 +1,24 @@
 // Holds current plugin metadata snapshots for process-scoped consumers.
 import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginCache, getProcessPluginCache } from "./plugin-cache.js";
+import {
+  adoptProcessPluginCache,
+  getPluginCache,
+  getProcessPluginCache,
+  type PluginCache,
+} from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+
+/** Selects an owned inventory and its prepared process-wide normalization policy together. */
+export function selectCurrentPluginMetadataCache(cache: PluginCache): void {
+  adoptProcessPluginCache(cache);
+  const state = cache.metadata.current;
+  setCurrentManifestModelIdNormalizationPolicies(
+    state.owner === "gateway" || state.defaultDiscoveryCompatible
+      ? state.snapshot?.owners.modelIdNormalizationPolicies
+      : undefined,
+  );
+}
 
 /** Owns config identity reuse for the current immutable metadata snapshot. */
 export const currentPluginMetadataConfigIdentityCache = {
@@ -19,7 +35,7 @@ export const currentPluginMetadataConfigIdentityCache = {
 
 /** Stores the process-current plugin metadata snapshot and compatible config fingerprints. */
 export function setCurrentPluginMetadataSnapshotState(
-  snapshot: unknown,
+  snapshot: PluginMetadataSnapshot | undefined,
   configFingerprint: string | undefined,
   compatiblePolicyHashes?: readonly string[],
   compatibleConfigFingerprints?: readonly string[],
@@ -58,8 +74,7 @@ export function isGatewayPluginMetadataSnapshotActive(): boolean {
 export function getGatewayPluginMetadataSnapshot(): PluginMetadataSnapshot | undefined {
   const cache = getPluginCache();
   if (cache.kind === "process" && cache.metadata.current.owner === "gateway") {
-    // SAFETY: Gateway publication stores the complete typed snapshot in its owning generation.
-    return cache.metadata.current.snapshot as PluginMetadataSnapshot | undefined;
+    return cache.metadata.current.snapshot;
   }
   return undefined;
 }
@@ -67,8 +82,7 @@ export function getGatewayPluginMetadataSnapshot(): PluginMetadataSnapshot | und
 /** Management compares a fresh candidate with boot state without making boot its read context. */
 export function getProcessGatewayPluginMetadataSnapshot(): PluginMetadataSnapshot | undefined {
   if (isGatewayPluginMetadataSnapshotActive()) {
-    // SAFETY: Production Gateway publication accepts only a complete typed snapshot.
-    return getProcessPluginCache().metadata.current.snapshot as PluginMetadataSnapshot;
+    return getProcessPluginCache().metadata.current.snapshot;
   }
   return undefined;
 }
