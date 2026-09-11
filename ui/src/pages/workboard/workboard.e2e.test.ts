@@ -422,18 +422,8 @@ suite.define(() => {
       expect(await createForm.getByLabel("Notes").isDisabled()).toBe(true);
       expect(await createForm.getByLabel("Labels").isDisabled()).toBe(true);
       expect(await createForm.getByRole("button", { name: /^Session:/u }).isDisabled()).toBe(true);
-      expect(
-        await createForm
-          .getByRole("group", { name: "Status", exact: true })
-          .getByRole("radio", { name: "Todo", exact: true })
-          .isDisabled(),
-      ).toBe(true);
-      expect(
-        await createForm
-          .getByRole("group", { name: "Priority", exact: true })
-          .getByRole("radio", { name: "Normal", exact: true })
-          .isDisabled(),
-      ).toBe(true);
+      expect(await createForm.getByRole("button", { name: /^Status:/u }).isDisabled()).toBe(true);
+      expect(await createForm.getByRole("button", { name: /^Priority:/u }).isDisabled()).toBe(true);
       expect(
         await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
       ).toBe(true);
