@@ -2201,6 +2201,34 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).loaded).toBe(false);
   });
 
+  it("reconciles selection after live refresh without dropping filtered-out cards", async () => {
+    const removed = makeCard({ id: "removed" });
+    const archived = makeCard({ id: "archived" });
+    const retained = makeCard({ id: "retained", status: "done" });
+    const client = createSequencedClient({
+      "workboard.cards.list": [
+        listResult([removed, archived, retained]),
+        listResult([{ ...archived, metadata: { archivedAt: 20 } }, retained]),
+        listResult([]),
+      ],
+    });
+    await loadBoard(client);
+    state.selectedCardIds = new Set([removed.id, archived.id, retained.id]);
+    state.bulkDialog = { kind: "delete", cardIds: [removed.id, archived.id, retained.id] };
+    state.statusFilter = new Set(["todo"]);
+    state.query = "no visible matches";
+
+    await refreshWorkboard({ host, client, source: "live" });
+    expect(state.selectedCardIds).toEqual(new Set([retained.id]));
+    expect(state.bulkDialog).toEqual({ kind: "delete", cardIds: [retained.id] });
+    expect(state.statusFilter).toEqual(new Set(["todo"]));
+    expect(state.query).toBe("no visible matches");
+
+    await refreshWorkboard({ host, client, source: "live" });
+    expect(state.selectedCardIds.size).toBe(0);
+    expect(state.bulkDialog).toBeNull();
+  });
+
   it("reloads a previously loaded board after lifecycle teardown", async () => {
     const reopenedCard = makeCard({ title: "Reopened board" });
     const client = createSequencedClient({
@@ -3685,8 +3713,10 @@ describe("workboard controller", () => {
       return { card: { ...child, status: "running", metadata: undefined } };
     });
     getWorkboardState(host).cards = [parent, child];
+    state.selectedCardIds = new Set([parent.id, child.id]);
 
     await deleteCard(client, parent.id);
+    expect(state.selectedCardIds).toEqual(new Set([child.id]));
 
     const remaining = expectDefined(getWorkboardState(host).cards[0], "remaining child card");
     expect(remaining).toMatchObject({ id: child.id });
@@ -4620,8 +4650,10 @@ describe("workboard controller", () => {
       metadata: { archivedAt: 20 },
     });
     const client = createClient({ "workboard.cards.archive": { card: archived } });
+    state.selectedCardIds.add("card-1");
 
     await archiveCard(client, "card-1");
+    expect(state.selectedCardIds.size).toBe(0);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.archive", {
       id: "card-1",
