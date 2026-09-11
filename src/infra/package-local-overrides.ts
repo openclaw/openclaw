@@ -2,6 +2,7 @@ import { execFile, type ExecFileException } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { root as openFsRoot } from "./fs-safe.js";
@@ -28,12 +29,42 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
 export type {
   LocalPackageOverridesPlan,
   LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+
+function resolveLocalOverrideRuntimeUrls(): string[] {
+  return [
+    import.meta.resolve("@openclaw/fs-safe/config"),
+    import.meta.resolve("@openclaw/fs-safe/root"),
+    import.meta.resolve("@openclaw/fs-safe/durability"),
+    import.meta.resolve("@openclaw/fs-safe/errors"),
+  ];
+}
+
+/** Resolve while the installed updater still exists; keep its complete dependency scope. */
+export async function prepareLocalOverrideRuntime(params: {
+  sourceRoot: string;
+  destinationRoot: string;
+}): Promise<string[]> {
+  const sourceRoot = await fs.realpath(params.sourceRoot);
+  const destinationRoot = path.join(
+    await fs.realpath(path.dirname(params.destinationRoot)),
+    path.basename(params.destinationRoot),
+  );
+  return await Promise.all(
+    resolveLocalOverrideRuntimeUrls().map(async (url) => {
+      // Real paths preserve external stores, and rebase in-project dependencies with
+      // the entire retained npm package or native package-manager project.
+      const modulePath = await fs.realpath(fileURLToPath(url));
+      return pathToFileURL(relocateRuntimePath(modulePath, [{ sourceRoot, destinationRoot }])).href;
+    }),
+  );
+}
 
 // Keep required native policy isolated from the operator's process-global defaults.
 // Root.move in fs-safe 0.8.5 is a check+rename fallback, even in required mode.
@@ -67,6 +98,7 @@ try {
 
 async function runRequiredFsSafeMove(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   sourcePath: string;
   relativePath: string;
   onMoved?: () => void;
@@ -81,10 +113,7 @@ async function runRequiredFsSafeMove(params: {
         "--input-type=module",
         "--eval",
         REQUIRED_FS_SAFE_OPERATION_SCRIPT,
-        import.meta.resolve("@openclaw/fs-safe/config"),
-        import.meta.resolve("@openclaw/fs-safe/root"),
-        import.meta.resolve("@openclaw/fs-safe/durability"),
-        import.meta.resolve("@openclaw/fs-safe/errors"),
+        ...params.runtimeUrls,
         params.packageFs.rootReal,
         params.sourcePath,
         params.relativePath,
@@ -127,6 +156,7 @@ function createLocalOverrideMutationPath(relativePath: string, label: string): s
 
 async function moveLocalOverrideTargetNoReplace(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   sourcePath: string;
   relativePath: string;
   onMoved?: () => void;
@@ -148,6 +178,7 @@ async function writeRollbackBackup(params: {
 
 async function publishLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   sourcePath: string;
   relativePath: string;
   onPublished?: () => void;
@@ -172,11 +203,13 @@ async function publishLocalOverrideTarget(params: {
 
 async function restoreMovedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   movedPath: string;
   relativePath: string;
 }): Promise<void> {
   await publishLocalOverrideTarget({
     packageFs: params.packageFs,
+    runtimeUrls: params.runtimeUrls,
     sourcePath: params.movedPath,
     relativePath: params.relativePath,
   });
@@ -184,6 +217,7 @@ async function restoreMovedLocalOverrideTarget(params: {
 
 async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   movedPath: string;
   relativePath: string;
   originalError: unknown;
@@ -192,6 +226,7 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   try {
     await restoreMovedLocalOverrideTarget({
       packageFs: params.packageFs,
+      runtimeUrls: params.runtimeUrls,
       movedPath: params.movedPath,
       relativePath: params.relativePath,
     });
@@ -223,6 +258,7 @@ async function removeLocalOverrideCleanupPath(
 
 async function moveExpectedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   relativePath: string;
   expected: PackageDistContentInventoryEntry;
 }): Promise<{ movedPath: string; content: Buffer; mode: number }> {
@@ -231,6 +267,7 @@ async function moveExpectedLocalOverrideTarget(params: {
   try {
     await moveLocalOverrideTargetNoReplace({
       packageFs: params.packageFs,
+      runtimeUrls: params.runtimeUrls,
       sourcePath: params.relativePath,
       relativePath: movedPath,
       onMoved: () => {
@@ -255,6 +292,7 @@ async function moveExpectedLocalOverrideTarget(params: {
     if (targetMoved) {
       await throwAfterRestoringMovedLocalOverrideTarget({
         packageFs: params.packageFs,
+        runtimeUrls: params.runtimeUrls,
         movedPath,
         relativePath: params.relativePath,
         originalError: error,
@@ -267,6 +305,7 @@ async function moveExpectedLocalOverrideTarget(params: {
 
 async function replaceLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   relativePath: string;
   sourcePath: string;
   mode?: number;
@@ -293,6 +332,7 @@ async function replaceLocalOverrideTarget(params: {
       }
       const moved = await moveExpectedLocalOverrideTarget({
         packageFs: params.packageFs,
+        runtimeUrls: params.runtimeUrls,
         relativePath: params.relativePath,
         expected: params.expected,
       });
@@ -322,6 +362,7 @@ async function replaceLocalOverrideTarget(params: {
     const cleanupPaths = [temporaryPath, ...(movedPath ? [movedPath] : [])];
     await publishLocalOverrideTarget({
       packageFs: params.packageFs,
+      runtimeUrls: params.runtimeUrls,
       sourcePath: temporaryPath,
       relativePath: params.relativePath,
       onPublished: () => {
@@ -334,6 +375,7 @@ async function replaceLocalOverrideTarget(params: {
     if (movedPath && !committed) {
       await throwAfterRestoringMovedLocalOverrideTarget({
         packageFs: params.packageFs,
+        runtimeUrls: params.runtimeUrls,
         movedPath,
         relativePath: params.relativePath,
         originalError: error,
@@ -350,12 +392,14 @@ async function replaceLocalOverrideTarget(params: {
 
 async function deleteLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
+  runtimeUrls: readonly string[];
   relativePath: string;
   expected: PackageDistContentInventoryEntry;
   backupPath: string;
 }): Promise<number> {
   const moved = await moveExpectedLocalOverrideTarget({
     packageFs: params.packageFs,
+    runtimeUrls: params.runtimeUrls,
     relativePath: params.relativePath,
     expected: params.expected,
   });
@@ -383,6 +427,7 @@ async function deleteLocalOverrideTarget(params: {
   } catch (error) {
     return await throwAfterRestoringMovedLocalOverrideTarget({
       packageFs: params.packageFs,
+      runtimeUrls: params.runtimeUrls,
       movedPath: moved.movedPath,
       relativePath: params.relativePath,
       originalError: error,
@@ -395,6 +440,7 @@ export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
   reapply: boolean;
+  runtimeUrls?: readonly string[];
 }): Promise<LocalPackageOverridesResult> {
   if (!params.plan) {
     return emptyResult("none");
@@ -481,7 +527,9 @@ export async function applyLocalPackageOverrides(params: {
   let applied = 0;
   let preserveRollbackDir = false;
   let packageFs: LocalOverridePackageRoot | undefined;
+  let runtimeUrls: readonly string[] = [];
   try {
+    runtimeUrls = params.runtimeUrls ?? resolveLocalOverrideRuntimeUrls();
     packageFs = await openFsRoot(params.packageRoot, {
       hardlinks: "reject",
       mkdir: true,
@@ -506,6 +554,7 @@ export async function applyLocalPackageOverrides(params: {
         }
         const backupMode = await deleteLocalOverrideTarget({
           packageFs,
+          runtimeUrls,
           relativePath: change.path,
           expected: change.baseline,
           backupPath,
@@ -522,6 +571,7 @@ export async function applyLocalPackageOverrides(params: {
         });
         const cleanupPaths = await replaceLocalOverrideTarget({
           packageFs,
+          runtimeUrls,
           relativePath: change.path,
           sourcePath: change.savedPath,
           mode: change.mode,
@@ -572,6 +622,7 @@ export async function applyLocalPackageOverrides(params: {
         try {
           await deleteLocalOverrideTarget({
             packageFs,
+            runtimeUrls,
             relativePath: entry.path,
             expected: entry.applied,
             backupPath: path.join(rollbackDir, "applied", entry.path),
@@ -587,6 +638,7 @@ export async function applyLocalPackageOverrides(params: {
         try {
           const cleanupPaths = await replaceLocalOverrideTarget({
             packageFs,
+            runtimeUrls,
             relativePath: entry.path,
             sourcePath: entry.backupPath,
             mode: entry.backupMode,

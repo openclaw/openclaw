@@ -10,6 +10,7 @@ import {
 import {
   captureLocalPackageOverrides,
   applyLocalPackageOverrides,
+  prepareLocalOverrideRuntime,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides.js";
 import {
@@ -120,6 +121,7 @@ export async function swapStagedPackageInstall(params: {
   );
   let shimBackupDir: string | undefined;
   let hadPackage = false;
+  let localOverrideRuntimeUrls: readonly string[] | undefined;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
   let previousRoot: PackageRootIntegrityFingerprint | undefined;
@@ -295,6 +297,12 @@ export async function swapStagedPackageInstall(params: {
       await collectPackageDistInventory(params.installTarget.packageRoot, {
         includePackageExcludedFiles: true,
       });
+      if (params.localOverrides.reapply) {
+        localOverrideRuntimeUrls = await prepareLocalOverrideRuntime({
+          sourceRoot: targetSwapRoot,
+          destinationRoot: backupRoot,
+        });
+      }
     }
     packageRollbackVerified = hadPackage && previousVersion !== null;
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
@@ -619,6 +627,7 @@ export async function swapStagedPackageInstall(params: {
         packageRoot: params.stage.packageRoot,
         plan,
         reapply: params.localOverrides.reapply,
+        runtimeUrls: localOverrideRuntimeUrls,
       });
       params.onLocalOverrides?.(result);
       if (result.status === "error") {
