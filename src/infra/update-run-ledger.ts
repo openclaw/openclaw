@@ -5,6 +5,7 @@ import {
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,

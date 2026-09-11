@@ -104,13 +104,13 @@ export function runExistingOpenClawStateWriteTransaction<T>(
             pathname,
             env,
           );
-          const db = openTrackedStateDatabase(pathname, { existingOnly: true });
+          const db = openTrackedStateDatabase(pathname, {
+            existingOnly: true,
+            // Match Doctor: inbound dependents must fail validation, never cascade away.
+            ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
+          });
           try {
             setSqliteBusyTimeout(db, busyTimeoutMs);
-            if (contract.recoverTaskDeliveryOrphans) {
-              // Match Doctor: inbound dependents must fail validation, never cascade away.
-              db.exec("PRAGMA foreign_keys = OFF;");
-            }
             return runCoordinatedStateTransaction(
               db,
               () => {
