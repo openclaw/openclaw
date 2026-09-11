@@ -6,6 +6,11 @@ on:
         description: Exact source commit to exercise with this branch's UI proof
         required: true
         type: string
+      swift_filter:
+        description: Swift test suites for this proof
+        required: false
+        default: ChatCatalogProjectionTests
+        type: string
   push:
     branches: [feat/ios-catalog-protocol-consumers]
     paths: [.github/workflows/ios-catalog-proof.yml]
@@ -80,6 +85,8 @@ jobs:
             end
           end
           RUBY
+          if brew list --versions swiftformat >/dev/null; then brew unlink swiftformat; fi
+          if brew list --versions swiftlint >/dev/null; then brew unlink swiftlint; fi
           brew install openclaw/catalog-proof/ios-proof-swiftformat openclaw/catalog-proof/ios-proof-swiftlint
           echo "$(brew --prefix ios-proof-swiftformat)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix ios-proof-swiftlint)/bin" >> "$GITHUB_PATH"
@@ -88,12 +95,25 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
       - name: Prepare package resources
         run: node scripts/prepare-apple-mermaid.mjs
+      - name: Format changed Swift sources with the repository pin
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin 543718e0edc508b25abad69f53d617a46e8ce8b4
+          files=()
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then files+=("$file"); fi
+          done < <(git diff --name-only 543718e0edc508b25abad69f53d617a46e8ce8b4 HEAD -- '*.swift')
+          files+=(apps/ios/UITests/ChatCatalogUITests.swift apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatCatalogProjectionTests.swift)
+          swiftformat "${files[@]}" --config config/swiftformat
+          git diff --binary > "$RUNNER_TEMP/catalog-proof/format.patch"
       - name: Swift package tests
         id: swift
         continue-on-error: true
+        env:
+          SWIFT_FILTER: ${{ inputs.swift_filter }}
         run: |
           set -o pipefail
-          swift test --package-path apps/shared/OpenClawKit --scratch-path "$RUNNER_TEMP/catalog-swift" --no-parallel --filter ChatCatalogProjectionTests 2>&1 | tee "$RUNNER_TEMP/catalog-proof/swift-tests.log"
+          swift test --package-path apps/shared/OpenClawKit --scratch-path "$RUNNER_TEMP/catalog-swift" --no-parallel --filter "$SWIFT_FILTER" 2>&1 | tee "$RUNNER_TEMP/catalog-proof/swift-tests.log"
       - name: Start isolated real Gateway and record catalog
         run: |
           set -euo pipefail
@@ -156,6 +176,7 @@ jobs:
           path: |
             ${{ runner.temp }}/catalog-proof/*.log
             ${{ runner.temp }}/catalog-proof/*.json
+            ${{ runner.temp }}/catalog-proof/*.patch
             ${{ runner.temp }}/catalog-proof/*-sha.txt
             ${{ runner.temp }}/catalog-proof/catalog.xcresult
             ${{ runner.temp }}/catalog-proof/ios-products.tgz
