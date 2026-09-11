@@ -1349,6 +1349,13 @@ export async function createGatewaySession(params: {
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,
+          // Main groups dashboard roots; it must not supply their reply-time model.
+          ...(createdNewEntry &&
+          dashboardParentSessionKey &&
+          !explicitParentSessionKey &&
+          !initializedEntry.modelOverride
+            ? { modelOverrideSource: "default" as const }
+            : {}),
           ...(storedParentSessionKey ? { parentSessionKey: storedParentSessionKey } : {}),
           ...(canonicalParentSessionKey && currentParentSessionEntry?.sessionId
             ? { parentSessionId: currentParentSessionEntry.sessionId }

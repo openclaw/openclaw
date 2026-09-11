@@ -2486,13 +2486,14 @@ export const en: TranslationMap & {
     retry: "Retry",
   },
   modelSetup: {
-    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
+    missingAuth:
+      "Connect a provider to send messages with this model. You can still use /models or /help.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
     required: {
       title: "No AI provider configured",
-      body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+      body: "Connect a provider and choose a model to send messages. You can still use /models or /help.",
       action: "Connect an AI provider",
     },
     loading: "Checking this Gateway for available AI access…",

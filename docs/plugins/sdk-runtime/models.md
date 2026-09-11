@@ -148,6 +148,15 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
   </Accordion>
 </AccordionGroup>
 
+## Model menu readiness
+
+`openclaw/plugin-sdk/models-provider-runtime` exposes `formatModelsAvailability`
+for channel model menus. Pass the published `ModelsProviderData` to get ready
+counts, display labels, and recovery notices from its paired readiness facts.
+The helper does not refresh the catalog or change model names or selection IDs.
+Pass its result to `formatModelsAvailableHeader` as `availability` and use its
+`modelNames` for button labels. Older SDK producers can omit readiness facts.
+
 ## Prepared completion SDK compatibility
 
 Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of

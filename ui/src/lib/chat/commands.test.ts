@@ -9,6 +9,7 @@ import {
   getRemoteCommandEntries,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
+  isModelIndependentChatCommand,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
@@ -17,6 +18,18 @@ import {
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("model-independent commands", () => {
+  it.each(["/models", "/models xai", "/status", "/help", "/id", "/login xai"])(
+    "admits %s without model access",
+    (command) => expect(isModelIndependentChatCommand(command)).toBe(true),
+  );
+
+  it.each(["Hello", "/compact", "/help explain this", "/unknown", "Please /models"])(
+    "requires model access for %s",
+    (command) => expect(isModelIndependentChatCommand(command)).toBe(false),
+  );
 });
 
 describe("findInlineSlashCompletion", () => {

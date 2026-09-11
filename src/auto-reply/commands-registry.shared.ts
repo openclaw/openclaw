@@ -137,6 +137,7 @@ function defineBuiltinCommand(
     category,
     tier,
     activeRunSafe: options.activeRunSafe,
+    modelIndependent: options.modelIndependent,
   };
 }
 
@@ -151,8 +152,12 @@ export function buildBuiltinChatCommands(
     return ["default", ...levels.filter((level) => level !== "default")];
   };
   const commands: ChatCommandDefinition[] = [
-    defineBuiltinCommand("help", "Show available commands.", "status", "essential"),
-    defineBuiltinCommand("commands", "List all slash commands.", "status", "power"),
+    defineBuiltinCommand("help", "Show available commands.", "status", "essential", {
+      modelIndependent: "no-args",
+    }),
+    defineBuiltinCommand("commands", "List all slash commands.", "status", "power", {
+      modelIndependent: "no-args",
+    }),
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
       args: [
         defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
@@ -208,6 +213,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
       activeRunSafe: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       args: [
@@ -235,6 +241,7 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
+      modelIndependent: "always",
       nativeProviders: ["discord", "slack", "telegram"],
       args: [defineCommandArgument("provider", "Provider or connection method")],
     }),
@@ -255,6 +262,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("approve", "Approve or deny exec requests.", "management", "power", {
       acceptsArgs: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand(
       "context",
@@ -334,6 +342,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("whoami", "Show your sender id.", "status", "power", {
       textAliases: ["/whoami", "/id"],
+      modelIndependent: "no-args",
     }),
     defineBuiltinCommand(
       "session",
@@ -471,6 +480,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
       activeRunSafe: true,
+      modelIndependent: "no-args",
     }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
     defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power"),
@@ -595,6 +605,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
       acceptsArgs: true,
+      modelIndependent: "always",
     }),
     defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
       args: [

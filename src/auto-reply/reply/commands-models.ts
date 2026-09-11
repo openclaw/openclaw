@@ -11,6 +11,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import {
@@ -77,6 +78,10 @@ export type ModelsProviderData = {
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
+  modelAvailability?: Map<
+    string,
+    Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">
+  >;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
   isCurrent?: () => boolean;
@@ -246,6 +251,7 @@ async function projectPreparedModelsProviderData(
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
+  const modelAvailability: NonNullable<ModelsProviderData["modelAvailability"]> = new Map();
   const hasAuth: ModelCatalogAuthChecker =
     options.view === "all"
       ? async () => true
@@ -275,6 +281,10 @@ async function projectPreparedModelsProviderData(
         entry,
         await decisions.evaluateEntry(entry, routeVariants),
       );
+      modelAvailability.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, {
+        availability: evaluation.availability,
+        unavailableReason: evaluation.unavailableReason,
+      });
       if (evaluation.routeResolution?.kind === "incompatible") {
         incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
       }
@@ -430,12 +440,23 @@ async function projectPreparedModelsProviderData(
       const entry = [...visibleCatalog, ...catalog].find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
+      const authEntry = entry ?? { provider, id: model, name: model };
+      const variants = snapshot.routeVariants.filter(
+        (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(authEntry),
+      );
+      if (!modelAvailability.has(`${provider}/${model}`)) {
+        const evaluation = decisions.evaluateNative(
+          authEntry,
+          await decisions.evaluateEntry(authEntry, variants.length ? variants : [authEntry]),
+        );
+        modelAvailability.set(`${provider}/${model}`, {
+          availability: evaluation.availability,
+          unavailableReason: evaluation.unavailableReason,
+        });
+      }
       if (!entry) {
         continue;
       }
-      const variants = snapshot.routeVariants.filter(
-        (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(entry),
-      );
       const runtimes = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
       if (!runtimes) {
         continue;
@@ -461,6 +482,7 @@ async function projectPreparedModelsProviderData(
     providers,
     resolvedDefault,
     modelNames,
+    modelAvailability,
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
@@ -575,6 +597,47 @@ function resolveProviderLabel(params: {
   return `${params.provider} · 🔑 ${authLabel}`;
 }
 
+export function formatModelsAvailability(data: ModelsProviderData, provider?: string) {
+  const modelNames = new Map(data.modelNames);
+  const notices = new Set<string>();
+  let available = 0;
+  for (const [id, models] of data.byProvider) {
+    if (provider && id !== provider) {
+      continue;
+    }
+    for (const model of models) {
+      const key = `${id}/${model}`;
+      const state = data.modelAvailability?.get(key);
+      if (!state || state.availability === true) {
+        available += 1;
+        continue;
+      }
+      let label: string;
+      let recovery: string;
+      switch (state.unavailableReason) {
+        case "missing-auth":
+          label = "Sign-in needed";
+          recovery = `Connect with /login ${id}.`;
+          break;
+        case "auth-failed":
+          label = "Sign-in failed";
+          recovery = `Sign in again with /login ${id}.`;
+          break;
+        case "cooldown":
+          label = "Temporarily unavailable";
+          recovery = "Try again later or choose another model.";
+          break;
+        default:
+          label = state.availability === false ? "Unavailable" : "Availability unknown";
+          recovery = "Run /models again or choose another model.";
+      }
+      modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
+      notices.add(`${id}: ${label}. ${recovery}`);
+    }
+  }
+  return { available, modelNames, notice: [...notices].join("\n") };
+}
+
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
@@ -583,6 +646,7 @@ export function formatModelsAvailableHeader(params: {
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
+  availability?: ReturnType<typeof formatModelsAvailability>;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
@@ -592,7 +656,13 @@ export function formatModelsAvailableHeader(params: {
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
-  return `Models (${providerLabel}) — ${params.total} available`;
+  const count =
+    params.availability && params.availability.available !== params.total
+      ? `${params.availability.available} of ${params.total}`
+      : String(params.total);
+  return [`Models (${providerLabel}) — ${count} available`, params.availability?.notice]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildModelsMenuText(params: {
@@ -664,7 +734,14 @@ export async function resolveModelsCommandReply(params: {
     }
     throw error;
   }
-  const { byProvider, providers, modelNames } = data;
+  const { byProvider, providers } = data;
+  const availability = formatModelsAvailability(
+    data,
+    parsed.action === "list" ? parsed.provider : undefined,
+  );
+  const { modelNames } = availability;
+  const withAvailability = (text: string) =>
+    [text, availability.notice].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
 
@@ -678,12 +755,12 @@ export async function resolveModelsCommandReply(params: {
       });
     if (channelData) {
       return {
-        text: "Select a provider:",
+        text: withAvailability("Select a provider:"),
         channelData,
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
     };
   }
 
@@ -699,12 +776,12 @@ export async function resolveModelsCommandReply(params: {
     });
     if (channelData) {
       return {
-        text: "Select a provider:",
+        text: withAvailability("Select a provider:"),
         channelData,
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
     };
   }
 
@@ -765,6 +842,7 @@ export async function resolveModelsCommandReply(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
+        availability,
       }),
       channelData: interactiveChannelData,
     };
@@ -800,7 +878,9 @@ export async function resolveModelsCommandReply(params: {
     `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
   ];
   for (const id of pageModels) {
-    lines.push(`- ${provider}/${id}`);
+    const key = `${provider}/${id}`;
+    const label = modelNames.get(key);
+    lines.push(`- ${key}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`);
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
@@ -809,7 +889,7 @@ export async function resolveModelsCommandReply(params: {
   if (!all) {
     lines.push(`All: /models list ${provider} all`);
   }
-  return { text: lines.join("\n") };
+  return { text: withAvailability(lines.join("\n")) };
 }
 
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {

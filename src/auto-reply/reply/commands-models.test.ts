@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,6 +30,7 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
 const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
     authenticatedProviders: new Set(["anthropic", "google", "openai"]),
+    unavailableReason: "missing-auth" as ModelAuthAvailabilityEvaluation["unavailableReason"],
     createProviderAuthChecker: vi.fn(),
     runtimeChoices: new Map<string, string[] | undefined>(),
     selectedRoute: undefined as
@@ -62,6 +64,7 @@ const modelProviderAuthMocks = vi.hoisted(() => {
         const incompatible = hasConflictingRoute(ref);
         return {
           availability: checker(provider, ref),
+          unavailableReason: checker(provider, ref) ? undefined : state.unavailableReason,
           routeResolution: incompatible
             ? {
                 kind: "incompatible" as const,
@@ -153,6 +156,7 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   pluginMetadataMocks.getCurrent.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.unavailableReason = "missing-auth";
   modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.runtimeChoices.clear();
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
@@ -326,6 +330,66 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
+
+  it.each([
+    {
+      reason: "missing-auth",
+      catalog: "known",
+      label: "Sign-in needed",
+      recovery: "Connect with /login anthropic.",
+    },
+    {
+      reason: "missing-auth",
+      catalog: "missing",
+      label: "Sign-in needed",
+      recovery: "Connect with /login anthropic.",
+    },
+    {
+      reason: "auth-failed",
+      catalog: "known",
+      label: "Sign-in failed",
+      recovery: "Sign in again with /login anthropic.",
+    },
+    {
+      reason: "cooldown",
+      catalog: "known",
+      label: "Temporarily unavailable",
+      recovery: "Try again later or choose another model.",
+    },
+  ] as const)(
+    "explains a retained primary with $reason and $catalog catalog entry",
+    async ({ reason, catalog, label, recovery }) => {
+      modelProviderAuthMocks.authenticatedProviders.delete("anthropic");
+      modelProviderAuthMocks.unavailableReason = reason;
+      if (catalog === "missing") {
+        modelCatalogMocks.loadModelCatalog.mockReturnValue([]);
+      }
+      const params = buildParams("/models");
+      params.ctx.Surface = "telegram";
+      params.command.channel = "telegram";
+      params.command.surface = "telegram";
+
+      const menu = await handleModelsCommand(params, true);
+      expect(menu?.reply?.text).toContain(`anthropic: ${label}. ${recovery}`);
+      expect(menu?.reply?.channelData).toMatchObject({
+        telegram: {
+          buttons: expect.arrayContaining([
+            [{ text: "anthropic", callback_data: "models:anthropic" }],
+          ]),
+        },
+      });
+
+      params.command.commandBodyNormalized = "/models anthropic";
+      const page = await handleModelsCommand(params, true);
+      expect(page?.reply?.text).toContain(
+        `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
+      );
+      expect(page?.reply?.text).toContain(recovery);
+      if (reason === "cooldown") {
+        expect(page?.reply?.text).not.toContain("/login");
+      }
+    },
+  );
 
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([

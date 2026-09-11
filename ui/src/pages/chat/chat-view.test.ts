@@ -41,6 +41,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
@@ -6879,20 +6880,59 @@ describe("chat welcome", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("omits the composer footer behind the empty model setup splash", () => {
+  it("keeps model-free commands usable beside empty model setup", () => {
+    const onModelSetup = vi.fn();
+    const onSend = vi.fn();
     const container = renderChatView({
-      canSend: false,
-      disabledBanner: {
-        kind: "composer-replacement",
-        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
-        actionLabel: "Connect an AI provider",
-        onAction: () => undefined,
-      },
+      draft: "/models",
+      modelRequiredReason: "Connect a provider to send messages.",
+      disabledBanner: createChatModelSetupBanner(onModelSetup),
       modelSetupRequired: true,
+      onSend,
     });
 
     expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
+    expect(getComposerTextarea(container).disabled).toBe(false);
+    const send = expectDefined(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+    );
+    expect(send.disabled).toBe(false);
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+    container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Hello", "/compact", "/help explain this"])(
+    "keeps %s editable but prevents submission without model access",
+    (draft) => {
+      const onSend = vi.fn();
+      const container = renderChatView({
+        draft,
+        modelRequiredReason: "Connect a provider to send messages.",
+        onSend,
+      });
+      const textarea = getComposerTextarea(container);
+      expect(textarea.disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(true);
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps model-free commands blocked in a read-only conversation", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      draft: "/models",
+      canSend: false,
+      modelRequiredReason: "Connect a provider to send messages.",
+      onSend,
+    });
+    expect(getComposerTextarea(container).disabled).toBe(true);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {
