@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -83,6 +84,51 @@ struct DashboardFailurePageTests {
 }
 
 struct DashboardBrowserSignInPolicyTests {
+    @Test(arguments: [false, true])
+    func `endpoint expiry context supplies the page without another profile lookup`(gesture: Bool) throws {
+        let url = try #require(URL(string: "wss://gateway.example/operator/"))
+        let expiry = Date(timeIntervalSince1970: 10000)
+        let context = MacGatewayProfileStore.BrowserSignInRequired(
+            profile: MacGatewayProfile(id: "research", name: "Research", url: url), expiresAt: expiry)
+        let configuration = try #require(try DashboardManager.WindowConfiguration(
+            signedOut: context, profileID: "research", name: nil, endpoint: nil, userGesture: gesture))
+
+        #expect(configuration.signedOut == DashboardFailurePage.SignedOut(
+            target: .profile("research"), name: "Research", host: "gateway.example", expiresAt: expiry))
+        #expect(configuration.url.absoluteString == "https://gateway.example/operator/")
+        #expect(configuration.autoStartSignIn == gesture)
+        #expect(!configuration.auth.hasCredential)
+        #expect(configuration.browserSession == nil)
+        #expect(try DashboardManager.WindowConfiguration(
+            signedOut: context, profileID: "other", name: nil, endpoint: nil, userGesture: gesture) == nil)
+    }
+
+    @Test func `injected browser endpoint supplies local expiry facts without credentials on the page`() throws {
+        let url = try #require(URL(string: "wss://gateway.example/operator/"))
+        let expiry = Date(timeIntervalSince1970: 10000)
+        let session = try GatewayBrowserSession(
+            origin: #require(URL(string: "https://gateway.example/")),
+            issuer: #require(URL(string: "https://issuer.example/")),
+            audience: "fixture", subject: "fixture", token: "synthetic", expiresAt: expiry)
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url, "synthetic-token", "synthetic-password"), routeAuthority: nil, browserSession: session)
+        let configuration = try #require(try DashboardManager.WindowConfiguration(
+            signedOut: GatewayBrowserSessionError.expired, profileID: "research", name: "Catalog name",
+            endpoint: endpoint, userGesture: true))
+
+        #expect(configuration.signedOut?.name == "Catalog name")
+        #expect(configuration.signedOut?.expiresAt == expiry)
+        #expect(configuration.url.absoluteString == "https://gateway.example/operator/")
+        #expect(!configuration.auth.hasCredential)
+        #expect(configuration.browserSession == nil)
+        #expect(try DashboardManager.WindowConfiguration(
+            signedOut: GatewayBrowserSessionError.wrongOrigin, profileID: "research", name: nil,
+            endpoint: endpoint, userGesture: true) == nil)
+        #expect(try DashboardManager.WindowConfiguration(
+            signedOut: GatewayBrowserSessionError.expired, profileID: "research", name: nil,
+            endpoint: nil, userGesture: true) == nil)
+    }
+
     @Test func `only expiry errors bypass normal error presentation`() {
         let now = Date(timeIntervalSince1970: 10000)
         let errors: [Error] = [

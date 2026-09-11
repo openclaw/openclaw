@@ -25,14 +25,6 @@ final class DashboardManager {
         let windowID: ObjectIdentifier?
     }
 
-    private final class ProfileObservation {
-        let id = UUID()
-        var task: Task<Void, Never>?
-        var snapshot: GatewayConnection.PushDelivery?
-        var revision: UInt64 = 0
-        var needsRefresh = false
-    }
-
     @ObservationIgnored private var controller: DashboardWindowController?
     @ObservationIgnored let alertPresenter = DashboardAlertPresenter()
     @ObservationIgnored private var mainTarget: DashboardGatewayTarget
@@ -739,8 +731,7 @@ extension DashboardManager {
         }
         // User intent belongs to the native shell and survives background document replacement.
         let intent = DashboardGatewaySwitchIntent(target: target)
-        let needsReplacement = forceReload || currentTarget != target || !source.canDeliverNativeCommands ||
-            target != .primary
+        let needsReplacement = forceReload || currentTarget != target || !source.canDeliverNativeCommands
         source.pendingGatewaySwitch = needsReplacement ? intent : nil
         guard source.pendingGatewaySwitch != nil else {
             if !forceReload { self.recordSelection(target) }
@@ -827,7 +818,7 @@ extension DashboardManager {
         return Task { @MainActor in
             guard !Task.isCancelled, self.windowLifetime == lifetime else { return }
             if reuseExisting, let controller = self.dashboardController(for: target) {
-                if target == .primary {
+                if target == .primary || (controller.browserSession == nil && !controller.isShowingFailurePage) {
                     controller.show()
                 } else {
                     await self.switchTarget(target, in: controller, forceReload: true, present: true)?.value
@@ -1157,8 +1148,11 @@ extension DashboardManager {
                 try Task.checkCancellation()
                 guard !self.unavailableProfileIDs.contains(profileID) else { throw CancellationError() }
                 let revision = self.profileCredentialRevisions[profileID, default: 0]
+                var resolvedEndpoint: GatewayConnection.EndpointSnapshot?
                 do {
                     let endpoint = try await profileEndpoint(profileID: profileID)
+                    resolvedEndpoint = endpoint
+                    try endpoint.browserSession?.validate(for: endpoint.config.url)
                     if Self.requiresBrowserSignIn(
                         error: nil, expiresAt: endpoint.browserSession?.expiresAt, userGesture: userGesture)
                     {
@@ -1170,16 +1164,15 @@ extension DashboardManager {
                     return (configuration, endpoint)
                 } catch {
                     guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
-                    guard Self.requiresBrowserSignIn(error: error, expiresAt: nil, userGesture: userGesture) else {
-                        throw error
-                    }
-                    let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
-                    guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
-                    guard let profile = profiles.first(where: { $0.profile.id == profileID }),
-                          let configuration = try WindowConfiguration(signedOut: profile, userGesture: userGesture)
+                    guard let configuration = try WindowConfiguration(
+                        signedOut: error,
+                        profileID: profileID,
+                        name: self.gatewayEntries.first { $0.id == target.bridgeID }?.name,
+                        endpoint: resolvedEndpoint,
+                        userGesture: userGesture)
                     else { throw error }
                     return (configuration, GatewayConnection.EndpointSnapshot(
-                        config: (profile.profile.url, nil, nil), routeAuthority: nil))
+                        config: (configuration.url, nil, nil), routeAuthority: nil))
                 }
             }
         }
@@ -1344,6 +1337,11 @@ extension DashboardManager {
             self.installMainController(existing.value.controller)
         }
         if let controller, mainTarget != .primary {
+            if controller.isWindowOpen, controller.browserSession == nil, !controller.isShowingFailurePage {
+                controller.show()
+                await self.refreshGatewaySnapshots()
+                return
+            }
             await self.switchTarget(
                 self.mainTarget, in: controller, forceReload: true, present: userGesture)?.value
             if !userGesture { self.controller?.show() }
