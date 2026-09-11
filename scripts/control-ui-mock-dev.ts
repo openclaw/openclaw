@@ -2770,9 +2770,52 @@ async function createChatPickerScenario(
             label: "Mac Studio",
             status: "available",
             desktop: true,
+            ...(process.env.MOCK_PICKER_INVENTORY === "1"
+              ? {
+                  platform: "darwin",
+                  sessionHost: true,
+                  workerSlots: { total: 4, available: 3 },
+                }
+              : {}),
           },
+          ...(process.env.MOCK_PICKER_INVENTORY === "1"
+            ? [
+                {
+                  id: "node:mock-macbook-offline",
+                  type: "node",
+                  label: "MacBook Pro",
+                  platform: "darwin",
+                  status: "unavailable",
+                  sessionHost: true,
+                  lastConnectedAtMs: baseTime - 5 * 86_400_000,
+                  lastDisconnectedAtMs: baseTime - (4 * 24 + 13) * 3_600_000,
+                },
+              ]
+            : []),
         ],
-        profiles: [{ id: "aws", providerId: "aws" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "aws",
+            ...(process.env.MOCK_PICKER_INVENTORY === "1"
+              ? { executionModes: ["worker-turn", "remote-exec"] }
+              : {}),
+          },
+          ...(process.env.MOCK_PICKER_INVENTORY === "1"
+            ? [
+                {
+                  id: "crabbox",
+                  providerId: "crabbox",
+                  executionModes: ["worker-turn", "remote-exec"],
+                },
+                {
+                  id: "test-cloud",
+                  providerId: "test-cloud",
+                  executionModes: ["worker-turn", "remote-exec"],
+                },
+              ]
+            : []),
+        ],
       },
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
