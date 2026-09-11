@@ -288,7 +288,7 @@ export function createSlackPresenceMonitor(params: {
     pruneTargets(nowMs());
     const target = stopped ? undefined : resolveTarget();
     if (!target) {
-      await params.cooldownStore.delete(cooldownKey);
+      await params.cooldownStore.deleteIf?.(cooldownKey, (current) => current === now);
       return;
     }
     const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
@@ -301,7 +301,7 @@ export function createSlackPresenceMonitor(params: {
       },
     });
     if (!queued) {
-      await params.cooldownStore.delete(cooldownKey);
+      await params.cooldownStore.deleteIf?.(cooldownKey, (current) => current === now);
       return;
     }
     wake({

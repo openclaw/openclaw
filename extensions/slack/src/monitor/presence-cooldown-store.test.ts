@@ -35,6 +35,10 @@ describe("openSlackPresenceCooldownStore", () => {
         clock.mockReturnValue(now + 8 * 60 * 60 * 1_000);
         expect(await reopened.lookup("default:T123:U123")).toBeUndefined();
         expect(await reopened.registerIfAbsent("default:T123:U123", now + 1)).toBe(true);
+        expect(await reopened.deleteIf?.("default:T123:U123", (value) => value === now)).toBe(
+          false,
+        );
+        expect(await reopened.lookup("default:T123:U123")).toBe(now + 1);
       } finally {
         clock.mockRestore();
         resetPluginStateStoreForTests();
