@@ -1307,7 +1307,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search current web; normalized provider results. Supports freshness or date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter). Perplexity cannot combine freshness with date_after/date_before.",
+        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter). Perplexity time filters are mutually exclusive.",
         "inputSchema": {
           "properties": {
             "count": {
@@ -1321,11 +1321,11 @@
               "type": "string"
             },
             "date_after": {
-              "description": "Published after YYYY-MM-DD. For Perplexity, use this date range instead of freshness.",
+              "description": "Published after YYYY-MM-DD.",
               "type": "string"
             },
             "date_before": {
-              "description": "Published before YYYY-MM-DD. For Perplexity, use this date range instead of freshness.",
+              "description": "Published before YYYY-MM-DD.",
               "type": "string"
             },
             "domain_filter": {
@@ -1336,7 +1336,7 @@
               "type": "array"
             },
             "freshness": {
-              "description": "Time filter: day/week/month/year. For Perplexity, cannot be combined with date_after/date_before.",
+              "description": "Time filter: day/week/month/year (Perplexity: choose this or a date range).",
               "type": "string"
             },
             "language": {

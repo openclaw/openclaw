@@ -29,7 +29,7 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     freshness: {
       type: "string",
       description:
-        "Filter by time: 'day' (24h), 'week', 'month', or 'year'. Cannot be combined with date_after/date_before.",
+        "Filter by time: 'day' (24h), 'week', 'month', or 'year'; choose this or a date range.",
     },
   };
 
@@ -45,12 +45,12 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     properties.date_after = {
       type: "string",
       description:
-        "Native Perplexity Search API only. Only results published after this date (YYYY-MM-DD); use instead of freshness.",
+        "Native Perplexity Search API only. Only results published after this date (YYYY-MM-DD).",
     };
     properties.date_before = {
       type: "string",
       description:
-        "Native Perplexity Search API only. Only results published before this date (YYYY-MM-DD); use instead of freshness.",
+        "Native Perplexity Search API only. Only results published before this date (YYYY-MM-DD).",
     };
     properties.domain_filter = {
       type: "array",
