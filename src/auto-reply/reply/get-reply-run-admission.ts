@@ -1,9 +1,15 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  resolveAgentEffectiveModelPrimary,
+} from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -437,10 +443,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       shouldUseEphemeralSession && authSessionEntry
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
+    const configuredProfile = splitTrailingAuthProfile(
+      resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
+    ).profile;
+    const defaultModel = configuredProfile
+      ? resolveDefaultModelForAgent({ cfg, agentId })
+      : undefined;
+    const configuredProfileId =
+      defaultModel &&
+      resolveModelCatalogIdentityKey({ provider, id: model }) ===
+        resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
+        ? configuredProfile
+        : undefined;
     const selection = await resolveSessionAuthSelection({
       cfg,
       provider,
       modelId: model,
+      ...(configuredProfileId ? { configuredProfileId } : {}),
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,

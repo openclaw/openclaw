@@ -532,12 +532,12 @@ async function verifyAndActivateCandidate(
   const savedCredential = staged.authProfileId
     ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir).profiles[staged.authProfileId]
     : undefined;
-  if (savedCredential?.setup?.replacement) {
+  if (savedCredential?.setup?.replacement && !params.activationConfirmed) {
     if (
       !params.prompter ||
       !(await params.prompter.confirm({
         message: "Connection verified. Activate this saved sign-in?",
-        initialValue: false,
+        initialValue: true,
       }))
     ) {
       return failure({

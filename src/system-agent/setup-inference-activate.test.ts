@@ -197,7 +197,10 @@ async function fixture(
       };
     };
   }
-  const activate = (kind: Parameters<typeof activateSetupInference>[0]["kind"] = "provider-auth") =>
+  const activate = (
+    kind: Parameters<typeof activateSetupInference>[0]["kind"] = "provider-auth",
+    activationConfirmed?: true,
+  ) =>
     metadata.run(() =>
       activateSetupInference({
         kind,
@@ -206,7 +209,8 @@ async function fixture(
         nativeSessionCatalogsEnabled: false,
         surface: "cli",
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        prompter,
+        prompter: activationConfirmed ? undefined : prompter,
+        activationConfirmed,
         deps,
       }),
     );
@@ -348,12 +352,13 @@ describe("setup activation credentials and configuration", () => {
   });
 
   it.each([
-    { explicitProfile: true, restartRequired: false },
-    { explicitProfile: false, restartRequired: false },
-    { explicitProfile: true, restartRequired: true },
+    { explicitProfile: true, restartRequired: false, activationConfirmed: undefined },
+    { explicitProfile: false, restartRequired: false, activationConfirmed: undefined },
+    { explicitProfile: true, restartRequired: true, activationConfirmed: undefined },
+    { explicitProfile: true, restartRequired: false, activationConfirmed: true as const },
   ])(
-    "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, restart: $restartRequired)",
-    async ({ explicitProfile, restartRequired }) => {
+    "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, restart: $restartRequired, confirmed: $activationConfirmed)",
+    async ({ explicitProfile, restartRequired, activationConfirmed }) => {
       const setup = await fixture({ restartRequired });
       const originalProfileId = "openai:fixture";
       const originalCredential = { ...credential, key: "working-original-key" };
@@ -449,7 +454,7 @@ describe("setup activation credentials and configuration", () => {
       expect(declined, await setup.diagnostics(declined)).toMatchObject({ ok: false });
       expect(setup.prompter.confirm).toHaveBeenCalledWith({
         message: "Connection verified. Activate this saved sign-in?",
-        initialValue: false,
+        initialValue: true,
       });
       expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
       const inactive = loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir);
@@ -457,8 +462,10 @@ describe("setup activation credentials and configuration", () => {
       expect(inactive.lastGood).toEqual(store.lastGood);
       expect(inactive.usageStats).toEqual(store.usageStats);
 
-      vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
-      const accepted = await setup.activate(retryKind);
+      vi.mocked(setup.prompter.confirm).mockImplementation(
+        async ({ initialValue }) => initialValue ?? false,
+      );
+      const accepted = await setup.activate(retryKind, activationConfirmed);
       expect(accepted, await setup.diagnostics(accepted)).toMatchObject({ ok: true });
       expect(setup.readProfile()).toEqual([savedId, credential]);
       expect(setup.login).toHaveBeenCalledOnce();

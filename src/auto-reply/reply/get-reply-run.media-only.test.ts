@@ -3094,6 +3094,51 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it.each([
+    { configuredModel: "claude-opus-4-1", expectedProfile: "activated-account" },
+    { configuredModel: "claude-sonnet-4-5", expectedProfile: "automatic-account" },
+  ])(
+    "uses $expectedProfile when the configured model is $configuredModel",
+    async ({ configuredModel, expectedProfile }) => {
+      const { resolveDefaultModelForAgent } = await import("../../agents/model-selection.js");
+      const { resolveSessionAuthSelection } =
+        await import("../../agents/auth-profiles/session-override.js");
+      const defaultResolver = vi.mocked(resolveDefaultModelForAgent);
+      const previous = expectDefined(
+        defaultResolver.getMockImplementation(),
+        "default model resolver",
+      );
+      defaultResolver.mockReturnValue({ provider: "anthropic", model: configuredModel });
+      vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(
+        async ({ configuredProfileId }) => ({
+          profileId: configuredProfileId ?? "automatic-account",
+          source: configuredProfileId ? "user" : "auto",
+          routeRequirement: undefined,
+        }),
+      );
+      try {
+        await runPrepared({
+          cfg: {
+            agents: {
+              defaults: {},
+              entries: { default: { model: `anthropic/${configuredModel}@activated-account` } },
+            },
+          },
+          isNewSession: false,
+          sessionEntry: {
+            sessionId: "credential-activation",
+            updatedAt: 1,
+            authProfileOverride: "automatic-account",
+            authProfileOverrideSource: "auto",
+          },
+        });
+        expect(requireLastRunReplyAgentCall().followupRun.run.authProfileId).toBe(expectedProfile);
+      } finally {
+        defaultResolver.mockImplementation(previous);
+      }
+    },
+  );
+
   it("re-resolves auth profile after waiting for a prior run", async () => {
     const { resolveSessionAuthSelection } =
       await import("../../agents/auth-profiles/session-override.js");
