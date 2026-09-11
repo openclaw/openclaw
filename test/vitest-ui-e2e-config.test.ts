@@ -606,7 +606,7 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/session-progress-interrupted-dismiss.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial",
+          project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
           fileParallelism: false,

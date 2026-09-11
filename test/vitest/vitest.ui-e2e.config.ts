@@ -89,6 +89,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
+  "ui/src/e2e/session-progress-interrupted-dismiss.real-gateway.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
