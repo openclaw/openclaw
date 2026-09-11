@@ -182,6 +182,17 @@ function createAnthropicModelFixture(overrides: Partial<Model> = {}): Model {
   };
 }
 
+function createQualityGuardSessionManager(): ExtensionContext["sessionManager"] {
+  const sessionManager = stubSessionManager();
+  setCompactionSafeguardRuntime(sessionManager, {
+    model: createAnthropicModelFixture(),
+    recentTurnsPreserve: 0,
+    qualityGuardEnabled: true,
+    qualityGuardMaxRetries: 1,
+  });
+  return sessionManager;
+}
+
 type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
 const createCompactionHandler = () => {
   let compactionHandler: CompactionHandler | undefined;
@@ -2435,13 +2446,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ).toBe(true);
     mockSummarizeInStages.mockResolvedValue(summaryResult(auditValidBeforeFinalization));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = {
       ...createCompactionEvent({ messageText: `${latestAsk} ${identifier}`, tokensBefore: 1_500 }),
       preparation: {
@@ -2493,13 +2498,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ].join("\n");
     mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: `${latestAsk} ${identifier}`,
       tokensBefore: 1_500,
@@ -2549,13 +2548,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(generatedSummary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
     mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: `${latestAsk} ${identifier}`,
       tokensBefore: 1_500,
@@ -2643,13 +2636,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(generatedSummary.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
     mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: `${latestAsk} ${identifier}`,
       tokensBefore: 1_500,
@@ -2690,13 +2677,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ].join("\n");
     mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: `${latestAsk} ${identifier}`,
       tokensBefore: 1_500,
@@ -2731,13 +2712,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ].join("\n");
     mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: latestAsk,
       tokensBefore: 1_500,
@@ -2955,13 +2930,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       .mockResolvedValueOnce(summaryResult("invalid first attempt"))
       .mockResolvedValueOnce(summaryResult(validRetry));
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: `${latestAsk} ${identifier}`,
       tokensBefore: 1_500,
@@ -3262,13 +3231,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         ),
       );
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({ messageText: latestAsk, tokensBefore: 90_000 });
     (event.preparation as { settings?: { reserveTokens: number } }).settings = {
       reserveTokens: 4_000,
@@ -3303,13 +3266,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         throw new Error("transport closed after abort");
       });
 
-    const sessionManager = stubSessionManager();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model: createAnthropicModelFixture(),
-      recentTurnsPreserve: 0,
-      qualityGuardEnabled: true,
-      qualityGuardMaxRetries: 1,
-    });
+    const sessionManager = createQualityGuardSessionManager();
     const event = createCompactionEvent({
       messageText: "report deployment status",
       tokensBefore: 1_500,
