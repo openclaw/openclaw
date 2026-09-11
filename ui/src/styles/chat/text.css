@@ -639,19 +639,24 @@
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link--titled {
-  display: inline-block;
+  display: inline-grid;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
   padding-inline-start: 1.5em;
   background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  color: var(--text-strong);
   font-family: var(--font-body);
   font-weight: 600;
   line-height: 1.25;
+  white-space: nowrap;
+}
+
+/* The grid supplies the text baseline; only its label clips for ellipsis. */
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution)
+  .markdown-session-link--titled
+  > .markdown-session-link__label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  vertical-align: -0.12em;
-  white-space: nowrap;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
