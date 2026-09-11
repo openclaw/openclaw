@@ -13,15 +13,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { StoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import type { RuntimeModelNormalization } from "./model-runtime-normalization.js";
 
-/** Normalizes a stored model ref, resolving runtime aliases only for CLI-bound sessions. */
-export function normalizeStoredRuntimeModelRef(
-  provider: string,
-  model: string,
+/** Preserves selected model IDs while resolving provider aliases for CLI-bound sessions. */
+export function resolveStoredRuntimeModelRef(
+  ref: StoredModelOverride & { provider: string },
   cfg?: OpenClawConfig,
   sessionEntry?: SessionEntry,
   normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 ) {
-  const normalized = normalizeModelRef(provider, model, normalization);
+  const normalized =
+    ref.routeResolution === "resolved"
+      ? { provider: ref.provider, model: ref.model }
+      : normalizeModelRef(ref.provider, ref.model, normalization);
   const hasCliSessionBinding =
     sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
   const canonicalProvider =

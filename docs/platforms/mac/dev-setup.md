@@ -48,7 +48,7 @@ private Node worker from the canonical package artifact for every requested
 pnpm packer; Corepack-only setups are supported. Packaging verifies native
 capabilities and worker readiness in temporary state before and after signing,
 then replaces the previous app. `scripts/restart-mac.sh` uses
-the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
+the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
 
 Each worker keeps native binaries that support its architecture and omits
@@ -96,7 +96,9 @@ The packaged app embeds the canonical `scripts/install-cli.sh` installer. On a
 fresh profile, choose **This Mac** during onboarding; the app installs the
 matching user-space CLI and runtime before starting the Gateway wizard.
 
-For manual development recovery, install the matching CLI yourself:
+For manual development recovery, install the matching CLI yourself. Read the
+version from the app: choose **About OpenClaw** in the menu bar, or run
+`openclaw-mac status --json`, which reports the app version and build.
 
 The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.

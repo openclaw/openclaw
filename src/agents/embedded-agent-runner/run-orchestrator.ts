@@ -83,7 +83,6 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
@@ -95,9 +94,8 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
 export function runEmbeddedAgent(
-  paramsInput: RunEmbeddedAgentParams,
+  internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =
@@ -291,7 +289,7 @@ async function runEmbeddedAgentInternal(
         manifestPlugins: pluginMetadataSnapshot,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
-        requestedRouteResolution: "resolved",
+        requestedRouteResolution: params.requestedRouteResolution,
         fallbacksOverride: runtimePluginFallbacksOverride,
       }).map((candidate, index) =>
         requestedHarnessRuntime &&
@@ -340,11 +338,10 @@ async function runEmbeddedAgentInternal(
         const preparedModelRuntimeLease = await (
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? // Probe homes outlive only the attempt client, not independent live catalog clients.
-              acquireReadOnlyPreparedModelRuntime(
-                preparedInput,
-                laneController.abortSignal,
-                "static",
-              )
+              acquireReadOnlyPreparedModelRuntime(preparedInput, {
+                abortSignal: laneController.abortSignal,
+                catalogMode: "static",
+              })
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains

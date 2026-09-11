@@ -64,7 +64,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
 | `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 

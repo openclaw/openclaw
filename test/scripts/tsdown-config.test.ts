@@ -608,6 +608,16 @@ describe("tsdown config", () => {
     const unifiedRuntimeConfig = configs.find(
       (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
     );
+    const standaloneRuntimeConfig = configs.find(
+      (entry) =>
+        entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
+        entry.dts === false &&
+        hasWorkerEntry(
+          entry,
+          "infra/sqlite-readonly-location.worker",
+          path.resolve("src/infra/sqlite-readonly-location.worker.ts"),
+        ),
+    );
     const unifiedDeclarationConfigs = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name) =>
       configs.find((entry) => entry.name === name),
     );
@@ -615,15 +625,28 @@ describe("tsdown config", () => {
     expect(packageConfigs).not.toHaveLength(0);
     expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
     expect(unifiedRuntimeConfig?.dts).toBe(false);
+    expect(standaloneRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
     const runtimeEntryNames = Object.keys(unifiedRuntimeConfig?.entry ?? {});
     expect(runtimeEntryNames).toContain("native-hook-relay/entry");
     const declarationEntryNames = runtimeEntryNames.filter(
       (name) => name !== "native-hook-relay/entry",
     );
+    const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
+    const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
+    const declarationInputs = Object.fromEntries([
+      ...Object.entries(unifiedRuntimeConfig?.entry ?? {}).filter(
+        ([name]) => name !== "native-hook-relay/entry",
+      ),
+      ...standaloneEntries,
+    ]);
     for (const declarationConfig of unifiedDeclarationConfigs) {
       expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
-      expect(Object.keys(declarationConfig?.entry ?? {})).toEqual(declarationEntryNames);
+      // Splitting executable graphs keeps all declaration aliases and the shared input order.
+      expect(declarationConfig?.entry).toEqual(declarationInputs);
+      expect(
+        Object.keys(declarationConfig?.entry ?? {}).filter((name) => !standaloneNames.has(name)),
+      ).toEqual(declarationEntryNames);
     }
   });
 

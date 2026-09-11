@@ -3,10 +3,8 @@ import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catal
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../../config/model-cost.js";
-import {
-  findConfiguredProviderModel,
-  matchesProviderScopedModelId,
-} from "../../config/model-provider-config.js";
+import { findConfiguredProviderModel } from "../../config/model-provider-config.js";
+import { materializeConfiguredProviderModelRows } from "../../config/model-provider-rows.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
@@ -172,31 +170,25 @@ export function mergeConfiguredModelCost(params: {
   cfg?: OpenClawConfig;
   configuredModel?: NonNullable<InlineProviderConfig["models"]>[number];
   catalogCost?: Model["cost"];
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): Model["cost"] {
   let authoredCost = params.configuredModel?.cost;
   if (params.cfg && params.configuredModel) {
     const source = projectConfigOntoRuntimeSourceSnapshot(params.cfg);
     if (source !== params.cfg) {
-      const modelId = normalizeConfiguredProviderCatalogModelId(
-        params.provider,
-        params.configuredModel.id,
-      ).trim();
-      const sourceModels = resolveConfiguredProviderConfig(source, params.provider)?.models?.filter(
-        (model) =>
-          matchesProviderScopedModelId({
-            candidateId: normalizeConfiguredProviderCatalogModelId(
-              params.provider,
-              model.id,
-            ).trim(),
-            provider: params.provider,
-            modelId,
-          }),
-      );
-      if (sourceModels?.length) {
-        authoredCost = sourceModels.reduce<Model["cost"] | undefined>(
-          (cost, model) => mergeModelCost(model.cost, cost),
-          undefined,
-        );
+      // Source aliases resolve once; the selected runtime ID already names its row.
+      const modelId = params.configuredModel.id.trim();
+      const sourceModel = materializeConfiguredProviderModelRows(
+        { models: resolveConfiguredProviderConfig(source, params.provider)?.models ?? [] },
+        (id) =>
+          normalizeConfiguredProviderCatalogModelId(
+            params.provider,
+            id,
+            params.providerMetadataOwners?.modelIdNormalizationPolicies,
+          ),
+      ).models.find((model) => model.id === modelId);
+      if (sourceModel) {
+        authoredCost = sourceModel.cost;
       }
     }
   }
@@ -610,6 +602,7 @@ export function applyConfiguredProviderOverrides(params: {
             cfg: params.cfg,
             configuredModel: metadataOverrideModel,
             catalogCost: discoveredModel.cost,
+            providerMetadataOwners: params.providerMetadataOwners,
           }),
           contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,

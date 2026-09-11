@@ -26,26 +26,6 @@ private func chatTextMessage(
     return AnyCodable(message)
 }
 
-private func chatTextModelMessage(
-    role: String,
-    text: String,
-    timestamp: Double,
-    idempotencyKey: String? = nil) -> OpenClawChatMessage
-{
-    OpenClawChatMessage(
-        role: role,
-        content: [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
-        ],
-        timestamp: timestamp,
-        idempotencyKey: idempotencyKey)
-}
-
 private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
     AnyCodable([
         "role": role,
@@ -3803,7 +3783,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "main",
-                    message: chatTextModelMessage(role: "assistant", text: "done", timestamp: now + 1),
+                    message: cacheMessage(role: "assistant", text: "done", timestamp: now + 1),
                     messageId: "msg-done",
                     messageSeq: 2)))
         try await waitUntil("assistant session message clears activity indicator") {
@@ -4367,7 +4347,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "intermediate output",
                         timestamp: 1),
@@ -5260,7 +5240,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(role: "assistant", text: "dedupe me", timestamp: now + 2),
+                    message: cacheMessage(role: "assistant", text: "dedupe me", timestamp: now + 2),
                     messageId: "msg-assistant-final",
                     messageSeq: 2)))
 
@@ -5301,7 +5281,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(role: "assistant", text: "canonical first", timestamp: now + 2),
+                    message: cacheMessage(role: "assistant", text: "canonical first", timestamp: now + 2),
                     messageId: "msg-assistant-first",
                     messageSeq: 2)))
 
@@ -5371,7 +5351,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(role: "assistant", text: "OK", timestamp: now + 4),
+                    message: cacheMessage(role: "assistant", text: "OK", timestamp: now + 4),
                     messageId: "msg-second-assistant",
                     messageSeq: 4)))
 
@@ -5791,7 +5771,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "canonical active request",
                         timestamp: canonicalTimestamp,
@@ -5853,7 +5833,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "active reply",
                         timestamp: now + 2,
@@ -5864,7 +5844,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "newer request from another client",
                         timestamp: now + 3,
@@ -6104,7 +6084,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "steer the active run",
                         timestamp: now + 2),
@@ -6114,7 +6094,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "canonical steered reply",
                         timestamp: now + 3,
@@ -6200,7 +6180,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "independent channel request",
                         timestamp: now + 2),
@@ -6210,7 +6190,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "same reply",
                         timestamp: now + 3),
@@ -6275,7 +6255,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "canonical redacted request",
                         timestamp: now + 1,
@@ -6286,7 +6266,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "active reply",
                         timestamp: now + 2,
@@ -6297,7 +6277,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "newer request from another client",
                         timestamp: now + 3,
@@ -6426,7 +6406,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "early final reply",
                         timestamp: now + 4,
@@ -6686,11 +6666,11 @@ struct ChatViewModelTests {
     }
 
     @Test @MainActor func `repeated refresh preserves an unconfirmed same text turn after pending retirement`() {
-        let firstUser = chatTextModelMessage(
+        let firstUser = cacheMessage(
             role: "user", text: "retry", timestamp: 5000, idempotencyKey: "first:user")
-        let firstAnswer = chatTextModelMessage(
+        let firstAnswer = cacheMessage(
             role: "assistant", text: "first answer", timestamp: 6000)
-        let secondUser = chatTextModelMessage(
+        let secondUser = cacheMessage(
             role: "user", text: "retry", timestamp: 1000, idempotencyKey: "second:user")
         let previous = [firstUser, firstAnswer, secondUser]
         let canonicalHistory = [firstUser, firstAnswer]
@@ -7046,7 +7026,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:aiden:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "spoken transcript",
                         timestamp: now),
@@ -7076,7 +7056,7 @@ struct ChatViewModelTests {
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "global",
                     agentId: "work",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "global transcript",
                         timestamp: now),
@@ -7106,7 +7086,7 @@ struct ChatViewModelTests {
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "global",
                     agentId: "main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "wrong global transcript",
                         timestamp: now),
@@ -7173,7 +7153,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:sentinel:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "wrong agent transcript",
                         timestamp: now),
@@ -7200,7 +7180,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "assistant",
                         text: "agent reply",
                         timestamp: now + 1),
@@ -7296,7 +7276,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "redacted canonical text",
                         timestamp: canonicalTimestamp,
@@ -7335,7 +7315,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "legacy echo",
                         timestamp: canonicalTimestamp),
@@ -7355,7 +7335,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "legacy echo",
                         timestamp: localCanonicalTimestamp,
@@ -7396,7 +7376,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "repeat",
                         timestamp: now + 1000),
@@ -7423,7 +7403,7 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "other",
-                    message: chatTextModelMessage(
+                    message: cacheMessage(
                         role: "user",
                         text: "other transcript",
                         timestamp: now),

@@ -396,8 +396,15 @@ Custom providers configured under `models.providers` are written into `models.js
 Generated plugin catalogs supply model inventory, not request credentials. Their
 cached API keys, authentication modes, and request headers do not authorize model
 requests. Use a current auth profile or authored request configuration instead.
-The session SDK preserves authored `models.json` keys and headers while merging
-generated model metadata below authored rows.
+Without a current configuration snapshot, the session SDK preserves authored
+`models.json` keys and headers while merging generated metadata below authored rows.
+With a current snapshot, the provider's current declaration owns request settings;
+keys and headers left only in an older file do not regain authority.
+
+Prepared catalogs compose static, generated, authored-file, and current configured
+rows before resolving models. Explicit model routes win over captured routes, which
+win over provider defaults. In replace mode, only current declarations enter the
+catalog; manifest inventory and runtime fallback rows cannot add other models.
 
 Provider aliases in `models.providers.*.models` resolve once before discovery.
 If an alias and its exact destination are both configured, the destination row
@@ -406,8 +413,9 @@ Catalog IDs from `models.json` and plugin discovery stay literal during refresh,
 apart from built-in corrections for retired Google and Together model names.
 
 <AccordionGroup>
-  <Accordion title="Merge mode precedence">
-    For matching provider IDs:
+  <Accordion title="models.json publication merge precedence">
+    The file publication step uses these rules for matching provider IDs. They do
+    not override current-configuration request authority in a prepared runtime:
 
     - A non-empty `baseUrl` already present in the agent `models.json` wins.
     - A non-empty `apiKey` in `models.json` wins only when that provider is not SecretRef-managed in the current config/auth-profile context.

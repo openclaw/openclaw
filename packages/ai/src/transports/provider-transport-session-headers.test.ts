@@ -150,7 +150,10 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         plugin: {
           ...initialHost.plugin,
           resolveTransportTurnState: ({ context }) => ({
-            headers: { "x-opencode-session": context.turnId },
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
           }),
         },
       });
@@ -197,6 +200,7 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         } else {
           expect(sessionHeader).toBe(testCase.expected);
         }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
       }
     },
   );
@@ -220,13 +224,16 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
           ...initialHost.plugin,
           resolveProviderStream: () => undefined,
           resolveTransportTurnState: ({ context }) => ({
-            headers: { "x-opencode-session": context.turnId },
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
           }),
         },
       });
       const apiRegistry = createApiRegistry();
       registerBuiltInApiProviders(apiRegistry);
-      const sourceModel = {
+      const baseModel = {
         id: "test-model",
         name: "Test model",
         api,
@@ -238,22 +245,42 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         contextWindow: 128_000,
         maxTokens: 128,
       } satisfies Model;
-      const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
 
-      expect(model.api).toBe(api);
-      const provider = apiRegistry.getApiProvider(model.api);
-      if (!provider) {
-        throw new Error(`No provider registered for ${api}`);
+      for (const testCase of [
+        { expected: "generated" },
+        { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
+        { headers: { "x-opencode-session": "stream-session" }, expected: "stream-session" },
+      ] as const) {
+        const sourceModel = {
+          ...baseModel,
+          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+        };
+        const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
+        expect(model.api).toBe(api);
+        const provider = apiRegistry.getApiProvider(model.api);
+        if (!provider) {
+          throw new Error(`No provider registered for ${api}`);
+        }
+        requests.length = 0;
+        const stream = provider.streamSimple(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          {
+            apiKey: "test-key",
+            headers: "headers" in testCase ? testCase.headers : undefined,
+          },
+        );
+        await stream.result();
+
+        expect(requests).toHaveLength(1);
+        const sessionHeader = requests[0]?.headers.get("x-opencode-session");
+        if (testCase.expected === "generated") {
+          expect(sessionHeader).toBeTruthy();
+        } else {
+          expect(sessionHeader).toBe(testCase.expected);
+        }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
       }
-      const stream = provider.streamSimple(
-        model,
-        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-        { apiKey: "test-key" },
-      );
-      await stream.result();
-
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.headers.get("x-opencode-session")).toBeTruthy();
     },
   );
 });

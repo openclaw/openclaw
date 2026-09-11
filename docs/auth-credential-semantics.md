@@ -148,10 +148,26 @@ they do not change message-execution profile rotation or session pins.
 
 ## External CLI credential discovery
 
-- Runtime-only credentials owned by external CLIs (Claude CLI for `claude-cli`, Codex CLI for `openai`, MiniMax CLI for `minimax-portal`) are discovered only when the provider, runtime, or auth profile is in scope for the current operation, or when a stored local profile for that external source already exists.
+- Supported external CLI credentials are discovered only when the provider, runtime, or auth profile is in scope for the current operation, or when a stored local profile for that external source already exists.
 - Auth-store callers choose an explicit external-CLI discovery mode: `none` for persisted/plugin auth only, `existing` for refreshing already stored external CLI profiles, or `scoped` for a concrete provider/profile set.
 - Read-only/status paths pass `allowKeychainPrompt: false`; they use file-backed external CLI credentials only and do not read or reuse macOS Keychain results.
 - `/models` reuses external login evidence already prepared with its catalog, so those providers remain visible without a second OpenClaw login. Opening the default menu does not repeat external CLI discovery; explicit auth order and route compatibility still apply.
+
+Codex owns its native login. Ordinary status and model reads do not import its
+credentials into OpenClaw profiles. To retain a configured CLI-backed
+`openai:default` profile, explicitly import the current Codex login with
+`openclaw models auth login --provider openai --method device-code`. When that
+OAuth profile is declared in `auth.profiles`, the source is the current native
+Codex home, and no other managed OpenAI OAuth profile exists, import preserves
+the profile ID and its existing model and session pins. The configured model
+and native credential file stay unchanged. An explicitly isolated agent home
+continues to use the imported OpenClaw profile through its isolated runtime.
+
+Fresh imports keep account-scoped profile IDs. A matching existing account and
+user reuse their stored profile. Import from another home, missing account/user
+identity, or an existing managed account does not claim the legacy pin. Use the
+reported imported profile explicitly in those cases. Source changes and
+conflicting profiles detected before persistence stop only the selected import.
 
 ## OAuth SecretRef Policy Guard
 

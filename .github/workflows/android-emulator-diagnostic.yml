@@ -145,11 +145,24 @@ jobs:
           for executable in /usr/bin/apt-get /usr/bin/sudo /usr/bin/timeout; do
             test -x "$executable"
           done
-          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
-            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update
+          apt_source="/etc/apt/sources.list.d/ubuntu.sources"
+          apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"
+          test -s "$apt_source"
+          if [[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]; then
+            echo "::error::Task-private APT source-parts path must remain absent"
+            exit 1
+          fi
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$apt_source"
+            -o "Dir::Etc::sourceparts=$apt_source_parts"
+          )
           /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
             /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
-            /usr/bin/apt-get install -y --no-install-recommends acl imagemagick
+            /usr/bin/apt-get "${apt_options[@]}" update
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get "${apt_options[@]}" install \
+            -y --no-install-recommends acl imagemagick
           test -x /usr/bin/convert
           test -x /usr/bin/identify
 
@@ -174,11 +187,17 @@ jobs:
           smoke_dir="$DIAGNOSTIC_DIR/image-conversion-smoke"
           mkdir -p "$smoke_dir"
           for dimensions in 1440x2560 454x454; do
-            /usr/bin/convert -size "$dimensions" 'xc:rgba(24,120,200,0.5)' \
+            width="${dimensions%x*}"
+            height="${dimensions#*x}"
+            /usr/bin/convert \
+              \( -size "$dimensions" 'gradient:#000000-#ff0000' \) \
+              \( -size "${height}x${width}" 'gradient:#000000-#00ff00' -transpose \) \
+              -compose plus -composite \
+              -alpha set -channel A -evaluate set 60% +channel \
               "$smoke_dir/input-${dimensions}.png"
             "$adapter" -s format jpeg -s formatOptions best \
               "$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"
-            /usr/bin/identify -ping \
+            /usr/bin/identify +ping \
               -format 'format=%m width=%w height=%h colorspace=%[colorspace] type=%[type] channels=%[channels] quality=%Q\n' \
               "$smoke_dir/output-${dimensions}.jpg" >"$smoke_dir/output-${dimensions}.txt"
           done

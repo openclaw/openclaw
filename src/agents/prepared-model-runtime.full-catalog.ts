@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Model } from "../llm/types.js";
+import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
@@ -26,10 +28,7 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
-import type {
-  PreparedConfiguredRuntimeModel,
-  PreparedRuntimeCapabilityModel,
-} from "./prepared-model-runtime.configured.js";
+import type { PreparedRuntimeCapabilityModel } from "./prepared-model-runtime.configured.js";
 import {
   acquirePreparedMediaCapabilityProviders,
   buildPreparedPluginModelCatalog,
@@ -50,51 +49,60 @@ export async function prepareFullCatalogFacts(
   agentFacts: PreparedModelRuntimeAgentFacts,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
-  catalogSource?: PreparedModelRuntimeCatalogSource,
+  catalogSource: PreparedModelRuntimeCatalogSource,
 ): Promise<PreparedModelRuntimeCatalogFacts> {
   const { env, input, templateAuthStorage } = agentFacts;
   const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
+  const observedProviders = new Set(
+    catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
+  );
   const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
     config: input.config,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     pluginMetadataSnapshot,
     ...(catalogMode === "static" ? { normalizeModels: false } : {}),
-    ...(catalogSource
-      ? {
-          includePluginCatalogs: true,
-          modelsJsonContents: catalogSource.modelsJsonContents,
-          pluginCatalogs: catalogSource.pluginCatalogs,
-        }
-      : {}),
+    includePluginCatalogs: true,
+    modelsJsonContents: catalogSource.modelsJsonContents,
+    pluginCatalogs: catalogSource.pluginCatalogs,
+    staticProviderConfigs: Object.fromEntries(
+      Object.entries(resolvePreparedProviderStaticConfigs(preparedStaticProviderCatalog)).filter(
+        ([provider]) => !observedProviders.has(normalizeProviderId(provider)),
+      ),
+    ),
   });
   const modelCatalog = await buildPreparedPluginModelCatalog({
     agentFacts,
     catalogMode,
     modelRegistry: templateModelRegistry,
-    providerOutcomes: catalogSource?.providerOutcomes,
+    providerOutcomes: catalogSource.providerOutcomes,
     pluginGeneration,
   });
   const providerStaticModels =
-    pluginGeneration.providerStaticModels ??
-    (await loadBundledProviderStaticCatalogContextModels({
-      cfg: input.config,
-      env,
-      metadataSnapshot: pluginMetadataSnapshot,
-      registeredProviders: pluginGeneration.pluginRegistry?.providers,
-      ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    }));
+    input.config.models?.mode === "replace"
+      ? []
+      : (pluginGeneration.providerStaticModels ??
+        (await loadBundledProviderStaticCatalogContextModels({
+          cfg: input.config,
+          env,
+          metadataSnapshot: pluginMetadataSnapshot,
+          registeredProviders: pluginGeneration.pluginRegistry?.providers,
+          ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        })));
   const configuredRuntimeModels = completeConfiguredRuntimeModels(
     agentFacts,
     pluginGeneration,
     templateModelRegistry,
   );
-  const providerOutcomes = catalogSource?.providerOutcomes ?? [];
+  const providerOutcomes = catalogSource.providerOutcomes ?? [];
   const completeModelCatalog = {
     ...modelCatalog,
-    staticEntries: dedupeByKey(providerStaticModels, resolveModelCatalogIdentityKey).map(
-      modelCatalogRowToEntry,
-    ),
+    staticEntries:
+      input.config.models?.mode === "replace"
+        ? []
+        : dedupeByKey(providerStaticModels, resolveModelCatalogIdentityKey).map(
+            modelCatalogRowToEntry,
+          ),
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
   };
   if (catalogMode === "live") {
@@ -229,7 +237,7 @@ export function prepareModelCatalogPublication(
 export function materializePreparedModelCatalog(
   snapshot: ModelCatalogSnapshot,
   runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[],
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[] = [],
+  configuredStaticEntries: ModelCatalogSnapshot["staticEntries"] = [],
 ): ModelCatalogSnapshot {
   // Preserve inventory reads before capability preparation when the snapshot has accessors.
   const materialized = { ...snapshot };
@@ -264,13 +272,10 @@ export function materializePreparedModelCatalog(
     });
   materialized.entries = project(sourceEntries);
   materialized.routeVariants = project(snapshot.routeVariants);
-  if (snapshot.staticEntries || configuredRuntimeModels.length > 0) {
+  if (snapshot.staticEntries || configuredStaticEntries.length > 0) {
     materialized.staticEntries = project(
       dedupeByKey(
-        [
-          ...configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
-          ...(snapshot.staticEntries ?? []),
-        ],
+        [...configuredStaticEntries, ...(snapshot.staticEntries ?? [])],
         resolveModelCatalogIdentityKey,
       ),
     );
@@ -321,7 +326,9 @@ export function createPreparedModelRuntimeSnapshot(
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
     agentFacts.runtimeCapabilityModels,
-    configuredRuntimeModels,
+    input.config.models?.mode === "replace"
+      ? []
+      : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
   );
   prepareModelCatalogThinkingPolicies({
     catalog: modelCatalog,

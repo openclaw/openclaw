@@ -19,6 +19,7 @@ import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
@@ -55,6 +56,11 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly toolIcons = new ChatToolIconController(
+    this,
+    () => this.context,
+    () => (this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined),
+  );
   private desktopFocus: {
     key: string;
     client: ChatPageHost["client"];
@@ -119,6 +125,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
+      pluginToolIcons: this.toolIcons.icons,
       presented: this.active && this.presented,
       transcriptVisible:
         this.presented &&
@@ -191,7 +198,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           content,
           host: state,
           layout: sidebarLayout,
-          transcript: this.taskSidebarTranscript,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,
@@ -199,6 +205,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
+      companionPresented:
+        this.presented &&
+        this.visuallyPresented &&
+        isSidebarSlotVisible(sidebarLayout, "companion"),
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),

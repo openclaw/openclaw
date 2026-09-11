@@ -2573,9 +2573,8 @@ openclaw-chat-session-rail {
 
 .chat-session-rail__exchange {
   display: grid;
-  gap: 6px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--chat-block-gap);
 }
 
 .chat-session-rail__exchange + .chat-session-rail__exchange {
@@ -2583,35 +2582,27 @@ openclaw-chat-session-rail {
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-.chat-session-rail__question {
-  justify-self: end;
+/* Share the main chat's bubble and Markdown skins; only the panel's column
+   geometry differs. It has no avatar gutter or transcript footer to reserve. */
+.chat-session-rail__message.chat-group {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-session-rail__message .chat-session-rail__question {
+  width: fit-content;
   max-width: 90%;
-  padding: 6px 9px;
-  border-radius: var(--radius-md) var(--radius-md) 3px var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--text);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.chat-session-rail__answer {
-  color: var(--text);
-}
-
-.chat-session-rail__answer > :first-child {
-  margin-top: 0;
-}
-
-.chat-session-rail__answer > :last-child {
-  margin-bottom: 0;
+  margin-inline-start: auto;
 }
 
 .chat-session-rail__timestamp {
-  font-size: 10.5px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-session-rail__hint {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-session-rail__exchange--error .chat-session-rail__hint {
@@ -2640,27 +2631,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__prompt {
   min-width: 0;
   flex: 1 1 auto;
-}
-
-.chat-session-rail__input {
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-}
-
-.chat-session-rail__input:focus {
-  border-color: var(--border-strong);
-  outline: none;
-}
-
-.chat-session-rail__input::placeholder {
-  color: var(--muted);
 }
 
 /* The docked form: a real column in the pane's flex row. It claims layout space

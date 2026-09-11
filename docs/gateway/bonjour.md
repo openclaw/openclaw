@@ -241,3 +241,4 @@ macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bon
 
 - Discovery policy and transport selection: [Discovery](/gateway/discovery)
 - Node pairing + approvals: [Gateway pairing](/gateway/pairing)
+- Wide-area DNS-SD setup helper: [`openclaw dns`](/cli/dns)

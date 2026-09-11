@@ -711,6 +711,88 @@ describe("Snapshot builds", () => {
     }
   });
 
+  it.each(["provisioning", "failed"] as const)(
+    "shows an admitted %s build when the first image inventory fails",
+    async (state) => {
+      let environments = [
+        buildFixture(state, state === "failed" ? "Setup recipe failed" : undefined),
+      ];
+      let failImages = true;
+      const result = { ...snapshotListFixture(), images: [], legacyLeases: [] };
+      const fixture = mountPage(buildMethods, {
+        response: (method) => {
+          if (method === "environments.list") {
+            return { environments };
+          }
+          if (method === "crabbox.images.list") {
+            if (failImages) {
+              throw new Error("Image inventory is unavailable");
+            }
+            return result;
+          }
+          if (method === "environments.destroy") {
+            environments = [];
+            return {};
+          }
+          return undefined;
+        },
+      });
+      try {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await waitForFast(() =>
+          expect(fixture.page.textContent).toContain("No cloud worker profiles"),
+        );
+        button(fixture.page, "Snapshots").click();
+        await waitForFast(() =>
+          expect(fixture.page.textContent).toContain("Image inventory is unavailable"),
+        );
+        const snapshots = expectDefined(
+          fixture.page.querySelector("openclaw-cloud-worker-snapshots"),
+          "Snapshots view",
+        );
+        expect(snapshots.textContent).toContain("build-app");
+        const imageTotal = () =>
+          [...snapshots.querySelectorAll(".settings-summary dt")].find(
+            (entry) => entry.textContent === "Images",
+          )?.nextElementSibling?.textContent;
+        expect(imageTotal()).toBeUndefined();
+        const imageReads = () =>
+          fixture.request.mock.calls.filter(([method]) => method === "crabbox.images.list").length;
+        const readsBeforePoll = imageReads();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(imageReads()).toBe(readsBeforePoll + (state === "provisioning" ? 1 : 0));
+        if (state === "provisioning") {
+          expect(snapshots.textContent).toContain("Provisioning");
+          expect(button(snapshots, "Cancel").disabled).toBe(false);
+          button(snapshots, "Cancel").click();
+          await waitForFast(() =>
+            expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
+              environmentId: "build-app",
+            }),
+          );
+          await waitForFast(() => expect(snapshots.textContent).not.toContain("build-app"));
+        } else {
+          expect(snapshots.textContent).toContain("Setup recipe failed");
+          expect(
+            [...snapshots.querySelectorAll("button")].some(
+              (entry) => entry.textContent?.trim() === "Cancel",
+            ),
+          ).toBe(false);
+        }
+        failImages = false;
+        await waitForFast(() => expect(button(snapshots, "Refresh").disabled).toBe(false));
+        button(snapshots, "Refresh").click();
+        await waitForFast(() => expect(imageTotal()).toBe("0"));
+        expect(snapshots.textContent).not.toContain("Image inventory is unavailable");
+        if (state === "failed") {
+          expect(snapshots.textContent).toContain("Setup recipe failed");
+        }
+      } finally {
+        fixture.dispose();
+      }
+    },
+  );
+
   it("retains an admitted active build and polling when the image inventory fails", async () => {
     let environments: Array<ReturnType<typeof buildFixture>> = [];
     let failImages = false;

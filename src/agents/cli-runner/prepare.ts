@@ -89,7 +89,11 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import {
+  buildCliSessionDriftNote,
+  hashCliSessionText,
+  resolveCliSessionReuse,
+} from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -271,7 +275,7 @@ function prependCliSessionDriftUserContext(
   if (reusableCliSession.mode !== "reuse-with-drift") {
     return context;
   }
-  const note = `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }

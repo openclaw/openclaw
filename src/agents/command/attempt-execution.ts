@@ -1341,6 +1341,7 @@ export function runAgentAttempt(params: {
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelRoutingProvenance: params.modelRoutingProvenance,
+    requestedRouteResolution: "resolved",
     modelHasVision: params.modelHasVision,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,

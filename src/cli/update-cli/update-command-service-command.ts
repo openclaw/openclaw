@@ -49,7 +49,7 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     serviceLoadBoundary?: UpdateServiceLoadBoundary;
   },
-  action: "install" | "restart" | "stop",
+  action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<"accepted" | "unverified"> {
   const run = params.opts.run;
@@ -84,7 +84,7 @@ export async function runUpdatedInstallGatewayCommand(
     );
   }
   const args = ["gateway", action];
-  if (installing || action === "stop") {
+  if (installing) {
     args.push("--force");
   } else if (preserveDefinition) {
     args.push("--preserve-definition");
@@ -142,9 +142,8 @@ export async function runUpdatedInstallGatewayCommand(
   if (exited && res.code === 0) {
     return response?.action === action &&
       response.ok === true &&
-      ((action === "restart" &&
-        (response.result === "restarted" || response.result === "scheduled")) ||
-        (action === "stop" && (response.result === "stopped" || response.result === "not-loaded")))
+      action === "restart" &&
+      (response.result === "restarted" || response.result === "scheduled")
       ? "accepted"
       : "unverified";
   }

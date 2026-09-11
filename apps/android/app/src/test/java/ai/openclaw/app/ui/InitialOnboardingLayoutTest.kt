@@ -235,6 +235,7 @@ class InitialOnboardingLayoutTest {
     val models = ViewModelStore()
     val mounted = mutableStateOf(true)
     var viewModelJob: Job? = null
+    val previousAutoAdvance = composeRule.mainClock.autoAdvance
     try {
       val runtime = NodeRuntime(app, prefs).also { ownedRuntime = it }
       bindNodeRuntimeTestFixture(app, runtime)
@@ -247,10 +248,15 @@ class InitialOnboardingLayoutTest {
 
       fun awaitUnapprovedRefreshCompletion() {
         composeRule.waitUntil(timeoutMillis = 10_000) {
-          runtime.gatewayConnectionDisplay.value.isConnected &&
-            runtime.nodeCapabilityApproval.value == GatewayNodeCapabilityApproval.Unapproved &&
-            !runtime.nodesDevicesRefreshing.value
+          composeRule.runOnIdle {
+            runtime.gatewayConnectionDisplay.value.isConnected &&
+              runtime.nodeCapabilityApproval.value == GatewayNodeCapabilityApproval.Unapproved &&
+              !runtime.nodesDevicesRefreshing.value &&
+              !viewModel.nodesDevicesRefreshing.value
+          }
         }
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
       }
 
       composeRule.onNodeWithText("Continue").performClick()
@@ -260,11 +266,21 @@ class InitialOnboardingLayoutTest {
       composeRule.onNodeWithText("Test connection").performClick()
       awaitUnapprovedRefreshCompletion()
       composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
+      // Socket I/O uses wall time; do not spend the UI observation timeout while waiting for it.
+      composeRule.mainClock.autoAdvance = false
+      composeRule.mainClock.advanceTimeByFrame()
 
       fun awaitHeldRefresh() {
         composeRule.waitUntil(timeoutMillis = 10_000) {
-          gateway.hasHeldNodeLists && runtime.nodesDevicesRefreshing.value
+          composeRule.runOnIdle {
+            gateway.hasHeldNodeLists &&
+              runtime.nodesDevicesRefreshing.value &&
+              viewModel.nodesDevicesRefreshing.value
+          }
         }
+        // Publish the state consumed by the screen before asserting its loading indicator.
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("Checking approval…").assertIsDisplayed()
       }
 
@@ -282,6 +298,7 @@ class InitialOnboardingLayoutTest {
 
       checkUnapprovedNode()
       composeRule.onNodeWithText("OK").performClick()
+      composeRule.mainClock.advanceTimeByFrame()
       composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
 
       repeat(2) {
@@ -297,8 +314,10 @@ class InitialOnboardingLayoutTest {
       // A new user check can report waiting again; dismissal does not suppress later feedback.
       checkUnapprovedNode()
       composeRule.onNodeWithText("OK").performClick()
+      composeRule.mainClock.advanceTimeByFrame()
       composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
     } finally {
+      composeRule.mainClock.autoAdvance = previousAutoAdvance
       gateway.releaseNodeLists()
       try {
         composeRule.runOnIdle { mounted.value = false }

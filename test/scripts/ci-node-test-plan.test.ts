@@ -942,7 +942,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         job.groups.some((group) => group.shard_name === "agentic-cli"),
       );
       expect(cliJobs).toHaveLength(1);
-      expect(cliJobs[0]).toMatchObject({ planConcurrency: 1 });
+      expect(cliJobs[0]).toMatchObject({
+        planConcurrency: 1,
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+      });
       // The combined bin uses the larger CLI budget, beyond the 150s child limit.
       expect(cliJobs[0]!.predictedSeconds).toBeGreaterThan(150);
       expect(cliJobs[0]!.pretestBuildMode).toBeUndefined();
@@ -1325,8 +1328,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           shard.groups.some((group) =>
             group.configs.includes("test/vitest/vitest.tooling.config.ts"),
           );
+        const nativeFullCli =
+          !githubPullRequestCompact.includes(shard) &&
+          shard.groups.some((group) => group.shard_name === "agentic-cli");
         expect(shard.runner).toBe(
-          blacksmithTooling ? EXTRA_LARGE_NODE_TEST_RUNNER : shard.groups[0]?.runner,
+          blacksmithTooling || shard.groups[0]?.runner === EXTRA_LARGE_NODE_TEST_RUNNER
+            ? EXTRA_LARGE_NODE_TEST_RUNNER
+            : nativeFullCli
+              ? "blacksmith-16vcpu-ubuntu-2404"
+              : shard.groups[0]?.runner,
         );
       }
     }

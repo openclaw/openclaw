@@ -343,6 +343,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
               headers: {
                 "x-client-request-id": context.sessionId ?? "",
                 "x-openclaw-session-id": context.sessionId ?? "",
+                "x-provider-route": "route-a",
               },
               degradeCooldownMs: 1_000,
             },
@@ -385,6 +386,28 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       );
     },
   );
+
+  it("preserves nonconflicting turn headers with an explicit OpenCode session", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        model: {
+          ...model,
+          headers: { "X-OpenCode-Session": "configured-session" },
+        },
+      },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(transportState.websocketOptions[0]?.headers).toMatchObject({
+      "X-OpenCode-Session": "configured-session",
+      "x-client-request-id": "session-1",
+      "x-openclaw-session-id": "session-1",
+      "x-provider-route": "route-a",
+    });
+  });
 
   it("closes the WebSocket when acceptance observation fails", async () => {
     transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);

@@ -62,10 +62,7 @@ import {
 } from "./prepared-model-runtime.refresh-scope.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
-import type {
-  PreparedModelRuntimeCatalogMode,
-  PreparedModelRuntimeLeaseOptions,
-} from "./prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -395,14 +392,13 @@ export async function acquireAgentRunPreparedModelRuntime(
 /** Acquires an exact read-only generation scoped to the returned lease. */
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  abortSignal?: AbortSignal,
-  catalogMode: PreparedModelRuntimeCatalogMode = "live",
+  options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
     { ...rawInput, readOnly: true },
     "ephemeral",
     preparedModelRuntimeLeaseContext,
-    { abortSignal, catalogMode },
+    { ...options, catalogMode: options.catalogMode ?? "live" },
   );
 }
 

@@ -534,7 +534,7 @@ describe("describeImageWithModelCore", () => {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
-      { catalogMode: "static", abortSignal: expect.any(AbortSignal) },
+      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
     );
     expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
@@ -543,6 +543,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
@@ -616,6 +617,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},

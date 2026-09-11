@@ -1,6 +1,7 @@
 // Slack plugin module implements relay-backed inbound event transport.
 import { Buffer } from "node:buffer";
 import { isIP } from "node:net";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -104,7 +105,7 @@ function openRelayWebSocket(
   }
   return new Promise((resolve, reject) => {
     const url = buildRelayWebSocketUrl(config);
-    const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken));
+    const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken, url));
 
     const cleanup = () => {
       ws.off("open", onOpen);
@@ -126,7 +127,7 @@ function openRelayWebSocket(
       reject(new Error(formatRelayClose(code, reason)));
     };
     const onAbort = () => {
-      cleanup();
+      // Keep terminal listeners until ws emits the error from closing a connecting socket.
       closeRelayWebSocket(ws);
       reject(new Error("Slack relay websocket aborted during connect"));
     };
@@ -232,8 +233,13 @@ async function handleRelayFrame(params: {
   sendRelayAck(params.ws, event.deliveryId);
 }
 
-export function buildRelayWebSocketOptions(authToken: string): ClientOptions {
+export function buildRelayWebSocketOptions(authToken: string, url: string): ClientOptions {
+  // ws supplies createConnection, bypassing Node's global proxy agent.
+  const agent = url.startsWith("wss:")
+    ? createNodeProxyAgent({ mode: "env", targetUrl: url, protocol: "https" })
+    : undefined;
   return {
+    ...(agent ? { agent } : {}),
     headers: {
       Authorization: `Bearer ${authToken}`,
     },

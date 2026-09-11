@@ -31,9 +31,9 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import {
   maybeRestartService,

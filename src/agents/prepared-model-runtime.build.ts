@@ -58,6 +58,7 @@ import {
   retainPreparedModelRuntimeGenerationResources,
 } from "./prepared-model-runtime.resources.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -161,12 +162,11 @@ function createFullModelCatalogAccess(params: {
     const current = materializePreparedModelCatalog(
       configured,
       params.agentFacts.runtimeCapabilityModels,
-      configuredRuntimeModels,
     );
     const projected = materializePreparedModelCatalog(
       catalog,
       params.agentFacts.runtimeCapabilityModels,
-      configuredRuntimeModels,
+      current.staticEntries,
     );
     projected.entries = dedupeByKey(
       [...projected.entries, ...current.entries],
@@ -264,7 +264,10 @@ function createFullModelCatalogAccess(params: {
           const authModes = {
             ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
           };
-          for (const providerId of providerIds) {
+          for (const providerId of [
+            ...providerIds,
+            ...scopeSyntheticAuthProviderRefs(Object.keys(authModes), providerIds),
+          ]) {
             delete authModes[normalizeProviderId(providerId)];
           }
           Object.assign(authModes, refreshed.authModes);

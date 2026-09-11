@@ -23,7 +23,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import { verifySystemAgentInferenceWithFallback } from "./inference-fallback.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { completeSetupInference, verifySetupInference } from "./setup-inference-verify.js";
+import { completeSetupInference, verifySetupInference } from "./setup-inference-turn.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,

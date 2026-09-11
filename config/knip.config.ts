@@ -145,6 +145,8 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  // Frozen-target contract admission is invoked as a standalone Node CLI.
+  "scripts/preflight-frozen-target-contracts.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
@@ -153,6 +155,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
+  // worktree.sh invokes this journal-state validator by path before native replay.
+  "scripts/pr-lib/review-transition-state.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",

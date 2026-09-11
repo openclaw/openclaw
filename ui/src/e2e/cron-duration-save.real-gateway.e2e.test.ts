@@ -132,7 +132,7 @@ catalogSuite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -187,13 +187,17 @@ catalogSuite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
             .toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
           await publish("published");
           await expect
             .poll(() => picker.locator('[role="option"][data-value="published"]').count())
             .toBe(1);
           expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           rejectCatalogReplies = true;
           await publish("held");
@@ -202,7 +206,11 @@ catalogSuite.define(() => {
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
           expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
           rejectCatalogReplies = false;
           await publish("recovered");
@@ -214,7 +222,9 @@ catalogSuite.define(() => {
           expect(await page.locator("#cron-payload-text").inputValue()).toBe(
             "Do not submit this draft",
           );
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {

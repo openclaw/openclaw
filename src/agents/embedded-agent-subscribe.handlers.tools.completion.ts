@@ -343,9 +343,6 @@ export async function handleToolExecutionEnd(
   const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
-  ctx.state.pendingMessagingTexts.delete(toolCallId);
-  ctx.state.pendingMessagingTargets.delete(toolCallId);
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));

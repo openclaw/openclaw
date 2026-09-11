@@ -568,7 +568,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   private renderSplitLayout(
     layout: ChatSplitLayout,
     splitMode: boolean,
-    retainedSessions: ReadonlyMap<string, readonly string[]>,
+    retainedSessions: ReadonlyMap<string, readonly (string | undefined)[]>,
   ) {
     const activeLocation = findPane(layout, layout.activePaneId);
     const rightmostPane = this.narrow ? activeLocation?.pane : layout.columns.at(-1)?.panes.at(-1);
@@ -617,7 +617,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
                     onSplitRight: splitMode ? this.handleSplitRight : undefined,
                     ownerKey: JSON.stringify([column.id, pane.id]),
                     pane,
-                    sessionKeys: retainedSessions.get(pane.id) ?? [],
+                    sessionSlots: retainedSessions.get(pane.id) ?? [],
                     showGatewayPicker: pane.id === rightmostPane?.id,
                     splitMode,
                     weight: splitWeight(
@@ -694,7 +694,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       for (const pane of column.panes) {
         const ownerKey = JSON.stringify([column.id, pane.id]);
         for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
-          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+          if (sessionKey !== undefined) {
+            nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+          }
         }
       }
     }

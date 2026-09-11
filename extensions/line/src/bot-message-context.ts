@@ -35,6 +35,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
+import { readLineQuoteToken, recordLineQuoteToken } from "./quote-tokens.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -480,6 +481,15 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   if (!agentBody && mediaFacts.length === 0) {
     return null;
   }
+
+  // Quoting a message back needs the token that arrived with it, and only a
+  // message the agent is given can later be named as the one being answered.
+  recordLineQuoteToken({
+    accountId: account.accountId,
+    chatId: peerId,
+    messageId,
+    quoteToken: readLineQuoteToken(message),
+  });
 
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {

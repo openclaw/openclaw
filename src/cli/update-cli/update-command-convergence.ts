@@ -15,12 +15,12 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   shouldResumePostCoreUpdateInFreshProcess,
 } from "./update-command-post-core.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -39,6 +39,7 @@ export async function convergeUpdatePlugins(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   beforeDoctor?: () => Promise<void>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -150,6 +151,7 @@ export async function convergeUpdatePlugins(params: {
             acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
+            beforePersistentEffect: params.beforePersistentEffect,
           });
         });
       }

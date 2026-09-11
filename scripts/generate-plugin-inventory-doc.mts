@@ -711,8 +711,7 @@ function readGeneratedDocs(records: PluginRecord[]) {
   ];
 }
 
-function renderDocument() {
-  const records = collectPluginRecords();
+function renderDocument(records: PluginRecord[]) {
   const groups = {
     core: records.filter((record) => record.status === "core"),
     external: records.filter((record) => record.status === "external"),
@@ -810,7 +809,7 @@ function main(argv = process.argv.slice(2)) {
   }
 
   const records = collectPluginRecords();
-  const next = renderDocument();
+  const next = renderDocument(records);
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");

@@ -263,6 +263,67 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
     },
   );
 
+  it.each([
+    {
+      order: "tool item, then command output",
+      failures: ["tool", "command"],
+      recovery: "command",
+    },
+    {
+      order: "command output, then tool item",
+      failures: ["command", "tool"],
+      recovery: "tool",
+    },
+  ] as const)(
+    "clears a quiet failure whose stored id came from an earlier item family ($order)",
+    async ({ failures, recovery }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: false, maxLines: 3, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      // The agent keys one exec call's item families separately (tool:<call>,
+      // command:<call>); the merged line keeps the id of whichever reported first.
+      const push = (family: "tool" | "command", outcome: "failed" | "completed") =>
+        family === "tool"
+          ? progress.pushItemEvent({
+              itemId: "tool:call-1",
+              toolCallId: "call-1",
+              kind: "tool",
+              name: "exec",
+              status: outcome,
+            })
+          : progress.pushCommandOutputEvent({
+              phase: "end",
+              itemId: "command:call-1",
+              toolCallId: "call-1",
+              exitCode: outcome === "failed" ? 1 : 0,
+            });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+        ]);
+        for (const family of failures) {
+          await push(family, "failed");
+          expect(update.mock.lastCall?.[0]).toMatch(/failed|exit 1/);
+        }
+        expect(update.mock.lastCall?.[1]?.lines).toHaveLength(1);
+        await push(recovery, "completed");
+        expect(update.mock.lastCall?.[0]).toContain("Repair");
+        expect(update.mock.lastCall?.[0]).not.toMatch(/failed|exit 1/);
+        expect(update.mock.lastCall?.[1]?.lines).toHaveLength(0);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
   it.each(["failed", "error", "blocked"])(
     "flushes and retains explicit %s status while tool progress is enabled",
     async (status) => {

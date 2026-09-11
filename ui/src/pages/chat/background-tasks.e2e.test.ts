@@ -339,7 +339,7 @@ suite.define(() => {
                             id: "routing-check",
                             name: "exec",
                             arguments: {
-                              command: "pnpm test routing",
+                              command: "pnpm test routing\npnpm tsgo:ui",
                               title: "Check model routing",
                             },
                           },
@@ -439,7 +439,12 @@ suite.define(() => {
         await detailPanel.waitFor({ state: "visible" });
         await detailPanel.getByRole("heading", { name: "Task Review layout proof" }).waitFor();
         expect(await detailPanel.textContent()).toContain("Map model routing code");
-        expect(await detailPanel.textContent()).toContain("Subagent");
+        expect(await detailPanel.locator(".chat-task-detail__meta").textContent()).toContain(
+          "12 tool calls",
+        );
+        expect(await detailPanel.locator(".chat-task-feed__now").textContent()).toContain(
+          "Reading provider catalogs",
+        );
         expect(await openRow.getAttribute("aria-current")).toBe("true");
         expect(
           await openRow.evaluate((element) =>
@@ -485,14 +490,20 @@ suite.define(() => {
         await detailPanel
           .getByText("Inspect the model routing boundary.", { exact: true })
           .waitFor();
-        const toolRow = detailPanel.locator(".chat-tool-row", { hasText: "Check model routing" });
-        await toolRow.waitFor();
-        await toolRow.click();
-        const toolBody = detailPanel.locator(".chat-tool-msg-body", {
-          hasText: "Routing boundary checks passed.",
+        const toolRow = detailPanel.locator(".chat-task-feed__tool-group", {
+          hasText: "pnpm test routing",
         });
+        await toolRow.waitFor();
+        const toolSummary = toolRow.locator("summary");
+        expect((await toolSummary.textContent())?.trim()).toBe("pnpm test routing");
+        const toolBody = toolRow.locator(".chat-task-feed__calls");
+        expect(await toolBody.isVisible()).toBe(false);
+        await toolSummary.click();
         await toolBody.waitFor();
-        expect(await toolBody.textContent()).toContain("pnpm test routing");
+        expect(await toolBody.locator("code").textContent()).toBe(
+          "pnpm test routing\npnpm tsgo:ui",
+        );
+        expect(await detailPanel.textContent()).not.toContain("Routing boundary checks passed.");
         expect(
           await detailPanel.getByRole("button", { name: "Show earlier", exact: true }).count(),
         ).toBe(0);
@@ -502,7 +513,7 @@ suite.define(() => {
           cursor: "task-earlier",
         });
         await writeFile(
-          path.join(railFlowDir, "02-native-transcript-with-tool-result.png"),
+          path.join(railFlowDir, "02-native-transcript-with-expanded-command.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
             detailPanel,
             toolBody,

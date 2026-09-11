@@ -42,17 +42,21 @@ Seven testable properties:
 6. **Recorded provenance.** Memory, audit, and delivery use recorded facts, explicit retention policies, and documented deletion limits.
 7. **Independent stewardship.** The license has no separate enterprise edition; releases are signed by an accountable identity; the security record is public.
 
+<a id="where-each-section-moved" />
+
 ## How OpenClaw answers
 
 The short answers, with details and limits on the linked pages:
 
-- **Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
-- **Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
-- **Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
-- **Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
-- **Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
-- **Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
+- <a id="the-trust-boundary" />**Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
+- <a id="policy-as-code" />**Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
+- <a id="identity-and-roles" />**Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
+- <a id="secrets" />**Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
+- <a id="versioned-state%2C-guarded-upgrades" /><a id="versioned-state-guarded-upgrades" />**Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
+- <a id="provenance" />**Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
 - **The Foundation provides independent stewardship.** MIT under an independent 501(c)(3) foundation, with signed releases and public security advisories. Advisory counts are not a comparative safety score. ([Governance](#governance))
+
+<a id="openclaw-and-hermes-agent" />
 
 The [comparison table](/start/why-openclaw/openclaw-and-hermes-agent) condenses the source-verified contrast with Hermes. [What we do not claim](#what-we-do-not-claim) states the limits, starting with sandboxing being off by default.
 
@@ -117,18 +121,3 @@ Each enterprise configuration item links to its reference:
 Then operate it as replaceable infrastructure: pin a channel, let [doctor](/cli/doctor) own migrations, restore [backups](/cli/backup) by verification, and redeploy instead of repairing deployments in place.
 
 Corrections to any claim on this page, about OpenClaw or about others, are welcome as issues or pull requests.
-
-## Where each section moved
-
-Every section heading from the previous single-page version keeps its anchor
-here, so an existing link such as `/start/why-openclaw#the-trust-boundary` still
-resolves. Each entry points at the page that now holds the content.
-
-- <a id="the-trust-boundary" />[The trust boundary](/start/why-openclaw/the-trust-boundary)
-- <a id="policy-as-code" />[Policy as code](/start/why-openclaw/policy-as-code)
-- <a id="identity-and-roles" />[Identity and roles](/start/why-openclaw/identity-and-roles)
-- <a id="secrets" />[Secrets](/start/why-openclaw/secrets)
-- <a id="versioned-state%2C-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="versioned-state-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="provenance" />[Provenance](/start/why-openclaw/provenance)
-- <a id="openclaw-and-hermes-agent" />[OpenClaw and Hermes Agent](/start/why-openclaw/openclaw-and-hermes-agent)

@@ -1,5 +1,7 @@
-import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 // Setup inference verification owns the shared verify/repair loop used by onboarding imports.
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, setAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -47,45 +49,57 @@ export async function offerLiveModelVerification(params: {
       return { config: params.config, attempted: false, persisted: false, verified: false };
     }
   }
-  const [inference, authStore, agentDatabase] = await Promise.all([
-    import("../system-agent/setup-inference.js"),
-    import("../agents/auth-profiles/store-runtime.js"),
-    import("../state/openclaw-agent-db.js"),
-  ]);
-  const stagedEnv = params.stateDir
-    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
-    : undefined;
+  const inference = await import("../system-agent/setup-inference.js");
   let shouldPersistCandidate = params.initialCandidate !== undefined;
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
-    const verification = withConsoleSubsystemsSuppressed(() =>
-      inference.verifySetupInferenceConfig({
-        // SAFETY: Canonical roster migration preserves typed config; this runtime view is never persisted.
-        config: migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig,
-        runtime: params.runtime,
-        authProfiles: candidate.authProfiles,
-        verifyAgentTools: shouldPersistCandidate && params.opts.nonInteractive !== true,
-        ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-        ...(params.stateDir
-          ? {
-              deps: {
-                updateAuthProfileStoreWithLock: async (updateParams) =>
-                  await authStore.updateAuthProfileStoreWithLock({
-                    ...updateParams,
-                    stateDir: params.stateDir,
-                  }),
-                disposeOpenClawAgentDatabaseByPath: (pathname) =>
-                  agentDatabase.disposeOpenClawAgentDatabaseByPath(pathname, {
-                    env: stagedEnv!,
-                  }),
-              },
-            }
-          : {}),
-      }),
-    );
-    let result: Awaited<typeof verification>;
+    let result: Awaited<ReturnType<typeof inference.verifySetupInferenceConfig>>;
     try {
-      result = await verification;
+      // SAFETY: Canonical roster migration preserves typed config; this runtime view is never persisted.
+      let config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
+      const agentId = resolveAmbientOwnerAgentId(config);
+      if (candidate.authProfiles.length > 0) {
+        const { saveSetupCredential, selectSetupCredential } =
+          await import("../system-agent/setup-inference-credentials.js");
+        const { projectSetupInferenceConfig } =
+          await import("../system-agent/setup-model-selection.js");
+        const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+        const modelRef = `${model.provider}/${model.model}`;
+        const profile = selectSetupCredential(candidate.authProfiles, modelRef, config);
+        if (!profile) {
+          throw new Error(`The selected provider did not return credentials for ${modelRef}.`);
+        }
+        const saved = await saveSetupCredential({
+          profile,
+          config: candidate.config,
+          agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
+          persistAuthProfiles: candidate.persistAuthProfiles,
+        });
+        candidate.config = projectSetupInferenceConfig({
+          base: saved.config,
+          prepared: saved.config,
+          modelRef,
+          agentId,
+          profileId: saved.profile.profileId,
+          credential: saved.profile.credential,
+        });
+        setAgentEffectiveModelPrimary(
+          candidate.config,
+          agentId,
+          `${modelRef}@${saved.profile.profileId}`,
+        );
+        candidate.authProfiles = [];
+        // SAFETY: Canonical roster migration preserves this typed config; this view is not persisted.
+        config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
+      }
+      result = await withConsoleSubsystemsSuppressed(() =>
+        inference.verifySetupInferenceConfig({
+          config,
+          agentId,
+          runtime: params.runtime,
+          ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+        }),
+      );
     } finally {
       progress.stop();
     }
@@ -122,7 +136,6 @@ export async function offerLiveModelVerification(params: {
           modelRef: result.modelRef,
         };
       }
-      await candidate.persistAuthProfiles(result.authProfiles);
       const config = await params.writeConfig(candidate.config);
       return {
         config,
@@ -131,9 +144,6 @@ export async function offerLiveModelVerification(params: {
         verified: true,
         modelRef: result.modelRef,
       };
-    }
-    if (result.authProfiles) {
-      candidate.authProfiles = result.authProfiles;
     }
     if (params.opts.nonInteractive) {
       return { config: params.config, attempted: true, persisted: false, verified: false };

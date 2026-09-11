@@ -899,6 +899,7 @@ async function probeTarget(params: {
         prompt: PROBE_PROMPT,
         provider: model.provider,
         model: model.model,
+        requestedRouteResolution: "resolved",
         modelFallbacksOverride: [],
         authProfileId: isolatedProfileId ?? target.profileId,
         authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,

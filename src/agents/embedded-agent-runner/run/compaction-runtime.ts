@@ -32,6 +32,7 @@ import { resolveContextEngineCapabilities } from "../context-engine-capabilities
 import { log } from "../logger.js";
 import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
+import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -56,12 +57,9 @@ export type EmbeddedRunCompactionRecoveryInput = {
   contextEngineAgentId?: string;
   agentDir: string;
   workspaceDir: string;
-  provider: string;
-  modelId: string;
+  modelSelection: ReturnType<typeof resolveCompactionLiveModelSelection>;
   harnessRuntime: string;
   thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
-  authProfileId?: string;
-  authProfileIdSource: "auto" | "user";
   resolveContextEnginePluginId: () => string | undefined;
   buildRuntimeSettings: (settings: {
     tokenBudget?: number | null;
@@ -131,8 +129,8 @@ export async function compactEmbeddedRunForRecovery(
       currentChannelId: runParams.currentChannelId,
       currentThreadTs: runParams.currentThreadTs,
       currentMessageId: runParams.currentMessageId,
-      authProfileId: input.authProfileId,
-      authProfileIdSource: input.authProfileIdSource,
+      authProfileId: input.modelSelection.authProfileId,
+      authProfileIdSource: input.modelSelection.authProfileIdSource,
       runtimeAuthPlan: input.runtimeAuthPlan,
       workspaceDir: input.workspaceDir,
       bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
@@ -146,8 +144,8 @@ export async function compactEmbeddedRunForRecovery(
       toolsAllow: runParams.toolsAllow,
       skillsSnapshot: runParams.skillsSnapshot,
       senderId: runParams.senderId,
-      provider: input.provider,
-      modelId: input.modelId,
+      provider: input.modelSelection.provider,
+      modelId: input.modelSelection.model,
       harnessRuntime: input.harnessRuntime,
       modelSelectionLocked: runParams.modelSelectionLocked,
       modelFallbacksOverride: runParams.modelFallbacksOverride,
@@ -256,7 +254,7 @@ export async function compactEmbeddedRunForRecovery(
     // replacement, and claim loss must never become a truncation/retry request.
     owner.assertActive();
     log.warn(
-      `contextEngine.compact() threw during ${reason} for ${input.provider}/${input.modelId}: ${String(error)}`,
+      `contextEngine.compact() threw during ${reason} for ${input.modelSelection.provider}/${input.modelSelection.model}: ${String(error)}`,
     );
     result = { ok: false, compacted: false, reason: String(error) };
   }

@@ -34,8 +34,10 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
+import ai.openclaw.app.chat.parseSessionDiff
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -1478,6 +1480,8 @@ class NodeRuntime private constructor(
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+  private val _sessionDiffAvailable = MutableStateFlow(false)
+  val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
   internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = chatPermissionSettingsAvailableState.asStateFlow()
   private val _sessionCatalogState = MutableStateFlow(SessionCatalogState())
@@ -6920,6 +6924,32 @@ class NodeRuntime private constructor(
     return written
   }
 
+  /** Loads the bounded uncommitted checkout snapshot for the native Review viewer. */
+  suspend fun loadSessionDiff(
+    sessionKey: String,
+    agentId: String?,
+    expectedGatewayStableId: String,
+  ): SessionDiffSnapshot {
+    require(sessionKey.isNotBlank()) { "Select a conversation to review its changes." }
+    val gatewayScope =
+      captureGatewayDataScope()
+        ?: throw IllegalStateException("Connect to the conversation's gateway to review changes.")
+    if (gatewayScope.stableId != expectedGatewayStableId) {
+      throw CancellationException("The conversation's gateway changed.")
+    }
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        agentId?.takeIf { it.isNotBlank() }?.let { put("agentId", JsonPrimitive(it)) }
+        put("scope", JsonPrimitive("uncommitted"))
+      }
+    val payload = requestGatewayData(gatewayScope, GatewayMethod.SessionsDiff.rawValue, params.toString(), timeoutMs = 30_000)
+    val snapshot = withContext(Dispatchers.Default) { parseSessionDiff(json, payload) }
+    if (!isGatewayDataScopeCurrent(gatewayScope)) throw CancellationException("gateway scope changed")
+    check(snapshot.sessionKey == sessionKey) { "The gateway returned changes for a different conversation." }
+    return snapshot
+  }
+
   /** Lists one directory of the active agent's workspace (read-only RPC). */
   suspend fun listWorkspaceFiles(
     path: String?,
@@ -8838,6 +8868,7 @@ class NodeRuntime private constructor(
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
       _sessionCatalogAvailable.value = sessionCatalogAvailableFor(advertisedMethods, _operatorScopes.value)
+      _sessionDiffAvailable.value = GatewayMethod.SessionsDiff.rawValue in advertisedMethods
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
       gatewayMethodsEpoch.update { it + 1 }

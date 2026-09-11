@@ -171,6 +171,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     provider: params.provider,
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),
+    requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
     modelFallbacksOverride,

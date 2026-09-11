@@ -14,7 +14,6 @@ import {
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createSyncSuiteTempRootTracker } from "../plugins/test-helpers/fs-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -29,6 +28,7 @@ import {
   acquireSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
 
@@ -163,7 +163,7 @@ module.exports = {
       },
     } satisfies OpenClawConfig;
     let preparedRuntime: PreparedModelRuntimeSnapshot | undefined;
-    const modelResolver: typeof resolveModelAsync = vi.fn(
+    const modelResolver: SimpleCompletionModelResolver = vi.fn(
       async (provider, modelId, _agentDir, _cfg, options) => {
         preparedRuntime = options?.preparedModelRuntime;
         return {

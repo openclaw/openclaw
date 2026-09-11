@@ -77,6 +77,49 @@ describe("memory embedding cache", () => {
     }
   });
 
+  it("reserves space before replacing cached vectors at capacity", () => {
+    const db = createDb();
+    const provider = { id: "local", model: "fixture" };
+    try {
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider,
+        providerKey: "fixture",
+        entries: [
+          { hash: "a", embedding: [1] },
+          { hash: "b", embedding: [2] },
+        ],
+        now: 1,
+      });
+      db.exec(`CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
+        WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= 2
+        BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
+      db.exec("BEGIN IMMEDIATE");
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider,
+        providerKey: "fixture",
+        maxEntries: 2,
+        entries: [
+          { hash: "a", embedding: [3] },
+          { hash: "a", embedding: [4] },
+        ],
+        now: 2,
+      });
+      db.exec("COMMIT");
+      expect(
+        db.prepare("SELECT hash, embedding FROM memory_embedding_cache ORDER BY hash").all(),
+      ).toEqual([
+        { hash: "a", embedding: "[4]" },
+        { hash: "b", embedding: "[2]" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("loads provider-declared alias cache rows without accepting arbitrary identities", () => {
     const db = createDb();
     try {

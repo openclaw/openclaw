@@ -1,6 +1,7 @@
 /** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import {
@@ -26,6 +27,7 @@ type DiscoverModelsOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
@@ -65,6 +67,7 @@ function createOpenClawModelRegistry(
       ? { modelsJsonContents: options.modelsJsonContents }
       : {}),
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
+    staticProviderConfigs: options?.staticProviderConfigs,
   };
   const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
   const getAll = registry.getAll.bind(registry);

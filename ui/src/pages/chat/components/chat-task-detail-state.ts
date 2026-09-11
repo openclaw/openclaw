@@ -1,9 +1,12 @@
 import type { TasksHistoryResult } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
+import { setExpansionState, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
 const TASK_TRANSCRIPT_REQUEST_LIMIT = 100;
@@ -21,15 +24,14 @@ type TaskTranscriptLoad = { status: "loading" } | LoadedTaskTranscript | { statu
 type TaskDetailState = {
   client: GatewayBrowserClient;
   connectionEpoch: number | undefined;
-  eventVersion: number;
-  refreshedEventVersion: number;
+  refreshPending: boolean;
   inFlight: boolean;
   lastRequestStartedAt: number;
   load: TaskTranscriptLoad;
   refreshTimer: number | null;
-  requestId: number;
   olderCursors: Set<string>;
   taskId: string;
+  fullMessages: Map<string, AssistantMessageExpansionState>;
 };
 
 export type TaskDetailHost = UiSessionDefaultsHost & {
@@ -38,7 +40,6 @@ export type TaskDetailHost = UiSessionDefaultsHost & {
   connected: boolean;
   connectionEpoch?: number;
   requestUpdate?: () => void;
-  sessionsResultAgentId?: string | null;
   taskDetailState?: TaskDetailState;
 };
 
@@ -55,7 +56,61 @@ export function resetTaskDetail(host: TaskDetailHost) {
     return;
   }
   clearRefreshTimer(current);
+  current.fullMessages.clear();
   host.taskDetailState = undefined;
+}
+
+export async function requestTaskFullMessage(
+  host: TaskDetailHost,
+  {
+    loader,
+    ...request
+  }: Parameters<SidebarFullMessageLoader>[0] & { loader: SidebarFullMessageLoader },
+) {
+  const state = host.taskDetailState;
+  if (
+    !state ||
+    !host.connected ||
+    host.client !== state.client ||
+    host.connectionEpoch !== state.connectionEpoch
+  ) {
+    return;
+  }
+  const current = state.fullMessages.get(request.messageId);
+  if (current?.status === "loading" || current?.status === "loaded") {
+    return;
+  }
+  const revision = (current?.revision ?? 0) + 1;
+  const pending = { status: "loading", revision } as const;
+  setExpansionState(state.fullMessages, request.messageId, pending);
+  host.requestUpdate?.();
+  let result: Awaited<ReturnType<SidebarFullMessageLoader>>;
+  try {
+    result = await loader(request);
+  } catch {
+    result = null;
+  }
+  // Reset or reconnection can reuse both the message ID and revision.
+  if (
+    host.taskDetailState !== state ||
+    host.client !== state.client ||
+    host.connectionEpoch !== state.connectionEpoch ||
+    state.fullMessages.get(request.messageId) !== pending
+  ) {
+    return;
+  }
+  const markdown =
+    result?.ok && result.message && typeof result.message === "object"
+      ? extractTextCached(result.message)
+      : null;
+  setExpansionState(
+    state.fullMessages,
+    request.messageId,
+    markdown === null
+      ? { status: "error", revision: revision + 1 }
+      : { status: "loaded", markdown, revision: revision + 1 },
+  );
+  host.requestUpdate?.();
 }
 
 function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
@@ -81,25 +136,21 @@ function transcriptEntryKey(message: unknown): string | undefined {
   if (!identity) {
     return undefined;
   }
-  const key = identity.externalSource
+  return identity.externalSource
     ? `external:${identity.externalSource}`
     : identity.id
       ? `id:${identity.id}`
       : identity.sequence == null
         ? undefined
         : `seq:${identity.sequence}`;
-  return key;
 }
 
-function mergeTranscriptMessages(earlier: unknown[], later: unknown[]): unknown[] {
+function transcriptOverlap(earlier: unknown[], later: unknown[]): number {
   const laterKeys = new Set(later.map(transcriptEntryKey).filter(Boolean));
-  const overlap = earlier.findIndex((message) => {
+  return earlier.findIndex((message) => {
     const key = transcriptEntryKey(message);
     return key !== undefined && laterKeys.has(key);
   });
-  // An entry can project into several rows. Replace the overlapping tail as a
-  // whole so updated, added, and removed siblings stay together.
-  return [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later];
 }
 
 async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, cursor?: string) {
@@ -117,12 +168,11 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
     host.requestUpdate?.();
     return;
   }
-  const requestId = ++state.requestId;
-  const eventVersion = state.eventVersion;
   const previous = state.load.status === "loaded" ? state.load : undefined;
   state.inFlight = true;
   if (!cursor) {
     state.lastRequestStartedAt = Date.now();
+    state.refreshPending = false;
   }
   state.load = previous ? { ...previous, loading: true, error: undefined } : { status: "loading" };
   host.requestUpdate?.();
@@ -134,12 +184,11 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
       ...(cursor ? { cursor } : {}),
     });
     const messages = visibleChatHistoryMessages(result.messages);
-    const previousKeys = new Set(previous?.messages.map(transcriptEntryKey).filter(Boolean));
-    const overlaps = messages.some((message) => {
-      const key = transcriptEntryKey(message);
-      return key !== undefined && previousKeys.has(key);
-    });
-    const retainPrevious = previous !== undefined && (cursor !== undefined || overlaps);
+    const previousMessages = previous?.messages ?? [];
+    const earlier = cursor ? messages : previousMessages;
+    const later = cursor ? previousMessages : messages;
+    const overlap = transcriptOverlap(earlier, later);
+    const retainPrevious = previous !== undefined && (cursor !== undefined || overlap >= 0);
     if (cursor) {
       state.olderCursors.add(cursor);
     } else if (!retainPrevious) {
@@ -149,10 +198,9 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
     }
     load = {
       status: "loaded",
+      // Replace whole overlapping entries, including their projected siblings.
       messages: retainPrevious
-        ? cursor
-          ? mergeTranscriptMessages(messages, previous.messages)
-          : mergeTranscriptMessages(previous.messages, messages)
+        ? [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later]
         : messages,
       // Only overlapping refreshes preserve the oldest boundary already loaded.
       nextCursor:
@@ -171,7 +219,6 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
   const current = host.taskDetailState;
   if (
     current !== state ||
-    current.requestId !== requestId ||
     host.client !== client ||
     host.connectionEpoch !== state.connectionEpoch
   ) {
@@ -179,12 +226,9 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
   }
   state.inFlight = false;
   state.load = load;
-  if (!cursor) {
-    state.refreshedEventVersion = eventVersion;
-  }
   host.requestUpdate?.();
   // Also refresh after events received during an older-page request.
-  if (state.eventVersion > state.refreshedEventVersion) {
+  if (state.refreshPending) {
     scheduleTranscriptLoad(host, state);
   }
 }
@@ -210,15 +254,14 @@ export function readTaskTranscript(
   const next: TaskDetailState = {
     client,
     connectionEpoch: host.connectionEpoch,
-    eventVersion: 0,
-    refreshedEventVersion: 0,
+    refreshPending: false,
     inFlight: false,
     lastRequestStartedAt: Number.NEGATIVE_INFINITY,
     load: { status: "loading" },
     refreshTimer: null,
-    requestId: 0,
     olderCursors: new Set(),
     taskId: selection.taskId,
+    fullMessages: new Map(),
   };
   host.taskDetailState = next;
   scheduleTranscriptLoad(host, next);
@@ -266,8 +309,8 @@ export function observeTaskDetailEvent(
   if (event.action !== "upserted" || event.task.id !== state.taskId) {
     return;
   }
-  state.eventVersion += 1;
-  // A terminal version remains pending through an in-flight or throttled read,
+  state.refreshPending = true;
+  // Terminal events remain pending through an in-flight or throttled read,
   // so the next request is always the final task-session snapshot.
   scheduleTranscriptLoad(host, state);
 }

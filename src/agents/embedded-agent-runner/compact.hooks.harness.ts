@@ -20,10 +20,12 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import type { SessionManager } from "../sessions/session-manager.js";
+import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 type MockResolvedModel = {
+  logicalRef: { provider: string; model: string };
   model: {
     provider: string;
     api: string;
@@ -66,6 +68,7 @@ export const resolveContextEngineMock = vi.fn(async () => ({
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
 > = vi.fn((provider?: string, modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
+  logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
   model: {
     provider: provider ?? "openai",
     api: "openai-responses",
@@ -78,8 +81,13 @@ export const resolveModelMock: Mock<
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown, _options?: unknown) =>
-    resolveModelMock(provider, modelId, agentDir, cfg),
+  async (
+    provider: string,
+    modelId: string,
+    agentDir?: string,
+    cfg?: unknown,
+    _options?: Parameters<typeof resolveModelAsync>[4],
+  ) => resolveModelMock(provider, modelId, agentDir, cfg),
 );
 export const sessionCompactImpl = vi.fn(async () => ({
   summary: "summary",
@@ -627,6 +635,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
 
   resolveModelMock.mockReset();
   resolveModelMock.mockImplementation((provider?: string, modelId?: string) => ({
+    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
     model: {
       provider: provider ?? "openai",
       api: "openai-responses",
@@ -645,7 +654,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
       modelId: string,
       agentDir?: string,
       cfg?: unknown,
-      _options?: unknown,
+      _options?: Parameters<typeof resolveModelAsync>[4],
     ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
   resolveAgentHarnessPolicyMock.mockReset();

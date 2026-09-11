@@ -67,6 +67,13 @@ provides `vc +meeting-join`.
 The official `lark-cli` VC agent skill currently marks meeting-bot actions as a limited beta. If the tool returns `ErrNotInGray` or error code `20017`, the app or tenant has not been enabled for that beta; use the early-access guidance in the linked skill before troubleshooting ordinary scope grants.
 </Warning>
 
+### Webhook callbacks rejected with 401 Invalid signature
+
+1. Check the Gateway host clock: webhook mode rejects signed callbacks whose timestamp is more than one hour from the server clock (before or after). Verify NTP sync and that the system time is correct.
+2. Confirm the configured `encryptKey` matches the app's Encrypt Key in Feishu Open Platform / Lark Developer.
+3. Verify the webhook URL path and port match the `channels.feishu.webhook*` configuration.
+4. Check logs: `openclaw logs --follow` for repeated signature failures from unexpected senders.
+
 ### QR setup does not react in the Feishu mobile app
 
 1. Rerun setup: `openclaw channels login --channel feishu`
