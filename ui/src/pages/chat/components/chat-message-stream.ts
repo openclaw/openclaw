@@ -149,11 +149,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   `;
 }
 
-/**
- * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check icon is
- * the turn's done indicator; the expanded groups render after this row.
- */
+/** Completed work keeps its operation summary and elapsed time above the expanded groups. */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null; groups: readonly MessageGroup[] },
   opts: {
@@ -189,6 +185,15 @@ export function renderWorkGroupSummary(
         <span class="chat-tool-disclosure__content">
           <span class="chat-activity-group__label" title=${label}>${label}</span>
         </span>
+        ${
+          cards.length && duration
+            ? html`<span
+                class="chat-activity-group__duration"
+                aria-label=${t("chat.workRun.workedFor", { duration })}
+                >${duration}</span
+              >`
+            : nothing
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       ${opts.expanded ? nothing : renderToolFailures(cards)}
