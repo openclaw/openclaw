@@ -10,7 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
@@ -41,6 +44,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+// The installed parent prepares the database before a sealed actor can acquire a lease.
+function prepareStagedLeaseFixture() {
+  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
+  const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
+  stageManagedHandoffRuntime(root);
+  return {
+    runtimeEntry: path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY),
+    options: { databasePath, serviceManagerEnv: resolveServiceManagerEnv(), existingIdentity },
+  };
+}
 
 function replaceOwner(installationRoot = root) {
   const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
@@ -168,12 +184,7 @@ describe("live update executor", () => {
   });
 
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const result = spawnSync(
       process.execPath,
       [
@@ -196,8 +207,7 @@ describe("live update executor", () => {
   });
 
   it("borrows only a live helper's exact assigned executor and leaves release to that helper", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const runId = randomUUID();
     const owner = randomUUID();
     const metadata = path.join(root, "handoff.json");
@@ -207,10 +217,6 @@ describe("live update executor", () => {
     );
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
     const child = spawn(
       process.execPath,
       [
@@ -644,12 +650,7 @@ describe("candidate executor delegation", () => {
   it.skipIf(process.platform === "win32")(
     "retains a candidate group after both the updater and its direct child exit",
     async () => {
-      stageManagedHandoffRuntime(root);
-      const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-      const options = {
-        databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-        serviceManagerEnv: resolveServiceManagerEnv(),
-      };
+      const { runtimeEntry, options } = prepareStagedLeaseFixture();
       const command = `
         const {spawn}=require('node:child_process');
         process.stdin.once('data',()=>{
@@ -700,12 +701,7 @@ describe("candidate executor delegation", () => {
   );
 
   it("does not reclaim a dead parent while its delegated child is alive", async () => {
-    stageManagedHandoffRuntime(root);
-    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const options = {
-      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    };
+    const { runtimeEntry, options } = prepareStagedLeaseFixture();
     const parent = spawnSync(
       process.execPath,
       [

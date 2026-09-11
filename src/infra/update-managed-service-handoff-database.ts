@@ -248,9 +248,10 @@ function initializeMissingDatabase(databasePath: string, parentReceipt: Director
       }
     }
     fs.chmodSync(stagedDatabasePath, 0o600);
+    // Windows fsync requires write access after the SQLite handle closes.
     const descriptor = fs.openSync(
       stagedDatabasePath,
-      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+      fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0),
     );
     try {
       stagedDatabaseIdentity = fs.fstatSync(descriptor);

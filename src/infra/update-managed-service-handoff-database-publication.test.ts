@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -13,7 +14,7 @@ const databaseModule = new URL("./update-managed-service-handoff-database.ts", i
   .href;
 const realSpawnSync = childProcess.spawnSync.bind(childProcess);
 const repoRoot = process.cwd();
-const tsxLoader = path.resolve("scripts/tsx.mjs");
+const tsxLoader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 let root: string;
 let databasePath: string;
 
