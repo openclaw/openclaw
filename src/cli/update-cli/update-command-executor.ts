@@ -297,20 +297,34 @@ export async function withDelegatedUpdateCommandExecutor<T>(
   root: string,
   operation: (fence: UpdateRecoveryFence) => Promise<T>,
 ): Promise<T> {
-  const store = createManagedHandoffLeaseStore({
-    databasePath: grant.databasePath,
-    serviceManagerEnv: resolveServiceManagerEnv(),
-    existingIdentity: grant.databaseIdentity,
-  });
-  const parent = store.read(resolveUpdateInstallRoot(root));
   const original = grant.originalParent ?? grant.parent;
   const spawner = grant.spawner ?? original;
-  const originalChild = store.read(grant.originalChildKey ?? grant.childKey);
-  const child = store.read(grant.childKey);
   const childPrefix = `${original.key}/.openclaw-update-child-`;
   const childName = grant.childKey.slice(
     grant.childKey.lastIndexOf("/.openclaw-update-child-") + "/.openclaw-update-child-".length,
   );
+  // v2026.9.4 sent this exact private-stdin format. Pin its existing database
+  // before reading/admitting the live parent and registered receiver. Modern
+  // names cannot downgrade by stripping their lineage or supplied physical pin.
+  const legacyGrant =
+    !grant.originalParent &&
+    !grant.spawner &&
+    !grant.originalChildKey &&
+    !grant.databaseIdentity &&
+    grant.childKey === `${grant.parent.key}/.openclaw-update-child-${childName}` &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(childName);
+  const databaseIdentity = legacyGrant
+    ? captureManagedUpdateLeaseDatabaseIdentity(grant.databasePath)
+    : grant.databaseIdentity;
+  const databasePath = databaseIdentity?.databasePath ?? grant.databasePath;
+  const store = createManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+    existingIdentity: databaseIdentity,
+  });
+  const parent = store.read(resolveUpdateInstallRoot(root));
+  const originalChild = store.read(grant.originalChildKey ?? grant.childKey);
+  const child = store.read(grant.childKey);
   const lineageBound = Boolean(
     grant.originalParent &&
     grant.databaseIdentity &&
@@ -324,16 +338,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       `-lineage-${childLineageDigest(original, spawner, grant.parent, grant.databaseIdentity)}`,
     ),
   );
-  // Shipped plain candidate grants keep their existing fence-only contract.
-  // They cannot acquire the new nested/native delegation capability. New names
-  // cannot downgrade to that contract by stripping transported lineage fields.
-  const legacyFenceOnly =
-    !grant.originalParent &&
-    !grant.spawner &&
-    !grant.originalChildKey &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(childName);
   if (
-    (!lineageBound && !legacyFenceOnly) ||
+    (!lineageBound && !legacyGrant) ||
+    (!legacyGrant && databasePath !== grant.databasePath) ||
     grant.runId !== runId ||
     grant.root !== resolveUpdateInstallRoot(root) ||
     parent.kind !== "current" ||
@@ -399,8 +406,8 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       parent: parent.lease,
       original,
       spawner: originalChild.lease,
-      databasePath: grant.databasePath,
-      databaseIdentity: grant.databaseIdentity,
+      databasePath,
+      databaseIdentity,
     }),
     assertBase,
   });
@@ -410,17 +417,15 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       owner.assertIdle();
     },
   };
-  if (lineageBound) {
-    childOwners.set(fence, (childRoot, childOperation) => owner.run(childRoot, childOperation));
-  }
+  childOwners.set(fence, (childRoot, childOperation) => owner.run(childRoot, childOperation));
   let outcome: { result: T } | { error: unknown };
   try {
     fence.assertCurrent();
-    if (grant.databaseIdentity) {
+    if (databaseIdentity) {
       admittedAuthorities.set(
         fence,
         Object.freeze({
-          ...grant.databaseIdentity,
+          ...databaseIdentity,
           installKey: original.key,
           owner: original.owner,
         }),

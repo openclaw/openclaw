@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
-import { withDelegatedUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import {
+  withDelegatedUpdateCommandExecutor,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
@@ -61,7 +64,13 @@ async function finalizeMigratedUpdate(): Promise<void> {
       async (fence) => finalizeInput(input, fence),
     );
   } else {
-    await finalizeInput(input);
+    // v2026.9.3 had no executor transport. The candidate must acquire an
+    // exclusive owner before adopting the run or making effects. Omission of
+    // a newer grant cannot bypass an incumbent original/descendant lease.
+    await withUpdateCommandExecutor(input.params.opts.run?.runId ?? "", async (executor) => {
+      const fence = await executor.enter(input.params.result.root ?? input.params.root);
+      await finalizeInput(input, fence);
+    });
   }
 }
 
