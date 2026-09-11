@@ -86,6 +86,8 @@ jobs:
             end
           end
           RUBY
+          if brew list --versions swiftformat >/dev/null; then brew unlink swiftformat; fi
+          if brew list --versions swiftlint >/dev/null; then brew unlink swiftlint; fi
           brew install openclaw/quick-chat-proof/quick-chat-swiftformat openclaw/quick-chat-proof/quick-chat-swiftlint
           echo "$(brew --prefix quick-chat-swiftformat)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix quick-chat-swiftlint)/bin" >> "$GITHUB_PATH"
