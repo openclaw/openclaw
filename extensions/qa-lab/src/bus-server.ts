@@ -339,6 +339,7 @@ export async function handleQaBusRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   state: QaBusState;
+  dropOutboundResponseAfterAccept?: boolean;
 }): Promise<boolean> {
   const method = params.req.method ?? "GET";
   const url = new URL(params.req.url ?? "/", "http://127.0.0.1");
@@ -381,13 +382,17 @@ export async function handleQaBusRequest(params: {
           ),
         });
         return true;
-      case "/v1/outbound/message":
-        writeJson(params.res, 200, {
-          message: params.state.addOutboundMessage(
-            qaBusRequestBodySchemas["/v1/outbound/message"].parse(body),
-          ),
-        });
+      case "/v1/outbound/message": {
+        const message = params.state.addOutboundMessage(
+          qaBusRequestBodySchemas["/v1/outbound/message"].parse(body),
+        );
+        if (params.dropOutboundResponseAfterAccept) {
+          params.res.destroy();
+          return true;
+        }
+        writeJson(params.res, 200, { message });
         return true;
+      }
       case "/v1/actions/thread-create":
         writeJson(params.res, 200, {
           thread: params.state.createThread(
@@ -475,10 +480,20 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-export function createQaBusServer(state: QaBusState): Server {
+export function createQaBusServer(
+  state: QaBusState,
+  options?: { dropOutboundResponseAfterAccept?: boolean },
+): Server {
   return createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
-      const handled = await handleQaBusRequest({ req, res, state });
+      const handled = await handleQaBusRequest({
+        req,
+        res,
+        state,
+        ...(options?.dropOutboundResponseAfterAccept
+          ? { dropOutboundResponseAfterAccept: true }
+          : {}),
+      });
       if (!handled) {
         writeError(res, 404, "not found");
       }
@@ -486,8 +501,15 @@ export function createQaBusServer(state: QaBusState): Server {
   });
 }
 
-export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
-  const server = createQaBusServer(params.state);
+export async function startQaBusServer(params: {
+  state: QaBusState;
+  port?: number;
+  dropOutboundResponseAfterAccept?: boolean;
+}) {
+  const server = createQaBusServer(
+    params.state,
+    params.dropOutboundResponseAfterAccept ? { dropOutboundResponseAfterAccept: true } : undefined,
+  );
   await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {

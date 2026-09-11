@@ -38,6 +38,9 @@ type QaChannelPayloadSendContext = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "signal"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 >;
 
 function createQaChannelMessageReceipt(
@@ -72,6 +75,9 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
+    signal: ctx.signal,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
   const result =
     mediaUrls.length === 0
@@ -116,6 +122,9 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
         text: ctx.text,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
+        signal: ctx.signal,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       });
       return {
         messageId: result.messageId,
@@ -134,6 +143,9 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
         mediaReadFile: ctx.mediaReadFile,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
+        signal: ctx.signal,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       });
       return {
         messageId: result.messageId,
@@ -318,41 +330,19 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     attachedResults: {
       channel: QA_CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
+      sendText: async (ctx) =>
         await sendQaChannelText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
         }),
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        accountId,
-        threadId,
-        replyToId,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-      }) => {
-        if (!mediaUrl) {
+      sendMedia: async (ctx) => {
+        if (!ctx.mediaUrl) {
           throw new Error("QA channel media send requires mediaUrl");
         }
         return await sendQaChannelMedia({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          mediaUrl,
-          threadId,
-          replyToId,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+          mediaUrl: ctx.mediaUrl,
         });
       },
     },

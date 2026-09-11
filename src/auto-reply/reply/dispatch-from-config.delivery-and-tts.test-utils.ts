@@ -54,6 +54,12 @@ import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.j
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyOperationCompletionFixture } from "./reply-operation-completion.test-support.js";
+import {
+  recordReplyOperationAgentTurn,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
@@ -66,6 +72,102 @@ describe("dispatchReplyFromConfig", () => {
     describe0BeforeEach0();
   });
   afterEach(clearRuntimeConfigSnapshot);
+
+  it.each(["confirmed", "ambiguous", "pending"] as const)(
+    "does not repeat an authenticated %s source reply at outer finalization",
+    async (mode) => {
+      setNoAbort();
+      const fixture = await createReplyOperationCompletionFixture(mode);
+      const operation = createReplyOperation({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:receipt",
+        resetTriggered: false,
+      });
+      const deliver = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({ deliver });
+      try {
+        const result = await dispatchReplyFromConfig({
+          ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyResolver: async (_ctx, opts) => {
+            const state = expectDefined(
+              resolveReplyOperationRunState(opts),
+              "reply operation run state",
+            );
+            recordReplyOperationAgentTurn(
+              [state],
+              operation,
+              { kind: "rejected" },
+              fixture.receipt,
+            );
+            return undefined;
+          },
+        });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        expect(deliver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
+        expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+        expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+      } finally {
+        await fixture.settle();
+        operation.complete();
+      }
+    },
+  );
+
+  it.each(["pre-dispatch", "forged", "spread"] as const)(
+    "keeps outer fallback eligible without authenticated dispatch (%s)",
+    async (mode) => {
+      setNoAbort();
+      const fixture = await createReplyOperationCompletionFixture(mode);
+      const operation = createReplyOperation({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:receipt",
+        resetTriggered: false,
+      });
+      const deliver = vi.fn(async () => ({
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result" as const },
+      }));
+      const dispatcher = createReplyDispatcher({ deliver });
+      try {
+        const result = await dispatchReplyFromConfig({
+          ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyResolver: async (_ctx, opts) => {
+            const state = expectDefined(
+              resolveReplyOperationRunState(opts),
+              "reply operation run state",
+            );
+            recordReplyOperationAgentTurn(
+              [state],
+              operation,
+              { kind: "rejected" },
+              fixture.receipt,
+            );
+            return undefined;
+          },
+        });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({ text: NO_VISIBLE_REPLY_FALLBACK_TEXT }),
+          expect.objectContaining({ kind: "final" }),
+        );
+        expect(result.noVisibleReplyFallbackEligible).toBe(true);
+        expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+        expect(result.observedReplyDelivery).toBeUndefined();
+      } finally {
+        await fixture.settle();
+        operation.complete();
+      }
+    },
+  );
 
   it("records channel transform suppression before TTS or visible fallback delivery", async () => {
     setNoAbort();

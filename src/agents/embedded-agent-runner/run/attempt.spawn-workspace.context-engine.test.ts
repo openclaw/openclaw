@@ -141,6 +141,44 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
   } as AttemptContextEngine;
 }
 
+async function createWriterSessionTarget(params: {
+  runId: string;
+  sessionKey: string;
+  tempPaths: string[];
+}) {
+  const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-authority-"));
+  const storePath = path.join(storeDir, "sessions.json");
+  params.tempPaths.push(storeDir);
+  const created = await createSessionEntryWithTranscript(
+    {
+      agentId: "main",
+      sessionKey: params.sessionKey,
+      storePath,
+    },
+    () => ({
+      ok: true,
+      entry: {
+        activeWriterRunId: params.runId,
+        sessionId: embeddedSessionId,
+        updatedAt: Date.now(),
+      },
+    }),
+  );
+  if (!created.ok) {
+    throw new Error(`failed to create SQLite session entry: ${created.error}`);
+  }
+  return {
+    sessionFile: created.sessionFile,
+    sessionTarget: {
+      agentId: "main",
+      expectedWriterRunId: params.runId,
+      sessionId: embeddedSessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    },
+  };
+}
+
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
@@ -197,6 +235,115 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
     expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("keeps exact host delivery through an explicit full-attempt toolsAllow", async () => {
+    const writerTarget = await createWriterSessionTarget({
+      runId: "run-context-engine-forwarding",
+      sessionKey,
+      tempPaths,
+    });
+    const readTool = { name: "read", execute: async () => "" };
+    const currentTurnDeliveryTool = {
+      name: "send_current_reply",
+      label: "Send current reply",
+      description: "Send the current OpenClaw Code Mode reply.",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [], details: { status: "sent" } }),
+    };
+    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce((_options, rawConstruction) => {
+      const currentTurnDeliveryToolRef = (
+        rawConstruction as
+          | { terminalReply?: { toolRef?: { value?: typeof currentTurnDeliveryTool } } }
+          | undefined
+      )?.terminalReply?.toolRef;
+      if (!currentTurnDeliveryToolRef) {
+        throw new Error("expected current-turn delivery tool ref");
+      }
+      currentTurnDeliveryToolRef.value = currentTurnDeliveryTool;
+      return [readTool, currentTurnDeliveryTool];
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow: ["read"],
+        config: { tools: { codeMode: { enabled: true } } } as OpenClawConfig,
+        ...writerTarget,
+      },
+    });
+
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    expect(customTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    const execTool = findRecord(customTools, (tool) => tool.name === "exec", "Code Mode exec");
+    expect(execTool.description).toContain("send_current_reply");
+  });
+
+  it.each([
+    ["ordinary runs", {}],
+    [
+      "restart-safe runs",
+      {
+        forceRestartSafeTools: true,
+        config: { tools: { codeMode: { enabled: true } } } as OpenClawConfig,
+      },
+    ],
+  ] as const)("omits current-turn delivery from %s", async (_, overrides) => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { disableTools: false, ...overrides },
+    });
+
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options).not.toHaveProperty("includeCurrentTurnDeliveryTool");
+    expect(options).not.toHaveProperty("currentTurnDeliveryToolRef");
+    expect(options).not.toHaveProperty("currentTurnDeliveryAuthority");
+    expect(hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it("keeps host delivery authority when Code Mode is disabled", async () => {
+    const runId = "run-context-engine-forwarding";
+    const writerTarget = await createWriterSessionTarget({ runId, sessionKey, tempPaths });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: { tools: { codeMode: { enabled: false } } } as OpenClawConfig,
+        runId,
+        ...writerTarget,
+      },
+    });
+
+    const construction = requireRecord(
+      mockArg(hoisted.createOpenClawCodingToolsMock, 0, 1, "current-turn delivery construction"),
+      "current-turn delivery construction",
+    );
+    const authority = requireRecord(
+      construction.deliveryAuthority,
+      "current-turn delivery authority",
+    );
+    expect(authority.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(authority.assertActive).toEqual(expect.any(Function));
+    expect(construction.terminalReply).toBeUndefined();
   });
 
   it("carries the resolved context budget into OpenClaw tool construction", async () => {

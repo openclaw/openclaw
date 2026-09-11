@@ -4,10 +4,12 @@
  * discards the content), and the embedded runner's bounded empty-error retry resubmits
  * the same request and recovers with the provider's second, well-formed response.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../src/config/sessions/store-writer-state.js";
@@ -37,6 +39,49 @@ const PROVIDER_ID = "mock-anthropic";
 const MODEL_ID = "claude-opus-5";
 const RECOVERED_MARKER = "PR142176_RECOVERED_AFTER_REJECTION";
 const TOKEN = "pr142176-proof-token";
+
+function summarizeMessages(messages: unknown) {
+  const serialized = JSON.stringify(messages ?? []);
+  const roles = { user: 0, assistant: 0, system: 0, other: 0 };
+  const blocks = { text: 0, toolUse: 0, toolResult: 0, thinking: 0, other: 0 };
+  for (const item of Array.isArray(messages) ? messages : []) {
+    const message = asOptionalRecord(item);
+    const role = message?.role;
+    if (role === "user" || role === "assistant" || role === "system") {
+      roles[role]++;
+    } else {
+      roles.other++;
+    }
+    const content = message?.content;
+    if (typeof content === "string") {
+      blocks.text++;
+    } else {
+      for (const block of Array.isArray(content) ? content : []) {
+        const type = asOptionalRecord(block)?.type;
+        if (type === "text" || type === "thinking") {
+          blocks[type]++;
+        } else if (type === "tool_use") {
+          blocks.toolUse++;
+        } else if (type === "tool_result") {
+          blocks.toolResult++;
+        } else {
+          blocks.other++;
+        }
+      }
+    }
+  }
+  return {
+    sha256: createHash("sha256").update(serialized).digest("hex"),
+    roles,
+    blocks,
+    markers: {
+      recovered: serialized.includes(RECOVERED_MARKER),
+      request: serialized.includes("read my notes"),
+      truncatedPath: serialized.includes("/workspace/notes"),
+      malformedNotice: serialized.includes("malformed JSON arguments"),
+    },
+  };
+}
 
 function anthropicSse(events: Record<string, unknown>[]): string {
   return events
@@ -141,6 +186,13 @@ describe("PR #142176 real runtime proof", () => {
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const providerRequests: Array<{ method: string; url: string; stream: unknown }> = [];
+      const diagnosticStarted = performance.now();
+      const requestSummaries: Array<{
+        ordinal: number;
+        elapsedMs: number;
+        bodySha256: string;
+        messages: ReturnType<typeof summarizeMessages>;
+      }> = [];
 
       try {
         tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pr142176-proof-"));
@@ -183,6 +235,14 @@ describe("PR #142176 real runtime proof", () => {
               url: request.url ?? "",
               stream: parsed.stream,
             });
+            if (requestSummaries.length < 8) {
+              requestSummaries.push({
+                ordinal: providerRequests.length,
+                elapsedMs: Math.round(performance.now() - diagnosticStarted),
+                bodySha256: createHash("sha256").update(body).digest("hex"),
+                messages: summarizeMessages(asOptionalRecord(parsed)?.messages),
+              });
+            }
             response.writeHead(200, {
               "content-type": "text/event-stream; charset=utf-8",
               "cache-control": "no-cache",
@@ -239,10 +299,37 @@ describe("PR #142176 real runtime proof", () => {
         expect(waited).toMatchObject({ status: "ok" });
 
         // Both attempts went to the real transport over HTTP as streaming Messages requests.
-        expect(providerRequests).toEqual([
-          { method: "POST", url: "/v1/messages", stream: true },
-          { method: "POST", url: "/v1/messages", stream: true },
-        ]);
+        try {
+          expect(providerRequests).toEqual([
+            { method: "POST", url: "/v1/messages", stream: true },
+            { method: "POST", url: "/v1/messages", stream: true },
+          ]);
+        } catch (error) {
+          let historySummary: ReturnType<typeof summarizeMessages> | undefined;
+          try {
+            const history = await gateway.client.request<{ messages?: unknown[] }>("chat.history", {
+              sessionKey,
+              limit: 20,
+            });
+            historySummary = summarizeMessages(history.messages);
+          } catch {
+            // Missing diagnostic history must not replace the original assertion.
+          }
+          try {
+            process.stderr.write(
+              `[predispatch-retry] ${JSON.stringify({
+                total: providerRequests.length,
+                omitted: providerRequests.length - requestSummaries.length,
+                requests: requestSummaries,
+                historyObserved: historySummary !== undefined,
+                history: historySummary,
+              })}\n`,
+            );
+          } catch {
+            // Preserve the assertion even when its diagnostic sink is unavailable.
+          }
+          throw error;
+        }
 
         const history = await gateway.client.request<{ messages?: unknown[] }>("chat.history", {
           sessionKey,

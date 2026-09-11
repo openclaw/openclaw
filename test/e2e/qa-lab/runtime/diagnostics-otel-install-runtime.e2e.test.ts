@@ -17,7 +17,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, type TestContext } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
@@ -37,6 +37,139 @@ type MutableConfig = {
   };
   [key: string]: unknown;
 };
+
+type InstallPhase =
+  | "setup"
+  | "scratch"
+  | `${"configured" | "environment"}-receiver`
+  | `pack-${"copy" | "build" | "npm" | "inspect" | "tarball"}`
+  | `${"registry" | "mock"}-start`
+  | `gateway-${"pre-listening" | "post-listening" | "ready"}`
+  | `cli-${"install" | "disable" | "enable" | "inspect"}`
+  | `${"install" | "disabled" | "enabled"}-config`
+  | `${"initial" | "sampled-in"}-restart-${"stop" | "read" | "write" | "start" | "ready"}`
+  | `${"sampled-out" | "sampled-in"}-${"send" | "wait" | "assert"}`
+  | "sampling-window"
+  | "export-wait"
+  | "export-assert"
+  | "cleanup"
+  | "complete";
+type PhaseObserver = (phase: InstallPhase) => void;
+type CleanupEvent = "started" | "fulfilled" | "rejected" | "deadline";
+type CleanupObserver = (event: CleanupEvent) => void;
+type CleanupState = {
+  startedAt: number;
+  settledAt?: number;
+  outcome: "not-started" | Exclude<CleanupEvent, "deadline">;
+  deadline: boolean;
+};
+
+function createInstallDiagnostics(context: TestContext) {
+  const startedAt = performance.now();
+  let phase: InstallPhase = "setup";
+  let phaseStartedAt = startedAt;
+  let reported = false;
+  const milestones: Partial<Record<InstallPhase, number>> = { setup: 0 };
+  const cleanups: Record<string, CleanupState> = {};
+  const observed: {
+    gateway?: QaGatewayChild;
+    receivers: Array<Awaited<ReturnType<typeof startReceiver>>>;
+  } = { receivers: [] };
+  const finiteMs = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) ? Math.max(0, Math.round(value)) : null;
+  const capture = (event: "test-abort" | "body-failed" | "test-failed") => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    try {
+      const now = performance.now();
+      const logs = observed.gateway?.logs().slice(-8_192);
+      process.stderr.write(
+        `[otel-install-diagnostic] ${JSON.stringify({
+          event,
+          phase,
+          elapsedMs: finiteMs(now - startedAt),
+          phaseElapsedMs: finiteMs(now - phaseStartedAt),
+          milestones,
+          // These are observed milestones, not evidence that a process is still alive.
+          gatewayStartReturned: observed.gateway !== undefined,
+          gatewayLogFacts:
+            logs === undefined
+              ? null
+              : {
+                  startupTraceLines: logs.match(/startup trace:/g)?.length ?? 0,
+                  pluginLoadProfileLines: logs.match(/\[plugin-load-profile\]/g)?.length ?? 0,
+                  sdkStartFailureObserved: logs.includes("diagnostics-otel: failed to start SDK:"),
+                  sdkRollbackFailureObserved: logs.includes(
+                    "diagnostics-otel: SDK startup rollback cleanup failed:",
+                  ),
+                },
+          mockRequests: "unavailable",
+          mockInflight: "unavailable",
+          receivers: observed.receivers.map((receiver) => {
+            const receivedAt = receiver.capturedRequests.at(-1)?.receivedAtMs;
+            return {
+              requests: receiver.capturedRequests.length,
+              spans: receiver.capturedSpans.length,
+              latestRequestAgeMs: finiteMs(
+                receivedAt === undefined ? undefined : Date.now() - receivedAt,
+              ),
+            };
+          }),
+          cleanups: Object.fromEntries(
+            Object.entries(cleanups).map(([owner, state]) => [
+              owner,
+              {
+                outcome: state.outcome,
+                deadline: state.deadline,
+                elapsedMs: finiteMs((state.settledAt ?? now) - state.startedAt),
+              },
+            ]),
+          ),
+        })}\n`,
+      );
+    } catch {
+      // Observing a failure must never replace it or prevent the existing cleanup.
+    }
+  };
+  const onAbort = () => capture("test-abort");
+  context.signal.addEventListener("abort", onAbort, { once: true });
+  context.onTestFailed(() => capture("test-failed"));
+  context.onTestFinished(() => context.signal.removeEventListener("abort", onAbort));
+  return {
+    observed,
+    capture,
+    phase(next: InstallPhase) {
+      phase = next;
+      phaseStartedAt = performance.now();
+      milestones[next] ??= finiteMs(phaseStartedAt - startedAt) ?? 0;
+    },
+    cleanup(
+      owner: "gateway" | "mock" | "registry" | "configured" | "environment" | "scratch",
+    ): CleanupObserver {
+      const state: CleanupState = {
+        startedAt: performance.now(),
+        outcome: "not-started",
+        deadline: false,
+      };
+      cleanups[owner] = state;
+      return (event) => {
+        // The wrapper deadline does not settle the underlying cleanup promise.
+        if (event === "deadline") {
+          state.deadline = true;
+        } else {
+          state.outcome = event;
+          if (event === "started") {
+            state.startedAt = performance.now();
+          } else {
+            state.settledAt = performance.now();
+          }
+        }
+      };
+    },
+  };
+}
 
 async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null) {
@@ -99,17 +232,24 @@ async function startReceiver() {
 async function runCleanup(
   label: string,
   cleanup: () => Promise<void>,
+  observe?: CleanupObserver,
   timeoutMs = 30_000,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} cleanup timed out`)), timeoutMs);
+    const timer = setTimeout(() => {
+      observe?.("deadline");
+      reject(new Error(`${label} cleanup timed out`));
+    }, timeoutMs);
     timer.unref();
+    observe?.("started");
     cleanup().then(
       () => {
+        observe?.("fulfilled");
         clearTimeout(timer);
         resolve();
       },
       (error: unknown) => {
+        observe?.("rejected");
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
       },
@@ -118,10 +258,12 @@ async function runCleanup(
 }
 
 async function settleCleanup(
-  ...cleanups: Array<readonly [label: string, cleanup: () => Promise<void>]>
+  ...cleanups: Array<
+    readonly [label: string, cleanup: () => Promise<void>, observe?: CleanupObserver]
+  >
 ): Promise<void> {
   const results = await Promise.allSettled(
-    cleanups.map(async ([label, cleanup]) => await runCleanup(label, cleanup)),
+    cleanups.map(async ([label, cleanup, observe]) => await runCleanup(label, cleanup, observe)),
   );
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
@@ -131,10 +273,11 @@ async function settleCleanup(
   }
 }
 
-async function packPlugin(repoRoot: string, scratch: string) {
+async function packPlugin(repoRoot: string, scratch: string, observe?: PhaseObserver) {
   const outputDir = path.join(scratch, "pack");
   const pluginRoot = path.join(repoRoot, "extensions/diagnostics-otel");
   const stagingDir = path.join(scratch, "package-source");
+  observe?.("pack-copy");
   await cp(pluginRoot, stagingDir, {
     recursive: true,
     filter: (source) => {
@@ -144,11 +287,13 @@ async function packPlugin(repoRoot: string, scratch: string) {
     },
   });
   await mkdir(outputDir, { recursive: true });
+  observe?.("pack-build");
   await execFileAsync(process.execPath, ["scripts/lib/plugin-npm-runtime-build.mjs", stagingDir], {
     cwd: repoRoot,
     maxBuffer: 16 * 1024 * 1024,
     timeout: 120_000,
   });
+  observe?.("pack-npm");
   await execFileAsync(
     process.execPath,
     [
@@ -173,6 +318,7 @@ async function packPlugin(repoRoot: string, scratch: string) {
       timeout: 120_000,
     },
   );
+  observe?.("pack-inspect");
   const tarballName = (await readdir(outputDir)).find((name) => name.endsWith(".tgz"));
   if (!tarballName) {
     throw new Error("diagnostics-otel pack did not produce a tarball");
@@ -230,7 +376,12 @@ async function startRegistry(repoRoot: string, scratch: string, tarball: string,
   }
 }
 
-async function runTurn(gateway: QaGatewayChild, marker: string) {
+async function runTurn(
+  gateway: QaGatewayChild,
+  marker: string,
+  observe?: (phase: "send" | "wait" | "assert") => void,
+) {
+  observe?.("send");
   const started = (await gateway.call("chat.send", {
     sessionKey: `agent:qa:${marker.toLowerCase()}`,
     message: `Reply exactly: ${marker}`,
@@ -238,11 +389,13 @@ async function runTurn(gateway: QaGatewayChild, marker: string) {
   })) as { runId?: string; status?: string };
   expect(started.status).toBe("started");
   expect(started.runId).toBeTruthy();
+  observe?.("wait");
   const completed = (await gateway.call(
     "agent.wait",
     { runId: started.runId, timeoutMs: 60_000 },
     { timeoutMs: 65_000 },
   )) as { status?: string };
+  observe?.("assert");
   expect(completed.status).toBe("ok");
 }
 
@@ -250,8 +403,11 @@ async function restartWithOtelConfig(params: {
   gateway: QaGatewayChild;
   sampleRate: number;
   traceEndpoint: string;
+  observe?: (phase: "stop" | "read" | "write" | "start" | "ready") => void;
 }) {
+  params.observe?.("stop");
   await params.gateway.restartAfterStateMutation(async ({ configPath }) => {
+    params.observe?.("read");
     const current = JSON.parse(await readFile(configPath, "utf8")) as MutableConfig;
     current.diagnostics = {
       enabled: true,
@@ -267,8 +423,11 @@ async function restartWithOtelConfig(params: {
         captureContent: false,
       },
     };
+    params.observe?.("write");
     await writeFile(configPath, `${JSON.stringify(current, null, 2)}\n`);
+    params.observe?.("start");
   });
+  params.observe?.("ready");
 }
 
 // The caller retains the owner before startup and every later installation step.
@@ -279,6 +438,7 @@ async function startInstallGateway(params: {
   nodeOptions?: string;
   registryBaseUrl: string;
   repoRoot: string;
+  observe?: PhaseObserver;
 }) {
   return await params.owner.start({
     repoRoot: params.repoRoot,
@@ -286,6 +446,7 @@ async function startInstallGateway(params: {
     providerMode: "mock-openai",
     transportBaseUrl: "http://127.0.0.1:9",
     controlUiEnabled: false,
+    onListening: params.observe ? () => params.observe?.("gateway-post-listening") : undefined,
     mutateConfig: (cfg) => ({
       ...cfg,
       plugins: {
@@ -313,10 +474,13 @@ async function installAndConfigure(params: {
   configTraceEndpoint: string;
   packageVersion: string;
   sampleRate?: number;
+  observe?: PhaseObserver;
 }) {
   const { gateway } = params;
   const spec = `npm:${PACKAGE_NAME}@${params.packageVersion}`;
+  params.observe?.("cli-install");
   await gateway.runCli(["plugins", "install", spec, "--force", "--accept-capabilities"]);
+  params.observe?.("install-config");
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("qa gateway state directory was not configured");
@@ -335,10 +499,14 @@ async function installAndConfigure(params: {
   expect(records["diagnostics-otel"]?.installPath).toContain("diagnostics-otel");
   expect(records["diagnostics-otel"]?.integrity).toMatch(/^sha512-/u);
 
+  params.observe?.("cli-disable");
   await gateway.runCli(["plugins", "disable", "diagnostics-otel"]);
+  params.observe?.("disabled-config");
   let config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
   expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(false);
+  params.observe?.("cli-enable");
   await gateway.runCli(["plugins", "enable", "diagnostics-otel"]);
+  params.observe?.("enabled-config");
   config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
   expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(true);
 
@@ -346,7 +514,9 @@ async function installAndConfigure(params: {
     gateway,
     sampleRate: params.sampleRate ?? 1,
     traceEndpoint: params.configTraceEndpoint,
+    observe: params.observe ? (phase) => params.observe?.(`initial-restart-${phase}`) : undefined,
   });
+  params.observe?.("cli-inspect");
   const inspect = JSON.parse(
     await gateway.runCli(["plugins", "inspect", "diagnostics-otel", "--runtime", "--json"]),
   ) as { plugin?: { enabled?: boolean; id?: string; status?: string } };
@@ -372,12 +542,13 @@ describe("managed diagnostics-otel install runtime", () => {
     );
   });
 
-  async function copyPackedPlugin(repoRoot: string, scratch: string) {
+  async function copyPackedPlugin(repoRoot: string, scratch: string, observe?: PhaseObserver) {
     packedPlugin ??= (async () => {
       seedDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-seed-"));
-      return await packPlugin(repoRoot, seedDir);
+      return await packPlugin(repoRoot, seedDir, observe);
     })();
     const packed = await packedPlugin;
+    observe?.("pack-tarball");
     const outputDir = path.join(scratch, "pack");
     await mkdir(outputDir, { recursive: true });
     const tarball = path.join(outputDir, path.basename(packed.tarball));
@@ -385,84 +556,134 @@ describe("managed diagnostics-otel install runtime", () => {
     return { tarball, version: packed.version };
   }
 
-  test("installs the exact package and exports with config precedence, sampling, and flush", async () => {
+  test("installs the exact package and exports with config precedence, sampling, and flush", async (context) => {
+    const diagnostics = createInstallDiagnostics(context);
+    const observe = diagnostics.phase;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+    observe("scratch");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-"));
+    observe("configured-receiver");
     const configured = await startReceiver();
+    diagnostics.observed.receivers.push(configured);
+    observe("environment-receiver");
     const envOnly = await startReceiver();
+    diagnostics.observed.receivers.push(envOnly);
     let registry: Awaited<ReturnType<typeof startRegistry>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
     const gatewayOwner = createQaGatewayChild();
     let gateway: QaGatewayChild | undefined;
     const runProof = async () => {
-      const packed = await copyPackedPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
-      mock = await startQaMockOpenAiServer();
-      gateway = await startInstallGateway({
-        owner: gatewayOwner,
-        envTraceEndpoint: envOnly.baseUrl,
-        mockBaseUrl: mock.baseUrl,
-        registryBaseUrl: registry.baseUrl,
-        repoRoot,
-      });
-      await installAndConfigure({
-        gateway,
-        configTraceEndpoint: configured.baseUrl,
-        packageVersion: packed.version,
-        sampleRate: 0,
-      });
-      await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
-      await sleep(1_500);
-      expect(configured.capturedRequests).toHaveLength(0);
-      expect(envOnly.capturedRequests).toHaveLength(0);
+      try {
+        observe("pack-copy");
+        const packed = await copyPackedPlugin(repoRoot, scratch, observe);
+        observe("registry-start");
+        registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
+        observe("mock-start");
+        mock = await startQaMockOpenAiServer();
+        observe("gateway-pre-listening");
+        gateway = await startInstallGateway({
+          owner: gatewayOwner,
+          envTraceEndpoint: envOnly.baseUrl,
+          mockBaseUrl: mock.baseUrl,
+          registryBaseUrl: registry.baseUrl,
+          repoRoot,
+          observe,
+        });
+        diagnostics.observed.gateway = gateway;
+        observe("gateway-ready");
+        await installAndConfigure({
+          gateway,
+          configTraceEndpoint: configured.baseUrl,
+          packageVersion: packed.version,
+          sampleRate: 0,
+          observe,
+        });
+        await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT", (phase) =>
+          observe(`sampled-out-${phase}`),
+        );
+        observe("sampling-window");
+        await sleep(1_500);
+        expect(configured.capturedRequests).toHaveLength(0);
+        expect(envOnly.capturedRequests).toHaveLength(0);
 
-      await restartWithOtelConfig({
-        gateway,
-        sampleRate: 1,
-        traceEndpoint: configured.baseUrl,
-      });
-      const sampledInRequestCursor = configured.capturedRequests.length;
-      const sampledInSpanCursor = configured.capturedSpans.length;
-      await runTurn(gateway, "OTEL-MANAGED-INSTALL-OK");
-      const sampledInExport = await waitFor(() => {
-        let spanOffset = sampledInSpanCursor;
-        for (const request of configured.capturedRequests.slice(sampledInRequestCursor)) {
-          const requestSpans = configured.capturedSpans.slice(
-            spanOffset,
-            spanOffset + request.spanCount,
-          );
-          spanOffset += request.spanCount;
-          if (
-            request.path === "/v1/traces" &&
-            requestSpans.some((span) => span.name === "openclaw.run")
-          ) {
-            return { request, spans: requestSpans };
+        await restartWithOtelConfig({
+          gateway,
+          sampleRate: 1,
+          traceEndpoint: configured.baseUrl,
+          observe: (phase) => observe(`sampled-in-restart-${phase}`),
+        });
+        const sampledInRequestCursor = configured.capturedRequests.length;
+        const sampledInSpanCursor = configured.capturedSpans.length;
+        await runTurn(gateway, "OTEL-MANAGED-INSTALL-OK", (phase) =>
+          observe(`sampled-in-${phase}`),
+        );
+        observe("export-wait");
+        const sampledInExport = await waitFor(() => {
+          let spanOffset = sampledInSpanCursor;
+          for (const request of configured.capturedRequests.slice(sampledInRequestCursor)) {
+            const requestSpans = configured.capturedSpans.slice(
+              spanOffset,
+              spanOffset + request.spanCount,
+            );
+            spanOffset += request.spanCount;
+            if (
+              request.path === "/v1/traces" &&
+              requestSpans.some((span) => span.name === "openclaw.run")
+            ) {
+              return { request, spans: requestSpans };
+            }
           }
-        }
-        return undefined;
-      }, 15_000);
-      // BatchSpanProcessor starts its timer on the first ended span. The first
-      // export's earliest end timestamp is the boundary that must observe the clamp.
-      const firstRequestEndTimes = sampledInExport.spans.flatMap((span) =>
-        span.endTimeMs === undefined ? [] : [span.endTimeMs],
-      );
-      expect(firstRequestEndTimes.length).toBeGreaterThan(0);
-      const firstSpanEndAt = Math.min(...firstRequestEndTimes);
-      const exportDelayMs = (sampledInExport.request.receivedAtMs ?? 0) - firstSpanEndAt;
-      expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
-      expect(exportDelayMs).toBeLessThan(4_500);
-      expect(envOnly.capturedRequests).toHaveLength(0);
+          return undefined;
+        }, 15_000);
+        observe("export-assert");
+        // BatchSpanProcessor starts its timer on the first ended span. The first
+        // export's earliest end timestamp is the boundary that must observe the clamp.
+        const firstRequestEndTimes = sampledInExport.spans.flatMap((span) =>
+          span.endTimeMs === undefined ? [] : [span.endTimeMs],
+        );
+        expect(firstRequestEndTimes.length).toBeGreaterThan(0);
+        const firstSpanEndAt = Math.min(...firstRequestEndTimes);
+        const exportDelayMs = (sampledInExport.request.receivedAtMs ?? 0) - firstSpanEndAt;
+        expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
+        expect(exportDelayMs).toBeLessThan(4_500);
+        expect(envOnly.capturedRequests).toHaveLength(0);
+      } catch (error) {
+        diagnostics.capture("body-failed");
+        throw error;
+      }
     };
     await runQaGatewayFixture(runProof, async () => {
+      observe("cleanup");
       await settleCleanup(
-        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry?.child)],
-        ["configured receiver", async () => await configured.close()],
-        ["environment receiver", async () => await envOnly.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+        [
+          "gateway",
+          async () => await stopQaGatewayFixture(gatewayOwner),
+          diagnostics.cleanup("gateway"),
+        ],
+        ["mock provider", async () => await mock?.stop(), diagnostics.cleanup("mock")],
+        [
+          "fixture registry",
+          async () => await stopChild(registry?.child),
+          diagnostics.cleanup("registry"),
+        ],
+        [
+          "configured receiver",
+          async () => await configured.close(),
+          diagnostics.cleanup("configured"),
+        ],
+        [
+          "environment receiver",
+          async () => await envOnly.close(),
+          diagnostics.cleanup("environment"),
+        ],
+        [
+          "scratch directory",
+          async () => await rm(scratch, { recursive: true, force: true }),
+          diagnostics.cleanup("scratch"),
+        ],
       );
     });
+    observe("complete");
   }, 180_000);
 
   test("keeps installed diagnostic listeners active with a preloaded SDK", async () => {

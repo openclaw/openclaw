@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createDeferred } from "./promise.js";
@@ -455,12 +455,12 @@ describe("QA gateway fixture error composition", () => {
     );
   });
 
-  it("retains startup and finalization errors through the actual OTel fixture", () =>
+  it("retains startup and finalization errors through the actual OTel fixture", (context) =>
     fixture.run(async () => {
       const startupError = new Error("fixture startup failed");
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
-      const bodies: Array<() => Promise<void>> = [];
+      const bodies: Array<(context: TestContext) => Promise<void>> = [];
       const cleanups: Array<() => Promise<void>> = [];
       const registry = {
         exitCode: null as number | null,
@@ -474,7 +474,7 @@ describe("QA gateway fixture error composition", () => {
       vi.doMock("vitest", () => ({
         afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, body: () => void) => body(),
-        test: (_name: string, body: () => Promise<void>) => bodies.push(body),
+        test: (_name: string, body: (context: TestContext) => Promise<void>) => bodies.push(body),
         expect,
       }));
       vi.doMock("node:child_process", () => ({
@@ -527,6 +527,8 @@ describe("QA gateway fixture error composition", () => {
         startLocalOtlpReceiver: () => {
           const label = `receiver-${receiverCount++}`;
           return {
+            capturedRequests: [],
+            capturedSpans: [],
             listen: async () => 43212,
             close: async () => {
               cleaned.push(label);
@@ -540,12 +542,16 @@ describe("QA gateway fixture error composition", () => {
       expect(cleanups).toHaveLength(1);
       let failure: unknown;
       try {
-        failure = await bodies[0]!().catch((error: unknown) => error);
+        failure = await bodies[0]!(context).catch((error: unknown) => error);
       } finally {
         for (const cleanup of cleanups) {
           await cleanup();
         }
       }
+      const failures = errorTree(failure).filter((error) => !(error instanceof AggregateError));
+      expect(failures).toHaveLength(2);
+      expect(failures[0]).toBe(startupError);
+      expect(failures[1]).toBe(finalizationError);
       expect(cleaned).toEqual([
         "gateway",
         "provider",
@@ -555,7 +561,5 @@ describe("QA gateway fixture error composition", () => {
         "/qa-fixture/scratch",
         "/qa-fixture/seed",
       ]);
-      expect(errorTree(failure)).toContain(startupError);
-      expect(errorTree(failure)).toContain(finalizationError);
     }));
 });

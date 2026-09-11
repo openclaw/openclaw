@@ -1,5 +1,6 @@
 /** Prepares queued follow-up payloads for source-channel delivery. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { readCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -92,6 +93,9 @@ export function resolveFollowupDeliveryDecision(params: {
   if (execution.outcome.kind === "aborted") {
     return { kind: "suppress", reason: "aborted" };
   }
+  if (readCurrentTurnReplyCompletion(execution)) {
+    return { kind: "suppress", reason: "message-tool-only" };
+  }
   const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
   const renderFailurePayloads = (payloads: ReplyPayload[]) =>
     payloads.map((payload) =>
@@ -166,6 +170,9 @@ export function resolveFollowupDeliveryDecision(params: {
     model: accounting.modelUsed,
   };
   const result = execution.outcome.result;
+  if (readCurrentTurnReplyCompletion(result.meta?.agentMeta?.terminalReceipt)) {
+    return { kind: "suppress", reason: "message-tool-only" };
+  }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
     typeof result.meta?.finalAssistantVisibleText === "string"

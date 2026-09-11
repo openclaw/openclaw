@@ -23,6 +23,11 @@ import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/er
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 import {
+  bindNewCopilotTools,
+  createCopilotHostToolSurface,
+  findDuplicateToolNames,
+} from "./tool-bridge-host-tools.js";
+import {
   createCopilotPromptToolPolicy,
   createCopilotToolExecutionScheduler,
   EMPTY_COPILOT_PROMPT_TOOL_POLICY,
@@ -119,28 +124,16 @@ export async function createCopilotToolBridge(
   if (!hostCapabilities) {
     throw new Error("Copilot attempt tools require host-bound capabilities.");
   }
-  const createHostToolSurface =
-    input.createOpenClawCodingTools === undefined ? hostCapabilities.createToolSurface : undefined;
-  const createOpenClawCodingTools =
-    input.createOpenClawCodingTools ??
-    createHostToolSurface ??
-    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
   try {
-    const constructedTools = createHostToolSurface
-      ? await createHostToolSurface(toolOptions, bindingOptions)
-      : await createOpenClawCodingTools(toolOptions);
-    if (!Array.isArray(constructedTools)) {
-      throw new Error("createOpenClawCodingTools must return an array of tools");
-    }
-    // Modern hosts construct and bind core tools under the admitted-run
-    // authority. Constructor-less hosts retain the public SDK fallback.
-    const boundTools = createHostToolSurface
-      ? constructedTools
-      : hostCapabilities.bindToolSurface(constructedTools, bindingOptions);
-    sourceTools = boundTools;
-    for (const tool of boundTools) {
+    sourceTools = await createCopilotHostToolSurface({
+      bindingOptions,
+      factory: input.createOpenClawCodingTools,
+      hostCapabilities,
+      options: toolOptions,
+    });
+    for (const tool of sourceTools) {
       boundSourceTools.add(tool);
     }
   } catch (error: unknown) {
@@ -166,19 +159,12 @@ export async function createCopilotToolBridge(
   // The constructor output is bound before catalog compaction so hidden tools
   // cannot outlive the attempt. Bind only controls created by compaction here;
   // rebinding retained tools would stack the before-tool hook.
-  const newlyConstructedTools = compactedTools.tools.filter((tool) => !boundSourceTools.has(tool));
-  const boundNewlyConstructedTools =
-    newlyConstructedTools.length > 0
-      ? hostCapabilities.bindToolSurface(newlyConstructedTools, bindingOptions)
-      : newlyConstructedTools;
-  if (boundNewlyConstructedTools.length !== newlyConstructedTools.length) {
-    throw new Error("Copilot host capability changed the tool surface length.");
-  }
-  const newlyBoundTools = new Map<AnyAgentTool, AnyAgentTool>();
-  for (let index = 0; index < newlyConstructedTools.length; index += 1) {
-    newlyBoundTools.set(newlyConstructedTools[index]!, boundNewlyConstructedTools[index]!);
-  }
-  const exposedTools = compactedTools.tools.map((tool) => newlyBoundTools.get(tool) ?? tool);
+  const exposedTools = bindNewCopilotTools({
+    bindingOptions,
+    compactedTools: compactedTools.tools,
+    hostCapabilities,
+    previouslyBound: boundSourceTools,
+  });
 
   // Run duplicate detection after filtering so a duplicate in a
   // suppressed tool does not fail a narrow run (PI parity: PI never
@@ -718,18 +704,4 @@ function filterCopilotToolsForConstructionPlan<T extends { name: string }>(
 function readInlinePluginToolMeta(tool: { name: string }): { pluginId: string } | undefined {
   const pluginId = (tool as { pluginId?: unknown }).pluginId;
   return typeof pluginId === "string" && pluginId.trim() ? { pluginId } : undefined;
-}
-
-function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
-  const counts = new Map<string, number>();
-  for (const sourceTool of sourceTools) {
-    if (typeof sourceTool.name !== "string" || sourceTool.name.length === 0) {
-      continue;
-    }
-    counts.set(sourceTool.name, (counts.get(sourceTool.name) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([name]) => name)
-    .toSorted();
 }

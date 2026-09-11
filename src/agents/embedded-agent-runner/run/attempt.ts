@@ -11,6 +11,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { copyCurrentTurnReplyCompletion } from "../../current-turn-reply-completion.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import {
@@ -404,7 +405,7 @@ export async function runEmbeddedAttempt(
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
-      return {
+      return copyCurrentTurnReplyCompletion(executionResult, {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries:
@@ -418,7 +419,7 @@ export async function runEmbeddedAttempt(
               },
             }
           : {}),
-      };
+      });
     } finally {
       // Retained review callbacks must lose the live transcript before cleanup awaits.
       const sessionResources = { ...resources };

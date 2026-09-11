@@ -164,13 +164,25 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   seedTranscriptState(storePath);
 
   const samples: number[] = [];
+  // openClient includes runtime preparation; endpoint phases do not identify the stall's cause.
+  let phase = "openClient (runtime preparation + connection)";
+  let previousPhase = phase;
+  let largestHeartbeatInterval = { gapMs: 0, startPhase: phase, endPhase: phase };
   let previous = performance.now();
   const heartbeat = setInterval(() => {
     const current = performance.now();
-    samples.push(current - previous);
+    const gapMs = current - previous;
+    samples.push(gapMs);
+    if (gapMs > largestHeartbeatInterval.gapMs) {
+      largestHeartbeatInterval = { gapMs, startPhase: previousPhase, endPhase: phase };
+    }
     previous = current;
+    previousPhase = phase;
   }, 10);
+  const openClientStartedAt = performance.now();
   const { ws } = await openClient();
+  const openClientMs = performance.now() - openClientStartedAt;
+  phase = "pre-delete wait";
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -187,6 +199,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
       setTimeout(resolve, 25);
     });
     const deleteStartedAt = performance.now();
+    phase = "sessions.delete";
     // The 200k-row fixture can take longer than the generic RPC helper's 10s
     // wall-clock budget on slower CI hosts. Responsiveness is asserted
     // independently below via the event-loop heartbeat.
@@ -318,5 +331,8 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   ]);
   expect(archives.every((archive) => Number(archive.archive_bytes) > 0)).toBe(true);
   expect(samples.length).toBeGreaterThan(0);
-  expect(maxGatewayGapMs).toBeLessThan(500);
+  expect(
+    maxGatewayGapMs,
+    JSON.stringify({ openClientMs, deleteMs, largestHeartbeatInterval }),
+  ).toBeLessThan(500);
 }, 120_000);

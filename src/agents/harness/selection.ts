@@ -22,6 +22,10 @@ import {
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import {
+  copyCurrentTurnReplyCompletion,
+  readCurrentTurnReplyCompletion,
+} from "../current-turn-reply-completion.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
@@ -566,6 +570,10 @@ export async function runAgentHarnessAttempt(
         );
       }),
     );
+  } catch (error) {
+    // Finalization or transport loss can reject after the host tool dispatched.
+    // Preserve the original error and its private receipt before closing the host.
+    throw copyCurrentTurnReplyCompletion(pluginAttempt.currentTurnReplyCompletion, error);
   } finally {
     pluginAttempt.closeHostCapabilities();
   }
@@ -601,7 +609,13 @@ export async function runAgentHarnessAttempt(
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
-  return copyCoreTtsAttemptResultProvenance(result, publicResult);
+  if (readCurrentTurnReplyCompletion(pluginAttempt.currentTurnReplyCompletion) === "confirmed") {
+    publicResult.sourceReplyDelivered = true;
+  }
+  return copyCurrentTurnReplyCompletion(
+    pluginAttempt.currentTurnReplyCompletion ?? result,
+    copyCoreTtsAttemptResultProvenance(result, publicResult),
+  );
 }
 
 function selectPreparedAgentHarness(
@@ -674,6 +688,7 @@ function withoutInternalHarnessAuthority(
 ): {
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
+  currentTurnReplyCompletion?: object;
   runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   if (builtIn) {
@@ -700,6 +715,7 @@ function withoutInternalHarnessAuthority(
   });
   return {
     params: { ...pluginParams, hostCapabilities: host.capabilities },
+    currentTurnReplyCompletion: host.currentTurnReplyCompletion,
     closeHostCapabilities: host.close,
     runWithHostScope: host.runWithScope,
   };

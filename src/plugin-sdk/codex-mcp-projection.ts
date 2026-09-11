@@ -3,6 +3,7 @@
 import { pinExecToolTarget } from "../agents/exec-tool-target-pinning.js";
 import type { AgentHarnessHostCapabilities } from "../agents/harness/host-capability-types.js";
 import {
+  resolveAgentHarnessCurrentTurnDeliveryTool,
   resolveAgentHarnessScheduledToolProjectionCapability,
   resolveAgentHarnessTtsProvenanceTransferCapability,
   type AgentHarnessScheduledToolProjectionFactory,
@@ -25,6 +26,13 @@ export {
 } from "../agents/mcp-codex-tool-approval.js";
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
 export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
+
+/** Resolve the exact host-created current-turn delivery tool for a Codex surface. */
+export function resolveCodexCurrentTurnDeliveryTool(
+  tools: readonly AnyAgentTool[],
+): AnyAgentTool | undefined {
+  return resolveAgentHarnessCurrentTurnDeliveryTool(tools);
+}
 
 // Native mode pins shell_tool after managed-policy preflight; the pinned registry has no disabled shells.
 // A shell-disabled custom model invalidates read/exec inference; Codex exposes no shell_type fact.

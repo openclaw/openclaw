@@ -29,6 +29,7 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
+import { copyCurrentTurnReplyCompletion } from "../current-turn-reply-completion.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
@@ -205,10 +206,13 @@ function withFallbackDiagnosticTrace(
   if (result.diagnosticTrace || !trace) {
     return result;
   }
-  return copyCoreTtsAttemptResultProvenance(result, {
-    ...result,
-    diagnosticTrace: freezeDiagnosticTraceContext(trace),
-  });
+  return copyCurrentTurnReplyCompletion(
+    result,
+    copyCoreTtsAttemptResultProvenance(result, {
+      ...result,
+      diagnosticTrace: freezeDiagnosticTraceContext(trace),
+    }),
+  );
 }
 
 function withFallbackFinalizationDiagnosticTrace(
@@ -344,10 +348,13 @@ export async function runAgentHarnessLifecycleAttempt(
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.
-      return copyCoreTtsAttemptResultProvenance(
+      return copyCurrentTurnReplyCompletion(
         rawResult,
-        normalizeAgentHarnessAttemptResult(
-          applyAgentHarnessResultClassification(harness, rawResult, params),
+        copyCoreTtsAttemptResultProvenance(
+          rawResult,
+          normalizeAgentHarnessAttemptResult(
+            applyAgentHarnessResultClassification(harness, rawResult, params),
+          ),
         ),
       );
     };

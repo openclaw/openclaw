@@ -158,6 +158,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     diagnosticTrace: input.diagnostics.diagnosticTrace,
     clientToolCallSlots: sessionRuntime.agentSession.clientToolCallSlots,
     nestedToolActivities: toolBase.nestedToolActivities,
+    currentTurnReplyCompletion: toolBase.currentTurnReplyCompletion,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     hasDeliveredSourceReply: sessionRuntime.agentSession.hasDeliveredSourceReply,
     markSourceReplyDelivered: sessionRuntime.agentSession.markSourceReplyDelivered,

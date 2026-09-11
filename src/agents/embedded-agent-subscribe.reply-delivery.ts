@@ -6,6 +6,7 @@ import {
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readCurrentTurnReplyCompletion } from "./current-turn-reply-completion.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -63,6 +64,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (
       !scope.delivery ||
       !scope.pending ||
+      readCurrentTurnReplyCompletion(state) ||
       state.unsubscribed ||
       (scope === streamScope && scope.active)
     ) {
@@ -134,7 +136,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
       emitAgentEvent({ runId: params.runId, ...event });
-      if (params.onAgentEvent) {
+      if (params.onAgentEvent && !readCurrentTurnReplyCompletion(state)) {
         runBestEffortCallback({
           label: "assistant agent event",
           log,
@@ -291,7 +293,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       autoDeliveryMediaUrls?: string[];
     },
   ): void => {
-    if (!params.onBlockReply) {
+    if (!params.onBlockReply || readCurrentTurnReplyCompletion(state)) {
       return;
     }
     const recordDeliveredReply = () => {

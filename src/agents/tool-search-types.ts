@@ -43,14 +43,15 @@ export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
   allowedIds?: { has(id: string): boolean };
 };
-export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
-  recoverySurface?: UnknownToolRecoverySurface;
+  recoverySurface?: "raw-tools" | "code-mode" | "catalog";
 };
 export type ToolSearchCallOptions = CatalogVisibilityOptions &
   UnknownToolErrorOptions & {
     parentToolCallId?: string;
+    /** Outer batches require every nested call to terminate; one settled Code Mode cell is monotonic. */
+    terminalAggregation?: "all" | "any";
     signal?: AbortSignal;
     onUpdate?: AgentToolUpdateCallback;
   };

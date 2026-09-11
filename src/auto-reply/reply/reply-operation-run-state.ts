@@ -1,3 +1,4 @@
+import { copyCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
@@ -44,6 +45,8 @@ export type ReplyOperationRunState = {
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
+  /** Opaque host receipt shared with this exact operation, never a delivery claim. */
+  currentTurnReplyCompletion?: object;
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
@@ -76,8 +79,18 @@ export function recordReplyOperationAgentTurn(
           "messagingToolSentTargets" | "asyncWorkStarted" | "acceptedSessionSpawns"
         >;
       },
+  currentTurnReplyCompletion?: unknown,
 ): void {
   for (const state of states ?? []) {
+    if (!owner || state.agentTurnOwner !== owner) {
+      state.currentTurnReplyCompletion = undefined;
+    }
+    if (owner && currentTurnReplyCompletion) {
+      // Copy the private reference, not its value: admitted sends may settle
+      // after cleanup, and a same-owner catch must retain their receipt.
+      state.currentTurnReplyCompletion ??= {};
+      copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, state.currentTurnReplyCompletion);
+    }
     state.agentTurn = resolveAgentTurnExecutionStatus(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );

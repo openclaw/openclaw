@@ -111,6 +111,7 @@ export function prepareEmbeddedAttemptStream(input: {
   diagnosticTrace: DiagnosticTraceContext;
   clientToolCallSlots: readonly EmbeddedAttemptClientToolCallSlot[];
   nestedToolActivities: NestedToolActivity[];
+  currentTurnReplyCompletion?: object;
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
@@ -288,96 +289,101 @@ export function prepareEmbeddedAttemptStream(input: {
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
-  const subscription = subscribeEmbeddedAgentSession({
-    session: input.activeSession,
-    onModelUsage: input.onModelUsage,
-    runId: attempt.runId,
-    lifecycleGeneration: attempt.lifecycleGeneration,
-    messageChannel: input.runtimeChannel,
-    initialReplayState: attempt.initialReplayState,
-    hookRunner: getGlobalHookRunner() ?? undefined,
-    verboseLevel: attempt.verboseLevel,
-    reasoningMode: attempt.reasoningLevel ?? "off",
-    thinkingLevel: attempt.thinkLevel,
-    toolResultFormat: attempt.toolResultFormat,
-    toolProgressDetail: attempt.toolProgressDetail,
-    shouldEmitToolResult: attempt.shouldEmitToolResult,
-    shouldEmitToolOutput: attempt.shouldEmitToolOutput,
-    sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-    hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
-    onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
-    onAgentToolResult: attempt.onAgentToolResult,
-    observeToolTerminal: attempt.observeToolTerminal,
-    trajectoryRecorder: input.trajectoryRecorder,
-    onToolResult: attempt.onToolResult,
-    onReasoningStream: attempt.onReasoningStream,
-    streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
-    onReasoningEnd: attempt.onReasoningEnd,
-    onBlockReply: input.onBlockReply,
-    onBlockReplyFlush: input.onBlockReplyFlush,
-    onBeforeTerminalDelivery,
-    blockReplyBreak: attempt.blockReplyBreak,
-    blockReplyChunking: attempt.blockReplyChunking,
-    onPartialReply: attempt.onPartialReply,
-    onAssistantMessageStart: attempt.onAssistantMessageStart,
-    onExecutionPhase: attempt.onExecutionPhase,
-    onAgentEvent: attempt.onAgentEvent,
-    terminalLifecyclePhase: attempt.deferTerminalLifecycle ? "finishing" : "end",
-    onToolStreamBoundary: attempt.onToolStreamBoundary,
-    isTerminalAborted: () => input.getRunState().aborted,
-    resolveTerminalStopReason: () =>
-      isAgentRunRestartAbortReason(input.runAbortController.signal.reason)
-        ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-        : undefined,
-    onBeforeLifecycleTerminal: () => {
-      if (deferredLifecycleOwner) {
-        return;
-      }
-      if (
-        requiresCompletionRequiredAsyncTaskWait({
-          sessionKey: attempt.sessionKey,
-          toolMetas: toolMetasForTerminal,
-        })
-      ) {
-        return;
-      }
-      // Clear embedded-run activity before emitting terminal lifecycle events so
-      // post-completion cleanup does not observe a logically finished run as active.
-      clearActiveEmbeddedRun(
-        attempt.sessionId,
-        queueHandle,
-        attempt.sessionKey,
-        attempt.sessionFile,
-      );
+  const subscription = subscribeEmbeddedAgentSession(
+    {
+      session: input.activeSession,
+      onModelUsage: input.onModelUsage,
+      runId: attempt.runId,
+      lifecycleGeneration: attempt.lifecycleGeneration,
+      messageChannel: input.runtimeChannel,
+      initialReplayState: attempt.initialReplayState,
+      hookRunner: getGlobalHookRunner() ?? undefined,
+      verboseLevel: attempt.verboseLevel,
+      reasoningMode: attempt.reasoningLevel ?? "off",
+      thinkingLevel: attempt.thinkLevel,
+      toolResultFormat: attempt.toolResultFormat,
+      toolProgressDetail: attempt.toolProgressDetail,
+      shouldEmitToolResult: attempt.shouldEmitToolResult,
+      shouldEmitToolOutput: attempt.shouldEmitToolOutput,
+      sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+      hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
+      onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
+      onAgentToolResult: attempt.onAgentToolResult,
+      observeToolTerminal: attempt.observeToolTerminal,
+      trajectoryRecorder: input.trajectoryRecorder,
+      onToolResult: attempt.onToolResult,
+      onReasoningStream: attempt.onReasoningStream,
+      streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
+      onReasoningEnd: attempt.onReasoningEnd,
+      onBlockReply: input.onBlockReply,
+      onBlockReplyFlush: input.onBlockReplyFlush,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: attempt.blockReplyBreak,
+      blockReplyChunking: attempt.blockReplyChunking,
+      onPartialReply: attempt.onPartialReply,
+      onAssistantMessageStart: attempt.onAssistantMessageStart,
+      onExecutionPhase: attempt.onExecutionPhase,
+      onAgentEvent: attempt.onAgentEvent,
+      terminalLifecyclePhase: attempt.deferTerminalLifecycle ? "finishing" : "end",
+      onToolStreamBoundary: attempt.onToolStreamBoundary,
+      isTerminalAborted: () => input.getRunState().aborted,
+      resolveTerminalStopReason: () =>
+        isAgentRunRestartAbortReason(input.runAbortController.signal.reason)
+          ? AGENT_RUN_RESTART_ABORT_STOP_REASON
+          : undefined,
+      onBeforeLifecycleTerminal: () => {
+        if (deferredLifecycleOwner) {
+          return;
+        }
+        if (
+          requiresCompletionRequiredAsyncTaskWait({
+            sessionKey: attempt.sessionKey,
+            toolMetas: toolMetasForTerminal,
+          })
+        ) {
+          return;
+        }
+        // Clear embedded-run activity before emitting terminal lifecycle events so
+        // post-completion cleanup does not observe a logically finished run as active.
+        clearActiveEmbeddedRun(
+          attempt.sessionId,
+          queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+        );
+      },
+      enforceFinalTag: attempt.enforceFinalTag,
+      silentExpected: attempt.silentExpected,
+      suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
+      config: attempt.config,
+      providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
+      compactionCountOwner: attempt.compactionCountOwner,
+      onContextAccountingEvent: attempt.onContextAccountingEvent,
+      sessionPersistence: attempt.sessionPersistence,
+      // Live events belong to the transcript session. The sandbox key is only
+      // authority context and may intentionally point at a visible parent.
+      sessionKey: attempt.sessionKey,
+      currentChannelId: attempt.currentChannelId,
+      currentMessagingTarget: attempt.currentMessagingTarget,
+      currentAccountId: attempt.agentAccountId,
+      currentThreadId: attempt.currentThreadTs,
+      currentMessageId: attempt.currentMessageId,
+      replyToMode: attempt.replyToMode,
+      hasRepliedRef: attempt.hasRepliedRef,
+      sessionId: attempt.sessionId,
+      agentId: input.hookAgentId,
+      builtinToolNames: input.builtinToolNames,
+      coreBuiltinToolNames: input.coreBuiltinToolNames,
+      replaySafeToolNames: input.replaySafeToolNames,
+      ...(input.codeModeExecToolNames
+        ? { codeModeExecToolNames: input.codeModeExecToolNames }
+        : {}),
+      ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
+      trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
+      internalEvents: attempt.internalEvents,
     },
-    enforceFinalTag: attempt.enforceFinalTag,
-    silentExpected: attempt.silentExpected,
-    suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
-    config: attempt.config,
-    providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
-    compactionCountOwner: attempt.compactionCountOwner,
-    onContextAccountingEvent: attempt.onContextAccountingEvent,
-    sessionPersistence: attempt.sessionPersistence,
-    // Live events belong to the transcript session. The sandbox key is only
-    // authority context and may intentionally point at a visible parent.
-    sessionKey: attempt.sessionKey,
-    currentChannelId: attempt.currentChannelId,
-    currentMessagingTarget: attempt.currentMessagingTarget,
-    currentAccountId: attempt.agentAccountId,
-    currentThreadId: attempt.currentThreadTs,
-    currentMessageId: attempt.currentMessageId,
-    replyToMode: attempt.replyToMode,
-    hasRepliedRef: attempt.hasRepliedRef,
-    sessionId: attempt.sessionId,
-    agentId: input.hookAgentId,
-    builtinToolNames: input.builtinToolNames,
-    coreBuiltinToolNames: input.coreBuiltinToolNames,
-    replaySafeToolNames: input.replaySafeToolNames,
-    ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
-    ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
-    trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
-    internalEvents: attempt.internalEvents,
-  });
+    input.currentTurnReplyCompletion,
+  );
   toolMetasForTerminal = subscription.toolMetas;
 
   const toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor = async (toolParams) => {

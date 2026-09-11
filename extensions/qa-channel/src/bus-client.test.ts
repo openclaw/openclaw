@@ -1,6 +1,8 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildQaTarget,
@@ -283,6 +285,131 @@ describe("qa-bus client", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("AbortError");
     }
+  });
+
+  it("refreshes dispatch evidence and fences authority immediately before request creation", async () => {
+    const order: string[] = [];
+    const server = createServer((_req, res) => {
+      order.push("request");
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ message: { id: "message-1" } }));
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    await expect(
+      sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "hello",
+        onPlatformSendDispatch: async () => {
+          order.push("dispatch");
+        },
+        assertDirectAdapterHandoff: () => {
+          order.push("fence");
+        },
+      }),
+    ).resolves.toMatchObject({ message: { id: "message-1" } });
+    expect(order).toEqual(["dispatch", "fence", "request"]);
+  });
+
+  it("does not create a request when authority changes during held dispatch preparation", async () => {
+    const dispatchStarted = createDeferred<void>();
+    const releaseDispatch = createDeferred<void>();
+    let current = true;
+    let requestCount = 0;
+    const server = createServer((_req, res) => {
+      requestCount += 1;
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ message: { id: "must-not-send" } }));
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    const request = sendQaBusMessage({
+      baseUrl: `http://127.0.0.1:${port}`,
+      accountId: "acct-a",
+      to: "dm:alice",
+      text: "hello",
+      onPlatformSendDispatch: async () => {
+        dispatchStarted.resolve();
+        await releaseDispatch.promise;
+      },
+      assertDirectAdapterHandoff: () => {
+        if (!current) {
+          throw new Error("current-turn authority changed");
+        }
+      },
+    });
+    await dispatchStarted.promise;
+    current = false;
+    releaseDispatch.resolve();
+
+    const error = await request.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "current-turn authority changed",
+      retryable: false,
+    });
+    expect(error).not.toHaveProperty("sentBeforeError");
+    expect(requestCount).toBe(0);
+  });
+
+  it("classifies failed dispatch bookkeeping as retryable and not dispatched", async () => {
+    let requestCount = 0;
+    const server = createServer((_req, res) => {
+      requestCount += 1;
+      res.end();
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    const error = await sendQaBusMessage({
+      baseUrl: `http://127.0.0.1:${port}`,
+      accountId: "acct-a",
+      to: "dm:alice",
+      text: "hello",
+      onPlatformSendDispatch: async () => {
+        throw new Error("dispatch evidence unavailable");
+      },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "dispatch evidence unavailable",
+      retryable: true,
+    });
+    expect(error).not.toHaveProperty("sentBeforeError");
+    expect(requestCount).toBe(0);
+  });
+
+  it("does not retry when the bus accepts a message but loses its response", async () => {
+    const accepted = createDeferred<void>();
+    let requestCount = 0;
+    const server = createServer((req) => {
+      requestCount += 1;
+      req.resume();
+      req.once("end", () => {
+        accepted.resolve();
+        req.socket.destroy();
+      });
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+
+    const request = sendQaBusMessage({
+      baseUrl: `http://127.0.0.1:${port}`,
+      accountId: "acct-a",
+      to: "dm:alice",
+      text: "hello",
+    });
+    await accepted.promise;
+    const error = await request.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).not.toHaveProperty("sentBeforeError");
+    expect(requestCount).toBe(1);
   });
 
   it("bounds stalled message requests with a total deadline", async () => {

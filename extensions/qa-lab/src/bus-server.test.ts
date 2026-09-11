@@ -129,6 +129,29 @@ describe("qa-bus server", () => {
     await expect(response.json()).resolves.toEqual({ error: requestError.message });
   });
 
+  it("retains an accepted outbound message when its response is lost", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({
+      state,
+      dropOutboundResponseAfterAccept: true,
+    });
+    stops.push(bus["stop"]);
+
+    await expect(
+      postQaBusJson(bus.baseUrl, "/v1/outbound/message", {
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "accepted once",
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(state.getSnapshot().messages).toEqual([
+      expect.objectContaining({
+        direction: "outbound",
+        text: "accepted once",
+      }),
+    ]);
+  });
+
   it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

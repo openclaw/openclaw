@@ -8591,4 +8591,174 @@ describe("qa mock openai server provider variant tagging", () => {
     expect(debug.providerVariant).toBe(expectedVariant);
   });
 });
+describe("current-turn Code Mode scenario ownership", () => {
+  const tools = [
+    {
+      type: "function",
+      name: "exec",
+      parameters: {
+        type: "object",
+        properties: { code: { type: "string" } },
+        required: ["code"],
+      },
+    },
+    { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+  ];
+  const promptFor = (label: string) =>
+    `QA current-turn Code Mode delivery: send exactly \`QA-${label}-OUTBOUND\`; ` +
+    `if another provider request follows, reply exactly \`QA-${label}-FINAL\``;
+  const request = (server: MockServer, input: unknown[], extra: Record<string, unknown> = {}) =>
+    expectOpenAiNonStreamingResponsesJson(server, { input, tools, ...extra });
+  const completedOutput = (plan: unknown) =>
+    makeToolOutputWithCallId(
+      outputToolCallId(outputToolCall(plan, "exec"), "current-turn-exec"),
+      JSON.stringify({ status: "completed", value: { sent: true, observed: true } }),
+    );
+
+  async function completeScenario(server: MockServer, label: string) {
+    const kickoff = makeUserInput(promptFor(label));
+    const plan = await request(server, [kickoff]);
+    const input = [kickoff, ...outputItems(plan), completedOutput(plan)];
+    const final = await request(server, input);
+    expect(outputText(final)).toBe(`QA-${label}-FINAL`);
+    return [...input, ...outputItems(final)];
+  }
+
+  it.each(["separate turns", "projected envelope"] as const)(
+    "dispatches fresh B after completed A in %s",
+    async (projection) => {
+      const server = await startMockServer();
+      const history = await completeScenario(server, "A");
+      const input =
+        projection === "separate turns"
+          ? [...history, makeUserInput(promptFor("B"))]
+          : [
+              makeUserInput(
+                `<conversation_context>\n${JSON.stringify(history)}\n</conversation_context>\n\nCurrent user request:\n${promptFor("B")}`,
+              ),
+            ];
+      const next = await request(server, input);
+      expect(outputItems(next)).toHaveLength(1);
+      const code = outputToolArgsFromItem(outputToolCall(next, "exec")).code;
+      expect(code).toBe(
+        [
+          'const sent = await send_current_reply({ text: "QA-B-OUTBOUND" });',
+          'const observed = await read({ path: "repo/package.json", offset: 1, limit: 1 });',
+          "return { sent, observed: Boolean(observed) };",
+        ].join("\n"),
+      );
+      expect(code).not.toContain("QA-A-");
+    },
+  );
+
+  it.each(["recovery", "exhaustion"] as const)(
+    "starts fresh write %s after completed Code Mode history",
+    async (kind) => {
+      const server = await startMockServer();
+      const history = await completeScenario(server, "A");
+      const prompt =
+        kind === "recovery"
+          ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
+          : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT;
+      const kickoff = makeUserInput(prompt);
+      const plan = await request(server, [...history, kickoff]);
+      const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+      expect(debug).toMatchObject({
+        plannedToolName: "write",
+        plannedToolArgs: { path: "qa-empty-response-side-effect.txt" },
+      });
+      const call = outputToolCall(plan, "exec");
+      const completed = makeToolOutputWithCallId(
+        outputToolCallId(call, "write"),
+        JSON.stringify({ status: "completed", value: "Successfully wrote 27 bytes" }),
+      );
+      const settled = await request(server, [
+        ...history,
+        kickoff,
+        ...outputItems(plan),
+        completed,
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ]);
+      expect(outputText(settled)).toBe(
+        kind === "recovery" ? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK" : "",
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "settles current B without another exec when output is included: %s",
+    async (includeOutput) => {
+      const server = await startMockServer();
+      const history = await completeScenario(server, "A");
+      const kickoff = makeUserInput(promptFor("B"));
+      const plan = await request(server, [...history, kickoff]);
+      const final = await request(server, [
+        ...history,
+        kickoff,
+        ...outputItems(plan),
+        ...(includeOutput ? [completedOutput(plan)] : []),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ]);
+      expect(outputItems(final)).toHaveLength(1);
+      expect(outputText(final)).toBe("QA-B-FINAL");
+      expect(outputItem(final).type).toBe("message");
+    },
+  );
+
+  it("keeps the current prompt for ordinary tool-result continuation", async () => {
+    const server = await startMockServer();
+    const history = await completeScenario(server, "A");
+    const kickoff = makeUserInput(promptFor("B"));
+    const plan = await request(server, [...history, kickoff]);
+    const final = await request(server, [
+      ...history,
+      kickoff,
+      ...outputItems(plan),
+      completedOutput(plan),
+    ]);
+    expect(outputText(final)).toBe("QA-B-FINAL");
+    expect(outputItems(final)).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "ordinary",
+      text: "Reply with exact marker: `FRESH-ORDINARY-OK`.",
+      reply: "FRESH-ORDINARY-OK",
+    },
+    { name: "empty", text: "", reply: undefined },
+    { name: "heartbeat", text: "Read HEARTBEAT.md if it exists.", reply: "HEARTBEAT_OK" },
+    { name: "generic retry", text: QA_EMPTY_RESPONSE_RETRY_INSTRUCTION, reply: undefined },
+  ])("fences Code Mode history at a fresh $name turn", async ({ text, reply }) => {
+    const server = await startMockServer();
+    const history = await completeScenario(server, "A");
+    const input = [...history, makeUserInput(text)];
+    const fresh = await request(server, input);
+    expect(outputItems(fresh).every((item) => item.type === "message")).toBe(true);
+    if (reply !== undefined) {
+      expect(outputText(fresh)).toBe(reply);
+    }
+    const continuation = await request(server, [
+      ...input,
+      ...outputItems(fresh),
+      makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+    ]);
+    expect(outputItems(continuation).every((item) => item.type === "message")).toBe(true);
+    const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+    expect(debug).not.toHaveProperty("plannedToolName");
+  });
+
+  it("summarizes Code Mode history before dispatching a scenario", async () => {
+    const server = await startMockServer();
+    const history = await completeScenario(server, "A");
+    const summary = await request(server, history, {
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+    });
+    expectCurrentCompactionSummaryHeadings(outputText(summary));
+    expect(outputItems(summary)).toHaveLength(1);
+    const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+    expect(debug).toMatchObject({ requestKind: "compaction-summary" });
+    expect(debug).not.toHaveProperty("plannedToolName");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

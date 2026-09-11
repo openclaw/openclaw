@@ -13,6 +13,7 @@ import { splitMediaFromOutput } from "../media/parse.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
+import { readCurrentTurnReplyCompletion } from "./current-turn-reply-completion.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -638,7 +639,12 @@ export function createStreamRendering({
     // only what was explicitly sent, so trailing reasoning must stay out of the
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
-    if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
+    if (
+      state.streamReasoning &&
+      !hasMessageToolOnlySourceDelivery() &&
+      !readCurrentTurnReplyCompletion(state) &&
+      params.onReasoningStream
+    ) {
       runBestEffortCallback({
         label: "reasoning stream",
         log,

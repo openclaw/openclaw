@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveCodexCurrentTurnDeliveryTool,
   resolveCodexScheduledToolProjectionFactory,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -34,6 +35,10 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
+import {
+  filterCodexDynamicToolsForAllowlist,
+  hasWildcardCodexToolsAllow,
+} from "./dynamic-tool-allowlist.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
@@ -42,6 +47,7 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
+import { createCodexHostToolSurface } from "./host-tool-surface.js";
 import {
   resolveCodexNodeExecToolOverrides,
   resolveCodexNativeExecutionPolicy,
@@ -94,7 +100,6 @@ const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
 ]);
-
 /** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexNodePlacementToolConstructionPlan(
   sandbox: OpenClawSandboxContext | undefined,
@@ -382,11 +387,11 @@ export async function buildDynamicTools(
         bindingOptions,
       );
     }
-    const createToolSurface = params.hostCapabilities.createToolSurface;
-    if (!createToolSurface) {
-      throw new Error("Codex tool construction requires a current host capability");
-    }
-    return createToolSurface(options, bindingOptions);
+    return createCodexHostToolSurface({
+      bindingOptions,
+      hostCapabilities: params.hostCapabilities,
+      options,
+    });
   };
   const allTools = input.resolveCronCreatorToolAuthority
     ? runWithCronCreatorAuthorityCapabilityResolver({
@@ -396,6 +401,7 @@ export async function buildDynamicTools(
         run: buildOpenClawCodingTools,
       })
     : buildOpenClawCodingTools();
+  const currentTurnDeliveryTool = resolveCodexCurrentTurnDeliveryTool(allTools);
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
@@ -482,6 +488,7 @@ export async function buildDynamicTools(
   const filteredTools = filterCodexDynamicToolsForAllowlist(
     visionFilteredTools,
     toolRunContext.runtimeToolAllowlist,
+    currentTurnDeliveryTool ? new Set([currentTurnDeliveryTool]) : undefined,
   );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
@@ -906,40 +913,6 @@ function placeDisabledNativeShellToolsInDirectNamespace<
     }
   }
   return tools;
-}
-/** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
-function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
-  tools: T[],
-  toolsAllow?: string[],
-): T[] {
-  if (!toolsAllow) {
-    return tools;
-  }
-  if (toolsAllow.length === 0) {
-    return [];
-  }
-  if (hasWildcardCodexToolsAllow(toolsAllow)) {
-    return tools;
-  }
-  const allowSet = new Set(
-    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
-  );
-  return tools.filter((tool) => {
-    const normalized = normalizeCodexDynamicToolName(tool.name);
-    return (
-      allowSet.has(normalized) ||
-      (normalized === "sandbox_exec" && allowSet.has("exec")) ||
-      (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
-      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME &&
-        (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec"))
-    );
-  });
-}
-/** Detects the wildcard allowlist marker after Codex tool-name normalization. */
-function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
-  return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 /** Forces message delivery through the message tool when the source channel requires it. */
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { copyCurrentTurnReplyCompletion } from "../../current-turn-reply-completion.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
@@ -30,27 +31,30 @@ export function normalizeEmbeddedRunAttemptResult(
     raw.runtimeContinuationStarted === true
       ? { hadPotentialSideEffects: true, replaySafe: false }
       : undefined;
-  return copyCoreTtsAttemptResultProvenance(attempt, {
-    ...attempt,
-    assistantTexts: raw.assistantTexts ?? [],
-    toolMetas: raw.toolMetas ?? [],
-    acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
-    messagesSnapshot: raw.messagesSnapshot ?? [],
-    messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
-    messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
-    messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
-    messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
-    didDeliverSourceReplyViaMessageTool: raw.didDeliverSourceReplyViaMessageTool === true,
-    itemLifecycle: raw.itemLifecycle ?? {
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    },
-    replayMetadata: runtimeContinuationReplayMetadata ??
-      raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
-    currentAttemptReplayMetadata:
-      runtimeContinuationReplayMetadata ?? raw.currentAttemptReplayMetadata ?? undefined,
-  });
+  return copyCurrentTurnReplyCompletion(
+    attempt,
+    copyCoreTtsAttemptResultProvenance(attempt, {
+      ...attempt,
+      assistantTexts: raw.assistantTexts ?? [],
+      toolMetas: raw.toolMetas ?? [],
+      acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
+      messagesSnapshot: raw.messagesSnapshot ?? [],
+      messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
+      messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
+      messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+      messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
+      didDeliverSourceReplyViaMessageTool: raw.didDeliverSourceReplyViaMessageTool === true,
+      itemLifecycle: raw.itemLifecycle ?? {
+        startedCount: 0,
+        completedCount: 0,
+        activeCount: 0,
+      },
+      replayMetadata: runtimeContinuationReplayMetadata ??
+        raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata:
+        runtimeContinuationReplayMetadata ?? raw.currentAttemptReplayMetadata ?? undefined,
+    }),
+  );
 }
 
 export function hasCompletedModelProgressForIdleBreaker(

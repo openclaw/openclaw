@@ -48,6 +48,16 @@ function writeJson(res, statusCode, body) {
   res.end(`${JSON.stringify(body)}\n`);
 }
 
+function recordPhase(phase) {
+  try {
+    process.stderr.write(
+      `[qa-self-yield-phase] ${JSON.stringify({ phase, timestamp: Date.now() })}\n`,
+    );
+  } catch {
+    // Captured progress is diagnostic only and must not change the fixture's outcome.
+  }
+}
+
 export default {
   id: "qa-self-yield-followup-subagent",
   register(api) {
@@ -157,6 +167,7 @@ export default {
           if (!state.yieldEntered) {
             throw new Error("sessions_yield did not reach the handoff gate");
           }
+          recordPhase("follow-up-admission");
           const result = await api.runtime.subagent.run({
             sessionKey: childSessionKey,
             message: FOLLOW_UP_MESSAGE,
@@ -191,10 +202,12 @@ export default {
         }
         state.releaseYield();
         state.releaseYield = undefined;
+        recordPhase("release-wait");
         const terminal = await api.runtime.subagent.waitForRun({
           runId: state.followUpRunId,
           timeoutMs: 90_000,
         });
+        recordPhase("session-read");
         const messages = await api.runtime.subagent.getSessionMessages({
           sessionKey: state.childSessionKey,
           limit: 20,
@@ -209,6 +222,7 @@ export default {
         if (terminal.status === "ok" && finalReply) {
           state.resolveFinalReply(finalReply);
         }
+        recordPhase("release-response-ready");
         writeJson(res, 200, {
           ok: terminal.status === "ok",
           kickoffRunId: state.kickoffRunId,

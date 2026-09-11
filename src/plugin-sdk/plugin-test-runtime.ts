@@ -110,6 +110,11 @@ export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 export { readQueuedEntries as readQueuedDeliveryEntriesForTest } from "../infra/outbound/delivery-queue.test-helpers.js";
 export {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../gateway/message-action-turn-capability.js";
+export { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+export {
   registerProviderPlugin,
   registerProviderPlugins,
   registerSingleProviderPlugin,

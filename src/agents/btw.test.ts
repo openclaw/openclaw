@@ -87,6 +87,7 @@ const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const createAgentHarnessHostCapabilitiesMock = vi.fn();
 const closeAgentHarnessHostCapabilitiesMock = vi.fn();
+const runWithAgentHarnessHostScopeMock = vi.fn((run: () => Promise<unknown>) => run());
 const agentHarnessHostCapabilitiesMock: AgentHarnessHostCapabilities = Object.freeze({
   kind: "agent-harness-host-capability",
   version: 1,
@@ -298,6 +299,7 @@ vi.mock("./harness/host-capability.js", () => {
       return {
         capabilities: agentHarnessHostCapabilitiesMock,
         close: closeAgentHarnessHostCapabilitiesMock,
+        runWithScope: runWithAgentHarnessHostScopeMock,
       };
     },
   };
@@ -761,6 +763,7 @@ describe("runBtwSideQuestion", () => {
     ensureSelectedAgentHarnessPluginMock.mockReset();
     createAgentHarnessHostCapabilitiesMock.mockReset();
     closeAgentHarnessHostCapabilitiesMock.mockReset();
+    runWithAgentHarnessHostScopeMock.mockClear();
     listSessionEntriesCoreMock.mockReset();
     listSessionEntriesCoreMock.mockReturnValue([]);
     loadSessionEntryMock.mockReset();
@@ -1352,9 +1355,11 @@ describe("runBtwSideQuestion", () => {
             operationalRunInstance: expect.objectContaining({ runId: "btw-side-authority" }),
           }),
           runId: "btw-side-authority",
+          sessionTarget: undefined,
         }),
       }),
     );
+    expect(runWithAgentHarnessHostScopeMock).toHaveBeenCalledOnce();
     expect(closeAgentHarnessHostCapabilitiesMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai",

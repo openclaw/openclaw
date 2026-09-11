@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
+  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   type DurableMessageBatchSendResult,
@@ -502,7 +503,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(send.status === "failed" || send.status === "partial_failed"
         ? { error: formatErrorMessage(send.error) }
         : {}),
-      ...(send.status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+      ...((send.status === "failed" || send.status === "partial_failed") &&
+      durableMessageBatchMayHaveReachedRecipient(send)
+        ? { sentBeforeError: true as const }
+        : {}),
       ...(payloadOutcomes ? { payloadOutcomes } : {}),
     };
   }

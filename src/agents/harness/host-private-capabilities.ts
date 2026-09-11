@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { CurrentTurnDeliveryAuthority } from "../current-turn-delivery.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -22,6 +23,7 @@ export type PreparedQuestionAnswerAuthority = Readonly<{
 }>;
 
 const questionAnswerScope = new AsyncLocalStorage<PreparedQuestionAnswerAuthority | undefined>();
+const currentTurnDeliveryScope = new AsyncLocalStorage<CurrentTurnDeliveryAuthority | undefined>();
 const questionAnswerCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   PreparedQuestionAnswerAuthority
@@ -82,6 +84,23 @@ export function captureAgentQuestionAnswerAuthority(
   return authority;
 }
 
+/** Makes ordinary delivery available only while the owning host invocation is active. */
+export function withAgentHarnessCurrentTurnDeliveryAuthority<T>(
+  authority: CurrentTurnDeliveryAuthority,
+  run: () => T,
+): T {
+  return currentTurnDeliveryScope.run(authority, run);
+}
+
+/** Captures the exact host scope at construction; later invocations cannot lend authority. */
+export function captureAgentHarnessCurrentTurnDeliveryAuthority():
+  | CurrentTurnDeliveryAuthority
+  | undefined {
+  const authority = currentTurnDeliveryScope.getStore();
+  authority?.assertActive();
+  return authority;
+}
+
 type RetainedBeforeToolCallRunner = Readonly<{
   assertActive: () => void;
   release: () => void;
@@ -118,6 +137,24 @@ const ttsProvenanceTransferCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   Readonly<{ ownerPluginId: string; transfer: AgentHarnessTtsProvenanceTransfer }>
 >();
+const currentTurnDeliveryTools = new WeakMap<readonly AnyAgentTool[], AnyAgentTool>();
+
+/** Records the exact host-bound delivery tool for one constructed tool surface. */
+export function registerAgentHarnessCurrentTurnDeliveryTool(
+  tools: readonly AnyAgentTool[],
+  tool: AnyAgentTool | undefined,
+): void {
+  if (tool) {
+    currentTurnDeliveryTools.set(tools, tool);
+  }
+}
+
+/** Resolves only the host-bound delivery instance carried by this exact surface. */
+export function resolveAgentHarnessCurrentTurnDeliveryTool(
+  tools: readonly AnyAgentTool[],
+): AnyAgentTool | undefined {
+  return currentTurnDeliveryTools.get(tools);
+}
 
 export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   hostCapabilities: AgentHarnessHostCapabilities;

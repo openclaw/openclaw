@@ -62,6 +62,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
+  // Source tools bypass dispatcher queues. Their authenticated receipt must
+  // reach this owner before silence recovery decides whether another send is safe.
+  turnLedger.recordCurrentTurnReplyCompletion(
+    state.replyOperationRunState.currentTurnReplyCompletion,
+  );
   const heartbeat = state.replyOperationRunState.heartbeat;
   const pendingFinalOptions = { preserveActivity: heartbeat !== undefined };
   throwIfDispatchOperationAborted();

@@ -148,13 +148,14 @@ describe("sendMessage", () => {
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
-    await sendMessage({
+    const result = await sendMessage({
       cfg: {},
       channel: "forum",
       to: "123456",
       content: "hi",
       agentId: "work",
     });
+    expect(result.sentBeforeError).toBeUndefined();
 
     const deliveryParams = expectDeliveryCallFields({ channel: "forum", to: "123456" });
     expectRecordFields(deliveryParams.session, { agentId: "work" }, "outbound session");
@@ -639,6 +640,7 @@ describe("sendMessage", () => {
       });
 
       expect(result.deliveryStatus).toBe("suppressed");
+      expect(result).not.toHaveProperty("sentBeforeError");
       expect(result).toMatchObject({ suppressionReason: reason });
       expect(result.payloadOutcomes).toEqual([
         {
@@ -651,62 +653,97 @@ describe("sendMessage", () => {
     },
   );
 
-  it("does not throw best-effort direct send failures but reports the failure", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
-      (
-        params as {
-          onPayloadDeliveryOutcome?: (outcome: {
-            index: number;
-            status: "failed";
-            error: Error;
-            sentBeforeError: boolean;
-            stage: "platform_send";
-          }) => void;
-        }
-      ).onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "failed",
-        error: new Error("transport unavailable"),
-        sentBeforeError: false,
-        stage: "platform_send",
+  it.each([false, true])(
+    "preserves identityless best-effort failure with dispatch evidence=%s",
+    async (sentBeforeError) => {
+      mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
+        (
+          params as {
+            onPayloadDeliveryOutcome?: (outcome: {
+              index: number;
+              status: "failed";
+              error: Error;
+              sentBeforeError: boolean;
+              stage: "platform_send";
+            }) => void;
+          }
+        ).onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: new Error("transport unavailable"),
+          sentBeforeError,
+          stage: "platform_send",
+        });
+        return [];
       });
-      return [];
-    });
 
-    const result = await sendMessage({
-      cfg: {},
-      channel: "forum",
-      to: "123456",
-      content: "hi",
-      bestEffort: true,
-    });
-    expectRecordFields(
-      result,
-      {
+      const result = await sendMessage({
+        cfg: {},
         channel: "forum",
         to: "123456",
-        via: "direct",
-        result: undefined,
-        deliveryStatus: "failed",
-        error: "transport unavailable",
-      },
-      "best-effort send message result",
-    );
-    expect(result.payloadOutcomes).toEqual([
-      {
-        index: 0,
-        status: "failed",
-        error: "transport unavailable",
-        sentBeforeError: false,
-        stage: "platform_send",
-      },
-    ]);
+        content: "hi",
+        bestEffort: true,
+      });
+      expectRecordFields(
+        result,
+        {
+          channel: "forum",
+          to: "123456",
+          via: "direct",
+          result: undefined,
+          deliveryStatus: "failed",
+          error: "transport unavailable",
+          ...(sentBeforeError ? { sentBeforeError: true } : {}),
+        },
+        "best-effort send message result",
+      );
+      expect(result.payloadOutcomes).toEqual([
+        {
+          index: 0,
+          status: "failed",
+          error: "transport unavailable",
+          sentBeforeError,
+          stage: "platform_send",
+        },
+      ]);
 
-    expectDeliveryCallFields({
-      bestEffort: true,
-      queuePolicy: "best_effort",
-    });
-  });
+      expectDeliveryCallFields({
+        bestEffort: true,
+        queuePolicy: "best_effort",
+      });
+      expect(result.result).toBeUndefined();
+      if (!sentBeforeError) {
+        expect(result).not.toHaveProperty("sentBeforeError");
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps throwing the genuine non-best-effort failure with dispatch evidence=%s",
+    async (sentBeforeError) => {
+      const error = new Error("acknowledgement unavailable");
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+          params.onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "failed",
+            error,
+            sentBeforeError,
+            stage: "platform_send",
+          });
+          return [];
+        },
+      );
+      await expect(
+        sendMessage({
+          cfg: {},
+          channel: "forum",
+          to: "123456",
+          content: "hi",
+        }),
+      ).rejects.toBe(error);
+    },
+  );
 
   it("reports partial delivery on best-effort direct sends instead of plain success", async () => {
     mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {

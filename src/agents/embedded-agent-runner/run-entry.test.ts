@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCurrentTurnReplyCompletion } from "../current-turn-reply-completion.js";
+import { createSourceReplyReceiptFixture } from "../current-turn-reply-completion.test-support.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import {
   initialAttemptOptions,
   fallbackAttemptOptions,
+  recordTurnAttempt,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -76,48 +79,52 @@ function createDirectHarness() {
   };
 }
 
-function recordTurnAttempt(
-  record: ((facts: ContextEngineTurnAttemptFacts) => void) | undefined,
-  label: string,
-): void {
-  if (!record) {
-    throw new Error("expected context-engine turn candidate callback");
-  }
-  record({
-    boundary: {
-      admission: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
-        entryId: `${label}-user`,
-        rawSeq: 1,
-        effectiveParentId: null,
-        activeMessagePosition: 0,
-        logicalTurnId: `${label}-turn`,
-        role: "user",
-      },
-      terminal: {
-        agentId: "main",
-        sessionId: label,
-        sessionKey: `agent:main:${label}`,
-        storePath: `/${label}.sqlite`,
-        generation: "generation-1",
-        entryId: `${label}-assistant`,
-        rawSeq: 2,
-        effectiveParentId: `${label}-user`,
-        activeMessagePosition: 1,
-      },
-    },
-    sessionIdUsed: label,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
-  });
-}
-
 describe("runEmbeddedAgentEntry", () => {
+  it.each(["sent", "partial_failed"] as const)(
+    "preserves private %s completion through receipt normalization and trace projection",
+    async (status) => {
+      const receipt = await createSourceReplyReceiptFixture(status, {
+        runId: "completion-receipt",
+        sessionId: "session-1",
+        provider: "provider",
+        model: "model",
+      });
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        outcome: "completed" as const,
+        result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }));
+      const result = await runEmbeddedAgentEntry({
+        selection: { cfg: {}, provider: "provider", model: "model" },
+        identity: { runId: receipt.runId, agentId: "main", sessionId: "session-1" },
+        harness: createDirectHarness(),
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model) => {
+          const candidate = makeResult({ provider, model });
+          candidate.meta.agentMeta = {
+            sessionId: "session-1",
+            provider,
+            model,
+            terminalReceipt: receipt,
+          };
+          return candidate;
+        },
+      });
+      const projected = result.terminal.metadata.terminalReceipt;
+      if (!projected || typeof projected !== "object") {
+        throw new Error("terminal receipt missing");
+      }
+      expect(readCurrentTurnReplyCompletion(projected)).toBe(
+        status === "sent" ? "confirmed" : "ambiguous",
+      );
+      expect(readCurrentTurnReplyCompletion(result.result.meta.agentMeta?.terminalReceipt)).toBe(
+        status === "sent" ? "confirmed" : "ambiguous",
+      );
+    },
+  );
   beforeEach(() => {
     state.discardedAttempts.length = 0;
     state.finalizedAttempts.length = 0;

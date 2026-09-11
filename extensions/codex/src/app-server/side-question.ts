@@ -1216,8 +1216,10 @@ async function createCodexSideToolBridge(input: {
   let tools: AnyAgentTool[] = [];
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   if (supportsModelTools(runtimeModel)) {
-    const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
-      .createOpenClawCodingTools;
+    const createToolSurface = input.params.hostCapabilities.createToolSurface;
+    if (!createToolSurface) {
+      throw new Error("Codex side-question tools require a current host capability");
+    }
     const sandboxSessionKey =
       input.params.sandboxSessionKey?.trim() ||
       input.params.sessionKey?.trim() ||
@@ -1247,88 +1249,94 @@ async function createCodexSideToolBridge(input: {
           ...(input.params.messageChannel ? { messageChannel: input.params.messageChannel } : {}),
         }
       : undefined;
-    const allTools = createOpenClawCodingTools({
-      agentId: input.sessionAgentId,
-      requesterThinkingLevel: input.params.resolvedThinkLevel ?? "off",
-      sessionKey: sandboxSessionKey,
-      runSessionKey:
-        input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey
-          ? input.params.sessionKey
-          : undefined,
-      sessionId: input.params.sessionId,
-      exec: input.sessionPermissionPolicy && { mode: input.sessionPermissionPolicy.execMode },
-      sessionPermissionPolicy: input.sessionPermissionPolicy,
-      runId: input.runId,
-      agentDir:
-        input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
-      workspaceDir: input.cwd,
-      spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-        sandbox,
-        resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
-      }),
-      config: input.params.cfg,
-      preparedModelRuntime: input.params.preparedModelRuntime,
-      abortSignal: input.signal,
-      modelProvider: runtimeModel.provider,
-      modelId: input.params.model,
-      modelCompat:
-        runtimeModel.compat && typeof runtimeModel.compat === "object"
-          ? (runtimeModel.compat as never)
-          : undefined,
-      modelApi: runtimeModel.api,
-      modelContextWindowTokens: runtimeModel.contextWindow,
-      modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
+    tools = createToolSurface(
+      {
+        agentId: input.sessionAgentId,
+        requesterThinkingLevel: input.params.resolvedThinkLevel ?? "off",
+        sessionKey: sandboxSessionKey,
+        runSessionKey:
+          input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey
+            ? input.params.sessionKey
+            : undefined,
+        sessionId: input.params.sessionId,
+        exec: input.sessionPermissionPolicy && { mode: input.sessionPermissionPolicy.execMode },
+        sessionPermissionPolicy: input.sessionPermissionPolicy,
+        runId: input.runId,
+        agentDir:
+          input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
         workspaceDir: input.cwd,
-      }),
-      suppressManagedWebSearch: false,
-      webFetchHostnameAllowlistRef,
-      ...(input.params.messageProvider || input.params.messageChannel
-        ? {
-            messageProvider: messageToolProvider,
-            toolPolicyMessageProvider: input.params.messageProvider ?? input.params.messageChannel,
-          }
-        : {}),
-      ...(input.params.chatType ? { chatType: input.params.chatType } : {}),
-      ...(input.params.agentAccountId ? { agentAccountId: input.params.agentAccountId } : {}),
-      ...(input.params.messageTo ? { messageTo: input.params.messageTo } : {}),
-      ...(input.params.messageThreadId !== undefined
-        ? { messageThreadId: input.params.messageThreadId }
-        : {}),
-      ...(input.params.chatId ? { nativeChannelId: input.params.chatId } : {}),
-      ...(input.params.messageActionTurnCapability
-        ? { messageActionTurnCapability: input.params.messageActionTurnCapability }
-        : {}),
-      ...(input.params.groupId !== undefined ? { groupId: input.params.groupId } : {}),
-      ...(input.params.groupChannel !== undefined
-        ? { groupChannel: input.params.groupChannel }
-        : {}),
-      ...(input.params.groupSpace !== undefined ? { groupSpace: input.params.groupSpace } : {}),
-      ...(input.params.memberRoleIds ? { memberRoleIds: input.params.memberRoleIds } : {}),
-      ...(input.params.spawnedBy !== undefined ? { spawnedBy: input.params.spawnedBy } : {}),
-      ...(input.params.senderId !== undefined ? { senderId: input.params.senderId } : {}),
-      ...(input.params.senderName !== undefined ? { senderName: input.params.senderName } : {}),
-      ...(input.params.senderUsername !== undefined
-        ? { senderUsername: input.params.senderUsername }
-        : {}),
-      ...(input.params.senderE164 !== undefined ? { senderE164: input.params.senderE164 } : {}),
-      ...(input.params.senderIsOwner !== undefined
-        ? { senderIsOwner: input.params.senderIsOwner }
-        : {}),
-      ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
-      hookChannelId: buildAgentHookContextChannelFields({
-        sessionKey: input.params.sessionKey,
-        messageChannel: input.params.messageChannel,
-        messageProvider: input.params.messageProvider,
-        currentChannelId: input.params.currentChannelId,
-      }).channelId,
-      sandbox,
-      ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
-      ...(questionPrompt ? { questionPrompt } : {}),
-      emitBeforeToolCallDiagnostics: false,
-      modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      requireExplicitMessageTarget: true,
-    });
-    const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+        spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+          sandbox,
+          resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
+        }),
+        config: input.params.cfg,
+        preparedModelRuntime: input.params.preparedModelRuntime,
+        abortSignal: input.signal,
+        modelProvider: runtimeModel.provider,
+        modelId: input.params.model,
+        modelCompat:
+          runtimeModel.compat && typeof runtimeModel.compat === "object"
+            ? (runtimeModel.compat as never)
+            : undefined,
+        modelApi: runtimeModel.api,
+        modelContextWindowTokens: runtimeModel.contextWindow,
+        modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
+          workspaceDir: input.cwd,
+        }),
+        suppressManagedWebSearch: false,
+        webFetchHostnameAllowlistRef,
+        ...(input.params.messageProvider || input.params.messageChannel
+          ? {
+              messageProvider: messageToolProvider,
+              toolPolicyMessageProvider:
+                input.params.messageProvider ?? input.params.messageChannel,
+            }
+          : {}),
+        ...(input.params.chatType ? { chatType: input.params.chatType } : {}),
+        ...(input.params.agentAccountId ? { agentAccountId: input.params.agentAccountId } : {}),
+        ...(input.params.messageTo ? { messageTo: input.params.messageTo } : {}),
+        ...(input.params.messageThreadId !== undefined
+          ? { messageThreadId: input.params.messageThreadId }
+          : {}),
+        ...(input.params.chatId ? { nativeChannelId: input.params.chatId } : {}),
+        ...(input.params.messageActionTurnCapability
+          ? { messageActionTurnCapability: input.params.messageActionTurnCapability }
+          : {}),
+        ...(input.params.groupId !== undefined ? { groupId: input.params.groupId } : {}),
+        ...(input.params.groupChannel !== undefined
+          ? { groupChannel: input.params.groupChannel }
+          : {}),
+        ...(input.params.groupSpace !== undefined ? { groupSpace: input.params.groupSpace } : {}),
+        ...(input.params.memberRoleIds ? { memberRoleIds: input.params.memberRoleIds } : {}),
+        ...(input.params.spawnedBy !== undefined ? { spawnedBy: input.params.spawnedBy } : {}),
+        ...(input.params.senderId !== undefined ? { senderId: input.params.senderId } : {}),
+        ...(input.params.senderName !== undefined ? { senderName: input.params.senderName } : {}),
+        ...(input.params.senderUsername !== undefined
+          ? { senderUsername: input.params.senderUsername }
+          : {}),
+        ...(input.params.senderE164 !== undefined ? { senderE164: input.params.senderE164 } : {}),
+        ...(input.params.senderIsOwner !== undefined
+          ? { senderIsOwner: input.params.senderIsOwner }
+          : {}),
+        ...(input.params.currentChannelId
+          ? { currentChannelId: input.params.currentChannelId }
+          : {}),
+        hookChannelId: buildAgentHookContextChannelFields({
+          sessionKey: input.params.sessionKey,
+          messageChannel: input.params.messageChannel,
+          messageProvider: input.params.messageProvider,
+          currentChannelId: input.params.currentChannelId,
+        }).channelId,
+        sandbox,
+        ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
+        ...(questionPrompt ? { questionPrompt } : {}),
+        emitBeforeToolCallDiagnostics: false,
+        modelHasVision: runtimeModel.input?.includes("image") ?? false,
+        requireExplicitMessageTarget: true,
+      },
+      { cwd: input.cwd },
+    );
+    const codexFilteredTools = filterCodexDynamicTools(tools, input.pluginConfig);
     tools = filterCodexVisionTools(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled,
@@ -1352,9 +1360,8 @@ async function createCodexSideToolBridge(input: {
       : requestedWebSearchPlan;
   // Side threads inherit a large parent context but do not own the main
   // context-compaction lifecycle needed to expire screenshot coordinates.
-  const exposedTools = input.params.hostCapabilities.bindToolSurface(
-    tools.filter((tool) => tool.name !== "web_search" && tool.name !== "computer"),
-    { cwd: input.cwd },
+  const exposedTools = tools.filter(
+    (tool) => tool.name !== "web_search" && tool.name !== "computer",
   );
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,

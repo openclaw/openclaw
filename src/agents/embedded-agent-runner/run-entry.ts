@@ -15,6 +15,12 @@ import {
   type AssistantErrorTranscript,
 } from "../assistant-error-transcript.js";
 import {
+  closeCurrentTurnReplyCompletionOwner,
+  copyCurrentTurnReplyCompletion,
+  createCurrentTurnReplyCompletionOwner,
+  readCurrentTurnReplyCompletion,
+} from "../current-turn-reply-completion.js";
+import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
 } from "../harness/context-engine-logical-turn.js";
@@ -244,13 +250,13 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
   const agentMeta = terminalReceipt
     ? {
         ...params.result.meta.agentMeta,
-        terminalReceipt: {
+        terminalReceipt: copyCurrentTurnReplyCompletion(terminalReceipt, {
           ...terminalReceipt,
           requested,
           rerouted:
             terminalReceipt.rerouted ||
             isProviderModelRerouted(requested, terminalReceipt.effective),
-        },
+        }),
       }
     : params.result.meta.agentMeta;
   return {
@@ -321,13 +327,13 @@ function buildTerminal(params: {
       : undefined);
   const terminalReceipt =
     normalizedTerminalReceipt?.runId === params.runId
-      ? {
+      ? copyCurrentTurnReplyCompletion(agentMeta?.terminalReceipt, {
           ...normalizedTerminalReceipt,
           terminalDisposition:
             terminalReply.disposition === "visible"
               ? ("visible" as const)
               : ("not-visible" as const),
-        }
+        })
       : undefined;
   const modelRouteChange = formatAgentRunRouteChange(terminalReceipt, params.runId);
   if (modelRouteChange && terminalReply.disposition === "visible") {
@@ -387,6 +393,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     runId: params.identity.runId,
     config: params.selection.cfg,
   });
+  const currentTurnReplyCompletion = createCurrentTurnReplyCompletionOwner();
+  // Every internal attempt already receives this private logical-turn context.
+  // Bind the live receipt before dispatch so cancellation need not await its acknowledgement.
+  copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, assistantErrorTranscript);
   let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
@@ -433,14 +443,13 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   // delivered its reply, producing a duplicate visible answer (#113788). Consult the
   // same live delivery evidence the result classifier already uses so both exit
   // paths suppress fallback after a delivered reply.
-  const canFallbackAfterError = committedSideEffect
-    ? () => !committedSideEffect()
-    : readChannelDeliveryEvidence
-      ? () => {
-          const evidence = readChannelDeliveryEvidence();
-          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
-        }
-      : undefined;
+  const canFallbackAfterError = () => {
+    if (readCurrentTurnReplyCompletion(currentTurnReplyCompletion) || committedSideEffect?.()) {
+      return false;
+    }
+    const evidence = readChannelDeliveryEvidence?.();
+    return !evidence?.hasDirectlySentBlockReply && !evidence?.hasBlockReplyPipelineOutput;
+  };
   try {
     const fallbackResult = await runWithModelFallback<RunEntryCandidate<T>>({
       ...params.selection,
@@ -503,7 +512,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
                 ? { stopReason: result.result.meta.modelFallbackStopReason }
                 : result.classification,
           }),
-      ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
+      canFallbackAfterError,
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
@@ -552,7 +561,9 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             classified = {
               result,
               value:
-                effectiveClassification && committedSideEffect?.()
+                effectiveClassification &&
+                (committedSideEffect?.() ||
+                  readCurrentTurnReplyCompletion(currentTurnReplyCompletion))
                   ? undefined
                   : effectiveClassification,
             };
@@ -672,7 +683,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       }
     };
     return { ...settledResult, terminal, settleSessionOverride };
+  } catch (error) {
+    throw copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, error);
   } finally {
+    closeCurrentTurnReplyCompletionOwner(currentTurnReplyCompletion);
     if (unsettledContextEngineTurnAttempt) {
       discardContextEngineTurnAttemptIntent({
         facts: unsettledContextEngineTurnAttempt,

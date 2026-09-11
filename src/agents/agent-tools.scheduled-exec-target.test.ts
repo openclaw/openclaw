@@ -152,6 +152,7 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
           ask: "always",
         }),
       }),
+      undefined,
     );
   });
 

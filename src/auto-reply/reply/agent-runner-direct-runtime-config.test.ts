@@ -2,6 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  copyCurrentTurnReplyCompletion,
+  readCurrentTurnReplyCompletion,
+} from "../../agents/current-turn-reply-completion.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -20,6 +24,7 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
+import { createReplyOperationCompletionFixture } from "./reply-operation-completion.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -582,6 +587,61 @@ describe("runReplyAgent runtime config", () => {
       await runReplyAgent(replyParams);
 
       expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    },
+  );
+
+  describe.each(["confirmed", "ambiguous", "pending"] as const)(
+    "%s current-turn receipt",
+    (mode) => {
+      it.each(["settled", "rejected", "aborted", "throw"] as const)(
+        "retains the private receipt from foreground %s before outer fallback",
+        async (kind) => {
+          const fixture = await createReplyOperationCompletionFixture(mode);
+          const { replyParams } = createDirectRuntimeReplyParams({
+            shouldFollowup: false,
+            isActive: false,
+          });
+          const state: ReplyOperationRunState = {};
+          const observed = vi.fn(async () => {});
+          replyParams.opts = {
+            [REPLY_OPERATION_RUN_STATE]: state,
+            onObservedReplyDelivery: observed,
+          };
+          runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+          const originalError = copyCurrentTurnReplyCompletion(
+            fixture.receipt,
+            new Error("native execution disconnected"),
+          );
+          const execution = kind === "throw" ? undefined : fixture.execution(kind);
+          const originalExecution = structuredClone(execution);
+          if (kind === "throw") {
+            executeAgentTurnMock.mockRejectedValue(originalError);
+          } else {
+            executeAgentTurnMock.mockResolvedValue(execution);
+          }
+          try {
+            await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
+            expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+            expect(readCurrentTurnReplyCompletion(state.currentTurnReplyCompletion)).toBe(mode);
+            expect(resolveReplyOperationAgentTurn(state)).toBe(
+              kind === "settled" ? "ok" : kind === "aborted" ? "cancelled" : "failed",
+            );
+            expect(observed).toHaveBeenCalledTimes(
+              kind === "settled" && mode === "confirmed" ? 1 : 0,
+            );
+            expect(execution).toEqual(originalExecution);
+            expect(fixture.receipt.successfulToolNames).toEqual(["read"]);
+            if (kind === "throw") {
+              expect(state.agentTurnOwner?.result).toMatchObject({
+                kind: "failed",
+                cause: originalError,
+              });
+            }
+          } finally {
+            await fixture.settle();
+          }
+        },
+      );
     },
   );
 

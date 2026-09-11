@@ -349,7 +349,10 @@ and the device allowed to review approvals. This keeps those facts intact
 when selecting a backend or recovering a turn. The Copilot bridge in
 `extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
 mapping, authentication, model context, and execution callbacks before
-calling `createOpenClawCodingTools`.
+using the host-owned `createToolSurface` constructor. Published older hosts
+fall back to `createOpenClawCodingTools` followed by `bindToolSurface`; that
+path retains ordinary plugin delivery but does not mint the terminal
+`send_current_reply` capability.
 `runAttempt` resolves sandbox context through the shared
 `resolveSandboxContext` seam, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool

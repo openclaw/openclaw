@@ -3,7 +3,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { handleReplyAgentRunError } from "../../auto-reply/reply/agent-runner-core.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -17,6 +20,10 @@ import {
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
@@ -26,7 +33,7 @@ import {
 } from "../../infra/heartbeat-outcome-store.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -38,6 +45,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -52,11 +60,13 @@ import {
 } from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { readCurrentTurnReplyCompletion } from "../current-turn-reply-completion.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "../embedded-agent-runner/model.generation-scope.test-support.js";
+import { runEmbeddedAgentEntry } from "../embedded-agent-runner/run-entry.js";
 import { projectRuntimeContextFragments } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -194,10 +204,12 @@ vi.mock("../runtime-plan/prepare-auth.js", async (importOriginal) => {
     prepareAgentRuntimeAuth: compactAuthMocks.prepareAgentRuntimeAuth,
   };
 });
-vi.mock("../../plugins/providers.js", () => ({
+vi.mock("../../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/providers.js")>()),
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
-vi.mock("./context-engine-turn-attempt.js", () => ({
+vi.mock("./context-engine-turn-attempt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./context-engine-turn-attempt.js")>()),
   drainPendingContextEngineTurnsBeforeRun:
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
 }));
@@ -579,6 +591,230 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["confirmed", "ambiguous", "pending", "pre-dispatch"] as const)(
+    "preserves %s delivery across native rejection, logical fallback, and failure payload selection",
+    async (completion) => {
+      const root = trajectoryTempDirs.make("harness-source-rejection-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:123",
+        storePath: path.join(root, "sessions.json"),
+        expectedWriterRunId: "run-1",
+      };
+      await replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        activeWriterRunId: "run-1",
+        updatedAt: 1,
+      });
+      const entered = createDeferred();
+      const acknowledge = createDeferred();
+      const sendText = vi.fn(async (context: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        await context.onPlatformSendDispatch?.();
+        entered.resolve();
+        if (completion === "pending") {
+          await acknowledge.promise;
+        }
+        if (completion === "ambiguous") {
+          throw new Error("adapter acknowledgement lost");
+        }
+        return { channel: "telegram" as const, messageId: "sent-1" };
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "telegram",
+              messaging: {
+                targetResolver: { looksLikeId: (raw) => /^-?\d+$/.test(raw), hint: "<chatId>" },
+              },
+              outbound: { deliveryMode: "direct", sendText },
+            }),
+          },
+        ]),
+      );
+      const token = mintMessageActionTurnCapability({
+        agentId: "main",
+        runId: "run-1",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+      });
+      const cfg: OpenClawConfig = { tools: { codeMode: { enabled: true } } };
+      const abortController = new AbortController();
+      const nativeError = new Error("execution disconnected after finalization");
+      const operation = createReplyOperation({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      let toolSettlement: Promise<unknown> | undefined;
+      let retainedHost: Parameters<AgentHarness["runAttempt"]>[0]["hostCapabilities"];
+      const nativeRun = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+        retainedHost = attempt.hostCapabilities;
+        const tool = retainedHost
+          ?.createToolSurface?.(
+            {
+              config: cfg,
+              workspaceDir: root,
+              sessionKey: target.sessionKey,
+              runSessionKey: target.sessionKey,
+              runId: "run-1",
+              sessionId: target.sessionId,
+              messageProvider: "telegram",
+              messageTo: "123",
+              messageActionTurnCapability: token,
+            },
+            undefined,
+            { terminalCompletion: "per-result" },
+          )
+          .find((candidate) => candidate.name === "send_current_reply");
+        if (!tool) {
+          throw new Error("expected exact host-created current reply tool");
+        }
+        if (completion === "pre-dispatch") {
+          revokeMessageActionTurnCapability(token);
+        }
+        toolSettlement = tool.execute("native-send", { text: "reply" });
+        // Attach a handler before abort closes the host while the adapter is held.
+        void toolSettlement.catch(() => {});
+        if (completion === "pending") {
+          await entered.promise;
+          operation.abortByUser();
+          abortController.abort(nativeError);
+        } else {
+          const result = await toolSettlement;
+          expect(result).toMatchObject({
+            details:
+              completion === "confirmed"
+                ? { status: "sent" }
+                : completion === "ambiguous"
+                  ? { status: "partial_failed", sentBeforeError: true }
+                  : { status: "failed" },
+          });
+        }
+        throw nativeError;
+      });
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: nativeRun,
+        },
+        { ownerPluginId: "codex" },
+      );
+      const candidateRun = vi.fn(
+        async (
+          provider: string,
+          model: string,
+          options: {
+            assistantErrorTranscript: EmbeddedRunAttemptParams["assistantErrorTranscript"];
+          },
+        ) => {
+          if (provider === "fallback-provider") {
+            return { payloads: [{ text: "fallback reply" }], meta: { durationMs: 1 } };
+          }
+          await runAgentHarnessAttempt({
+            ...createAttemptParams(cfg),
+            ...target,
+            sessionTarget: target,
+            workspaceDir: root,
+            provider,
+            modelId: model,
+            model: {
+              id: model,
+              name: model,
+              api: "openai-responses",
+              provider,
+              baseUrl: "https://api.openai.com/v1",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+            } satisfies Model,
+            abortSignal: abortController.signal,
+            assistantErrorTranscript: options.assistantErrorTranscript,
+          });
+          throw new Error("native failure was unexpectedly accepted");
+        },
+      );
+      try {
+        const entry = runEmbeddedAgentEntry({
+          selection: {
+            cfg,
+            provider: "codex",
+            model: "gpt-5.4",
+            fallbacksOverride: ["fallback-provider/fallback-model"],
+          },
+          identity: { ...target, runId: "run-1" },
+          harness: {
+            workspaceDir: root,
+            preparation: { kind: "direct" },
+            resolveRuntimeOverride: () => undefined,
+          },
+          behavior: {
+            kind: "channel-delivery",
+            readDeliveryEvidence: () => ({
+              hasDirectlySentBlockReply: false,
+              hasBlockReplyPipelineOutput: false,
+            }),
+          },
+          sessionOverride: { kind: "preserve" },
+          abortSignal: abortController.signal,
+          runCandidate: candidateRun,
+        });
+        if (completion === "pre-dispatch") {
+          await expect(entry).resolves.toMatchObject({
+            provider: "fallback-provider",
+            result: { payloads: [{ text: "fallback reply" }] },
+          });
+          expect(candidateRun).toHaveBeenCalledTimes(2);
+          expect(readCurrentTurnReplyCompletion(nativeError)).toBeUndefined();
+          expect(sendText).not.toHaveBeenCalled();
+        } else {
+          await expect(entry).rejects.toBe(nativeError);
+          expect(candidateRun).toHaveBeenCalledOnce();
+          expect(nativeRun).toHaveBeenCalledOnce();
+          expect(readCurrentTurnReplyCompletion(nativeError)).toBe(completion);
+          expect(nativeError).not.toHaveProperty("sourceReplyDelivered");
+          const delivered = await handleReplyAgentRunError(nativeError, {
+            cfg,
+            replyOperation: operation,
+            isHeartbeat: false,
+            isRestartRecoveryArmed: () => false,
+            resolveVisibleReplyDelivery: async () => false,
+            resolvedVerboseLevel: "off",
+            returnWithQueuedFollowupDrain: (value) => value,
+            sessionCtx: {},
+          });
+          expect(delivered).toBeUndefined();
+          expect(operation.result).toEqual(
+            completion === "pending"
+              ? { kind: "aborted", code: "aborted_by_user" }
+              : { kind: "failed", code: "run_failed", cause: nativeError },
+          );
+          expect(sendText).toHaveBeenCalledOnce();
+        }
+        expect(() => retainedHost?.assertActive()).toThrow("no longer active");
+      } finally {
+        acknowledge.resolve();
+        await toolSettlement?.catch(() => {});
+        operation.complete();
+        revokeMessageActionTurnCapability(token);
+      }
+      if (completion === "pending") {
+        await vi.waitFor(() => {
+          expect(readCurrentTurnReplyCompletion(nativeError)).toBe("ambiguous");
+        });
+      }
+    },
+  );
+
   it.each(["openclaw", "codex"])(
     "carries silent heartbeat outcome into the %s host boundary exactly once per retry",
     async (harnessId) => {

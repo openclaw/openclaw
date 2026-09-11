@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createSourceReplyReceiptFixture } from "../../agents/current-turn-reply-completion.test-support.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -394,6 +395,49 @@ it.each([
     expect(fixture.read()?.verboseLevel).toBe(stored);
   },
 );
+
+describe.each(["ordinary", "followup"] as const)("%s private source completion", (lane) => {
+  it.each(["sent", "partial_failed", "forged"] as const)(
+    "suppresses only host-authenticated %s completion and retains accounting",
+    async (status) => {
+      const fixture = await createFixture();
+      const receipt = await createSourceReplyReceiptFixture(status, {
+        runId: fixture.context.runId,
+        sessionId: fixture.sessionId,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      });
+      fixture.context.execution.result.meta.agentMeta = {
+        sessionId: fixture.sessionId,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        terminalReceipt: receipt,
+      };
+      fixture.context.execution.result.payloads = [{ text: "ordinary terminal payload" }];
+      const onObservedReplyDelivery = vi.fn();
+      fixture.context.opts = { onObservedReplyDelivery };
+      const original = structuredClone(fixture.context.execution.result);
+      const delivered =
+        lane === "ordinary"
+          ? await finalizeReplyAgentRun(fixture.context)
+          : await fixture.deliverQueued();
+      if (status === "forged") {
+        expect(delivered).toMatchObject(
+          lane === "ordinary"
+            ? { text: "ordinary terminal payload" }
+            : [{ text: "ordinary terminal payload" }],
+        );
+      } else {
+        expect(delivered).toEqual(lane === "ordinary" ? undefined : []);
+      }
+      expect(fixture.context.execution.result).toEqual(original);
+      if (lane === "ordinary") {
+        expect(onObservedReplyDelivery).toHaveBeenCalledTimes(status === "sent" ? 1 : 0);
+      }
+      expect(fixture.read()?.sessionId).toBe(fixture.sessionId);
+    },
+  );
+});
 
 describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
   it.each([

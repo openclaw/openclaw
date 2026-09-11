@@ -4,6 +4,7 @@
 // routed transport result is recorded, so no delivery lane can bypass the
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { readCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -30,6 +31,8 @@ type LedgerQueuedSend = {
 type LedgerSettleResult = "settled" | "aborted" | "timed-out";
 
 type ReplyTurnLedger = {
+  /** Bind the private operation receipt without converting ambiguity into visibility. */
+  recordCurrentTurnReplyCompletion: (receipt: object | undefined) => void;
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
@@ -76,7 +79,10 @@ export async function requireQueuedReplyDelivery(params: {
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   const outcomes = new Set<ReplyDispatchDeliveryOutcome>();
   let pendingDelivery = false;
-  const mayHaveDelivered = () => outcomes.has("delivered") || outcomes.has("failed-deliver");
+  let currentTurnReplyCompletion: object | undefined;
+  const sourceCompletion = () => readCurrentTurnReplyCompletion(currentTurnReplyCompletion);
+  const mayHaveDelivered = () =>
+    sourceCompletion() !== undefined || outcomes.has("delivered") || outcomes.has("failed-deliver");
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
     if (kind === "tool") {
       return dispatcher.sendToolResult(payload);
@@ -87,6 +93,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     return dispatcher.sendFinalReply(payload);
   };
   return {
+    recordCurrentTurnReplyCompletion(receipt) {
+      currentTurnReplyCompletion = receipt;
+    },
     sendQueued(kind, payload) {
       const capture =
         dispatcher.supportsSettledReceipt === true
@@ -175,9 +184,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
     },
     mayHaveDelivered,
-    hasObservedDelivery: () => outcomes.has("delivered"),
+    hasObservedDelivery: () => sourceCompletion() === "confirmed" || outcomes.has("delivered"),
     canAttemptFallback: () =>
       !mayHaveDelivered() && !pendingDelivery && !outcomes.has("recovery-owned"),
-    hasPendingDelivery: () => pendingDelivery,
+    hasPendingDelivery: () => sourceCompletion() === "pending" || pendingDelivery,
   };
 }

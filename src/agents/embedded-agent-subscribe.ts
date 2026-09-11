@@ -7,6 +7,11 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  closeCurrentTurnReplyCompletionOwner,
+  copyCurrentTurnReplyCompletion,
+  readCurrentTurnReplyCompletion,
+} from "./current-turn-reply-completion.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
@@ -43,11 +48,26 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
-export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+export function subscribeEmbeddedAgentSession(
+  input: SubscribeEmbeddedAgentSessionParams,
+  currentTurnReplyCompletion?: object,
+) {
+  let params = input;
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, state);
+  const onToolResult = params.onToolResult;
+  if (currentTurnReplyCompletion && onToolResult) {
+    params = {
+      ...params,
+      // Media and prompt callbacks also bypass text-summary delivery. Gate the
+      // channel callback, not the retained tool result or audit event.
+      onToolResult: (...args) =>
+        readCurrentTurnReplyCompletion(state) ? undefined : onToolResult(...args),
+    };
+  }
   const {
     captureModelEvent,
     recordAuxiliaryUsage,
@@ -192,7 +212,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     message: string,
     result?: unknown,
   ) => {
-    if (!params.onToolResult) {
+    if (!params.onToolResult || readCurrentTurnReplyCompletion(state)) {
       return;
     }
     const parsed = parseInlineDirectives(message, {
@@ -421,6 +441,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    if (currentTurnReplyCompletion) {
+      closeCurrentTurnReplyCompletionOwner(currentTurnReplyCompletion);
+    }
     clearAssistantStream();
     cleanupRunToolStartData(params.runId);
     state.liveEditDiffStateById.clear();
@@ -501,7 +524,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
-    getSourceReplyDelivered: () => state.sourceReplyDelivered,
+    getSourceReplyDelivered: (): true | undefined =>
+      readCurrentTurnReplyCompletion(state) === "confirmed" ? true : state.sourceReplyDelivered,
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),

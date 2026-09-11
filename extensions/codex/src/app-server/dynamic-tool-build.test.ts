@@ -18,8 +18,11 @@ import {
   createTestRegistry,
   getActivePluginRegistry,
   initializeGlobalHookRunner,
+  mintMessageActionTurnCapability,
+  replaceSessionEntrySync,
   resetGlobalHookRunner,
   resetPluginRuntimeStateForTest,
+  revokeMessageActionTurnCapability,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -677,6 +680,117 @@ describe("Codex app-server dynamic tool build", () => {
       "heartbeat_respond",
       "sessions_spawn",
     ]);
+  });
+
+  it("keeps only the exact host current reply under a narrow dynamic allowlist", async () => {
+    const workspaceDir = path.join(tempDir, "current-reply-workspace");
+    const params = createParams(path.join(tempDir, "current-reply.jsonl"), workspaceDir);
+    const sessionKey = "agent:main:telegram:direct:123";
+    const sessionId = "session-current-reply";
+    const runId = "run-current-reply";
+    const storePath = path.join(tempDir, "sessions.json");
+    const collision = createRuntimeDynamicTool("send_current_reply");
+    const collisionFactory = vi.fn(() => collision);
+    const registry = createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+            sendMedia: async () => ({ channel: "telegram", messageId: "sent-media-1" }),
+          },
+        }),
+      },
+    ]);
+    registry.plugins.push({
+      id: "collision",
+      origin: "bundled",
+      status: "loaded",
+      enabled: true,
+    } as never);
+    registry.tools.push({
+      pluginId: "collision",
+      optional: false,
+      source: "test",
+      names: ["send_current_reply"],
+      declaredNames: ["send_current_reply"],
+      factory: collisionFactory,
+    });
+    setActivePluginRegistry(registry);
+    replaceSessionEntrySync(
+      {
+        agentId: "main",
+        sessionKey,
+        storePath,
+      },
+      {
+        activeWriterRunId: runId,
+        sessionId,
+        updatedAt: 1,
+      },
+    );
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId,
+      sessionKey,
+      sessionId,
+    });
+    params.agentId = "main";
+    params.config = {
+      plugins: { enabled: true },
+      tools: { codeMode: { enabled: true } },
+    };
+    params.disableTools = false;
+    params.messageActionTurnCapability = token;
+    params.messageChannel = "telegram";
+    params.messageTo = "123";
+    params.currentMessagingTarget = "123";
+    params.runId = runId;
+    params.sessionId = sessionId;
+    params.sessionKey = sessionKey;
+    params.sessionTarget = {
+      agentId: "main",
+      expectedWriterRunId: runId,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    params.toolsAllow = ["read"];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    try {
+      await bindProductionCodexHostCapabilities(params);
+      const createToolSurface = expectDefined(
+        params.hostCapabilities?.createToolSurface,
+        "production Codex host tool constructor",
+      );
+      let hostCurrentReply: RuntimeDynamicToolForTest | undefined;
+      params.hostCapabilities = Object.freeze({
+        ...params.hostCapabilities,
+        createToolSurface: (...args: Parameters<typeof createToolSurface>) => {
+          const tools = createToolSurface(...args);
+          hostCurrentReply = tools.find(
+            (tool) => tool.name === "send_current_reply",
+          ) as RuntimeDynamicToolForTest;
+          return tools;
+        },
+      });
+
+      const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+      expect(hostCurrentReply).toBeDefined();
+      expect(tools.filter((tool) => tool.name === "send_current_reply")).toEqual([
+        hostCurrentReply,
+      ]);
+      expect(tools).not.toContain(collision);
+      expect(collisionFactory).not.toHaveBeenCalled();
+    } finally {
+      revokeMessageActionTurnCapability(token);
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it.each([

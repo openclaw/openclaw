@@ -1,7 +1,10 @@
 // Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  PlatformMessageNotDispatchedError,
+  toErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -59,7 +62,18 @@ const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 type QaBusPostOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  classifyPreRequestFailure?: boolean;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
 };
+
+function wrapQaBusPreRequestFailure(error: unknown, retryable: boolean) {
+  if (error instanceof PlatformMessageNotDispatchedError) {
+    return error;
+  }
+  const cause = toErrorObject(error, "QA bus request was not dispatched");
+  return new PlatformMessageNotDispatchedError(cause.message, { cause, retryable });
+}
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -98,6 +112,26 @@ async function postJson<T>(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
+  try {
+    signal.throwIfAborted();
+    await options.onPlatformSendDispatch?.();
+    signal.throwIfAborted();
+  } catch (error) {
+    if (!options.classifyPreRequestFailure) {
+      throw error;
+    }
+    const cancelled = signal.aborted || (error instanceof Error && error.name === "AbortError");
+    throw wrapQaBusPreRequestFailure(error, !cancelled);
+  }
+  try {
+    // Keep the last authority fence and request creation in one synchronous stack.
+    options.assertDirectAdapterHandoff?.();
+  } catch (error) {
+    if (!options.classifyPreRequestFailure) {
+      throw error;
+    }
+    throw wrapQaBusPreRequestFailure(error, false);
+  }
   return await new Promise<T>((resolve, reject) => {
     const request = client.request(
       url,
@@ -197,9 +231,17 @@ export async function sendQaBusMessage(params: {
   replyToId?: string;
   attachments?: import("./protocol.js").QaBusAttachment[];
   toolCalls?: QaBusToolCall[];
+  signal?: AbortSignal;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
 }) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+  const { signal, onPlatformSendDispatch, assertDirectAdapterHandoff, ...body } = params;
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", body, {
+    signal,
     timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
+    classifyPreRequestFailure: true,
+    onPlatformSendDispatch,
+    assertDirectAdapterHandoff,
   });
 }
 

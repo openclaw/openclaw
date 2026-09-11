@@ -15,6 +15,13 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { createCurrentTurnDeliveryTool } from "../current-turn-delivery.js";
+import {
+  closeCurrentTurnReplyCompletionOwner,
+  copyCurrentTurnReplyCompletion,
+  createCurrentTurnReplyCompletionOwner,
+  readCurrentTurnReplyCompletion,
+} from "../current-turn-reply-completion.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
@@ -203,6 +210,39 @@ describe("AgentHarness lifecycle runner", () => {
       ),
     ).toEqual(["/tmp/reply.opus"]);
   });
+
+  it.each(["sent", "partial_failed"] as const)(
+    "preserves private %s source completion through normalization and trace backfill",
+    async (status) => {
+      const owner = createCurrentTurnReplyCompletionOwner();
+      await createCurrentTurnDeliveryTool(
+        {
+          send: async () =>
+            status === "sent"
+              ? { status }
+              : { status, sentBeforeError: true, error: "adapter acknowledgement lost" },
+        },
+        owner,
+      ).execute("source-send", { text: "reply" });
+      closeCurrentTurnReplyCompletionOwner(owner);
+      const result = copyCurrentTurnReplyCompletion(owner, createAttemptResult());
+      delete result.diagnosticTrace;
+      const harness: AgentHarness = {
+        id: "openclaw",
+        label: "OpenClaw",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async () => result,
+      };
+      const normalized = await runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
+        runAgentHarnessLifecycleAttempt(harness, createAttemptParams()),
+      );
+      expect(readCurrentTurnReplyCompletion(normalized)).toBe(
+        status === "sent" ? "confirmed" : "ambiguous",
+      );
+      expect(normalized.diagnosticTrace).toEqual(createDiagnosticTrace());
+      expect(normalized).not.toHaveProperty("completionOwner");
+    },
+  );
 
   it("backfills omitted current-attempt provenance from the harness assistant", async () => {
     const assistant = createFinalAssistant();

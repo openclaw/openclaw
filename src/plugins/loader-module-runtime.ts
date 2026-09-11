@@ -5,8 +5,15 @@ import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withProfile } from "./plugin-load-profile.js";
-import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import {
+  formatPluginLoadProfileLine,
+  shouldProfilePluginLoader,
+  withProfile,
+} from "./plugin-load-profile.js";
+import {
+  getCachedPluginModuleLoader,
+  getPluginModuleLoaderStats,
+} from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -158,7 +165,44 @@ export function createPluginModuleLoader(options: {
     });
   };
   return (modulePath: string): unknown =>
-    withPluginCache(cache, () => createLoaderForModule(modulePath)(toSafeImportPath(modulePath)));
+    withPluginCache(cache, () => {
+      if (!shouldProfilePluginLoader()) {
+        return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
+      }
+      const loader = withProfile({ source: "(module)" }, "module-loader-prepare", () =>
+        createLoaderForModule(modulePath),
+      );
+      const before = getPluginModuleLoaderStats();
+      const startedAt = performance.now();
+      try {
+        return loader(toSafeImportPath(modulePath));
+      } finally {
+        const elapsedMs = performance.now() - startedAt;
+        const after = getPluginModuleLoaderStats();
+        // These module-instance intervals include reentrant loads, not one plugin's graph.
+        // Cache hits may be zero; throwing calls may have no recorded outcome.
+        console.error(
+          formatPluginLoadProfileLine({
+            phase: "module-load",
+            source: "(module)",
+            elapsedMs,
+            extras: [
+              ["calls", String(after.calls - before.calls)],
+              ["nativeHits", String(after.nativeHits - before.nativeHits)],
+              ["nativeMisses", String(after.nativeMisses - before.nativeMisses)],
+              [
+                "sourceTransformForced",
+                String(after.sourceTransformForced - before.sourceTransformForced),
+              ],
+              [
+                "sourceTransformFallbacks",
+                String(after.sourceTransformFallbacks - before.sourceTransformFallbacks),
+              ],
+            ],
+          }),
+        );
+      }
+    });
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {

@@ -208,6 +208,8 @@ const MOCK_HTTP_POST_ROUTES = new Map([
   ["/v1/messages", "Anthropic Messages"],
 ]);
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
+const QA_CURRENT_TURN_CODE_MODE_PROMPT_RE =
+  /QA current-turn Code Mode delivery: send exactly `([^`]+)`; if another provider request follows, reply exactly `([^`]+)`/iu;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
 const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
@@ -1006,6 +1008,36 @@ async function buildResponsesPayload(
           : resolveCompactionRecoverySummary(allInputText),
     );
   }
+  const currentPrompt = splitMockConversationContext(prompt).current;
+  const allUserTexts = extractUserTurnTexts(input);
+  const isSettledToolContinuation = currentPrompt.includes(
+    QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  );
+  // Fresh turns own scenario dispatch; only an explicit settled continuation
+  // may inherit the nearest scenario across uninterrupted continuation turns.
+  const codeModePrompt = isSettledToolContinuation
+    ? extractLatestScenarioFamilyPrompt(allUserTexts, QA_CURRENT_TURN_CODE_MODE_PROMPT_RE)
+    : currentPrompt;
+  const currentTurnCodeMode = QA_CURRENT_TURN_CODE_MODE_PROMPT_RE.exec(codeModePrompt);
+  if (currentTurnCodeMode) {
+    const outboundMarker = currentTurnCodeMode[1] ?? "";
+    const ordinaryFinalMarker = currentTurnCodeMode[2] ?? "";
+    if (
+      !isSettledToolContinuation &&
+      !hasCompletedToolOutput &&
+      hasDeclaredTool(toolDeclarationBody, "exec")
+    ) {
+      return buildRawToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        code: [
+          `const sent = await send_current_reply({ text: ${JSON.stringify(outboundMarker)} });`,
+          'const observed = await read({ path: "repo/package.json", offset: 1, limit: 1 });',
+          "return { sent, observed: Boolean(observed) };",
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents(ordinaryFinalMarker);
+  }
   if (
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     /compaction-retry-summary\.txt/i.test(toolOutput)
@@ -1142,7 +1174,6 @@ async function buildResponsesPayload(
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const allUserTexts = extractUserTurnTexts(input);
   const allUserText = allUserTexts.join("\n");
   const scenarioFamilyPrompt = extractLatestScenarioFamilyPrompt(allUserTexts) || prompt;
   const scenarioFamilyReplyDirective =
@@ -1175,10 +1206,6 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction =
     allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
     allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
-  const currentPrompt = splitMockConversationContext(prompt).current;
-  const isSettledToolContinuation = currentPrompt.includes(
-    QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
-  );
   // Only a current continuation may reuse a previous scenario prompt.
   const sideEffectPrompt = extractLatestScenarioFamilyPrompt(
     isSettledToolContinuation ? allUserTexts : [currentPrompt],

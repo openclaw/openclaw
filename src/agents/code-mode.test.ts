@@ -295,9 +295,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
     expect(execTool.description).toContain("Enabled tools are async global functions");
-    expect(execTool.description).toContain("Await dependent calls in order");
-    expect(execTool.description).toContain("independent calls may run with Promise.all");
     expect(execTool.description).toContain("Emit output with `text(value)` or `json(value)`");
+    expect(execTool.description).toContain("OpenClaw Code Mode");
+    expect(execTool.description).toContain("Compose deterministic dependent work in one cell");
+    expect(execTool.description).toContain("use Promise.all only for independent work");
     expect(execTool.description).toContain(
       "Declared output fields may feed later calls in the same program",
     );
@@ -307,9 +308,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("normal tool policy and approvals");
     expect(execTool.description).toContain("`catalog.search(query)`");
     expect(execTool.description).toContain("results are callable");
-    expect(execTool.description).toContain("`-> ?` means unknown output");
-    expect(execTool.description).toContain("do not feed it into guessed field-dependent logic");
-    expect(execTool.description).toContain("use a later `exec` for dependent composition");
+    expect(execTool.description).toContain("`-> ?` means the output contract is unknown");
+    expect(execTool.description).toContain("only when the actual output is genuinely ambiguous");
+    expect(execTool.description).toContain("If authority changes between calls");
+    expect(execTool.description).toContain("Never replay a mutation whose outcome is uncertain");
     expect(execTool.description).not.toContain("ALL_TOOLS");
     expect(execTool.description).not.toContain("tools.call");
     expect(execTool.description).not.toContain("exact id");
@@ -423,8 +425,28 @@ describe("Code Mode catalog and model-visible surface", () => {
       const codeDescription = parameters.properties?.code?.description;
 
       expect(execTool.description.length).toBeLessThan(2_400);
-      expect(execTool.description).toContain("independent calls may run with Promise.all");
+      expect(execTool.description).toContain("Run JavaScript or TypeScript in OpenClaw Code Mode");
+      expect(execTool.description).toContain(
+        "Compose deterministic dependent work in one cell and await calls in order",
+      );
+      expect(execTool.description).toContain("use Promise.all only for independent work");
+      expect(execTool.description).toContain(
+        "Declared output fields may feed later calls in the same program.",
+      );
+      expect(execTool.description).not.toContain("so continue directly from them");
+      expect(execTool.description).toContain("only when the actual output is genuinely ambiguous");
+      expect(execTool.description).toContain("If authority changes between calls");
+      expect(execTool.description).toContain("Never replay a mutation whose outcome is uncertain");
       expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
+      expect(execTool.description).toContain("`TextEncoder` and `TextDecoder`");
+      expect(execTool.description).toContain("Console log/info/warn/error/debug emit bounded text");
+      expect(execTool.description).toContain(
+        "Nested results are intact or throw catchable resource errors",
+      );
+      expect(execTool.description).toContain("10485760-byte cell inbox");
+      expect(execTool.description).toContain("`API.list(prefix?)`");
+      expect(execTool.description).toContain("`API.read(path)`");
+      expect(execTool.description).toContain("native tools: `tools/`");
       expect(execTool.description).toContain("65536 bytes");
       expect(execTool.description).toContain("rerun with narrower args");
       expect(execTool.description).toContain(`${expectedBudgetMs} ms wall-clock budget`);

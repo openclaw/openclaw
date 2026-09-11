@@ -58,6 +58,11 @@ type AgentHarnessToolSurfaceOptions = Omit<
   "operationalRunInstance"
 >;
 
+export type AgentHarnessToolResultCapabilities = Readonly<{
+  /** The harness preserves terminality on each successful tool result. */
+  terminalCompletion: "per-result";
+}>;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
@@ -94,6 +99,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,
+    resultCapabilities?: AgentHarnessToolResultCapabilities,
   ) => AnyAgentTool[];
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<

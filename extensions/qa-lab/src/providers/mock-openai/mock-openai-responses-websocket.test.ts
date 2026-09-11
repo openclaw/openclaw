@@ -192,6 +192,67 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
+  it("dispatches fresh Code Mode B after settled A through previous-response deltas", async () => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const prompt = (label: string) =>
+      `QA current-turn Code Mode delivery: send exactly \`WS-${label}-OUTBOUND\`; ` +
+      `if another provider request follows, reply exactly \`WS-${label}-FINAL\``;
+    const user = (text: string) => ({
+      role: "user",
+      content: [{ type: "input_text", text }],
+    });
+    const first = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        tools: [{ type: "function", name: "exec" }],
+        input: [user(prompt("A"))],
+      }),
+    );
+    const firstCall = (first.output as Array<Record<string, unknown>>)[0];
+    expect(firstCall).toMatchObject({ type: "function_call", name: "exec" });
+    const settled = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        previous_response_id: first.id,
+        input: [
+          {
+            type: "function_call_output",
+            call_id: firstCall?.call_id,
+            output: JSON.stringify({ status: "completed", value: { sent: true } }),
+          },
+        ],
+      }),
+    );
+    expect(settled.output).toEqual([
+      expect.objectContaining({
+        type: "message",
+        content: [expect.objectContaining({ text: "WS-A-FINAL" })],
+      }),
+    ]);
+    const next = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        previous_response_id: settled.id,
+        input: [user(prompt("B"))],
+      }),
+    );
+    const nextCall = (next.output as Array<Record<string, unknown>>)[0];
+    expect(nextCall).toMatchObject({ type: "function_call", name: "exec" });
+    expect(nextCall?.arguments).toContain("WS-B-OUTBOUND");
+    expect(nextCall?.arguments).not.toContain("WS-A-OUTBOUND");
+    expect(nextCall?.arguments).toBe(
+      JSON.stringify({
+        language: "javascript",
+        code: [
+          'const sent = await send_current_reply({ text: "WS-B-OUTBOUND" });',
+          'const observed = await read({ path: "repo/package.json", offset: 1, limit: 1 });',
+          "return { sent, observed: Boolean(observed) };",
+        ].join("\n"),
+      }),
+    );
+  });
+
   it("rejects a response ID after a newer response replaces the connection cache", async () => {
     const server = await startServer();
     const socket = await connectResponsesWebSocket(server.baseUrl);

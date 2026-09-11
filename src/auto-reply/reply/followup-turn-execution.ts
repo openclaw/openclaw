@@ -1,3 +1,4 @@
+import { copyCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -435,7 +436,7 @@ export async function executeFollowupTurn(params: {
         throw error;
       }
       turn.operation.fail("run_failed", error);
-      execution = {
+      execution = copyCurrentTurnReplyCompletion(error, {
         runId: turn.runId,
         outcome: {
           kind: "rejected",
@@ -446,7 +447,7 @@ export async function executeFollowupTurn(params: {
             cfg: turn.config,
           }),
         },
-      };
+      });
     }
   }
   // Runner defaults may be newer; only the queued sources own this execution result.
@@ -454,6 +455,9 @@ export async function executeFollowupTurn(params: {
     turn.queued.replyOperationRunStates,
     turn.operation,
     execution.outcome,
+    execution.outcome.kind === "settled"
+      ? execution.outcome.result.meta.agentMeta?.terminalReceipt
+      : execution,
   );
   return {
     commentaryPayloadsEnabled,

@@ -1,6 +1,7 @@
 /**
  * Dispatches embedded attempts to native harness or OpenClaw backend execution.
  */
+import { copyCurrentTurnReplyCompletion } from "../../current-turn-reply-completion.js";
 import {
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
@@ -77,20 +78,23 @@ export async function runEmbeddedAttemptWithBackend(
     ...attempt
   } = result;
   const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
-  return copyCoreTtsAttemptResultProvenance(result, {
-    ...attempt,
-    ...(requesterContinuationSettled ? { requesterContinuationSettled: true as const } : {}),
-    ...(modelAttempt ? { modelAttempt } : {}),
-    // Only private prepared ownership permits a runtime to select the session model.
-    ...(nativeSessionRuntime && runtimeModelSelection
-      ? {
-          runtimeModelSelection: {
-            provider: runtimeModelSelection.provider,
-            model: runtimeModelSelection.model,
-          },
-        }
-      : {}),
-  });
+  return copyCurrentTurnReplyCompletion(
+    result,
+    copyCoreTtsAttemptResultProvenance(result, {
+      ...attempt,
+      ...(requesterContinuationSettled ? { requesterContinuationSettled: true as const } : {}),
+      ...(modelAttempt ? { modelAttempt } : {}),
+      // Only private prepared ownership permits a runtime to select the session model.
+      ...(nativeSessionRuntime && runtimeModelSelection
+        ? {
+            runtimeModelSelection: {
+              provider: runtimeModelSelection.provider,
+              model: runtimeModelSelection.model,
+            },
+          }
+        : {}),
+    }),
+  );
 }
 
 /** Runs one operation-specific settled-turn finalization through the selected harness. */

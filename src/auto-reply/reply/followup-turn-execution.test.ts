@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  copyCurrentTurnReplyCompletion,
+  readCurrentTurnReplyCompletion,
+} from "../../agents/current-turn-reply-completion.js";
+import { createSourceReplyReceiptFixture } from "../../agents/current-turn-reply-completion.test-support.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
@@ -13,6 +18,7 @@ import {
   resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { createReplyOperation, markReplyOperationExecutionStarted } from "./reply-run-registry.js";
 
 const state = getFollowupTurnTestState();
 const createTypingController = createFollowupTurnTestTypingController;
@@ -77,6 +83,55 @@ async function runFastAutoProgressCase(params: {
 }
 
 describe("executeFollowupTurn", () => {
+  it.each(["sent", "partial_failed"] as const)(
+    "retains private %s completion on the original rejected run",
+    async (status) => {
+      const turn = createTurn();
+      const operation = createReplyOperation({
+        sessionId: "session",
+        sessionKey: "main",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      turn.operation = operation;
+      const receipt = await createSourceReplyReceiptFixture(status, {
+        runId: turn.runId,
+        sessionId: "session",
+        provider: "openai",
+        model: "model",
+      });
+      const error = copyCurrentTurnReplyCompletion(
+        receipt,
+        new Error("native finalization failed"),
+      );
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        markReplyOperationExecutionStarted(operation);
+        params.opts?.onAgentRunStart?.(turn.runId);
+        throw error;
+      });
+      try {
+        const result = await executeFollowupTurn({
+          turn,
+          defaults: {
+            typing: createTypingController(),
+            typingMode: "never",
+            defaultModel: "claude",
+          },
+          onToolResult: vi.fn(async () => {}),
+          onCompactionNoticePayload: vi.fn(async () => {}),
+        });
+        await result.progress.drain();
+        expect(result.execution.outcome.kind).toBe("rejected");
+        expect(readCurrentTurnReplyCompletion(result.execution)).toBe(
+          status === "sent" ? "confirmed" : "ambiguous",
+        );
+        expect(operation.result).toEqual({ kind: "failed", code: "run_failed", cause: error });
+      } finally {
+        operation.complete();
+      }
+    },
+  );
+
   it.each([false, true])(
     "records each source receipt without changing newer runner state (preflight: %s)",
     async (preflight) => {

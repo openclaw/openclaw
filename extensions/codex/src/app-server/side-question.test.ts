@@ -398,12 +398,16 @@ function nativeCommandItem(
 }
 
 type SideQuestionParams = Parameters<typeof runCodexAppServerSideQuestion>[0];
+type SideQuestionToolBindingOptions = Parameters<
+  SideQuestionParams["hostCapabilities"]["bindToolSurface"]
+>[1];
 
 const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.freeze({
   kind: "agent-harness-host-capability",
   version: 1,
   assertActive: () => {},
   bindToolSurface: (tools) => tools,
+  createToolSurface: (options) => createOpenClawCodingToolsMock(options),
   runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
   requestApproval: async () => undefined,
   waitForApproval: async () => undefined,
@@ -3259,10 +3263,12 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("exposes blocking question tools to a side thread conversation", async () => {
     const boundNames: string[][] = [];
-    const bindToolSurface = vi.fn((tools: Array<{ name: string }>) => {
-      boundNames.push(tools.map((tool) => tool.name));
-      return tools;
-    });
+    const bindToolSurface = vi.fn(
+      (tools: Array<{ name: string }>, _options?: SideQuestionToolBindingOptions) => {
+        boundNames.push(tools.map((tool) => tool.name));
+        return tools;
+      },
+    );
     createOpenClawCodingToolsMock.mockReturnValue([
       { name: "message", execute: vi.fn() },
       { name: "ask_user", execute: vi.fn() },
@@ -3288,6 +3294,8 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: {
           ...TEST_HOST_CAPABILITIES,
           bindToolSurface: bindToolSurface as never,
+          createToolSurface: (options, bindingOptions) =>
+            bindToolSurface(createOpenClawCodingToolsMock(options), bindingOptions) as never,
         },
       }),
     );
@@ -3298,17 +3306,21 @@ describe("runCodexAppServerSideQuestion", () => {
   it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
     let active = true;
     let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
-    const bindToolSurface = vi.fn((tools: Array<{ execute?: (...args: never[]) => unknown }>) =>
-      tools.map((tool) => {
-        const execute = async (...args: never[]) => {
-          if (!active) {
-            throw new Error("agent harness host capability is no longer active");
-          }
-          return await tool.execute?.(...args);
-        };
-        retainedExecute = execute;
-        return { ...tool, execute };
-      }),
+    const bindToolSurface = vi.fn(
+      (
+        tools: Array<{ execute?: (...args: never[]) => unknown }>,
+        _options?: SideQuestionToolBindingOptions,
+      ) =>
+        tools.map((tool) => {
+          const execute = async (...args: never[]) => {
+            if (!active) {
+              throw new Error("agent harness host capability is no longer active");
+            }
+            return await tool.execute?.(...args);
+          };
+          retainedExecute = execute;
+          return { ...tool, execute };
+        }),
     );
     const client = createFakeClient();
     client.request.mockImplementation(async (method: string) => {
@@ -3337,6 +3349,8 @@ describe("runCodexAppServerSideQuestion", () => {
           hostCapabilities: {
             ...TEST_HOST_CAPABILITIES,
             bindToolSurface: bindToolSurface as never,
+            createToolSurface: (options, bindingOptions) =>
+              bindToolSurface(createOpenClawCodingToolsMock(options), bindingOptions) as never,
           },
         }),
       ),

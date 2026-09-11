@@ -1,3 +1,4 @@
+import { readCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -108,6 +109,17 @@ export async function prepareReplyAgentPayloads(state: {
     usage,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
+  // Keep the original result/error for transcript and accounting. A host-owned
+  // source dispatch, including lost acknowledgement, forbids a second channel send.
+  const sourceCompletion = readCurrentTurnReplyCompletion(
+    runResult.meta?.agentMeta?.terminalReceipt,
+  );
+  if (sourceCompletion) {
+    if (sourceCompletion === "confirmed") {
+      await opts?.onObservedReplyDelivery?.();
+    }
+    return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
+  }
   const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
   if (deliberateSilentTerminalReply) {
     opts?.onDeliberateSilentTerminalReply?.();

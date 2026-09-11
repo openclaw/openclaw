@@ -57,6 +57,24 @@ type RestartObservation = {
   flow?: { id: string; ownerKey: string; status: string; endedAt?: number };
 };
 
+type SelfYieldPhase =
+  | "startup"
+  | "channel-ready"
+  | "inbound"
+  | "follow-up"
+  | "follow-up-body"
+  | "release"
+  | "release-body"
+  | "outbound"
+  | "quiet"
+  | "restart"
+  | "restarted-channel-ready"
+  | "restarted-quiet"
+  | "mock-requests"
+  | "assertions"
+  | "verdict-directory"
+  | "verdict-write";
+
 function readRestartBacking(databasePath: string, taskId: string, childSessionKey: string) {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
@@ -509,13 +527,99 @@ describe("plugin subagent sessions_yield follow-up", () => {
     600_000,
   );
 
-  it("announces to the original requester only after the follow-up run ends", async () => {
+  it("announces to the original requester only after the follow-up run ends", async (context) => {
+    const startedAt = performance.now();
+    let phase: SelfYieldPhase = "startup";
+    let phaseStartedAt = startedAt;
+    let reported = false;
+    let readFacts: () => Record<string, unknown> = () => ({ observations: "unavailable" });
+    const mockObservation: { requests?: number; yieldCalls?: number } = {};
+    const milestones: Array<{ phase: SelfYieldPhase; elapsedMs: number }> = [
+      { phase, elapsedMs: 0 },
+    ];
+    const enterPhase = (next: SelfYieldPhase) => {
+      if (reported) {
+        return;
+      }
+      phase = next;
+      phaseStartedAt = performance.now();
+      if (milestones.length < 16) {
+        milestones.push({ phase, elapsedMs: Math.round(phaseStartedAt - startedAt) });
+      }
+    };
+    const report = (trigger: "test-abort" | "test-failed" | "body-error") => {
+      if (reported) {
+        return;
+      }
+      reported = true;
+      try {
+        const now = performance.now();
+        let facts: Record<string, unknown>;
+        try {
+          facts = readFacts();
+        } catch {
+          facts = { observations: "unavailable" };
+        }
+        process.stderr.write(
+          `[self-yield-diagnostic] ${JSON.stringify({
+            trigger,
+            phase,
+            phaseElapsedMs: Math.round(now - phaseStartedAt),
+            elapsedMs: Math.round(now - startedAt),
+            milestones,
+            ...facts,
+            mockRequests: mockObservation.requests ?? "unavailable",
+            mockYieldCalls: mockObservation.yieldCalls ?? "unavailable",
+          })}\n`,
+        );
+      } catch {
+        // Observation must not replace the timeout or the original test failure.
+      }
+    };
+    // Vitest aborts this signal at its deadline, before afterEach can stop the child.
+    const onAbort = () => report("test-abort");
+    context.signal.addEventListener("abort", onAbort, { once: true });
+    context.onTestFinished(() => context.signal.removeEventListener("abort", onAbort));
+    context.onTestFailed(() => report("test-failed"));
     const { state, transport, mock, gateway } = await startFixtureGateway();
+    readFacts = () => {
+      const messages = state.getSnapshot().messages;
+      const logs = gateway.logs().slice(-16_384);
+      const marker = [...logs.matchAll(/\[qa-self-yield-phase\] (\{[^\r\n]*\})/gu)].at(-1);
+      const observed = marker
+        ? (JSON.parse(marker[1]!) as { phase: string; timestamp: number })
+        : undefined;
+      const knownPhase =
+        observed &&
+        ["follow-up-admission", "release-wait", "session-read", "release-response-ready"].includes(
+          observed.phase,
+        ) &&
+        Number.isFinite(observed.timestamp);
+      return {
+        inboundMessages: messages.filter((message) => message.direction === "inbound").length,
+        outboundMessages: messages.filter((message) => message.direction === "outbound").length,
+        completionMarkerObserved: messages.some(
+          (message) =>
+            message.direction === "outbound" &&
+            message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
+        ),
+        // This is the last captured marker, not proof of the child's current phase.
+        lastObservedFixturePhase: knownPhase
+          ? { phase: observed.phase, ageMs: Date.now() - observed.timestamp }
+          : "unavailable",
+        transcriptReconcileFailureObserved: logs.includes("session transcript reconcile failed"),
+        transcriptConflictObserved: logs.includes(
+          "SQLite transcript changed while preparing rewrite",
+        ),
+      };
+    };
+    enterPhase("channel-ready");
     await transport.waitReady({ gateway });
 
     const outboundStartIndex = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
+    enterPhase("inbound");
     await transport.sendInbound({
       accountId: "default",
       conversation: REQUESTER_CONVERSATION,
@@ -523,18 +627,10 @@ describe("plugin subagent sessions_yield follow-up", () => {
       text: TRIGGER,
     });
 
-    const failureContext = (error: unknown) =>
-      new Error(
-        [
-          error instanceof Error ? error.message : String(error),
-          `bus=${JSON.stringify(state.getSnapshot())}`,
-          `gateway=${gateway.logs()}`,
-        ].join("\n"),
-        { cause: error },
-      );
     let distinctFollowupRun: boolean;
 
     try {
+      enterPhase("follow-up");
       const followUpResponse = await fetch(`${gateway.baseUrl}/qa/self-yield/follow-up`, {
         method: "POST",
         headers: {
@@ -544,16 +640,19 @@ describe("plugin subagent sessions_yield follow-up", () => {
         body: JSON.stringify({}),
       });
       expect(followUpResponse.status).toBe(202);
+      enterPhase("follow-up-body");
       const followUp = (await followUpResponse.json()) as {
         kickoffRunId?: string;
         runId: string;
       };
       expect(followUp.runId).toBeTruthy();
+      enterPhase("release");
       const releaseResponse = await fetch(`${gateway.baseUrl}/qa/self-yield/release`, {
         method: "POST",
         headers: { Authorization: `Bearer ${gateway.token}` },
       });
       expect(releaseResponse.status).toBe(200);
+      enterPhase("release-body");
       const release = (await releaseResponse.json()) as {
         finalReply?: string;
         kickoffRunId?: string;
@@ -569,6 +668,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
       expect(release.runId).not.toBe(release.kickoffRunId);
       distinctFollowupRun = release.runId !== release.kickoffRunId;
 
+      enterPhase("outbound");
       const completion = await transport.waitForOutbound({
         conversation: REQUESTER_CONVERSATION,
         sinceIndex: outboundStartIndex,
@@ -577,7 +677,8 @@ describe("plugin subagent sessions_yield follow-up", () => {
       });
       expect(completion.accountId).toBe("default");
     } catch (error) {
-      throw failureContext(error);
+      report("body-error");
+      throw error;
     }
 
     const outbound = state
@@ -591,6 +692,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     const visibleRepliesBeforeQuiet = outbound.filter((message) =>
       message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
     ).length;
+    enterPhase("quiet");
     await transport.waitForNoOutbound({
       sinceIndex: outbound.length,
       quietMs: 1_000,
@@ -601,8 +703,11 @@ describe("plugin subagent sessions_yield follow-up", () => {
         (message) =>
           message.direction === "outbound" && message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
       ).length;
+    enterPhase("restart");
     await gateway.restartAfterStateMutation(async () => {});
+    enterPhase("restarted-channel-ready");
     await transport.waitReady({ gateway });
+    enterPhase("restarted-quiet");
     await transport.waitForNoOutbound({
       sinceIndex: outbound.length,
       quietMs: 1_000,
@@ -613,9 +718,15 @@ describe("plugin subagent sessions_yield follow-up", () => {
         (message) =>
           message.direction === "outbound" && message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
       ).length;
+    enterPhase("mock-requests");
     const requests = (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
       response.json(),
     )) as Array<{ plannedToolName?: string; prompt?: string }>;
+    mockObservation.requests = requests.length;
+    mockObservation.yieldCalls = requests.filter(
+      (request) => request.plannedToolName === "sessions_yield",
+    ).length;
+    enterPhase("assertions");
     const handoffRequests = requests.filter(
       (request) =>
         request.prompt?.includes("Subagent self yield qa worker") ||
@@ -650,7 +761,9 @@ describe("plugin subagent sessions_yield follow-up", () => {
       duplicateRepliesAfterGatewayRestart: 0,
       distinctFollowupRun: true,
     });
+    enterPhase("verdict-directory");
     await mkdir(path.dirname(VERDICT_PATH), { recursive: true });
+    enterPhase("verdict-write");
     await writeFile(VERDICT_PATH, `${JSON.stringify(verdict, null, 2)}\n`, "utf8");
   }, 180_000);
 });

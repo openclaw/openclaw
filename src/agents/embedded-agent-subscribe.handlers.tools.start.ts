@@ -10,6 +10,7 @@ import { isAgentPlanProgressToolName } from "../session-cards/progress-card-chan
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
+import { readCurrentTurnReplyCompletion } from "./current-turn-reply-completion.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
@@ -274,6 +275,9 @@ export function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
+  if (readCurrentTurnReplyCompletion(ctx.state)) {
+    return;
+  }
   runBestEffortCallback({
     label: "tool agent event",
     log: ctx.log,

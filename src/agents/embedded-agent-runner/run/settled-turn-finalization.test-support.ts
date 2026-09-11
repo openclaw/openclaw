@@ -3,6 +3,10 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { AdmittedRunContext } from "../../admitted-run-context.js";
 import {
+  closeCurrentTurnReplyCompletionOwner,
+  createCurrentTurnReplyCompletionOwner,
+} from "../../current-turn-reply-completion.js";
+import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -194,6 +198,7 @@ export function projectSettledProviderFailureAttempt(
     setTerminalLifecycleMeta: () => {},
     toolMetas: base.toolMetas,
   };
+  const currentTurnReplyCompletion = createCurrentTurnReplyCompletionOwner();
   const input = {
     attempt: {
       runId: "run-settled",
@@ -213,6 +218,7 @@ export function projectSettledProviderFailureAttempt(
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
+      toolBase: { currentTurnReplyCompletion },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
@@ -231,5 +237,9 @@ export function projectSettledProviderFailureAttempt(
       cache: { observabilityEnabled: false },
     },
   };
-  return completeEmbeddedAttemptResult(input as never, settled, prompt);
+  try {
+    return completeEmbeddedAttemptResult(input as never, settled, prompt);
+  } finally {
+    closeCurrentTurnReplyCompletionOwner(currentTurnReplyCompletion);
+  }
 }

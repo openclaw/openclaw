@@ -2,6 +2,13 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createCurrentTurnDeliveryTool } from "../../current-turn-delivery.js";
+import {
+  closeCurrentTurnReplyCompletionOwner,
+  copyCurrentTurnReplyCompletion,
+  createCurrentTurnReplyCompletionOwner,
+  readCurrentTurnReplyCompletion,
+} from "../../current-turn-reply-completion.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   markCoreTtsAttemptResult,
@@ -109,6 +116,51 @@ describe("prepareEmbeddedRunTerminal", () => {
   beforeEach(() => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
   });
+
+  it.each(["sent", "partial_failed"] as const)(
+    "retains private %s source completion without changing terminal failure",
+    async (status) => {
+      const owner = createCurrentTurnReplyCompletionOwner();
+      const tool = createCurrentTurnDeliveryTool(
+        {
+          send: async () =>
+            status === "sent"
+              ? { status }
+              : { status, sentBeforeError: true, error: "adapter acknowledgement lost" },
+        },
+        owner,
+      );
+      await tool.execute("source-send", { text: "reply" });
+      closeCurrentTurnReplyCompletionOwner(owner);
+      const attempt = copyCurrentTurnReplyCompletion(
+        owner,
+        attemptResult({
+          sourceReplyDelivered: status === "sent" ? true : undefined,
+          lastToolError: { toolName: tool.name, error: "projection rejected" },
+        }),
+      );
+      const prepared = await prepareAttempt({
+        attempt,
+        terminalState: {
+          outcome: { reason: "failed", status: "error", error: "projection rejected" },
+          signalOwnedInterruption: false,
+        },
+      });
+      expect(readCurrentTurnReplyCompletion(prepared.agentMeta.terminalReceipt)).toBe(
+        status === "sent" ? "confirmed" : "ambiguous",
+      );
+      expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(
+        status === "sent" ? true : undefined,
+      );
+      expect(attempt.lastToolError).toEqual({
+        toolName: tool.name,
+        error: "projection rejected",
+      });
+      expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({ lastToolError: attempt.lastToolError }),
+      );
+    },
+  );
 
   it.each([
     {

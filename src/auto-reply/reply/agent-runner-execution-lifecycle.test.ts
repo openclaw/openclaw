@@ -49,6 +49,8 @@ import {
 
 const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
+const completion = await import("../../agents/current-turn-reply-completion.js");
+const { createCurrentTurnDeliveryTool } = await import("../../agents/current-turn-delivery.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
   agentId: "main",
@@ -72,6 +74,55 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+  });
+
+  it("retains pending source dispatch when abort becomes an execution outcome", async () => {
+    let owner: object | undefined;
+    const next = completion.createCurrentTurnReplyCompletionOwner();
+    const acknowledgement = createDeferred<{ status: "sent" }>();
+    let pending: Promise<unknown> | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: RunEmbeddedAgentInternalParams) => {
+        if (!params.assistantErrorTranscript) {
+          throw new Error("expected the private logical-turn context");
+        }
+        owner = completion.createCurrentTurnReplyCompletionOwner(params.assistantErrorTranscript);
+        const tool = createCurrentTurnDeliveryTool(
+          {
+            send: (_params, _bestEffort, _signal, onDispatch) => {
+              onDispatch?.();
+              return acknowledgement.promise;
+            },
+          },
+          owner,
+        );
+        pending = tool.execute("held-source-reply", { text: "reply" });
+        throw completion.copyCurrentTurnReplyCompletion(owner, createAgentRunDirectAbortError());
+      },
+    );
+    try {
+      const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+      expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+      expect(completion.readCurrentTurnReplyCompletion(result)).toBe("pending");
+      expect(result).not.toHaveProperty("sourceReplyDelivered");
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      if (!owner) {
+        throw new Error("expected the admitted completion owner");
+      }
+      completion.closeCurrentTurnReplyCompletionOwner(owner);
+      acknowledgement.resolve({ status: "sent" });
+      await pending;
+      expect(completion.readCurrentTurnReplyCompletion(result)).toBe("confirmed");
+      expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
+      expect(completion.readCurrentTurnReplyCompletion(next)).toBeUndefined();
+    } finally {
+      acknowledgement.resolve({ status: "sent" });
+      await pending;
+      if (owner) {
+        completion.closeCurrentTurnReplyCompletionOwner(owner);
+      }
+      completion.closeCurrentTurnReplyCompletionOwner(next);
+    }
   });
 
   it.each([

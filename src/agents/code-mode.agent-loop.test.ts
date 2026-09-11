@@ -9,7 +9,14 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../gateway/message-action-turn-capability.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
@@ -24,6 +31,15 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import {
+  createCurrentTurnDelivery,
+  createCurrentTurnDeliveryTool,
+} from "./current-turn-delivery.js";
+import {
+  closeCurrentTurnReplyCompletionOwner,
+  createCurrentTurnReplyCompletionOwner,
+  readCurrentTurnReplyCompletion,
+} from "./current-turn-reply-completion.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
@@ -449,6 +465,180 @@ describe("Code Mode agent-loop error recovery", () => {
     await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
       "Aborted",
     );
+  });
+
+  it("continues permission refresh without sending a second current reply through the rebuilt catalog", async () => {
+    const generation = new AbortController();
+    const adapterEntered = createDeferred();
+    const releaseAck = createDeferred();
+    const deliverySettled = createDeferred();
+    const owner = createCurrentTurnReplyCompletionOwner();
+    const harness = createCodeModeHarness();
+    const applied: string[] = [];
+    const sendText = vi
+      .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async () => {
+        throw new Error("Unexpected second current reply adapter call");
+      })
+      .mockImplementationOnce(async () => {
+        adapterEntered.resolve();
+        await releaseAck.promise;
+        return { channel: "telegram" as const, messageId: "sent-1" };
+      });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            messaging: {
+              targetResolver: {
+                looksLikeId: (raw) => /^-?\d+$/.test(raw),
+                hint: "<chatId>",
+              },
+            },
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: harness.ctx.runId,
+      sessionKey: harness.ctx.sessionKey,
+      sessionId: harness.ctx.sessionId,
+    });
+    const createReply = (abortSignal: AbortSignal) => {
+      const delivery = createCurrentTurnDelivery({
+        authority: { abortSignal, assertActive() {} },
+        context: {
+          runtimeConfig: harness.config,
+          getRuntimeConfig: () => harness.config,
+          agentId: "main",
+          sessionId: harness.ctx.sessionId,
+          sessionKey: harness.ctx.sessionKey,
+          deliveryContext: { channel: "telegram", to: "123" },
+        },
+        runId: harness.ctx.runId,
+        token,
+      });
+      if (!delivery) {
+        throw new Error("Expected current-turn delivery");
+      }
+      return createCurrentTurnDeliveryTool(delivery, owner);
+    };
+    const reply = createReply(generation.signal);
+    const executeReply = reply.execute;
+    vi.spyOn(reply, "execute").mockImplementation(async (...args) => {
+      try {
+        return await executeReply(...args);
+      } finally {
+        deliverySettled.resolve();
+      }
+    });
+    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () => {
+      applied.push("prior mutation");
+      return jsonResult({ recorded: true });
+    });
+    const inspect = pluginToolWithExecute(
+      "inspect_state",
+      "Inspect authoritative state",
+      async () =>
+        jsonResult({ applied: [...applied], reply: readCurrentTurnReplyCompletion(owner) }),
+    );
+    const finish = pluginToolWithExecute("finish_task", "Finish remaining work", async () => {
+      applied.push("remaining mutation");
+      return jsonResult({ finished: true });
+    });
+    let changePermissions!: () => void;
+    let refreshedReply!: AnyAgentTool;
+    const running = runCodeModeAgent({
+      harness,
+      hiddenTools: [recordEffect, reply, inspect, finish],
+      abortSignal: generation.signal,
+      configureAgent: (agent, { ctx }) => {
+        agent.prepareNextTurn = async () => ({
+          context: {
+            systemPrompt: agent.state.systemPrompt,
+            tools: agent.state.tools,
+            messages: agent.state.messages,
+          },
+        });
+        changePermissions = () => {
+          generation.abort(createCodeModePermissionChangeReason());
+          const abortSignal = new AbortController().signal;
+          refreshedReply = createReply(abortSignal);
+          vi.spyOn(refreshedReply, "execute");
+          const tools = createCodeModeTools({ ...ctx, abortSignal });
+          agent.state.tools = applyCodeModeCatalog({
+            ...ctx,
+            tools: [...tools, recordEffect, refreshedReply, inspect, finish],
+          }).tools;
+        };
+      },
+      programs: [
+        'await record_effect({}); json("prior mutation completed"); return await send_current_reply({ text: "first reply" });',
+        "return await inspect_state({});",
+        'return await send_current_reply({ text: "duplicate reply" });',
+        "return await finish_task({});",
+      ],
+    });
+    try {
+      await adapterEntered.promise;
+      expect(readCurrentTurnReplyCompletion(owner)).toBe("pending");
+      changePermissions();
+      const { agent, providerContexts } = await running;
+      expect(providerContexts).toHaveLength(5);
+      expect(applied).toEqual(["prior mutation", "remaining mutation"]);
+      expect(recordEffect.execute).toHaveBeenCalledOnce();
+      expect(reply.execute).toHaveBeenCalledOnce();
+      expect(refreshedReply.execute).toHaveBeenCalledOnce();
+      expect(inspect.execute).toHaveBeenCalledOnce();
+      expect(finish.execute).toHaveBeenCalledOnce();
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(agent.state.messages).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          details: expect.objectContaining({
+            status: "failed",
+            code: "aborted",
+            output: [{ type: "json", value: "prior mutation completed" }],
+          }),
+        }),
+      );
+      expect(agent.state.messages).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          isError: true,
+          details: expect.objectContaining({
+            status: "failed",
+            error: expect.stringContaining("already been consumed"),
+          }),
+        }),
+      );
+      closeCurrentTurnReplyCompletionOwner(owner);
+      releaseAck.resolve();
+      await deliverySettled.promise;
+      expect(readCurrentTurnReplyCompletion(owner)).toBe("ambiguous");
+      await expect(
+        createReply(new AbortController().signal).execute("late-retry", {
+          text: "duplicate reply",
+        }),
+      ).rejects.toThrow("already been consumed");
+      expect(sendText).toHaveBeenCalledOnce();
+    } finally {
+      releaseAck.resolve();
+      try {
+        await running;
+      } finally {
+        if (vi.mocked(reply.execute).mock.calls.length > 0) {
+          await deliverySettled.promise;
+        }
+        closeCurrentTurnReplyCompletionOwner(owner);
+        revokeMessageActionTurnCapability(token);
+        resetPluginRuntimeStateForTest();
+      }
+    }
   });
 
   it.each([

@@ -8,6 +8,7 @@ import type {
   TransformConfigFileParams,
 } from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
+import { resolveDiagnosticFlags } from "../infra/diagnostic-flags.js";
 import { defaultRuntime } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 
@@ -104,11 +105,98 @@ describe("models set + fallbacks", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("normalizes z.ai provider in models set", async () => {
+  it("normalizes z.ai provider in models set", async (context) => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
+    const startedAt = performance.now();
+    const cpuStartedAt = process.cpuUsage();
+    const previousDiagnostics = process.env.OPENCLAW_DIAGNOSTICS;
+    let sequence = 0;
+    let commandSettled = false;
+    const record = (
+      event: string,
+      phaseElapsedMs?: number,
+      loaderCounts?: {
+        calls: number;
+        nativeHits: number;
+        nativeMisses: number;
+        sourceTransformForced: number;
+        sourceTransformFallbacks: number;
+      },
+    ) => {
+      // CPU counters cover the process, not this worker alone.
+      const cpu = process.cpuUsage(cpuStartedAt);
+      process.stderr.write(
+        `[models-set-diagnostic] ${JSON.stringify({
+          sequence: sequence++,
+          event,
+          elapsedMs: performance.now() - startedAt,
+          cpuUserMs: cpu.user / 1000,
+          cpuSystemMs: cpu.system / 1000,
+          commandSettled,
+          aborted: context.signal.aborted,
+          ...(phaseElapsedMs === undefined ? {} : { phaseElapsedMs }),
+          ...loaderCounts,
+        })}\n`,
+      );
+    };
+    const onAbort = () => record("test-abort");
+    context.signal.addEventListener("abort", onAbort, { once: true });
+    context.onTestFailed(() => record("test-failed"));
+    context.onTestFinished(() => {
+      // afterEach restores console spies before this hook; keep its output independent.
+      try {
+        record("test-finished");
+      } finally {
+        context.signal.removeEventListener("abort", onAbort);
+        if (previousDiagnostics === undefined) {
+          delete process.env.OPENCLAW_DIAGNOSTICS;
+        } else {
+          process.env.OPENCLAW_DIAGNOSTICS = previousDiagnostics;
+        }
+      }
+    });
+    process.env.OPENCLAW_DIAGNOSTICS = [...resolveDiagnosticFlags(), "plugin.load-profile"].join(
+      ",",
+    );
+    const originalConsoleError = console.error;
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      const line = args[0];
+      if (typeof line !== "string" || !line.startsWith("[plugin-load-profile] ")) {
+        originalConsoleError(...args);
+        return;
+      }
+      // Only emit known phase labels and numeric timing, never plugin paths or payloads.
+      const loaderMatch =
+        /^\[plugin-load-profile\] phase=module-load plugin=\(core\) elapsedMs=(\d+(?:\.\d+)?) calls=(\d+) nativeHits=(\d+) nativeMisses=(\d+) sourceTransformForced=(\d+) sourceTransformFallbacks=(\d+) source=\(module\)$/.exec(
+          line,
+        );
+      if (args.length === 1 && loaderMatch) {
+        record("module-load", Number(loaderMatch[1]), {
+          calls: Number(loaderMatch[2]),
+          nativeHits: Number(loaderMatch[3]),
+          nativeMisses: Number(loaderMatch[4]),
+          sourceTransformForced: Number(loaderMatch[5]),
+          sourceTransformFallbacks: Number(loaderMatch[6]),
+        });
+        return;
+      }
+      const match =
+        /^\[plugin-load-profile\] phase=(models-command-(?:import-start|import-end|metadata|selection|registry|mutation-start|mutation-settled)|discovery(?::register)?|runtime-module|module-loader-prepare|source-transform-prepare) plugin=(?:\(core\)|zai) elapsedMs=(\d+(?:\.\d+)?) source=[^\r\n]*$/.exec(
+          line,
+        );
+      if (args.length === 1 && match?.[1] !== undefined && match[2] !== undefined) {
+        record(match[1], Number(match[2]));
+      }
+    });
 
-    await modelsSetCommand("z.ai/glm-4.7", runtime);
+    record("command-start");
+    try {
+      await modelsSetCommand("z.ai/glm-4.7", runtime);
+    } finally {
+      commandSettled = true;
+      record("command-settled");
+    }
 
     expectWrittenPrimaryModel("zai/glm-4.7");
   });

@@ -1,6 +1,36 @@
-import type { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchConfig } from "./tool-search.js";
-import "./tool-search.js";
+import { Type } from "typebox";
+import { vi } from "vitest";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
+  type ToolSearchConfig,
+} from "./tool-search.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+export function fakeTool(name: string, parameters = Type.Object({})): AnyAgentTool {
+  return {
+    name,
+    label: name,
+    description: `Run ${name}`,
+    parameters,
+    execute: vi.fn(async (_toolCallId, input) => jsonResult({ input })),
+  };
+}
+
+export function createRuntime(tools: AnyAgentTool[]) {
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+  return {
+    catalogRef,
+    config,
+    runtime: new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config), {
+      validateInput: true,
+    }),
+  };
+}
 
 type ToolSearchTestApi = {
   maxToolSchemaDirectoryPromptChars: number;

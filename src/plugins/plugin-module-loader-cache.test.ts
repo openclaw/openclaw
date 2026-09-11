@@ -48,6 +48,7 @@ async function importPluginModuleLoader(scope: string) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.resetModules();
   vi.doUnmock("jiti");
   resetPluginCache();
@@ -820,6 +821,8 @@ describe("getCachedPluginModuleLoader", () => {
   });
 
   it("falls back to source transform when the native-require helper declines", async () => {
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "plugin.load-profile");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     vi.doMock("./native-module-require.js", async (importOriginal) => ({
@@ -862,6 +865,11 @@ describe("getCachedPluginModuleLoader", () => {
     expect(stats.topSourceTransformTargets).toEqual([
       { target: "/repo/dist/extensions/demo/api.js", count: 1 },
     ]);
+    expect(output).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(
+        /^\[plugin-load-profile\] phase=source-transform-prepare plugin=\(core\) elapsedMs=\d+\.\d source=\(module\)$/,
+      ),
+    );
   });
 
   it("can transform OpenClaw dependencies on a forced source fallback", async () => {
@@ -931,6 +939,7 @@ describe("getCachedPluginModuleLoader", () => {
   });
 
   it("skips the native-require fast path when tryNative is explicitly false", async () => {
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "off");
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
     const createJiti = vi.fn(() => fromSourceTransformer);
     const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
@@ -954,8 +963,12 @@ describe("getCachedPluginModuleLoader", () => {
       createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
+    const clock = vi.spyOn(performance, "now");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
+    expect(clock).not.toHaveBeenCalled();
+    expect(output).not.toHaveBeenCalled();
     const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
     expect(options.tryNative).toBe(false);
     expect(options.nativeModules).toEqual(["openclaw"]);
@@ -972,44 +985,6 @@ describe("getCachedPluginModuleLoader", () => {
     });
     expect(stats.topSourceTransformTargets).toEqual([
       { target: "/repo/dist/extensions/demo/api.js", count: 1 },
-    ]);
-  });
-
-  it("reuses successful source-transform module exports inside one loader", async () => {
-    const moduleExport = { marker: "source-cached" };
-    const fromSourceTransformer = vi.fn(() => moduleExport);
-    const createJiti = vi.fn(() => fromSourceTransformer);
-    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: nativeStub,
-    }));
-    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } =
-      await importPluginModuleLoader("./plugin-module-loader-cache.js?scope=source-export-cache");
-
-    const cache = new Map();
-    const loader = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/extensions/demo/api.ts",
-      importerUrl: "file:///repo/src/plugins/bundled-capability-runtime.ts",
-      loaderFilename: "file:///repo/src/plugins/bundled-capability-runtime.ts",
-      tryNative: false,
-      createLoader: asPluginModuleLoaderFactory(createJiti),
-    });
-
-    expect(loader("/repo/extensions/demo/api.ts")).toBe(moduleExport);
-    expect(loader("/repo/extensions/demo/api.ts")).toBe(moduleExport);
-    expect(nativeStub).not.toHaveBeenCalled();
-    expect(fromSourceTransformer).toHaveBeenCalledTimes(1);
-    const stats = expectStats(getPluginModuleLoaderStats(), {
-      calls: 1,
-      nativeHits: 0,
-      nativeMisses: 0,
-      sourceTransformFallbacks: 0,
-      sourceTransformForced: 1,
-    });
-    expect(stats.topSourceTransformTargets).toEqual([
-      { target: "/repo/extensions/demo/api.ts", count: 1 },
     ]);
   });
 

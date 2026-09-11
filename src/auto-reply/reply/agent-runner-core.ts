@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import { readCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
@@ -349,6 +350,10 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (readCurrentTurnReplyCompletion(error)) {
+    replyOperation.fail("run_failed", error);
+    return returnWithQueuedFollowupDrain(undefined);
+  }
   if (isReplyOperationSuperseded(replyOperation)) {
     return { text: SILENT_REPLY_TOKEN };
   }

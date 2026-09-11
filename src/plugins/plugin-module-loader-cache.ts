@@ -19,6 +19,7 @@ import {
   getPluginCacheSource,
   withPluginCache,
 } from "./plugin-cache.js";
+import { formatPluginLoadProfileLine, shouldProfilePluginLoader } from "./plugin-load-profile.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderJitiOptions,
@@ -204,49 +205,64 @@ function createLazySourceTransformLoader(params: {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
-    const jitiOptions = buildPluginLoaderJitiOptions(params.getAliasMap(), {
-      modulePath: params.loaderFilename,
-    });
-    const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
-      params.loaderFilename,
-      {
-        ...jitiOptions,
-        // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
-        // matcher misses them. Keep host state native while plugin source remains
-        // transformable and reloadable within its cache generation.
-        virtualModules: params.transformOpenClawDependencies
-          ? undefined
-          : new Proxy<Record<string, unknown>>(
-              {},
-              {
-                has(_target, key) {
-                  return (
-                    typeof key === "string" &&
-                    isPluginSdkAliasSpecifier(key) &&
-                    Boolean(params.resolveAlias(key))
-                  );
+    // Cold preparation is nested within module-load, not an additive evaluation phase.
+    const profile = shouldProfilePluginLoader();
+    const startedAt = profile ? performance.now() : 0;
+    try {
+      const jitiOptions = buildPluginLoaderJitiOptions(params.getAliasMap(), {
+        modulePath: params.loaderFilename,
+      });
+      const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
+        params.loaderFilename,
+        {
+          ...jitiOptions,
+          // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
+          // matcher misses them. Keep host state native while plugin source remains
+          // transformable and reloadable within its cache generation.
+          virtualModules: params.transformOpenClawDependencies
+            ? undefined
+            : new Proxy<Record<string, unknown>>(
+                {},
+                {
+                  has(_target, key) {
+                    return (
+                      typeof key === "string" &&
+                      isPluginSdkAliasSpecifier(key) &&
+                      Boolean(params.resolveAlias(key))
+                    );
+                  },
+                  get(_target, key) {
+                    const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
+                    if (!target) {
+                      return undefined;
+                    }
+                    const native = tryNativeRequireModule(target, {
+                      allowWindows: true,
+                      fallbackOnMissingDependency: true,
+                    });
+                    return native.ok ? native.moduleExport : jitiLoader(target);
+                  },
                 },
-                get(_target, key) {
-                  const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
-                  if (!target) {
-                    return undefined;
-                  }
-                  const native = tryNativeRequireModule(target, {
-                    allowWindows: true,
-                    fallbackOnMissingDependency: true,
-                  });
-                  return native.ok ? native.moduleExport : jitiLoader(target);
-                },
-              },
-            ),
-        nativeModules: params.transformOpenClawDependencies
-          ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
-          : jitiOptions.nativeModules,
-        tryNative: false,
-      },
-    );
-    loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
-    return loadWithSourceTransform;
+              ),
+          nativeModules: params.transformOpenClawDependencies
+            ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
+            : jitiOptions.nativeModules,
+          tryNative: false,
+        },
+      );
+      loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
+      return loadWithSourceTransform;
+    } finally {
+      if (profile) {
+        console.error(
+          formatPluginLoadProfileLine({
+            phase: "source-transform-prepare",
+            source: "(module)",
+            elapsedMs: performance.now() - startedAt,
+          }),
+        );
+      }
+    }
   };
 }
 

@@ -31,8 +31,11 @@ type GatewayEvent = {
 type ChatEventPayload = {
   runId?: string;
   sessionKey?: string;
+  seq?: number;
   state?: string;
   deltaText?: string;
+  error?: unknown;
+  errorMessage?: unknown;
 };
 type AgentEvent = {
   runId?: string;
@@ -43,10 +46,108 @@ type AgentEvent = {
     delta?: string;
     phase?: string;
     text?: string;
+    error?: unknown;
   };
 };
 
+type StreamingPhase =
+  | "provider-start"
+  | "gateway-pre-listening"
+  | "gateway-post-listening"
+  | "gateway-ready"
+  | "operator-connect"
+  | "subscribe"
+  | "acceptance"
+  | "provider-deltas"
+  | "chat-deltas"
+  | "terminal-wait"
+  | "lifecycle-events"
+  | "chat-final-events"
+  | "post-terminal-events"
+  | "history"
+  | "complete";
+
 const cleanups: Array<() => Promise<void>> = [];
+let captureFailure: (() => unknown) | undefined;
+
+function diagnosticLabel(value: unknown, allowed: readonly string[]): string {
+  return typeof value === "string" && allowed.includes(value) ? value : "other";
+}
+
+function summarizeGatewayEvent(event: GatewayEvent) {
+  const agent = asAgentEvent(event);
+  const chat = asChatEvent(event);
+  const payload = agent ?? chat;
+  const delta = agent?.data?.delta ?? chat?.deltaText;
+  const seq = payload?.seq;
+  return {
+    event: diagnosticLabel(event.event, ["agent", "chat"]),
+    stream: diagnosticLabel(agent?.stream, ["assistant", "lifecycle", "tool", "reasoning"]),
+    state: diagnosticLabel(chat?.state, ["delta", "final", "error", "aborted"]),
+    phase: diagnosticLabel(agent?.data?.phase, ["start", "end", "error"]),
+    runMatches: payload?.runId === IDEMPOTENCY_KEY,
+    sessionMatches: payload?.sessionKey === SESSION_KEY,
+    seq: typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 ? seq : null,
+    hasDelta: typeof delta === "string",
+    deltaLength: typeof delta === "string" ? delta.length : 0,
+    hasError:
+      agent?.data?.error != null ||
+      chat?.error != null ||
+      chat?.errorMessage != null ||
+      agent?.data?.phase === "error" ||
+      chat?.state === "error",
+  };
+}
+
+function createStreamingDiagnostics() {
+  const startedAt = performance.now();
+  let phase: StreamingPhase = "provider-start";
+  let listeningAttempt: number | null = null;
+  const milestones: Partial<Record<StreamingPhase, number>> = { "provider-start": 0 };
+  const provider = {
+    responsePosts: 0,
+    parsedRequests: 0,
+    unexpectedTransport: 0,
+    deltasSent: false,
+    terminalReleased: false,
+  };
+  const events = { expectedRunAgent: 0, expectedRunChat: 0 };
+  const recentEvents: ReturnType<typeof summarizeGatewayEvent>[] = [];
+  return {
+    provider,
+    enterPhase(next: StreamingPhase) {
+      phase = next;
+      milestones[next] ??= Math.round(performance.now() - startedAt);
+    },
+    onListening(attempt: number) {
+      listeningAttempt = Number.isSafeInteger(attempt) && attempt >= 0 ? attempt : null;
+      this.enterPhase("gateway-post-listening");
+    },
+    observeEvent(event: GatewayEvent) {
+      const summary = summarizeGatewayEvent(event);
+      if (summary.runMatches && summary.event === "agent") {
+        events.expectedRunAgent++;
+      }
+      if (summary.runMatches && summary.event === "chat") {
+        events.expectedRunChat++;
+      }
+      if (recentEvents.length === 16) {
+        recentEvents.shift();
+      }
+      recentEvents.push(summary);
+    },
+    snapshot: () => ({
+      diagnostic: "session-streaming-failure",
+      phase,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      milestones: { ...milestones },
+      listeningAttempt,
+      provider: { ...provider },
+      events: { ...events },
+      recentEvents: [...recentEvents],
+    }),
+  };
+}
 
 function createDeferred() {
   let resolve = () => {};
@@ -56,7 +157,16 @@ function createDeferred() {
   return { promise, resolve };
 }
 
-afterEach(async () => {
+afterEach(async (context) => {
+  // Snapshot before cleanup releases the provider terminal or changes event state.
+  if (context.task.result?.state === "fail" && captureFailure) {
+    try {
+      console.error(JSON.stringify(captureFailure()));
+    } catch {
+      // Diagnostic failure must not replace the test failure or skip cleanup.
+    }
+  }
+  captureFailure = undefined;
   const errors: unknown[] = [];
   for (const cleanup of cleanups.splice(0).toReversed()) {
     try {
@@ -81,6 +191,7 @@ async function writeStreamingResponse(
   response: ServerResponse,
   deltasSent: ReturnType<typeof createDeferred>,
   terminalRelease: ReturnType<typeof createDeferred>,
+  diagnostics: ReturnType<typeof createStreamingDiagnostics>,
 ): Promise<void> {
   const message = {
     type: "message",
@@ -110,6 +221,7 @@ async function writeStreamingResponse(
     });
     await delay(STREAM_INTERVAL_MS);
   }
+  diagnostics.provider.deltasSent = true;
   deltasSent.resolve();
   await terminalRelease.promise;
   writeEvent(response, {
@@ -132,13 +244,14 @@ async function writeStreamingResponse(
   response.end("data: [DONE]\n\n");
 }
 
-async function startStreamingProvider() {
+async function startStreamingProvider(diagnostics: ReturnType<typeof createStreamingDiagnostics>) {
   const providerRequests: Array<Record<string, unknown>> = [];
   const transportRequests: string[] = [];
   const deltasSent = createDeferred();
   const terminalRelease = createDeferred();
   let terminalReleased = false;
   const releaseTerminal = () => {
+    diagnostics.provider.terminalReleased = true;
     terminalReleased = true;
     terminalRelease.resolve();
   };
@@ -154,6 +267,7 @@ async function startStreamingProvider() {
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
+        diagnostics.provider.responsePosts++;
         const chunks: Buffer[] = [];
         for await (const chunk of request) {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -161,9 +275,11 @@ async function startStreamingProvider() {
         providerRequests.push(
           JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
         );
-        await writeStreamingResponse(response, deltasSent, terminalRelease);
+        diagnostics.provider.parsedRequests++;
+        await writeStreamingResponse(response, deltasSent, terminalRelease, diagnostics);
         return;
       }
+      diagnostics.provider.unexpectedTransport++;
       transportRequests.push(`${request.method ?? "UNKNOWN"} ${request.url ?? ""}`);
       response.writeHead(200, { "content-type": "application/json" });
       response.end("{}");
@@ -199,6 +315,7 @@ async function startStreamingProvider() {
 async function connectOperator(
   gateway: GatewayHandle,
   events: GatewayEvent[],
+  diagnostics: ReturnType<typeof createStreamingDiagnostics>,
 ): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
@@ -228,13 +345,16 @@ async function connectOperator(
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: null,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onEvent: (event) => events.push(event),
+      onEvent: (event) => {
+        events.push(event);
+        diagnostics.observeEvent(event);
+      },
       onHelloOk: () => finish(),
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
     const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
+      () => finish(new Error(`Gateway client connection timed out after ${REQUEST_TIMEOUT_MS}ms`)),
       REQUEST_TIMEOUT_MS,
     );
     timeout.unref();
@@ -284,10 +404,13 @@ describe("agent session streaming", () => {
     "orders Gateway deltas before one terminal event and persists one assistant message",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const provider = await startStreamingProvider();
+      const diagnostics = createStreamingDiagnostics();
+      captureFailure = diagnostics.snapshot;
+      const provider = await startStreamingProvider(diagnostics);
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      diagnostics.enterPhase("gateway-pre-listening");
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
@@ -308,12 +431,17 @@ describe("agent session streaming", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
+        onListening: ({ attempt }) => diagnostics.onListening(attempt),
       });
+      diagnostics.enterPhase("gateway-ready");
 
       const gatewayEvents: GatewayEvent[] = [];
-      const client = await connectOperator(gateway, gatewayEvents);
+      diagnostics.enterPhase("operator-connect");
+      const client = await connectOperator(gateway, gatewayEvents, diagnostics);
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));
+      diagnostics.enterPhase("subscribe");
       await client.request("sessions.messages.subscribe", { key: SESSION_KEY });
+      diagnostics.enterPhase("acceptance");
       const accepted = await client.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: REQUEST_MESSAGE,
@@ -325,7 +453,9 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      diagnostics.enterPhase("provider-deltas");
       await provider.deltasSent;
+      diagnostics.enterPhase("chat-deltas");
       await vi.waitFor(
         () => {
           expect(provider.isTerminalReleased()).toBe(false);
@@ -340,6 +470,7 @@ describe("agent session streaming", () => {
       );
       provider.releaseTerminal();
 
+      diagnostics.enterPhase("terminal-wait");
       const terminal = await client.request<AgentResult>(
         "agent.wait",
         { runId: IDEMPOTENCY_KEY, timeoutMs: 30_000 },
@@ -350,6 +481,7 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      diagnostics.enterPhase("lifecycle-events");
       await vi.waitFor(
         () => {
           const runEvents = gatewayEvents
@@ -399,6 +531,7 @@ describe("agent session streaming", () => {
       });
       expect(terminalEvents[0]?.seq).toBeGreaterThan(deltaSeqs.at(-1) ?? 0);
 
+      diagnostics.enterPhase("chat-final-events");
       await vi.waitFor(
         () => {
           const runChatEvents = gatewayEvents
@@ -408,6 +541,7 @@ describe("agent session streaming", () => {
         },
         { interval: 20, timeout: REQUEST_TIMEOUT_MS },
       );
+      diagnostics.enterPhase("post-terminal-events");
       const runChatEventsAtTerminal = gatewayEvents
         .map(asChatEvent)
         .filter((event) => event?.runId === IDEMPOTENCY_KEY);
@@ -428,6 +562,7 @@ describe("agent session streaming", () => {
       const streamedText = assistantDeltas.map((event) => event.data?.delta ?? "").join("");
       expect(streamedText).toBe(TERMINAL_TEXT);
 
+      diagnostics.enterPhase("history");
       const history = await client.request<{ messages?: unknown[] }>("chat.history", {
         sessionKey: SESSION_KEY,
         limit: 20,
@@ -439,6 +574,7 @@ describe("agent session streaming", () => {
       expect(messageText(assistantMessages[0])).toBe(streamedText);
       expect(provider.providerRequests).toHaveLength(1);
       expect(provider.transportRequests).toEqual([]);
+      diagnostics.enterPhase("complete");
     },
   );
 });

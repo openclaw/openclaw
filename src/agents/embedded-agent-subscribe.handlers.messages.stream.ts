@@ -11,6 +11,7 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
+import { readCurrentTurnReplyCompletion } from "./current-turn-reply-completion.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -239,6 +240,9 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   }
   ctx.flushAssistantStream();
   ctx.state.reasoningStreamOpen = false;
+  if (readCurrentTurnReplyCompletion(ctx.state)) {
+    return;
+  }
   runBestEffortCallback({
     label: "reasoning end",
     log: ctx.log,
@@ -248,6 +252,9 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.flushAssistantStream();
+  if (readCurrentTurnReplyCompletion(ctx.state)) {
+    return;
+  }
   runBestEffortCallback({
     label: "assistant message start",
     log: ctx.log,

@@ -5,6 +5,8 @@ import {
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { readCurrentTurnReplyCompletion } from "../../current-turn-reply-completion.js";
+import { createSourceReplyReceiptFixture } from "../../current-turn-reply-completion.test-support.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
@@ -15,6 +17,7 @@ import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } f
 const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
 
 function createResultFixture(params?: {
+  currentTurnReplyCompletion?: object;
   terminal?: EmbeddedRunAttemptResult["terminal"];
   currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   heartbeatToolResponse?: EmbeddedRunAttemptResult["heartbeatToolResponse"];
@@ -127,6 +130,7 @@ function createResultFixture(params?: {
       }),
     },
     prepared: {
+      toolBase: { currentTurnReplyCompletion: params?.currentTurnReplyCompletion },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
@@ -168,6 +172,25 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each(["sent", "partial_failed", "forged"] as const)(
+    "carries only private %s source completion through result normalization",
+    async (status) => {
+      const receipt = await createSourceReplyReceiptFixture(status, {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "test",
+        model: "model",
+      });
+      const result = completeResult({ currentTurnReplyCompletion: receipt });
+      const normalized = normalizeEmbeddedRunAttemptResult(result);
+      const expected =
+        status === "forged" ? undefined : status === "sent" ? "confirmed" : "ambiguous";
+      expect(readCurrentTurnReplyCompletion(result)).toBe(expected);
+      expect(readCurrentTurnReplyCompletion(normalized)).toBe(expected);
+      expect(normalized).not.toHaveProperty("currentTurnReplyCompletion");
+      expect(normalized.sourceReplyDelivered).toBeUndefined();
+    },
+  );
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });
     const fixture = createResultFixture({ currentAttemptCompletedAssistant: assistant });

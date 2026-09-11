@@ -189,8 +189,13 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     prepareCatalogExecutor([], { trustedLocalMediaToolNames });
 
+    expect(mocks.subscribe).toHaveBeenCalledTimes(1);
     expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({ trustedLocalMediaToolNames }),
+      undefined,
+    );
+    expect(mocks.subscribe.mock.calls[0]![0].trustedLocalMediaToolNames).toBe(
+      trustedLocalMediaToolNames,
     );
   });
 
@@ -587,6 +592,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),
+      undefined,
     );
   });
 

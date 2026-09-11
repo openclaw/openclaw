@@ -117,8 +117,25 @@ The same bag accepts `kind: "run"` for run-only assertions. These are local code
 contracts, not Gateway wire fields, operator settings, or new SDK exports.
 
 Each prepared attempt also receives a versioned `params.hostCapabilities`
-object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
-and use its policy and approval operations for native actions. A native action
+object. Prefer `createToolSurface(...)` when present; it creates and binds the
+OpenClaw tools under the current admitted turn:
+
+```typescript
+const tools = params.hostCapabilities.createToolSurface(
+  options,
+  { cwd: workspaceDir },
+  { terminalCompletion: "per-result" },
+);
+```
+
+Declare `terminalCompletion: "per-result"` only when the adapter preserves a
+successful tool result's termination signal and stops the model turn. Omitting
+it preserves ordinary plugin delivery but suppresses `send_current_reply`.
+On published older hosts that lack `createToolSurface`, call
+`createOpenClawCodingTools(...)` during the attempt and then
+`bindToolSurface(...)`. That compatibility path also preserves ordinary plugin
+delivery but never exposes the writer-bound terminal tool.
+Use the host policy and approval operations for native actions. A native action
 whose working directory differs from the attempt may pass
 `nativeOperation: { cwd }` to `runBeforeToolCall(...)`; the host normalizes that
 bounded action fact while keeping identity and policy authority closure-bound. The closure

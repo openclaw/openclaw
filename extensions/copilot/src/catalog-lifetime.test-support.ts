@@ -131,15 +131,21 @@ export async function createCopilotFaultPeer() {
     destroying: destroying.promise,
     releaseDestroy: () => releaseDestroy.resolve(),
     emit,
-    requestTool(name: string, args: Record<string, unknown>) {
+    requestTool(
+      name: string,
+      args: Record<string, unknown>,
+      options: Readonly<{ emitAssistantMessage?: boolean }> = {},
+    ) {
       const requestId = randomUUID();
       const reply = createDeferred<Record<string, unknown>>();
       replies.set(requestId, reply);
-      emit("assistant.message", {
-        content: "",
-        messageId: `fixture-${requestId}`,
-        toolRequests: [{ arguments: args, name, toolCallId: requestId }],
-      });
+      if (options.emitAssistantMessage) {
+        emit("assistant.message", {
+          content: "",
+          messageId: `fixture-assistant-${requestId}`,
+          toolRequests: [{ arguments: args, name, toolCallId: requestId }],
+        });
+      }
       emit("external_tool.requested", {
         requestId,
         toolCallId: requestId,

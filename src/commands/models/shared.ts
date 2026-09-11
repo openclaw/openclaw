@@ -32,6 +32,10 @@ import { resolveIncludeRoots } from "../../config/paths.js";
 import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import {
+  formatPluginLoadProfileLine,
+  shouldProfilePluginLoader,
+} from "../../plugins/plugin-load-profile.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { inspectModelReference } from "./model-reference-validation.js";
 import {
@@ -115,6 +119,16 @@ export async function updateConfig(
       }
       const sourceConfig = structuredClone(currentConfig);
       let authoredModels: Record<string, unknown> | undefined;
+      const profileEnabled = shouldProfilePluginLoader();
+      let mutationStartedAt: number | undefined;
+      const emitProfile = (phase: string, elapsedMs: number) =>
+        console.error(
+          formatPluginLoadProfileLine({
+            phase,
+            source: "src/commands/models/shared.ts",
+            elapsedMs,
+          }),
+        );
       const context: UpdateConfigContext = {
         runtimeConfig: snapshot.runtimeConfig,
         restoreSourceEntry: (from, to, entry) => {
@@ -136,6 +150,10 @@ export async function updateConfig(
         },
       };
       const mutate = () => {
+        if (profileEnabled) {
+          mutationStartedAt = performance.now();
+          emitProfile("models-command-mutation-start", 0);
+        }
         if (selectModelRefs) {
           const cfg = context.runtimeConfig;
           const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg });
@@ -155,17 +173,37 @@ export async function updateConfig(
         }
         return mutator(sourceConfig, context);
       };
-      const nextConfig = selectModelRefs
-        ? await (
-            await import("./model-selection.runtime.js")
-          ).withModelCommandProviderRuntime(
+      let nextConfig: OpenClawConfig;
+      try {
+        if (selectModelRefs) {
+          const importStartedAt = profileEnabled ? performance.now() : undefined;
+          if (importStartedAt !== undefined) {
+            emitProfile("models-command-import-start", 0);
+          }
+          let runtime: typeof import("./model-selection.runtime.js");
+          try {
+            runtime = await import("./model-selection.runtime.js");
+          } finally {
+            if (importStartedAt !== undefined) {
+              emitProfile("models-command-import-end", performance.now() - importStartedAt);
+            }
+          }
+          nextConfig = await runtime.withModelCommandProviderRuntime(
             {
               runtimeConfig: context.runtimeConfig,
               selectModelRefs: () => selectModelRefs(sourceConfig, context),
             },
             mutate,
-          )
-        : await mutate();
+          );
+        } else {
+          nextConfig = await mutate();
+        }
+      } finally {
+        // The mutator may return a promise; time settlement at the existing outer await.
+        if (mutationStartedAt !== undefined) {
+          emitProfile("models-command-mutation-settled", performance.now() - mutationStartedAt);
+        }
+      }
       // The public SDK returns the mutator's value; persisted readback may restore env refs.
       return { nextConfig, result: nextConfig };
     },

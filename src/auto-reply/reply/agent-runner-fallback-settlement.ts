@@ -1,4 +1,5 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { copyCurrentTurnReplyCompletion } from "../../agents/current-turn-reply-completion.js";
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -36,6 +37,9 @@ export async function settleAgentFallbackCycle(params: {
   // fallback backstop so downstream waiters never have to rederive them.
   const terminalMetadata = fallbackResult.terminal.metadata;
   const terminalOutcome = fallbackResult.terminal.outcome;
+  // Replacement outcomes must retain the host receipt even when no result
+  // payload survives; otherwise outer silence recovery can repeat a sent reply.
+  const currentTurnReplyCompletion = terminalMetadata.terminalReceipt;
   const settledLifecycleTerminal =
     cycle.state.pendingLifecycleTerminal?.provider === fallbackProvider &&
     cycle.state.pendingLifecycleTerminal.model === fallbackModel
@@ -49,7 +53,10 @@ export async function settleAgentFallbackCycle(params: {
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
     await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
-    return { kind: "aborted", reason: abortReason };
+    return copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, {
+      kind: "aborted",
+      reason: abortReason,
+    });
   }
   cycle.commitTerminalOutcome();
   const fallbackAttempts = Array.isArray(fallbackResult.attempts)
@@ -63,7 +70,11 @@ export async function settleAgentFallbackCycle(params: {
       }))
     : [];
   if (!fallbackExhausted) {
-    await fallbackResult.settleSessionOverride();
+    try {
+      await fallbackResult.settleSessionOverride();
+    } catch (error) {
+      throw copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, error);
+    }
   }
   const embeddedError = runResult.meta?.error;
   const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
@@ -100,7 +111,7 @@ export async function settleAgentFallbackCycle(params: {
       `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
     turn.replyOperation?.fail("run_failed", embeddedError);
-    return {
+    return copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: buildContextOverflowRecoveryText({
@@ -115,13 +126,13 @@ export async function settleAgentFallbackCycle(params: {
         }),
       }),
       postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
-    };
+    });
   }
   if (embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
     turn.replyOperation?.fail("run_failed", embeddedError);
     const embeddedErrorText = formatErrorMessage(embeddedError);
-    return {
+    return copyCurrentTurnReplyCompletion(currentTurnReplyCompletion, {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: cycle.shouldSurfaceToControlUi
@@ -129,7 +140,7 @@ export async function settleAgentFallbackCycle(params: {
           : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       }),
       postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
-    };
+    });
   }
   const sourceReplyPolicy = turn.sessionKey
     ? resolveSourceReplyPolicy({
