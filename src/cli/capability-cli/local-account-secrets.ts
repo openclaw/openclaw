@@ -3,8 +3,11 @@ import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 
-/** Prepare account-owned SecretRefs for one standalone local model run. */
-export async function prepareLocalModelRunAccountSecrets(params: {
+/**
+ * Prepare the selected agent's account-owned SecretRefs for one standalone local
+ * capability run. Every agent-scoped local runner calls this before provider auth.
+ */
+export async function prepareLocalCapabilityAccountSecrets(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {

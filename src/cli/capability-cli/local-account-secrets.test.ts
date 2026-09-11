@@ -28,9 +28,9 @@ vi.mock("../../secrets/runtime.js", () => ({
   activateSecretsRuntimeSnapshot: mocks.activateSecretsRuntimeSnapshot,
 }));
 
-import { prepareLocalModelRunAccountSecrets } from "./model-local-secrets.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 
-describe("prepareLocalModelRunAccountSecrets", () => {
+describe("prepareLocalCapabilityAccountSecrets", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
@@ -42,7 +42,7 @@ describe("prepareLocalModelRunAccountSecrets", () => {
     const sourceConfig: OpenClawConfig = { secrets: { providers: {} } };
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
 
-    await prepareLocalModelRunAccountSecrets({ cfg, agentId: "ops" });
+    await prepareLocalCapabilityAccountSecrets({ cfg, agentId: "ops" });
 
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(cfg, "ops");
     expect(mocks.prepareSecretsRuntimeSnapshot).toHaveBeenCalledWith({
@@ -63,7 +63,7 @@ describe("prepareLocalModelRunAccountSecrets", () => {
       configRefsPrepared: true,
     });
 
-    await prepareLocalModelRunAccountSecrets({ cfg, agentId: "main" });
+    await prepareLocalCapabilityAccountSecrets({ cfg, agentId: "main" });
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.prepareSecretsRuntimeSnapshot).not.toHaveBeenCalled();
