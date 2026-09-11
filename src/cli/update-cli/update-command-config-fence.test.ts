@@ -147,7 +147,11 @@ it.each([
     if (included) {
       // These revocations were scheduled at commit/fsync. Guarded includes now
       // refuse before either boundary; they must not reach those callbacks.
-      await expect(owned).rejects.toThrow(new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR));
+      await expect(owned).rejects.toMatchObject({
+        name: "GuardedConfigIncludeWriteError",
+        message: GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
+        includePath,
+      });
       expect(reachedCommit).toBe(false);
       expect(await captureFiles()).toEqual(beforeFiles);
       expect([await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]).toEqual(

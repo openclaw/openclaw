@@ -4,6 +4,7 @@ import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-st
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import { assertStartupProviderUseBindingCurrent } from "../model-auth-runtime-config.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
@@ -265,6 +266,14 @@ export async function resolvePreparedRuntimeModelAuth(
     plan: AgentRuntimeAuthPlan;
   },
 ): Promise<PreparedRuntimeModelAuthResolution> {
+  const assertCurrentBinding = () =>
+    assertStartupProviderUseBindingCurrent({
+      provider: params.model.provider,
+      cfg: params.cfg,
+      store: params.store,
+      workspaceDir: params.workspaceDir,
+    });
+  assertCurrentBinding();
   const { plan, ...authParams } = params;
   const candidates = [
     plan.forwardedAuthProfileId,
@@ -283,6 +292,7 @@ export async function resolvePreparedRuntimeModelAuth(
       skipSetupProviderFallback: plan.modelRoute?.provider === "openai",
       boundEnvVar: plan.boundEnvVar,
     });
+    assertCurrentBinding();
     assertResolvedAuthMatchesPreparedRoute({ plan, auth });
     return { auth, plan: applyResolvedAuthToPlan({ plan, auth, candidates }) };
   }
@@ -292,6 +302,7 @@ export async function resolvePreparedRuntimeModelAuth(
       profileId: plan.forwardedAuthProfileId,
       lockedProfile: Boolean(plan.forwardedAuthProfileId),
     });
+    assertCurrentBinding();
     assertResolvedAuthMatchesPreparedRoute({ plan, auth });
     return { auth, plan: applyResolvedAuthToPlan({ plan, auth, candidates }) };
   }
@@ -323,6 +334,7 @@ export async function resolvePreparedRuntimeModelAuth(
         lockedProfile: true,
         ...(candidateStore ? { store: candidateStore } : {}),
       });
+      assertCurrentBinding();
       assertResolvedAuthMatchesPreparedRoute({ plan, auth });
       return {
         auth,

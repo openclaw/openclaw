@@ -5,6 +5,11 @@ import {
   type CanonicalSessionRepairFact,
 } from "../config/sessions/session-accessor.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqlitePath,
+  type ExistingAgentDatabaseTarget,
+} from "../config/sessions/targets-existing.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,11 +19,6 @@ import {
 } from "../gateway/session-store-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqlitePath,
-  type ExistingAgentDatabaseTarget,
-} from "./doctor-session-sqlite-targets.js";
 
 export type CanonicalSessionCandidate = {
   agentId: string;

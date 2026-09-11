@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveConfigProviderUseBindings } from "../config/resolution-facts.js";
+import {
+  getConfigProviderUseBindings,
+  resolveConfigProviderUseBindings,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderBindingEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { isSetupCredentialAccessible } from "./auth-profiles/setup-access.js";
@@ -24,6 +27,69 @@ const GENERIC_CREDENTIAL_ENV_VARS = new Set([
 
 export function isGenericProviderCredentialEnvVar(name: string): boolean {
   return GENERIC_CREDENTIAL_ENV_VARS.has(name);
+}
+
+/** Preserve manifest-owned variable provenance while inheriting provider credential aliases. */
+export function resolveProviderUseBindingCredentialPolicy(
+  providerEnvVars: ProviderBindingEnvVarCandidates,
+  aliasMap: Readonly<Record<string, string>>,
+) {
+  const envCandidateMap: Record<string, readonly string[]> = Object.fromEntries(
+    Object.entries(providerEnvVars).map(([provider, declarations]) => [
+      provider,
+      declarations.flatMap((declaration) => declaration.envVars),
+    ]),
+  );
+  const manifestVariables = new Set(Object.values(envCandidateMap).flat());
+  for (const [alias, provider] of Object.entries(aliasMap)) {
+    envCandidateMap[alias] ??= envCandidateMap[provider] ?? [];
+  }
+  return { aliasMap, envCandidateMap, manifestVariables };
+}
+
+/** Startup and Doctor share the same conservative saved-account family boundary. */
+export function providerUseBindingConflictsWithAccount(
+  providerId: string,
+  storedProviderId: string,
+  policy: ReturnType<typeof resolveProviderUseBindingCredentialPolicy>,
+): boolean {
+  const provider = normalizeProviderId(providerId);
+  const storedProvider = normalizeProviderId(storedProviderId);
+  const { aliasMap, envCandidateMap, manifestVariables } = policy;
+  return (
+    storedProvider === provider ||
+    [provider, storedProvider].every(
+      (id) => id === "amazon-bedrock" || id === "amazon-bedrock-mantle",
+    ) ||
+    (aliasMap[storedProvider] ?? storedProvider) === (aliasMap[provider] ?? provider) ||
+    (envCandidateMap[storedProvider] ?? []).some(
+      (name) => manifestVariables.has(name) && (envCandidateMap[provider] ?? []).includes(name),
+    )
+  );
+}
+
+export function findStartupProviderUseBindingConflict(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  profiles: Iterable<readonly [string, Pick<AuthProfileCredential, "provider">]>;
+  providerEnvVars: ProviderBindingEnvVarCandidates;
+  providerAuthAliases: Readonly<Record<string, string>>;
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider);
+  const binding = getConfigProviderUseBindings(params.config)[provider];
+  if (!binding) {
+    return undefined;
+  }
+  const policy = resolveProviderUseBindingCredentialPolicy(
+    params.providerEnvVars,
+    params.providerAuthAliases,
+  );
+  for (const [profileId, profile] of params.profiles) {
+    if (providerUseBindingConflictsWithAccount(provider, profile.provider, policy)) {
+      return profileId;
+    }
+  }
+  return undefined;
 }
 
 /** One declaring chat plugin may bind its own family, but never a competing plugin. */

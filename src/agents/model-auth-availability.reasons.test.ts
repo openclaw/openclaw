@@ -13,11 +13,56 @@ import {
   authStore,
   dualRoutes,
   evaluate,
+  platformRoute,
   routeResolverFactory,
+  subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 
 describe("model auth unavailability reasons", () => {
+  it.each([
+    {
+      label: "Platform environment after unavailable OAuth",
+      env: { OPENAI_API_KEY: "environment-key" },
+      profileId: "openai:oauth-missing",
+      profile: { type: "oauth" as const, provider: "openai", access: "", refresh: "" },
+      route: platformRoute,
+      mode: "api-key",
+    },
+    {
+      label: "OAuth environment after unavailable Platform auth",
+      cfg: {
+        models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
+      } as OpenClawConfig,
+      env: { OPENAI_API_KEY: "environment-token" },
+      profileId: "openai:platform-missing",
+      profile: { type: "api_key" as const, provider: "openai", key: "" },
+      route: subscriptionRoute,
+      mode: "oauth",
+    },
+  ])(
+    "reports $label when independently admitted and retains explicit profile order",
+    ({ cfg, env, profile, profileId, route, mode }) => {
+      const store = authStore({ [profileId]: profile });
+      expect(evaluate({ cfg, env, store })).toMatchObject({
+        availability: true,
+        evidence: "environment",
+        environmentVariable: "OPENAI_API_KEY",
+        selectedAuthMode: mode,
+        selectedRoute: route,
+      });
+      expect(
+        evaluate({
+          cfg: { ...cfg, auth: { order: { openai: [profileId] } } },
+          env,
+          store,
+        }),
+      ).toMatchObject({
+        availability: false,
+      });
+    },
+  );
+
   it.each([
     { name: "resolved profile collision", key: "bound", available: true },
     { name: "resolved malformed syntax", key: "$not-a-template", available: true },

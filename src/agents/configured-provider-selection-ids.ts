@@ -6,22 +6,19 @@ import {
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store/path.js";
+import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import {
   collectSelectedModelProviders,
   resolveDefaultModelForAgent,
-} from "../../../agents/model-selection-config.js";
-import {
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../../../agents/model-selection-shared.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveCronJobsStorePathFromConfig } from "../../../cron/store.js";
-import { cronStoreKey } from "../../../cron/store/key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "../../../cron/store/row-codec.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
+} from "./model-selection-config.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "./model-selection-shared.js";
 
 function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();

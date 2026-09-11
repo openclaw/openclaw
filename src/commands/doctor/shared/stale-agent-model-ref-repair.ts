@@ -8,6 +8,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
+import { collectConfiguredProviderSelectionIds } from "../../../agents/configured-provider-selection-ids.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
@@ -16,7 +17,6 @@ import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
-import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredConfigModelRefs,

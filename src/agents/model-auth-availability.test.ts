@@ -688,39 +688,6 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it.each([
-    {
-      label: "Platform environment after unavailable OAuth",
-      env: { OPENAI_API_KEY: "environment-key" },
-      profileId: "openai:oauth-missing",
-      profile: { type: "oauth" as const, provider: "openai", access: "", refresh: "" },
-      route: platformRoute,
-      mode: "api-key",
-    },
-    {
-      label: "OAuth environment after unavailable Platform auth",
-      cfg: {
-        models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
-      } as OpenClawConfig,
-      env: { OPENAI_API_KEY: "environment-token" },
-      profileId: "openai:platform-missing",
-      profile: { type: "api_key" as const, provider: "openai", key: "" },
-      route: subscriptionRoute,
-      mode: "oauth",
-    },
-    // An environment credential named nowhere in config is not authorized to
-    // stand in for a declared profile, including a declared profile that turned
-    // out to be unusable. Availability mirrors the runtime rule here so status
-    // does not advertise a credential the run would refuse to use.
-  ])(
-    "reports $label unavailable rather than substituting an ambient credential",
-    ({ cfg, env, profile, profileId }) => {
-      expect(evaluate({ cfg, env, store: authStore({ [profileId]: profile }) })).toMatchObject({
-        availability: false,
-      });
-    },
-  );
-
-  it.each([
     { env: { OPENAI_API_KEY: "resolved-key" }, availability: true },
     { env: {}, availability: undefined },
   ])("reports a SecretRef profile as $availability", ({ availability, env }) => {

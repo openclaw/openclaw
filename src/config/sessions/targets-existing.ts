@@ -1,15 +1,12 @@
 /** Read-only target layout shared by startup migration and Doctor session repairs. */
 import fs from "node:fs";
-import {
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   type SessionStoreTarget as ResolvedSessionStoreTarget,
-} from "../config/sessions/targets.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+} from "./targets.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: string };

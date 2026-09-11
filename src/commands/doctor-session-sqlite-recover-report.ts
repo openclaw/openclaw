@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  resolveTargetSqliteOptions,
+  resolveTargetSqlitePath,
+} from "../config/sessions/targets-existing.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -31,10 +35,6 @@ import {
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
-import {
-  resolveTargetSqliteOptions,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-targets.js";
 import {
   createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,

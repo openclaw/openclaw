@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { resolveProviderUseAdmission } from "../../../agents/provider-model-auth-source-plan.js";
 import { readConfigFileSnapshot } from "../../../config/io.js";
+import { prepareProviderUseBindingMigration } from "../../../config/provider-use-binding-plan.js";
 import { getConfigProviderUseBindings } from "../../../config/resolution-facts.js";
 import {
   loadSessionEntry,
@@ -31,7 +32,6 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import {
   completeProviderUseBindingMigration,
-  prepareProviderUseBindingMigration,
   revalidateProviderUseBindingMigration,
   writeProviderUseBindingMigration,
 } from "./provider-use-binding-migration.js";
@@ -637,7 +637,7 @@ describe("selected shared-provider upgrade", () => {
         defaults: {
           model: {
             primary: "github-copilot/gpt-4o",
-            fallbacks: ["amazon-bedrock/fixture", "google-vertex/fixture"],
+            fallbacks: ["amazon-bedrock/fixture", "anthropic-vertex/fixture"],
           },
         },
       },
@@ -663,10 +663,10 @@ describe("selected shared-provider upgrade", () => {
       env,
     });
 
-    expect(result.bindings).toEqual({ "amazon-bedrock": {}, "google-vertex": {} });
+    expect(result.bindings).toEqual({ "amazon-bedrock": {}, "anthropic-vertex": {} });
     expect(Object.keys(result.config.models?.providers ?? {})).toEqual([
       "amazon-bedrock",
-      "google-vertex",
+      "anthropic-vertex",
     ]);
     expect(result.pending).toBe(true);
     const unselected = prepareProviderUseBindingMigration({
@@ -677,7 +677,7 @@ describe("selected shared-provider upgrade", () => {
     expect(unselected.config.models?.providers).toBeUndefined();
   });
 
-  it.each(["amazon-bedrock", "amazon-bedrock-mantle", "google-vertex"])(
+  it.each(["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex", "google-vertex"])(
     "preserves a stored account instead of materializing a chain declaration for %s",
     async (provider) => {
       await state.writeAuthProfiles(

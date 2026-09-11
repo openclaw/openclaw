@@ -127,7 +127,11 @@ describe("independently admitted provider environment fallback", () => {
     const config: OpenClawConfig = {};
     const env = { FIXTURE_API_KEY: "environment-account" };
     const store = account("expired");
-    store.profiles[profileId].setup = {
+    const profile = store.profiles[profileId];
+    if (!profile) {
+      throw new Error("Expected the stored setup replacement fixture");
+    }
+    profile.setup = {
       replacement: true,
       modelRef: `${model.provider}/${model.id}`,
       configJson: "{}",

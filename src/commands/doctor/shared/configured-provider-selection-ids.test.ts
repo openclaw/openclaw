@@ -1,9 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
+import { collectConfiguredProviderUseSelections } from "../../../agents/configured-provider-selection-ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig, saveCronJobsStore } from "../../../cron/store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { collectConfiguredProviderUseSelections } from "./configured-provider-selection-ids.js";
 
 it.each([
   "agents.defaults.subagents.model",

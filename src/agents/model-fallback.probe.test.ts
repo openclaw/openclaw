@@ -41,6 +41,14 @@ vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
 }));
 
+// These profile-only probes have no usable direct credential. The real env-selection
+// composition is covered by runtime-plan/model-fallback.own-env.test.ts.
+vi.mock("./model-auth-availability.js", () => ({
+  createModelAuthAvailabilityResolver: () => ({
+    evaluateModelAuth: () => ({ availability: false, routeResolution: null }),
+  }),
+}));
+
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));

@@ -69,7 +69,10 @@ import {
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
-import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
+import {
+  resolveManagedSecretRefRuntimeProviderAuth,
+  resolveStartupProviderUseBindingConflict,
+} from "./model-auth-runtime-config.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
@@ -1182,13 +1185,30 @@ export function createModelAuthAvailabilityResolver(
   };
   // Provider-only availability is the legacy fallback when no route artifact exists;
   // it never claims a concrete OpenAI endpoint.
+  const startupBindingFailure = (provider: string): ModelAuthAvailabilityEvaluation | undefined =>
+    resolveStartupProviderUseBindingConflict({
+      provider,
+      cfg: params.cfg,
+      store,
+      env,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
+    })
+      ? {
+          availability: false,
+          unavailableReason: "auth-failed",
+          evidence: "provider-config",
+          routeResolution: null,
+        }
+      : undefined;
   const evaluateProviderAuth = (
     provider: string,
     ref: ModelAuthAvailabilityRef = {},
-  ): ModelAuthAvailabilityEvaluation => ({
-    ...resolveProviderEvaluation(provider, ref),
-    routeResolution: null,
-  });
+  ): ModelAuthAvailabilityEvaluation =>
+    startupBindingFailure(provider) ?? {
+      ...resolveProviderEvaluation(provider, ref),
+      routeResolution: null,
+    };
   const resolveProviderAuthAvailability = (provider: string, ref: ModelAuthAvailabilityRef = {}) =>
     evaluateProviderAuth(provider, ref).availability;
   const evaluateModelAuth = (
@@ -1198,6 +1218,10 @@ export function createModelAuthAvailabilityResolver(
     const provider = normalizeProviderIdForAuth(rawProvider);
     if (provider !== OPENAI_PROVIDER_ID) {
       return evaluateProviderAuth(provider, ref);
+    }
+    const startupFailure = startupBindingFailure(provider);
+    if (startupFailure) {
+      return startupFailure;
     }
     if (invalidProfilePin(provider, ref)) {
       return { availability: false, unavailableReason: "auth-failed", routeResolution: null };

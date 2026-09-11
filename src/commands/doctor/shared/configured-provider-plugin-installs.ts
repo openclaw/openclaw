@@ -1,8 +1,8 @@
+import { collectConfiguredProviderSelectionIds } from "../../../agents/configured-provider-selection-ids.js";
 // Resolves official provider plugins implied by configured auth and model selections.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { collectConfiguredOfficialProviderPluginIds } from "./configured-provider-plugin-ids.js";
-import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 
 /** Lists external provider plugins implied by configured auth profiles and model refs. */
 export function collectConfiguredProviderPluginIds(params: {

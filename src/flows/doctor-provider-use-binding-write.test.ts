@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveProviderUseAdmission } from "../agents/provider-model-auth-source-plan.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
+import { readConfigFileSnapshot } from "../config/io.js";
 import {
   prepareProviderUseBindingMigration,
   type ProviderUseBindingMigrationBindings,
-} from "../commands/doctor/shared/provider-use-binding-migration.js";
-import { readConfigFileSnapshot } from "../config/io.js";
+} from "../config/provider-use-binding-plan.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createOpenClawTestState,
@@ -29,7 +29,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-it.each(["amazon-bedrock", "amazon-bedrock-mantle", "google-vertex"])(
+it.each(["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex", "google-vertex"])(
   "persists the empty %s declaration before completion and preserves it through later repairs",
   async (provider) => {
     state = await createOpenClawTestState({

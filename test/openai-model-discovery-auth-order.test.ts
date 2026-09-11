@@ -14,7 +14,7 @@ import {
 } from "../src/agents/auth-profiles/oauth-test-utils.js";
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
-import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
+import * as discoveryAuth from "../src/agents/models-config.providers.discovery-auth.runtime.js";
 import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
 import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
@@ -623,7 +623,7 @@ describe("Provider model discovery auth preparation", () => {
             apiKey: refreshedFallback.access,
           };
         });
-      const preparation = vi.spyOn(catalogContext, "prepareProviderCatalogRun");
+      const preparation = vi.spyOn(discoveryAuth, "prepareProviderCatalogOAuthAuth");
       const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
       const fetch = vi
         .spyOn(globalThis, "fetch")
@@ -858,11 +858,7 @@ describe("provider catalog late-result finalization", () => {
         ready.push({ provider: peerId, status: "ready" });
       }
       let reads = 0;
-      const readProvider = (): ModelProviderConfig => ({
-        baseUrl: "https://catalog.invalid/v1",
-        api: "openai-completions",
-        models: reads++ === 0 ? [model] : [],
-      });
+      const resultReads: Array<{ count: number }> = [];
       discovery.providers = [
         {
           id: providerId,
@@ -885,11 +881,22 @@ describe("provider catalog late-result finalization", () => {
               if (timedOut) {
                 await completion.promise;
               }
+              const resultRead = { count: 0 };
+              resultReads.push(resultRead);
+              const readResult = () => {
+                reads++;
+                return resultRead.count++ === 0;
+              };
+              const readProvider = (): ModelProviderConfig => ({
+                baseUrl: "https://catalog.invalid/v1",
+                api: "openai-completions",
+                models: readResult() ? [model] : [],
+              });
               if (shape === "outcomes") {
                 return {
                   providers: {},
                   get outcomes() {
-                    return reads++ === 0 ? ready : [];
+                    return readResult() ? ready : [];
                   },
                 };
               }
@@ -955,7 +962,16 @@ describe("provider catalog late-result finalization", () => {
         outcomes.length = 0;
         accepted = await discover();
       }
-      expect({ lateReads, reads }).toEqual({ lateReads: timedOut ? 0 : 1, reads: 1 });
+      // Configured destinations may borrow; profile-bound siblings need a separate auth scope.
+      const activeResults = shape === "providers" ? 2 : 1;
+      expect({ lateReads, reads }).toEqual({
+        lateReads: timedOut ? 0 : activeResults,
+        reads: activeResults,
+      });
+      expect(resultReads.map((result) => result.count)).toEqual([
+        ...(timedOut ? [0] : []),
+        ...Array.from({ length: activeResults }, () => 1),
+      ]);
       if (shape === "outcomes") {
         expect(accepted).toEqual({});
       } else {

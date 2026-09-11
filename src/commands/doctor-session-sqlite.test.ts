@@ -25,6 +25,7 @@ import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveTargetSqlitePath } from "../config/sessions/targets-existing.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -77,7 +78,6 @@ import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recov
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-targets.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";

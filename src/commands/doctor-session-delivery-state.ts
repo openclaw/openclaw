@@ -3,6 +3,7 @@ import {
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
+import { listExistingAgentDatabaseTargets } from "../config/sessions/targets-existing.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
@@ -11,7 +12,6 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-targets.js";
 
 export type SessionDeliveryStateRepairReport = {
   found: number;

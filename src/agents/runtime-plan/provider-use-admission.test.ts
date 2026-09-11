@@ -1,15 +1,27 @@
 import { describe, expect, it } from "vitest";
+import {
+  resolveConfigProviderUseBindings,
+  setConfigProviderUseBindings,
+} from "../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { Model } from "../../llm/types.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
 import { withSetupCredentialAccess } from "../auth-profiles/setup-access.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "../model-auth-availability.js";
+import { getApiKeyForModelCore } from "../model-auth.js";
 import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../models-config.providers.secrets.js";
+import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 import { resolveProviderUseAdmission } from "../provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
+import { resolvePreparedRuntimeModelAuth } from "./resolve-auth.js";
 
 const sharedProviderEnvVars = {
   opencode: [{ pluginId: "opencode", envVars: ["OPENCODE_API_KEY"] }],
@@ -27,6 +39,239 @@ const byteplusMetadataSnapshot = createPluginMetadataSnapshotFixture({
 });
 
 describe("resolveProviderUseAdmission", () => {
+  it.each([
+    ["amazon-bedrock", "amazon-bedrock-mantle"],
+    ["amazon-bedrock-mantle", "amazon-bedrock"],
+    ["fixture-target", "fixture-rival-alias"],
+  ])(
+    "rejects a generated %s binding after saved family account %s appears",
+    async (provider, storedProvider) => {
+      await withOpenClawTestState(
+        {
+          layout: "home",
+          prefix: "startup-binding-family-",
+          env: { SHARED_KEY: "environment-account" },
+        },
+        async (state) => {
+          const metadataSnapshot = createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "target",
+                providers: ["fixture-target"],
+                setup: { providers: [{ id: "fixture-target", envVars: ["SHARED_KEY"] }] },
+              },
+              {
+                id: "rival",
+                providers: ["fixture-rival"],
+                providerAuthAliases: { "fixture-rival-alias": "fixture-rival" },
+                setup: { providers: [{ id: "fixture-rival", envVars: ["SHARED_KEY"] }] },
+              },
+            ],
+          });
+          const source: OpenClawConfig = {};
+          setConfigProviderUseBindings(source, {
+            [provider]:
+              provider === "fixture-target"
+                ? { apiKey: { source: "env", provider: "default", id: "SHARED_KEY" } }
+                : {},
+          });
+          const config = resolveConfigProviderUseBindings(source);
+          const profileId = `${storedProvider}:late`;
+          const store: AuthProfileStore = {
+            version: 1,
+            runtimePersistedProfileIds: [profileId],
+            profiles: {
+              [profileId]: { type: "api_key", provider: storedProvider, key: "saved-account" },
+            },
+          };
+          await withPluginMetadataSnapshotScope(
+            metadataSnapshot,
+            async () => {
+              expect(() =>
+                prepareAgentRuntimeAuth({
+                  provider,
+                  modelId: "fixture",
+                  config,
+                  env: state.env,
+                  authProfileStore: store,
+                  metadataSnapshot,
+                }),
+              ).toThrow(`conflicts with saved profile "${profileId}"`);
+              expect(
+                createModelAuthAvailabilityResolver({
+                  cfg: config,
+                  authStore: store,
+                  env: state.env,
+                  metadataSnapshot,
+                }).evaluateProviderAuth(provider).availability,
+              ).toBe(false);
+            },
+            { config },
+          );
+        },
+      );
+    },
+  );
+
+  it.each([
+    "unchanged",
+    "same-provider",
+    "family-main",
+    "family-other",
+    "unrelated",
+    "authored",
+    "during-resolution",
+    "runtime-only",
+  ] as const)(
+    "keeps startup binding authority current when a saved account is %s",
+    async (selection) => {
+      await withOpenClawTestState(
+        {
+          layout: "home",
+          prefix: "startup-binding-account-",
+          env: { BYTEPLUS_API_KEY: "environment-account" },
+        },
+        async (state) => {
+          const binding = {
+            apiKey: { source: "env" as const, provider: "default", id: "BYTEPLUS_API_KEY" },
+          };
+          const source: OpenClawConfig = {
+            agents: {
+              defaults: { model: "byteplus-plan/fixture" },
+              entries: { main: {}, other: {} },
+            },
+            ...(selection === "authored"
+              ? {
+                  models: {
+                    providers: { "byteplus-plan": { ...binding, baseUrl: "", models: [] } },
+                  },
+                }
+              : {}),
+          };
+          const authoredSource = JSON.stringify(source);
+          if (selection !== "authored") {
+            setConfigProviderUseBindings(source, { "byteplus-plan": binding });
+          }
+          const config = resolveConfigProviderUseBindings(source);
+          const store = ensureAuthProfileStore(state.agentDir(), {
+            config,
+            syncExternalCli: false,
+          });
+          setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+          setRuntimeAuthProfileStoreSnapshot(
+            ensureAuthProfileStore(state.agentDir("other"), { config, syncExternalCli: false }),
+            state.agentDir("other"),
+          );
+          const model: Model = {
+            provider: "byteplus-plan",
+            id: "fixture",
+            name: "Fixture",
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 4096,
+            maxTokens: 1024,
+          };
+          await withPluginMetadataSnapshotScope(
+            byteplusMetadataSnapshot,
+            async () => {
+              const prepare = () =>
+                prepareAgentRuntimeAuth({
+                  provider: model.provider,
+                  modelId: model.id,
+                  modelApi: model.api,
+                  modelBaseUrl: model.baseUrl,
+                  config,
+                  env: state.env,
+                  authProfileStore: store,
+                  agentDir: state.agentDir(),
+                  metadataSnapshot: byteplusMetadataSnapshot,
+                });
+              const prepared = prepare();
+              const resolve = () =>
+                resolvePreparedRuntimeModelAuth({
+                  plan: prepared.plan,
+                  cfg: config,
+                  model,
+                  store,
+                  agentDir: state.agentDir(),
+                });
+              expect((await resolve()).auth.apiKey).toBe("environment-account");
+              const profileProvider =
+                selection === "same-provider"
+                  ? "byteplus-plan"
+                  : selection === "unrelated"
+                    ? "openai"
+                    : "byteplus";
+              const profileId = `${profileProvider}:late`;
+              const saveAccount = () =>
+                state.writeAuthProfiles(
+                  {
+                    version: 1,
+                    profiles: {
+                      [profileId]: {
+                        type: "api_key",
+                        provider: profileProvider,
+                        key: "saved-account",
+                      },
+                    },
+                  },
+                  selection === "family-other" ? "other" : "main",
+                );
+              const message = `Startup provider binding for "byteplus-plan" conflicts with saved profile "${profileId}"`;
+              if (selection === "runtime-only") {
+                store.profiles[profileId] = {
+                  type: "api_key",
+                  provider: profileProvider,
+                  key: "derived-runtime-account",
+                };
+                store.runtimePersistedProfileIds = [];
+                setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+              } else if (selection === "during-resolution") {
+                const rejected = expect(resolve()).rejects.toThrow(message);
+                await saveAccount();
+                await rejected;
+              } else if (selection !== "unchanged") {
+                await saveAccount();
+              }
+              const blocked = !["unchanged", "unrelated", "authored", "runtime-only"].includes(
+                selection,
+              );
+              const evaluation = createModelAuthAvailabilityResolver({
+                cfg: config,
+                authStore: store,
+                env: state.env,
+                agentDir: state.agentDir(),
+                metadataSnapshot: byteplusMetadataSnapshot,
+              }).evaluateModelAuth(model.provider);
+              expect(evaluation.availability).toBe(!blocked);
+              if (blocked) {
+                expect(prepare).toThrow(message);
+                await expect(resolve()).rejects.toThrow(message);
+                await expect(
+                  getApiKeyForModelCore({ cfg: config, model, store, agentDir: state.agentDir() }),
+                ).rejects.toThrow(message);
+                expect(
+                  buildProviderAuthRecoveryHint({
+                    provider: model.provider,
+                    config,
+                    env: state.env,
+                  }),
+                ).toContain(profileId);
+              } else {
+                expect((await resolve()).auth.apiKey).toBe("environment-account");
+              }
+              expect(JSON.stringify(source)).toBe(authoredSource);
+            },
+            { config },
+          );
+        },
+      );
+    },
+  );
+
   it("binds only a requested sibling to its saved credential realm", () => {
     expect(
       resolveProviderUseAdmission({

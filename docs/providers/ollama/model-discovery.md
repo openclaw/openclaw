@@ -10,10 +10,11 @@ sidebarTitle: "Model discovery"
 
 ## Model discovery (implicit provider)
 
-Declare `models.providers.ollama` or use an Ollama-bound auth profile before
-discovery. `OLLAMA_API_KEY` alone does not select between Ollama and Ollama Cloud.
-The default local endpoint is `http://127.0.0.1:11434`; an explicit self-hosted
-`baseUrl` selects that host instead:
+`OLLAMA_API_KEY` enables both `ollama` and `ollama-cloud` because the Ollama
+plugin declares it for both model identities. No provider entry is needed for
+that environment-key flow. A provider entry or an Ollama-bound auth profile
+also enables discovery. Use `models.providers.ollama.baseUrl` to select or
+override a local endpoint; its default is `http://127.0.0.1:11434`:
 
 | Behavior             | Detail                                                                                                                                                                                                                                                                                        |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

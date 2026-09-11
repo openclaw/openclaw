@@ -2,6 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope.js";
+import { collectConfiguredProviderSelectionIds } from "../../../agents/configured-provider-selection-ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
@@ -16,7 +17,6 @@ import {
   hasOfficialExternalWebContractEnvTarget,
   hasOfficialExternalWebSearchTarget,
 } from "../../../plugins/official-external-plugin-targets.js";
-import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
 
 export type StartupPluginConvergencePlan = {

@@ -3,7 +3,6 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
-import { applyProviderUseBindingsToRuntime } from "../commands/doctor/shared/provider-use-binding-migration.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -31,6 +30,7 @@ import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { resolveConfigPath } from "./paths.js";
+import { applyProviderUseBindingsToRuntime } from "./provider-use-binding-plan.js";
 import { copyConfigResolutionFacts } from "./resolution-facts.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
@@ -128,8 +128,9 @@ function validateConfigObjectWithPluginMode(
       runtimeConfig: result.config,
       configPath: resolveConfigPath(env, undefined, params?.homedir),
       env,
-      manifestRegistry:
-        manifestRegistry ?? resolveConfigWidePluginManifestRegistry({ config: migrated, env }),
+      manifestRegistry,
+      loadManifestRegistry: () =>
+        resolveConfigWidePluginManifestRegistry({ config: migrated, env }),
     });
     result = {
       ...result,

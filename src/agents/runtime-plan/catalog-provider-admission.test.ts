@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveConfigProviderUseBindings,
+  setConfigProviderUseBindings,
+} from "../../config/resolution-facts.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildOpenAICompatibleProviderFamilyCatalog } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -7,6 +12,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { MODELS_CONFIG_IMPLICIT_ENV_VARS } from "../models-config.e2e-harness.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,12 +26,15 @@ vi.mock("../../plugins/provider-discovery.js", () => ({
   runProviderCatalog: mocks.runProviderCatalog,
   runProviderStaticCatalog: mocks.runProviderStaticCatalog,
   prepareProviderStaticCatalog: vi.fn(async () => ({ providers: [], entries: [] })),
-  groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) => ({
-    simple: providers,
-    profile: [],
-    paired: [],
-    late: [],
-  }),
+  groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) =>
+    Object.fromEntries(
+      ["simple", "profile", "paired", "late"].map((order) => [
+        order,
+        providers.filter(
+          (provider) => ((provider.catalog ?? provider.staticCatalog)?.order ?? "late") === order,
+        ),
+      ]),
+    ),
   normalizePluginDiscoveryResult: ({
     result,
   }: {
@@ -52,6 +62,7 @@ describe("catalog destination credential admission", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.runProviderCatalog.mockReset();
+    mocks.runProviderStaticCatalog.mockReset();
     state = await createOpenClawTestState({
       label: "catalog-destination-admission",
       env: Object.fromEntries(
@@ -64,10 +75,162 @@ describe("catalog destination credential admission", () => {
   afterEach(async () => {
     await state.cleanup();
   });
+  it("revokes earlier provisional output after a later order saves an account while retaining authored and static rows", async () => {
+    const first = "fixture-first",
+      last = "fixture-last",
+      publicId = "fixture-static";
+    const env = { ...state.env, SHARED_API_KEY: "environment-account" };
+    const source: OpenClawConfig = {
+      models: {
+        providers: {
+          [last]: { baseUrl: "https://fixture.invalid/v1", apiKey: "authored-account", models: [] },
+        },
+      },
+    };
+    const binding = {
+      apiKey: { source: "env" as const, provider: "default", id: "SHARED_API_KEY" },
+    };
+    setConfigProviderUseBindings(source, { [first]: binding, [publicId]: binding });
+    const config = resolveConfigProviderUseBindings(source);
+    const store = ensureAuthProfileStore(state.agentDir(), { config, syncExternalCli: false });
+    setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: first,
+          providers: [first],
+          setup: { providers: [{ id: first, envVars: ["SHARED_API_KEY"] }] },
+        },
+        { id: last, providers: [last] },
+        {
+          id: publicId,
+          providers: [publicId],
+          setup: { providers: [{ id: publicId, envVars: ["SHARED_API_KEY"] }] },
+        },
+      ],
+    });
+    const providerConfig = (id: string) => ({
+      baseUrl: "https://fixture.invalid/v1",
+      api: "openai-completions" as const,
+      models: [createTextModel(id, id)],
+    });
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProvider(first),
+      { ...createProvider(last), catalog: { order: "late", run: async () => null } },
+      {
+        id: publicId,
+        label: publicId,
+        auth: [],
+        staticCatalog: {
+          order: "profile",
+          run: async () => ({ providers: { [publicId]: providerConfig("public-model") } }),
+        },
+      },
+    ]);
+    mocks.runProviderStaticCatalog.mockImplementation(({ provider }) =>
+      provider.staticCatalog.run({}),
+    );
+    mocks.runProviderCatalog.mockImplementation(async (params) => {
+      const id = params.provider.id;
+      if (id === last) {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "fixture-first:late": { type: "api_key", provider: first, key: "saved-account" },
+          },
+        });
+      }
+      expect(params.resolveProviderApiKey(id).discoveryApiKey).toBe(
+        id === first ? "environment-account" : "authored-account",
+      );
+      params.reportCatalogOutcome?.({ provider: id, status: "ready" });
+      return { providers: { [id]: providerConfig(id) } };
+    });
+    const outcomes: Array<{ provider: string; status: string }> = [];
+    const result = await resolveImplicitProviders({
+      config,
+      env,
+      authStore: store,
+      agentDir: state.agentDir(),
+      pluginMetadataSnapshot: metadata,
+      providerDiscoveryProviderIds: [first, last, publicId],
+      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+    expect(result?.[first]).toBeUndefined();
+    expect(result?.[last]?.models.map((model) => model.id)).toEqual([last]);
+    expect(result?.[publicId]?.models.map((model) => model.id)).toEqual(["public-model"]);
+    expect(outcomes).toEqual([
+      { provider: last, status: "ready" },
+      { provider: first, status: "unavailable" },
+    ]);
+  });
+
+  it("does not refresh an authenticated startup catalog after a saved account conflicts", async () => {
+    const provider = "fixture-startup";
+    const env = { ...state.env, FIXTURE_API_KEY: "environment-account" };
+    const source = {};
+    setConfigProviderUseBindings(source, {
+      [provider]: { apiKey: { source: "env", provider: "default", id: "FIXTURE_API_KEY" } },
+    });
+    const config = resolveConfigProviderUseBindings(source);
+    const store = ensureAuthProfileStore(state.agentDir(), { config, syncExternalCli: false });
+    setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "fixture-startup-plugin",
+          providers: [provider],
+          setup: { providers: [{ id: provider, envVars: ["FIXTURE_API_KEY"] }] },
+        },
+      ],
+    });
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      { ...createProvider(provider), pluginId: "fixture-startup-plugin" },
+    ]);
+    mocks.runProviderCatalog.mockImplementation((params) => {
+      expect(params.resolveProviderApiKey(provider).discoveryApiKey).toBe("environment-account");
+      return {
+        providers: {
+          [provider]: {
+            baseUrl: "https://fixture.invalid/v1",
+            api: "openai-completions",
+            models: [createTextModel("fixture", "Fixture")],
+          },
+        },
+      };
+    });
+    const discover = () =>
+      resolveImplicitProviders({
+        config,
+        env,
+        authStore: store,
+        agentDir: state.agentDir(),
+        pluginMetadataSnapshot: metadata,
+        providerDiscoveryProviderIds: [provider],
+      });
+    expect((await discover())?.[provider]?.models).toHaveLength(1);
+    const retained = mocks.runProviderCatalog.mock.lastCall?.[0];
+    if (!retained) {
+      throw new Error("Expected the initial catalog owner to run");
+    }
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "fixture-startup:late": { type: "api_key", provider, key: "saved-account" },
+      },
+    });
+    expect(() => retained.resolveProviderApiKey(provider)).toThrow("conflicts with saved profile");
+    expect(() => retained.resolveProviderAuth(provider)).toThrow("conflicts with saved profile");
+    mocks.runProviderCatalog.mockClear();
+    expect(await discover()).toEqual({});
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(source).toEqual({});
+  });
   it.each([
     { sibling: "none", configured: true },
     { sibling: "environment", configured: true },
     { sibling: "profile", configured: true },
+    { sibling: "startup-conflict", configured: true },
     { sibling: "environment", configured: false },
   ])(
     "keeps SDK donor auth destination-specific (sibling: $sibling, configured: $configured)",
@@ -109,37 +272,67 @@ describe("catalog destination credential admission", () => {
           },
         ],
       });
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            ...(sibling === "startup-conflict"
+              ? {}
+              : {
+                  "fixture-donor": {
+                    baseUrl: "https://donor.example",
+                    apiKey: "donor-key",
+                    models: [],
+                  },
+                }),
+            ...(configured ? { "fixture-configured": { baseUrl: "not-a-url", models: [] } } : {}),
+          },
+        },
+      };
+      if (sibling === "startup-conflict") {
+        setConfigProviderUseBindings(sourceConfig, {
+          "fixture-donor": {
+            apiKey: { source: "env", provider: "default", id: "FIXTURE_DONOR_KEY" },
+          },
+          "fixture-sibling": {
+            apiKey: { source: "env", provider: "default", id: "FIXTURE_SIBLING_KEY" },
+          },
+        });
+      }
       const result = await resolveImplicitProviders({
         agentDir: state.agentDir(),
         env: {
           ...state.env,
           ...(sibling === "environment" ? { FIXTURE_SIBLING_KEY: "sibling-key" } : {}),
+          ...(sibling === "startup-conflict"
+            ? { FIXTURE_DONOR_KEY: "donor-key", FIXTURE_SIBLING_KEY: "sibling-key" }
+            : {}),
         },
         authStore: {
           version: 1,
+          ...(sibling === "startup-conflict"
+            ? { runtimePersistedProfileIds: ["fixture-sibling:saved", "fixture-donor:saved"] }
+            : {}),
           profiles:
-            sibling === "profile"
+            sibling === "profile" || sibling === "startup-conflict"
               ? {
                   "fixture-sibling:saved": {
                     type: "api_key",
                     provider: "fixture-sibling",
                     key: "saved-key",
                   },
+                  ...(sibling === "startup-conflict"
+                    ? {
+                        "fixture-donor:saved": {
+                          type: "api_key" as const,
+                          provider: "fixture-donor",
+                          key: "saved-donor-key",
+                        },
+                      }
+                    : {}),
                 }
               : {},
         },
-        config: {
-          models: {
-            providers: {
-              "fixture-donor": {
-                baseUrl: "https://donor.example",
-                apiKey: "donor-key",
-                models: [],
-              },
-              ...(configured ? { "fixture-configured": { baseUrl: "not-a-url", models: [] } } : {}),
-            },
-          },
-        },
+        config: resolveConfigProviderUseBindings(sourceConfig),
         pluginMetadataSnapshot: metadata,
         providerDiscoveryProviderIds: ["fixture-configured", "fixture-sibling"],
       });

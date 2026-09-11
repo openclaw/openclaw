@@ -4,6 +4,10 @@ import {
   rewriteDoctorSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  listExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../config/sessions/targets-existing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -33,10 +37,6 @@ import {
   type ReservedKeyRename,
   writeRepairJournal,
 } from "./doctor-session-incognito-key-repair-state.js";
-import {
-  listExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-targets.js";
 
 export type ReservedIncognitoKeyRepairReport = {
   found: number;

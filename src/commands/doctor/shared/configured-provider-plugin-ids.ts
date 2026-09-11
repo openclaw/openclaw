@@ -1,3 +1,7 @@
+import {
+  collectConfiguredMediaProviderSelectionIds,
+  collectConfiguredModelProviderSelectionIds,
+} from "../../../agents/configured-provider-selection-ids.js";
 // Resolves official external provider plugins implied by config and environment state.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -5,10 +9,6 @@ import {
   resolveOfficialExternalProviderPluginIds,
   resolveOfficialExternalProviderPluginIdsForEnv,
 } from "../../../plugins/official-external-plugin-catalog.js";
-import {
-  collectConfiguredMediaProviderSelectionIds,
-  collectConfiguredModelProviderSelectionIds,
-} from "./configured-provider-selection-ids.js";
 
 /** Lists official external provider plugins without loading installed plugin registries. */
 export function collectConfiguredOfficialProviderPluginIds(params: {

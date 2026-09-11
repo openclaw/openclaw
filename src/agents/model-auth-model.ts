@@ -33,6 +33,7 @@ import {
   resolveScopedAuthProfileStore,
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
+import { assertStartupProviderUseBindingCurrent } from "./model-auth-runtime-config.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 import {
@@ -252,6 +253,12 @@ export async function getApiKeyForModelCore(params: {
   boundEnvVar?: string;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  assertStartupProviderUseBindingCurrent({
+    provider: params.model.provider,
+    cfg: params.cfg,
+    store: params.store,
+    workspaceDir: params.workspaceDir,
+  });
   if (params.boundEnvVar && !normalizeOptionalSecretInput(process.env[params.boundEnvVar])) {
     throw new ProviderAuthError(
       "missing-provider-auth",
@@ -259,7 +266,7 @@ export async function getApiKeyForModelCore(params: {
       `Prepared environment credential "${params.boundEnvVar}" is no longer available for ${params.model.provider}. Restore it or prepare a new request.`,
     );
   }
-  return resolveApiKeyForProviderCore({
+  const auth = await resolveApiKeyForProviderCore({
     provider: params.model.provider,
     cfg: params.cfg,
     profileId: params.profileId,
@@ -277,6 +284,13 @@ export async function getApiKeyForModelCore(params: {
     modelBaseUrl: params.model.baseUrl,
     secretSentinels: params.secretSentinels,
   });
+  assertStartupProviderUseBindingCurrent({
+    provider: params.model.provider,
+    cfg: params.cfg,
+    store: params.store,
+    workspaceDir: params.workspaceDir,
+  });
+  return auth;
 }
 
 /** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */

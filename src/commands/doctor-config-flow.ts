@@ -398,8 +398,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     emitWarnings: true,
   });
 
-  const { prepareProviderUseBindingMigration, resolveProviderUseBindingWriteMetadata } =
-    await import("./doctor/shared/provider-use-binding-migration.js");
+  const [{ prepareProviderUseBindingMigration }, { resolveProviderUseBindingWriteMetadata }] =
+    await Promise.all([
+      import("../config/provider-use-binding-plan.js"),
+      import("./doctor/shared/provider-use-binding-migration.js"),
+    ]);
   const providerUseBindingMigration = runWithCurrentPluginMetadata(state.candidate, () =>
     prepareProviderUseBindingMigration({
       config: state.candidate,

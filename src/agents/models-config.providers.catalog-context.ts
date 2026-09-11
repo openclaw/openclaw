@@ -2,7 +2,13 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import {
+  copyConfigResolutionFacts,
+  getConfigProviderUseBindings,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type {
   ProviderCatalogOutcome,
@@ -10,7 +16,7 @@ import type {
 } from "../plugins/provider-catalog.types.js";
 import {
   normalizePluginDiscoveryResult,
-  type runProviderCatalog,
+  runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -18,6 +24,7 @@ import { resolveProviderBindingEnvVarCandidates } from "../secrets/provider-env-
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveStartupProviderUseBindingConflict } from "./model-auth-runtime-config.js";
 import { resolveSelectedModelProviderIds } from "./model-selection-config.js";
 import type {
   ProviderApiKeyResolver,
@@ -29,6 +36,8 @@ import {
   resolveProviderUseAdmission,
   type ProviderUseBinding,
 } from "./provider-model-auth-source-plan.js";
+
+const log = createSubsystemLogger("agents/model-providers");
 
 type ProviderCatalogAuthScope = Pick<
   Parameters<typeof runProviderCatalog>[0],
@@ -43,44 +52,93 @@ export async function runProviderCatalogForAdmittedDestinations(
     provider: ProviderPlugin;
     providerIds: readonly string[];
     admission: ReadonlyMap<string, ProviderUseBinding>;
+    config: OpenClawConfig;
+    authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
+    workspaceDir?: string;
     run: (scope: ProviderCatalogAuthScope) => Promise<ProviderCatalogResult>;
   },
 ): Promise<ProviderCatalogResult> {
   const configured: string[] = [];
+  const provisional: string[] = [];
   const bound: string[] = [];
-  for (const id of new Set(params.providerIds.map(normalizeProviderId))) {
-    (params.admission.get(id)?.kind === "provider-config" ? configured : bound).push(id);
+  const startupBindings = getConfigProviderUseBindings(params.config);
+  const providerIds = [...new Set(params.providerIds.map(normalizeProviderId))];
+  for (const id of providerIds) {
+    (params.admission.get(id)?.kind === "provider-config"
+      ? Object.hasOwn(startupBindings, id)
+        ? provisional
+        : configured
+      : bound
+    ).push(id);
   }
   const scopes = [
     ...(configured.length ? [{ ids: configured, allowDonor: true }] : []),
+    ...provisional.map((id) => ({ ids: [id], allowDonor: true })),
     ...bound.map((id) => ({ ids: [id], allowDonor: false })),
-  ];
+  ].toSorted(
+    (left, right) =>
+      providerIds.findIndex((id) => left.ids.includes(id)) -
+      providerIds.findIndex((id) => right.ids.includes(id)),
+  );
   const providers: Record<string, ProviderConfig> = {};
   const outcomes: ProviderCatalogOutcome[] = [];
   let hasResult = false;
   for (const scope of scopes) {
     const includes = (provider: string) => scope.ids.includes(normalizeProviderId(provider));
     const canResolve = (provider: string) => scope.allowDonor || includes(provider);
-    const result = await params.run({
-      providerIds: scope.ids,
-      resolveProviderApiKey: (providerId) => {
-        const provider = providerId?.trim() || params.provider.id;
-        return canResolve(provider)
-          ? params.resolveProviderApiKey(provider)
-          : { apiKey: undefined, discoveryApiKey: undefined };
-      },
-      resolveProviderAuth: (providerId, options) => {
-        const provider = providerId?.trim() || params.provider.id;
-        return canResolve(provider)
-          ? params.resolveProviderAuth(provider, options)
-          : { apiKey: undefined, mode: "none", source: "none" };
-      },
-      reportCatalogOutcome: (outcome) => {
-        if (includes(outcome.provider)) {
-          params.reportCatalogOutcome?.(outcome);
+    let conflict: ReturnType<typeof resolveStartupProviderUseBindingConflict>;
+    const assertCurrentScope = () => {
+      for (const provider of scope.ids) {
+        conflict = resolveStartupProviderUseBindingConflict({
+          ...params,
+          provider,
+          cfg: params.config,
+          store: params.authStore,
+        });
+        if (conflict) {
+          throw conflict;
         }
-      },
-    });
+      }
+    };
+    let result: ProviderCatalogResult;
+    try {
+      assertCurrentScope();
+      result = await params.run({
+        providerIds: scope.ids,
+        resolveProviderApiKey: (providerId) => {
+          assertCurrentScope();
+          const provider = providerId?.trim() || params.provider.id;
+          return canResolve(provider)
+            ? params.resolveProviderApiKey(provider)
+            : { apiKey: undefined, discoveryApiKey: undefined };
+        },
+        resolveProviderAuth: (providerId, options) => {
+          assertCurrentScope();
+          const provider = providerId?.trim() || params.provider.id;
+          return canResolve(provider)
+            ? params.resolveProviderAuth(provider, options)
+            : { apiKey: undefined, mode: "none", source: "none" };
+        },
+        reportCatalogOutcome: (outcome) => {
+          assertCurrentScope();
+          if (includes(outcome.provider)) {
+            params.reportCatalogOutcome?.(outcome);
+          }
+        },
+      });
+      if (result) {
+        assertCurrentScope();
+      }
+    } catch (error) {
+      if (!conflict || error !== conflict) {
+        throw error;
+      }
+      for (const provider of scope.ids) {
+        params.reportCatalogOutcome?.({ provider, status: "unavailable" });
+      }
+      continue;
+    }
     if (!result) {
       continue;
     }
@@ -171,13 +229,15 @@ export function buildPluginCatalogConfig(
       providers[providerId] = { ...source, headers: runtime.headers, request: runtime.request };
     }
   }
-  return {
+  const config = {
     ...ctx.config,
     models: {
       ...ctx.config?.models,
       providers,
     },
   };
+  copyConfigResolutionFacts(ctx.config, config);
+  return config;
 }
 
 export async function prepareProviderCatalogRun(
@@ -286,4 +346,99 @@ export async function reportProviderCatalogSecretFailure(
     });
   }
   return true;
+}
+
+export async function runProviderCatalogWithTimeout(
+  params: Omit<
+    Parameters<typeof runProviderCatalog>[0],
+    "providerIds" | "resolveProviderApiKey" | "resolveProviderAuth"
+  > &
+    Pick<
+      Parameters<typeof runProviderCatalogForAdmittedDestinations>[0],
+      "providerIds" | "resolveProviderApiKey" | "resolveProviderAuth" | "admission"
+    > & {
+      agentDir: string;
+      authStore: AuthProfileStore;
+      timeoutMs: number | null;
+    },
+): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
+  const timeoutMs = params.timeoutMs ?? undefined;
+  const timeoutError = new Error(
+    `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = true;
+  const catalogParams = {
+    ...params,
+    isActive: () => active,
+    reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
+      if (active) {
+        params.reportCatalogOutcome?.(outcome);
+      }
+    },
+  };
+  const runCatalog = () =>
+    runProviderCatalogForAdmittedDestinations({
+      ...catalogParams,
+      run: async (scope) => {
+        if (!active) {
+          return undefined;
+        }
+        try {
+          const prepared = await prepareProviderCatalogRun({ ...catalogParams, ...scope });
+          if (!active) {
+            return undefined;
+          }
+          const result = await runProviderCatalog({
+            ...prepared,
+            isActive: catalogParams.isActive,
+          });
+          if (!active) {
+            return undefined;
+          }
+          return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
+        } catch (error) {
+          if (await reportProviderCatalogSecretFailure(error, { ...catalogParams, ...scope })) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+    });
+  try {
+    if (!timeoutMs) {
+      return await runCatalog();
+    }
+    const catalogRun = runCatalog();
+    // Live discovery should not hang startup; a timeout skips this provider while
+    // preserving the rest of the prepared catalog.
+    return await Promise.race([
+      catalogRun,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          active = false;
+          reject(timeoutError);
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    if (error !== timeoutError) {
+      throw error;
+    }
+    for (const provider of params.providerIds ?? [params.provider.id]) {
+      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
+    }
+    if (error === timeoutError) {
+      const message = formatErrorMessage(error);
+      log.warn(`${message}; skipping provider discovery`);
+    }
+    return undefined;
+  } finally {
+    // A timed-out hook can still finish; its late reports no longer own this publication.
+    active = false;
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
