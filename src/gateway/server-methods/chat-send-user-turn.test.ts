@@ -10,6 +10,7 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -101,6 +102,62 @@ function createAttachments(
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each([
+    { profileId: "profile-ada", synthetic: false, verified: true, allowed: true },
+    { profileId: "profile-other", synthetic: false, verified: true, allowed: false },
+    { profileId: "profile-ada", synthetic: true, verified: true, allowed: false },
+    { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
+  ])(
+    "checks command allowlists against the admitted profile: %j",
+    ({ profileId, synthetic, verified, allowed }) => {
+      const { controller } = createUserTurnInputController("/status");
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "/status",
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          }),
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: { agentId: "main", clientRunId: "run-1", sessionKey: "agent:main:main" },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({ parsedMessage: "/status" }),
+        client: {
+          authenticatedUserId: verified ? "ada@example.test" : undefined,
+          authenticatedUserProfile: {
+            profileId,
+            displayName: "Ada",
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+          internal: synthetic ? { syntheticClient: true } : undefined,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
+            scopes: ["operator.write"],
+          },
+        },
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+      expect(
+        resolveCommandAuthorization({
+          ctx: finalizeInboundContext({ ...prepared.ctx }),
+          cfg: {
+            commands: { ownerAllowFrom: ["profile-ada"], allowFrom: { "*": ["profile-ada"] } },
+          },
+          commandAuthorized: prepared.ctx.CommandAuthorized === true,
+        }),
+      ).toMatchObject({ senderIsOwner: allowed, isAuthorizedSender: allowed });
+    },
+  );
+
   it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
     "records only accepted authenticated external input after retargeting: %s",
     async (kind) => {
