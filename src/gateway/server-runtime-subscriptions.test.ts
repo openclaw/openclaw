@@ -442,6 +442,53 @@ describe("startGatewayEventSubscriptions", () => {
     ).toEqual({ active: true, runIds: ["run-ops"] });
   });
 
+  it.each([false, true])(
+    "keeps bound ACP terminal ownership together (chat link=%s)",
+    async (linked) => {
+      const runId = "bound-acp-terminal";
+      const sourceKey = "agent:main:dashboard:source";
+      const targetKey = "agent:claude:acp:target";
+      const params = createParams();
+      const registration = registerChatAbortController({
+        chatAbortControllers: params.chatAbortControllers,
+        runId,
+        agentId: "main",
+        sessionId: "source-session",
+        sessionKey: sourceKey,
+        timeoutMs: 60_000,
+      });
+      if (linked) {
+        params.chatRunState.registry.add(runId, {
+          clientRunId: runId,
+          sessionKey: sourceKey,
+          agentId: "main",
+        });
+      }
+      agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
+      unsubs = startGatewayEventSubscriptions(params);
+      try {
+        emitAgentEvent({
+          runId,
+          sessionKey: targetKey,
+          agentId: "claude",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 3_000, completionSource: "reply-dispatch" },
+        });
+        await waitForFast(() =>
+          expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledOnce(),
+        );
+        expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: linked ? sourceKey : targetKey,
+            agentId: linked ? "main" : "claude",
+          }),
+        );
+      } finally {
+        registration.cleanup();
+      }
+    },
+  );
+
   it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";
     const sessionKey = "agent:main:main";
