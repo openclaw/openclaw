@@ -176,7 +176,7 @@ vi.mock("../../../plugins/capability-consent.js", async (importOriginal) => ({
 
 function mockCurrentBundledPlugin(pluginId: string, packageName: string): void {
   mocks.loadInstalledPluginIndex.mockReturnValue({
-    plugins: [{ pluginId, origin: "bundled", packageName }],
+    plugins: [{ pluginId, origin: "bundled", packageName, rootDir: `/tmp/bundled/${pluginId}` }],
     diagnostics: [],
     installRecords: {},
   });

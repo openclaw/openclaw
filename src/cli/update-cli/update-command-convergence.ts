@@ -234,9 +234,14 @@ export async function convergeUpdatePlugins(params: {
           ],
         };
       }
-      const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
-        (warning) => warning.reason === "plugin-target-unavailable",
-      );
+      const pluginAdvisories = [
+        ...(postCorePluginUpdate?.warnings ?? []).filter(
+          (warning) => warning.reason === "plugin-target-unavailable",
+        ),
+        ...(postCorePluginUpdate?.npm.outcomes ?? []).filter(
+          (outcome) => outcome.code === "source-bundled-plugin",
+        ),
+      ];
       resultWithPostUpdate = {
         ...resultWithPostUpdate,
         steps: [

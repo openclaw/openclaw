@@ -133,6 +133,12 @@ not a self-contained package artifact. Use `openclaw update --channel dev` to
 switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior.
 
+On source installs, Doctor and plugin updates keep plugins built with the host.
+A registry plugin with the same version string can target a different SDK, so
+it does not replace the source build without matching SDK build evidence.
+Existing registry generations remain on disk; convergence reports the bundled
+selection and skips their refresh. `OPENCLAW_DEV_SOURCE_ROOT` is not required.
+
 Managed npm plugins on the beta channel use the same newest-of-beta/latest
 selection, including official plugins such as `@openclaw/codex`. An older beta
 tag cannot hold a plugin behind the current stable release. Startup repair

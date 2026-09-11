@@ -12,7 +12,10 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import {
+  isBundledPluginInsideDevSourceRoot,
+  resolveOpenClawDevSourceRoot,
+} from "./dev-source-root.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
@@ -339,6 +342,7 @@ function requiresDerivedRegistryValidation(
   env: NodeJS.ProcessEnv,
   hasStalePluginFiles: () => boolean,
 ): boolean {
+  const bundledRoot = resolveBundledPluginsDir(env);
   return (
     // Capture file freshness before any other reason starts derived discovery.
     // Otherwise that discovery can cache the old bytes and hide a concurrent replacement.
@@ -350,6 +354,8 @@ function requiresDerivedRegistryValidation(
     params.installRecords !== undefined ||
     // Persisted source selection cannot encode this process's development checkout preference.
     resolveOpenClawDevSourceRoot(env) !== null ||
+    (bundledRoot !== undefined &&
+      isBundledPluginInsideDevSourceRoot({ rootDir: bundledRoot, env })) ||
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
     hasMissingInstalledPluginOwnerMetadata(index, env) ||
