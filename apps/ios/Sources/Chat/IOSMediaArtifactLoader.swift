@@ -5,9 +5,31 @@ import OpenClawProtocol
 
 struct IOSMediaArtifactLoader: Sendable {
     struct Connection: Sendable {
-        let config: GatewayConnectConfig
+        let gatewayURL: URL
+        let tls: GatewayTLSParams?
         let gatewayID: String
         let customHeaders: [String: String]
+        let nativeBinding: IOSNativeActionBinding?
+
+        init(config: GatewayConnectConfig, gatewayID: String, customHeaders: [String: String]) {
+            self.gatewayURL = config.url
+            self.tls = config.tls
+            self.gatewayID = gatewayID
+            self.customHeaders = customHeaders
+            self.nativeBinding = nil
+        }
+
+        init(binding: IOSNativeActionBinding, context: GatewayAdmittedHTTPContext) {
+            self.gatewayURL = context.gatewayURL
+            self.tls = GatewayTLSParams(
+                required: true,
+                expectedFingerprint: context.tlsFingerprintSHA256,
+                allowTOFU: false,
+                storeKey: nil)
+            self.gatewayID = binding.session.owner.gatewayID
+            self.customHeaders = context.customHeaders
+            self.nativeBinding = binding
+        }
     }
 
     enum LoadError: Error, Equatable {
@@ -19,7 +41,7 @@ struct IOSMediaArtifactLoader: Sendable {
     }
 
     typealias Request = @Sendable (URLRequest) async throws -> (Data, URLResponse)
-    typealias RequestFactory = @Sendable (GatewayTLSParams, Int) -> Request
+    typealias RequestFactory = @Sendable (Connection, Int) -> Request
     typealias ConnectionProvider = @MainActor @Sendable () -> Connection?
 
     static let maximumImageBytes = 12 * 1024 * 1024
@@ -29,8 +51,16 @@ struct IOSMediaArtifactLoader: Sendable {
     private let requestFactory: RequestFactory
 
     init(connectionProvider: @escaping ConnectionProvider) {
-        self.init(connectionProvider: connectionProvider) { tls, maximumBytes in
-            let session = GatewayTLSPinningSession(params: tls)
+        self.init(connectionProvider: connectionProvider) { connection, maximumBytes in
+            let tls = connection.tls ?? GatewayTLSParams(
+                required: false,
+                expectedFingerprint: nil,
+                allowTOFU: false,
+                storeKey: nil)
+            let session = GatewayTLSPinningSession(
+                params: tls,
+                allowsRedirects: connection.nativeBinding == nil,
+                allowsStoredCredentials: connection.nativeBinding == nil)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
@@ -69,12 +99,13 @@ struct IOSMediaArtifactLoader: Sendable {
 
         let path = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard let connection = await self.connectionProvider(),
-              connection.gatewayID == expectedGatewayID,
+              connection.gatewayID.utf8.elementsEqual(expectedGatewayID.utf8),
               let url = OpenClawChatMediaURL.resolve(
-                  gatewayURL: connection.config.url,
+                  gatewayURL: connection.gatewayURL,
                   ticketedPath: path,
                   playback: playback)
         else { throw LoadError.invalidSource }
+        try await connection.nativeBinding?.requireAvailable()
 
         let headers = url.scheme?.lowercased() == "https"
             ? GatewayCustomHeaders.sanitized(connection.customHeaders)
@@ -83,7 +114,8 @@ struct IOSMediaArtifactLoader: Sendable {
         // headers. Those routes take the bounded authenticated download path.
         let canStreamDirectly = kind == .video &&
             url.scheme?.lowercased() == "https" &&
-            connection.config.tls == nil &&
+            connection.nativeBinding == nil &&
+            connection.tls == nil &&
             headers.isEmpty &&
             declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
@@ -102,17 +134,15 @@ struct IOSMediaArtifactLoader: Sendable {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        let tls = connection.config.tls ?? GatewayTLSParams(
-            required: false,
-            expectedFingerprint: nil,
-            allowTOFU: false,
-            storeKey: nil)
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await self.requestFactory(tls, maximumBytes)(request)
+            (data, urlResponse) = try await self.requestFactory(connection, maximumBytes)(request)
         } catch is GatewayBoundedDataError {
             throw LoadError.payloadTooLarge
+        }
+        if let binding = connection.nativeBinding, await !binding.isCurrent() {
+            throw CancellationError()
         }
         guard let http = urlResponse as? HTTPURLResponse else { throw LoadError.invalidResponse }
         if http.statusCode == 202 {

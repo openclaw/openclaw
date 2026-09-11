@@ -572,9 +572,14 @@ public final class OpenClawChatViewModel {
     }
 
     /// Permanently retires a replaced presentation without aborting its gateway run.
-    public func detachTransport() {
+    public func detachTransport(reason: String? = nil) {
         guard !self.isTransportDetached else { return }
         self.isTransportDetached = true
+        if let reason {
+            self.healthOK = false
+            self.errorText = reason
+            self.isLoading = false
+        }
         self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
@@ -588,12 +593,8 @@ public final class OpenClawChatViewModel {
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
         self.subagentActivityCleanupTask?.cancel()
         self.questionRefreshRetryTask?.cancel()
-        for (_, task) in self.questionExpiryTasks {
-            task.cancel()
-        }
-        for (_, task) in self.pendingRunOwnerTasks {
-            task.cancel()
-        }
+        self.questionExpiryTasks.values.forEach { $0.cancel() }
+        self.pendingRunOwnerTasks.values.forEach { $0.cancel() }
         for tail in self.settingsPatchTailsByTarget.values {
             tail.routeLeaseTask.cancel()
             tail.task.cancel()

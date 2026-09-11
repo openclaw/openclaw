@@ -34,6 +34,15 @@ extension String {
     }
 }
 
+/// Transport facts from one admitted socket, not current settings or account authority.
+public struct GatewayAdmittedHTTPContext: Sendable {
+    public let gatewayURL: URL
+    /// Nil means known unpinned policy; HTTPS consumers must still require system trust.
+    public let tlsFingerprintSHA256: String?
+    /// Sanitized credential headers actually supplied to this socket's upgrade.
+    public let customHeaders: [String: String]
+}
+
 public actor GatewayChannelActor {
     struct PendingRequest {
         let continuation: CheckedContinuation<GatewayFrame, Error>
@@ -69,6 +78,7 @@ public actor GatewayChannelActor {
     private var password: String?
     private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
+    private let usesDefaultURLSession: Bool
     private var backoffMs: Double = 500
     var connectFailureBackoff = GatewayConnectFailureBackoff()
     private var shouldReconnect = true
@@ -77,6 +87,7 @@ public actor GatewayChannelActor {
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
     private var lastAuthBinding: (generation: UInt64, binding: GatewayAuthBinding)?
+    private var lastAdmittedHTTPContext: (generation: UInt64, context: GatewayAdmittedHTTPContext)?
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
@@ -128,6 +139,7 @@ public actor GatewayChannelActor {
         self.password = password
         self.authBindingKey = authBindingKey
         self.extraHeadersProvider = extraHeadersProvider
+        self.usesDefaultURLSession = session == nil
         self.session = session?.session ?? URLSession(configuration: .default)
         self.connectSnapshotAdmissionHandler = connectSnapshotAdmissionHandler
         self.pushHandler = pushHandler
@@ -150,9 +162,20 @@ public actor GatewayChannelActor {
         return self.lastAuthBinding?.binding
     }
 
+    func admittedHTTPContext(
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayAdmittedHTTPContext?
+    {
+        guard self.isConnected(connectionGeneration: expectedGeneration),
+              self.task?.state == .running,
+              self.lastAdmittedHTTPContext?.generation == expectedGeneration
+        else { return nil }
+        return self.lastAdmittedHTTPContext?.context
+    }
+
     public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
+        self.lastAdmittedHTTPContext = nil
         self.activeConnectAttemptID = nil
         self.automaticReconnectRequested = false
         self.connectAttemptTask?.cancel()
@@ -247,6 +270,43 @@ public actor GatewayChannelActor {
             self.workerEdgeCredentials = ["clientId": clientID, "clientSecret": clientSecret]
         }
         return request
+    }
+
+    private func makeAdmittedHTTPContext(
+        request: URLRequest,
+        task: WebSocketTaskBox) -> GatewayAdmittedHTTPContext?
+    {
+        guard let gatewayURL = request.url,
+              self.usesDefaultURLSession || self.session is GatewayTLSPinningSession
+        else { return nil }
+
+        let fingerprint: String?
+        switch gatewayURL.scheme?.lowercased() {
+        case "wss":
+            if self.usesDefaultURLSession {
+                fingerprint = nil
+            } else {
+                guard let pinningSession = self.session as? GatewayTLSPinningSession,
+                      let admission = pinningSession.tlsAdmission(for: task)
+                else { return nil }
+                switch admission {
+                case let .pinned(value):
+                    fingerprint = value
+                case .unpinned:
+                    fingerprint = nil
+                case .unknown:
+                    return nil
+                }
+            }
+        case "ws":
+            fingerprint = nil
+        default:
+            return nil
+        }
+        return GatewayAdmittedHTTPContext(
+            gatewayURL: gatewayURL,
+            tlsFingerprintSHA256: fingerprint,
+            customHeaders: request.allHTTPHeaderFields ?? [:])
     }
 
     public func connect() async throws {
@@ -346,7 +406,8 @@ public actor GatewayChannelActor {
         let connectionGeneration = self.connectionGeneration
         self.task?.cancel(with: .goingAway, reason: nil)
         let attemptID = UUID()
-        let connectTask = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
+        let upgradeRequest = self.makeUpgradeRequest()
+        let connectTask = self.session.makeWebSocketTask(request: upgradeRequest)
         self.activeConnectAttemptID = attemptID
         self.task = connectTask
         connectTask.resume()
@@ -388,6 +449,10 @@ public actor GatewayChannelActor {
               self.disconnectedConnectionGeneration != connectionGeneration,
               self.shouldReconnect
         else { throw CancellationError() }
+        // The provider can change without reconnecting; retain only this upgrade's facts.
+        self.lastAdmittedHTTPContext = self.makeAdmittedHTTPContext(
+            request: upgradeRequest,
+            task: connectTask).map { (generation: connectionGeneration, context: $0) }
         self.connected = true
         self.automaticReconnectRequested = false
         self.reconnectPausedForAuthFailure = false
@@ -701,88 +766,6 @@ extension GatewayChannelActor {
             suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
     }
 
-    nonisolated static func _test_requestedScopesExceedStoredToken(
-        role: String,
-        requestedScopes: [String],
-        storedToken: String?,
-        storedScopes: [String]) -> Bool
-    {
-        self.requestedScopesExceedStoredToken(
-            role: role,
-            requestedScopes: requestedScopes,
-            storedToken: storedToken,
-            storedScopes: storedScopes)
-    }
-
-    private nonisolated static func requestedScopesExceedStoredToken(
-        role: String,
-        requestedScopes: [String],
-        storedToken: String?,
-        storedScopes: [String]) -> Bool
-    {
-        storedToken != nil && !storedScopes.isEmpty &&
-            !self.storedDeviceTokenScopesAllow(
-                role: role,
-                requestedScopes: requestedScopes,
-                storedScopes: storedScopes)
-    }
-
-    private nonisolated static func storedDeviceTokenScopesAllow(
-        role: String,
-        requestedScopes: [String],
-        storedScopes: [String]) -> Bool
-    {
-        let requested = self.normalizedScopeList(requestedScopes)
-        if requested.isEmpty {
-            return true
-        }
-        let allowed = self.normalizedScopeList(storedScopes)
-        if allowed.isEmpty {
-            return false
-        }
-        let allowedSet = Set(allowed)
-        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalizedRole != "operator" {
-            let prefix = "\(normalizedRole)."
-            return requested.allSatisfy { scope in
-                scope.hasPrefix(prefix) && allowedSet.contains(scope)
-            }
-        }
-        return requested.allSatisfy { scope in
-            self.operatorScopeSatisfied(scope, granted: allowedSet)
-        }
-    }
-
-    private nonisolated static func normalizedScopeList(_ scopes: [String]) -> [String] {
-        var out: [String] = []
-        var seen = Set<String>()
-        for scope in scopes {
-            let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty || seen.contains(trimmed) {
-                continue
-            }
-            seen.insert(trimmed)
-            out.append(trimmed)
-        }
-        return out
-    }
-
-    private nonisolated static func operatorScopeSatisfied(_ scope: String, granted: Set<String>) -> Bool {
-        if !scope.hasPrefix("operator.") {
-            return false
-        }
-        if granted.contains("operator.admin") {
-            return true
-        }
-        if scope == "operator.read" {
-            return granted.contains("operator.read") || granted.contains("operator.write")
-        }
-        if scope == "operator.write" {
-            return granted.contains("operator.write")
-        }
-        return granted.contains(scope)
-    }
-
     private func shouldPersistBootstrapHandoffTokens() -> Bool {
         guard self.lastAuthSource == .bootstrapToken else { return false }
         let scheme = self.url.scheme?.lowercased()
@@ -1077,6 +1060,7 @@ extension GatewayChannelActor {
         // receive failure. Only the owner notifies lifecycle cleanup or reconnects.
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
+        self.lastAdmittedHTTPContext = nil
         self.activeConnectAttemptID = nil
         if shouldReconnect {
             self.automaticReconnectRequested = true
@@ -1363,7 +1347,9 @@ extension GatewayChannelActor {
     public func request(
         method: String,
         params: [String: AnyCodable]?,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        expectedProfileId: String? = nil,
+        completionPolicy: GatewayRequestCompletionPolicy = .requireCurrentRoute) async throws -> Data
     {
         try Task.checkCancellation()
         try await self.connectOrThrow(context: "gateway connect")
@@ -1383,7 +1369,9 @@ extension GatewayChannelActor {
             params: params,
             timeoutMs: timeoutMs,
             task: task,
-            connectionGeneration: connectionGeneration)
+            connectionGeneration: connectionGeneration,
+            expectedProfileId: expectedProfileId,
+            completionPolicy: completionPolicy)
     }
 
     /// Sends a request only on an already-connected physical socket. Unlike
@@ -1392,7 +1380,9 @@ extension GatewayChannelActor {
         method: String,
         params: [String: AnyCodable]?,
         timeoutMs: Double? = nil,
-        ifCurrentConnectionGeneration expectedGeneration: UInt64) async throws -> Data
+        ifCurrentConnectionGeneration expectedGeneration: UInt64,
+        expectedProfileId: String? = nil,
+        completionPolicy: GatewayRequestCompletionPolicy = .requireCurrentRoute) async throws -> Data
     {
         guard self.isConnected(connectionGeneration: expectedGeneration),
               let task = self.task,
@@ -1403,7 +1393,9 @@ extension GatewayChannelActor {
             params: params,
             timeoutMs: timeoutMs,
             task: task,
-            connectionGeneration: expectedGeneration)
+            connectionGeneration: expectedGeneration,
+            expectedProfileId: expectedProfileId,
+            completionPolicy: completionPolicy)
     }
 
     /// The generation is usable as a lease only while its socket is live.
@@ -1420,11 +1412,17 @@ extension GatewayChannelActor {
         params: [String: AnyCodable]?,
         timeoutMs: Double?,
         task: WebSocketTaskBox,
-        connectionGeneration: UInt64) async throws -> Data
+        connectionGeneration: UInt64,
+        expectedProfileId: String?,
+        completionPolicy: GatewayRequestCompletionPolicy) async throws -> Data
     {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
-        let payload = try self.encodeRequest(method: method, params: params, kind: "request")
+        let payload = try self.encodeRequest(
+            method: method,
+            params: params,
+            kind: "request",
+            expectedProfileId: expectedProfileId)
         let cancellationGate = GatewayRequestCancellationGate()
         let response: GatewayFrame
         do {
@@ -1490,21 +1488,27 @@ extension GatewayChannelActor {
             await testRequestResumedHandler()
         }
         #endif
+        let result = Result<Data, Error> {
+            guard case let .res(res) = response else {
+                throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
+            }
+            if res.ok == false {
+                throw GatewayResponseError(
+                    method: method,
+                    code: res.error?.code,
+                    message: res.error?.message,
+                    details: gatewayErrorDetails(res.error))
+            }
+            // Preserve JSON types without ObjC bridging. Encoding failures remain errors.
+            return try res.payload.map { try self.encoder.encode($0) } ?? Data()
+        }
+        // Only a successful response that won the original pending request is a
+        // receipt. Cancellation still fences reads, RPC errors, and encoding failures.
+        if completionPolicy.preservesSuccessfulResponse(for: method), case let .success(data) = result {
+            return data
+        }
         try Task.checkCancellation()
-        guard case let .res(res) = response else {
-            throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
-        }
-        if res.ok == false {
-            let code = res.error?.code
-            let msg = res.error?.message
-            let details = gatewayErrorDetails(res.error)
-            throw GatewayResponseError(method: method, code: code, message: msg, details: details)
-        }
-        if let payload = res.payload {
-            // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.
-            return try self.encoder.encode(payload)
-        }
-        return Data() // Should not happen, but tolerate empty payloads.
+        return try result.get()
     }
 
     public func send(method: String, params: [String: AnyCodable]?) async throws {
@@ -1599,7 +1603,8 @@ extension GatewayChannelActor {
     private func encodeRequest(
         method: String,
         params: [String: AnyCodable]?,
-        kind: String) throws -> (id: String, data: Data)
+        kind: String,
+        expectedProfileId: String? = nil) throws -> (id: String, data: Data)
     {
         let id = UUID().uuidString
         // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
@@ -1613,7 +1618,8 @@ extension GatewayChannelActor {
             type: "req",
             id: id,
             method: method,
-            params: paramsObject)
+            params: paramsObject,
+            expectedprofileid: expectedProfileId)
         do {
             let data = try self.encoder.encode(frame)
             return (id: id, data: data)

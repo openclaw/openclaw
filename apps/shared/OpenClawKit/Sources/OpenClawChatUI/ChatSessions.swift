@@ -607,6 +607,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var spawnedBy: String?
     public var childSessions: [String]?
     public var status: String?
+    public var lastRunId: String?
     public var lastRunError: String?
     public var hasActiveRun: Bool?
     public var activeRunIds: [String]?
@@ -693,6 +694,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         spawnedBy: String? = nil,
         childSessions: [String]? = nil,
         status: String? = nil,
+        lastRunId: String? = nil,
         lastRunError: String? = nil,
         hasActiveRun: Bool? = nil,
         activeRunIds: [String]? = nil,
@@ -749,6 +751,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.spawnedBy = spawnedBy
         self.childSessions = childSessions
         self.status = status
+        self.lastRunId = lastRunId
         self.lastRunError = lastRunError
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds

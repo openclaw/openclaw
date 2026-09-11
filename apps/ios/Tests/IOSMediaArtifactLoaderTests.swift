@@ -91,8 +91,8 @@ struct IOSMediaArtifactLoaderTests {
                     gatewayID: config.effectiveStableID,
                     customHeaders: [:])
             },
-            requestFactory: { receivedTLS, maximumBytes in
-                #expect(receivedTLS == tls)
+            requestFactory: { connection, maximumBytes in
+                #expect(connection.tls == tls)
                 #expect(maximumBytes == 16 * 1024 * 1024)
                 return { request in
                     #expect(request.value(forHTTPHeaderField: "Accept") == "video/*")

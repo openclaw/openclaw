@@ -15,6 +15,8 @@ public enum OpenClawChatTransportEvent: Sendable {
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
+    /// Terminal for this transport, without aborting accepted Gateway runs.
+    case routeUnavailable(reason: String)
     case seqGap
 }
 

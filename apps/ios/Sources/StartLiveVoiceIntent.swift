@@ -1,4 +1,11 @@
 import AppIntents
+import OpenClawKit
+
+extension OpenClawApp: AppIntentsPackage {
+    nonisolated static var includedPackages: [any AppIntentsPackage.Type] {
+        [OpenClawNativeAppIntents.self]
+    }
+}
 
 struct StartLiveVoiceIntent: AppIntent {
     static let title: LocalizedStringResource = "Start Live Voice"
@@ -21,5 +28,25 @@ struct OpenClawShortcuts: AppShortcutsProvider {
             phrases: ["Start live voice with \(.applicationName)"],
             shortTitle: "Start Live Voice",
             systemImageName: "waveform")
+        AppShortcut(
+            intent: OpenSessionIntent(),
+            phrases: ["Open a session in \(.applicationName)"],
+            shortTitle: "Open Session",
+            systemImageName: "bubble.left.and.bubble.right")
+        AppShortcut(
+            intent: OpenComposeIntent(),
+            phrases: ["Compose a message in \(.applicationName)"],
+            shortTitle: "Compose Message",
+            systemImageName: "square.and.pencil")
+        AppShortcut(
+            intent: SendMessageIntent(),
+            phrases: ["Send a message with \(.applicationName)"],
+            shortTitle: "Send Message",
+            systemImageName: "paperplane")
+        AppShortcut(
+            intent: InspectRunIntent(),
+            phrases: ["Inspect a run in \(.applicationName)"],
+            shortTitle: "Inspect Run",
+            systemImageName: "clock")
     }
 }

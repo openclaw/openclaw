@@ -748,6 +748,12 @@ struct GatewayTLSPinningState {
     }
 }
 
+enum GatewayTLSAdmission: Equatable, Sendable {
+    case unknown
+    case unpinned
+    case pinned(String)
+}
+
 public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionTaskDelegate,
     GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
@@ -759,6 +765,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
     private var expectedAuthority: GatewayTLSAuthority?
+    private var webSocketTLSAdmissions: [ObjectIdentifier: GatewayTLSAdmission] = [:]
     private lazy var session: URLSession = {
         let config = self.allowsStoredCredentials ? URLSessionConfiguration.default : .ephemeral
         if !self.allowsStoredCredentials {
@@ -795,6 +802,23 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         self.failureLock.lock()
         defer { self.failureLock.unlock() }
         return self.pinningState.acceptedFingerprint
+    }
+
+    func tlsAdmission(for task: WebSocketTaskBox) -> GatewayTLSAdmission? {
+        self.failureLock.withLock {
+            guard let admission = self.webSocketTLSAdmissions[ObjectIdentifier(task.task)],
+                  admission != .unknown else { return nil }
+            return admission
+        }
+    }
+
+    private func recordTLSAdmission(_ admission: GatewayTLSAdmission, for task: URLSessionTask) {
+        self.failureLock.withLock {
+            let key = ObjectIdentifier(task)
+            // Completed tasks cannot regain admission through a late challenge.
+            guard self.webSocketTLSAdmissions[key] != nil else { return }
+            self.webSocketTLSAdmissions[key] = admission
+        }
     }
 
     public func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
@@ -852,6 +876,9 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         self.registerExpectedAuthority(url: request.url)
         let task = self.session.webSocketTask(with: request)
+        self.failureLock.withLock {
+            self.webSocketTLSAdmissions[ObjectIdentifier(task)] = .unknown
+        }
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }
@@ -907,6 +934,16 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func urlSession(
         _: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError _: Error?)
+    {
+        self.failureLock.withLock {
+            self.webSocketTLSAdmissions[ObjectIdentifier(task)] = nil
+        }
+    }
+
+    public func urlSession(
+        _: URLSession,
         task _: URLSessionTask,
         willPerformHTTPRedirection _: HTTPURLResponse,
         newRequest request: URLRequest,
@@ -918,22 +955,18 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     }
 
     public func urlSession(
-        _ session: URLSession,
-        task _: URLSessionTask,
+        _: URLSession,
+        task: URLSessionTask,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
     {
-        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
-    }
-
-    public func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
-    {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
         else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        self.recordTLSAdmission(.unknown, for: task)
+        guard let trust = challenge.protectionSpace.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
@@ -964,6 +997,11 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         {
         case let .accept(fingerprint, enforcePin):
             self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            if enforcePin, let fingerprint {
+                self.recordTLSAdmission(.pinned(fingerprint), for: task)
+            } else if !enforcePin {
+                self.recordTLSAdmission(.unpinned, for: task)
+            }
             completionHandler(.useCredential, URLCredential(trust: trust))
         case let .reject(failure, enforcedFingerprint):
             if let enforcedFingerprint {

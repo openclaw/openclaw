@@ -2,6 +2,8 @@
 import CryptoKit
 import Foundation
 import Network
+import Security
+import Testing
 @testable import OpenClawKit
 
 @MainActor
@@ -23,6 +25,19 @@ final class NativeGatewayWebSocketFixture {
             requestId: "native-pairing-request")
     }
 
+    struct HelloMetadata: Sendable {
+        var role = "node"
+        var scopes: [String] = []
+        var capabilities: [String] = []
+    }
+
+    enum RPCResponse {
+        case success([String: Any])
+        case failure(code: String, message: String, details: [String: Any]? = nil)
+    }
+
+    typealias RPCHandler = @MainActor @Sendable ([String: Any]) -> RPCResponse
+
     private struct Client {
         enum Phase {
             case handshake
@@ -39,22 +54,32 @@ final class NativeGatewayWebSocketFixture {
     private let listener: NWListener
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
+    private let hello: HelloMetadata
+    private let rpcHandler: RPCHandler?
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
+    private var upgradeHeaders: [Int: String] = [:]
     private var nextConnectionIndex = 0
     private var stopped = false
     nonisolated let port: UInt16
+    nonisolated let usesTLS: Bool
 
     private init(
         listener: NWListener,
         port: UInt16,
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure])
+        connectFailures: [Int: ConnectFailure],
+        usesTLS: Bool,
+        hello: HelloMetadata,
+        rpcHandler: RPCHandler?)
     {
         self.listener = listener
         self.port = port
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
+        self.usesTLS = usesTLS
+        self.hello = hello
+        self.rpcHandler = rpcHandler
         self.listener.newConnectionHandler = { [weak self] connection in
             Task { @MainActor [weak self] in
                 guard let self else {
@@ -70,9 +95,19 @@ final class NativeGatewayWebSocketFixture {
     @concurrent
     nonisolated static func start(
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure] = [:]) async throws -> NativeGatewayWebSocketFixture
+        connectFailures: [Int: ConnectFailure] = [:],
+        tlsIdentity: sec_identity_t? = nil,
+        hello: HelloMetadata = .init(),
+        rpcHandler: RPCHandler? = nil) async throws -> NativeGatewayWebSocketFixture
     {
-        let parameters = NWParameters.tcp
+        let parameters: NWParameters
+        if let tlsIdentity {
+            let tls = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(tls.securityProtocolOptions, tlsIdentity)
+            parameters = NWParameters(tls: tls)
+        } else {
+            parameters = .tcp
+        }
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
@@ -90,7 +125,10 @@ final class NativeGatewayWebSocketFixture {
                         listener: listener,
                         port: port.rawValue,
                         issuedDeviceTokens: issuedDeviceTokens,
-                        connectFailures: connectFailures)
+                        connectFailures: connectFailures,
+                        usesTLS: tlsIdentity != nil,
+                        hello: hello,
+                        rpcHandler: rpcHandler)
                     try Task.checkCancellation()
                     return fixture
                 case let .failed(error):
@@ -113,7 +151,7 @@ final class NativeGatewayWebSocketFixture {
     }
 
     nonisolated func url() -> URL {
-        URL(string: "ws://127.0.0.1:\(self.port)")!
+        URL(string: "\(self.usesTLS ? "wss" : "ws")://127.0.0.1:\(self.port)")!
     }
 
     var activeConnectionCount: Int {
@@ -123,6 +161,14 @@ final class NativeGatewayWebSocketFixture {
     func capturedAuth(at index: Int) -> ConnectAuth? {
         guard self.connectAuth.indices.contains(index) else { return nil }
         return self.connectAuth[index]
+    }
+
+    func capturedUpgradeHeader(_ name: String, at index: Int) -> String? {
+        self.upgradeHeaders[index]?
+            .components(separatedBy: "\r\n")
+            .first(where: { $0.lowercased().hasPrefix("\(name.lowercased()):") })?
+            .split(separator: ":", maxSplits: 1).last?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func closeConnection(at index: Int) {
@@ -215,6 +261,7 @@ final class NativeGatewayWebSocketFixture {
             self.close(index)
             return
         }
+        self.upgradeHeaders[index] = headers
 
         let digest = Insecure.SHA1.hash(data: Data((key + Self.websocketGUID).utf8))
         let accept = Data(digest).base64EncodedString()
@@ -261,12 +308,20 @@ final class NativeGatewayWebSocketFixture {
     }
 
     private func handleText(_ data: Data, index: Int) {
-        guard var client = self.clients[index], client.phase == .connect,
+        guard var client = self.clients[index],
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               request["type"] as? String == "req",
-              request["method"] as? String == "connect",
+              let method = request["method"] as? String,
               let id = request["id"] as? String
         else { return }
+
+        if client.phase == .open {
+            // A rejected handshake must not reach the opt-in RPC handler.
+            guard self.connectFailures[index] == nil, let rpcHandler = self.rpcHandler else { return }
+            self.sendRPCResponse(rpcHandler(request), id: id, index: index)
+            return
+        }
+        guard client.phase == .connect, method == "connect" else { return }
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
@@ -283,6 +338,21 @@ final class NativeGatewayWebSocketFixture {
         }
     }
 
+    private func sendRPCResponse(_ response: RPCResponse, id: String, index: Int) {
+        var frame: [String: Any] = ["type": "res", "id": id]
+        switch response {
+        case let .success(payload):
+            frame["ok"] = true
+            frame["payload"] = payload
+        case let .failure(code, message, details):
+            var error: [String: Any] = ["code": code, "message": message]
+            if let details { error["details"] = details }
+            frame["ok"] = false
+            frame["error"] = error
+        }
+        self.sendJSON(frame, index: index)
+    }
+
     private func sendChallenge(_ index: Int) {
         let frame: [String: Any] = [
             "type": "event",
@@ -297,8 +367,8 @@ final class NativeGatewayWebSocketFixture {
 
     private func sendConnectOK(id: String, index: Int) {
         var auth: [String: Any] = [
-            "role": "node",
-            "scopes": [],
+            "role": self.hello.role,
+            "scopes": self.hello.scopes,
         ]
         if self.issuedDeviceTokens.indices.contains(index),
            let token = self.issuedDeviceTokens[index]
@@ -319,7 +389,7 @@ final class NativeGatewayWebSocketFixture {
                 "features": [
                     "methods": [],
                     "events": [],
-                    "capabilities": [],
+                    "capabilities": self.hello.capabilities,
                 ],
                 "snapshot": [
                     "presence": [["ts": 1]],
@@ -433,4 +503,55 @@ final class NativeGatewayWebSocketFixture {
         return (first & 0x0F, payload)
     }
 }
+
+#if os(macOS)
+/// The local listener's synthetic identity is imported in memory, never into Keychain.
+struct NativeGatewayTLSIdentity {
+    let identity: sec_identity_t
+    let fingerprint: String
+
+    init() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func openssl(_ arguments: [String]) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+            process.currentDirectoryURL = directory
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            try #require(process.terminationStatus == 0)
+        }
+        try openssl([
+            "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+            "-subj", "/CN=localhost", "-keyout", "key.pem", "-out", "cert.pem",
+        ])
+        try openssl([
+            "pkcs12", "-export", "-inkey", "key.pem", "-in", "cert.pem", "-out", "identity.p12",
+            "-passout", "pass:fixture", "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES",
+            "-macalg", "sha1",
+        ])
+        let data = try Data(contentsOf: directory.appendingPathComponent("identity.p12"))
+        var items: CFArray?
+        let options: [String: Any] = [
+            kSecImportExportPassphrase as String: "fixture",
+            kSecImportToMemoryOnly as String: true,
+        ]
+        try #require(SecPKCS12Import(data as CFData, options as CFDictionary, &items) == errSecSuccess)
+        let imported = try #require((items as? [[String: Any]])?.first?[kSecImportItemIdentity as String])
+        // Security guarantees a SecIdentity at kSecImportItemIdentity.
+        // swiftlint:disable:next force_cast
+        let identity = imported as! SecIdentity
+        self.identity = try #require(sec_identity_create(identity))
+        var certificate: SecCertificate?
+        try #require(SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess)
+        let certificateData = try SecCertificateCopyData(#require(certificate)) as Data
+        self.fingerprint = SHA256.hash(data: certificateData)
+            .map { String(format: "%02x", $0) }.joined()
+    }
+}
+#endif
 #endif

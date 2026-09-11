@@ -624,7 +624,19 @@ final class NodeAppModel {
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
-    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
+    func makeChatTransport(
+        outboxGatewayID: String? = nil,
+        nativeBinding: IOSNativeActionBinding? = nil) -> any OpenClawChatTransport
+    {
+        if let nativeBinding {
+            return IOSGatewayChatTransport(
+                gateway: nativeBinding.gateway,
+                globalAgentId: nativeBinding.session.agentID,
+                outboxGatewayID: nativeBinding.session.owner.gatewayID,
+                mediaArtifactLoader: IOSMediaArtifactLoader(
+                    connectionProvider: { nativeBinding.mediaConnection }),
+                nativeBinding: nativeBinding)
+        }
         if self.isScreenshotFixtureModeEnabled {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
         }

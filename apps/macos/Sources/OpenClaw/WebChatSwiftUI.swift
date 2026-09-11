@@ -258,6 +258,13 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 try await connection.request(
                     method: method, params: params, timeoutMs: 26 * 60 * 1000, ifCurrentServerLease: lease)
             },
+            closeWizard: { sessionID in
+                try await connection.request(
+                    method: "wizard.cancel",
+                    params: ["sessionId": AnyCodable(sessionID), "closeInput": AnyCodable(true)],
+                    timeoutMs: 26 * 60 * 1000,
+                    ifCurrentServerLease: lease)
+            },
             isCurrent: { await connection.isCurrentServerLease(lease) })
     }
 

@@ -5444,11 +5444,14 @@ struct ChatViewModelTests {
         #expect(vm.streamingAssistantText == "Here is the result")
     }
 
-    @Test @MainActor func `detached transport ignores late events and in-flight history`() async throws {
+    @Test(arguments: [false, true])
+    @MainActor
+    func `detached transport ignores late events and in-flight history`(unavailable: Bool) async throws {
         let historyGate = AsyncGate()
         let historyStarted = AsyncCounter()
         let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload()],
+            historyResponses: [historyPayload(
+                inFlightRun: unavailable ? OpenClawChatInFlightRun(runId: "accepted-run", text: "accepted") : nil)],
             historyResponseHook: { _, index, _ in
                 guard index == 1 else { return nil }
                 _ = await historyStarted.increment()
@@ -5458,8 +5461,18 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm)
         let refresh = Task { await vm.refreshHistoryAfterRun() }
         try await waitUntil("history starts before detachment") { await historyStarted.current() == 1 }
+        let retainedRuns = vm.pendingRuns
+        let retainedMessages = vm.messages
+        let retainedStream = vm.streamingAssistantText
+        let reason = "The selected account is unavailable."
+        if unavailable {
+            vm.handleTransportEvent(.routeUnavailable(reason: reason))
+        } else {
+            vm.detachTransport()
+        }
         vm.detachTransport()
-        vm.detachTransport()
+        vm.handleTransportEvent(.health(ok: true))
+        vm.refresh()
         let lateEvent = OpenClawChatTransportEvent.chat(OpenClawChatEventPayload(
             runId: "retired-run", sessionKey: "main", state: "delta",
             message: chatTextMessage(role: "assistant", text: "late", timestamp: 1), errorMessage: nil))
@@ -5469,9 +5482,49 @@ struct ChatViewModelTests {
         await historyGate.open()
         let result = await refresh.value
         #expect(!result.applied)
-        #expect(vm.pendingRunCount == 0)
-        #expect(vm.streamingAssistantText == nil)
+        #expect(vm.pendingRuns == retainedRuns)
+        #expect(vm.pendingRunCount == (unavailable ? 1 : 0))
+        #expect(vm.streamingAssistantText == retainedStream)
+        #expect(vm.messages == retainedMessages)
+        #expect(await transport.abortedRunIds().isEmpty)
+        if unavailable {
+            #expect(!vm.healthOK)
+            #expect(!vm.isLoading)
+            #expect(vm.errorText == reason)
+        }
+    }
+
+    @Test @MainActor func `route loss during bootstrap ends loading without adopting late history`() async throws {
+        let gate = SessionSubscribeGate()
+        let completed = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [],
+            historyResponseHook: { _, _, _ in
+                await gate.wait()
+                _ = await completed.increment()
+                return historyPayload(inFlightRun: .init(runId: "late-run", text: "late history"))
+            })
+        vm.input = "preserved draft"
+        vm.load()
+        await gate.waitUntilBlocked()
+        #expect(vm.isLoading)
+        let reason = "The selected connection was replaced."
+        vm.handleTransportEvent(.routeUnavailable(reason: reason))
+        #expect(!vm.isLoading)
+        #expect(!vm.healthOK)
+        #expect(vm.errorText == reason)
+        await gate.release()
+        try await waitUntil("retired bootstrap history returned") { await completed.current() == 1 }
+        await Task { @MainActor in }.value
+        vm.handleTransportEvent(.health(ok: true))
+        vm.load()
+        #expect(vm.errorText == reason)
+        #expect(!vm.isLoading)
+        #expect(!vm.healthOK)
+        #expect(vm.pendingRuns.isEmpty)
         #expect(vm.messages.isEmpty)
+        #expect(vm.input == "preserved draft")
+        #expect(await transport.abortedRunIds().isEmpty)
     }
 
     @Test func `completion wait refreshes history and clears pending run`() async throws {

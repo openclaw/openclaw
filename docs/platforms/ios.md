@@ -3,6 +3,7 @@ summary: "iOS node app: connect to the Gateway, pairing, device capabilities, an
 read_when:
   - Pairing or reconnecting the iOS node
   - Starting live voice with Siri or Shortcuts
+  - Opening selected sessions or sending and inspecting runs with native actions
   - Using voice input and spoken replies on Apple Watch
   - Setting up standalone Apple Watch voice
   - Enabling or troubleshooting the direct Apple Watch node
@@ -617,6 +618,55 @@ For quick access, save a shortcut containing **Start Live Voice**, then assign
 it under **Settings → Action Button → Shortcut** on a supported iPhone, or use
 **Add to Home Screen** in Shortcuts. Background voice remains subject to the
 same iOS limits as Talk started inside the app.
+
+## Native session actions
+
+These actions are under development. Discovery in a signed, installed app and
+physical-device Siri behavior still need validation; this is not a shipped
+availability claim.
+
+In a build that includes the actions:
+
+1. Open OpenClaw and connect to the intended Gateway and account.
+2. In **Shortcuts > Apps > OpenClaw**, choose an action and select its **Session**
+   or **Run**. Session suggestions come from the currently connected Gateway.
+3. Unlock when prompted and keep OpenClaw in the foreground while it opens the
+   selected chat. **Send Message** asks for confirmation before sending.
+
+- **Open Session** opens the selected chat.
+- **Compose Message** opens that chat with an optional draft, without sending.
+  An existing draft is not overwritten.
+- **Send Message** sends the supplied text after confirmation and returns a
+  **Run** with a continuation to that exact chat.
+- **Inspect Run** reads facts for the selected run and can open its chat.
+
+A saved Session selection includes the Gateway, canonical account ID, agent,
+and session. These identify the destination, not permissions. Actions use the
+app's existing authenticated connection, chat settings, and approval flow;
+shortcut confirmation does not approve later agent commands.
+
+**Accepted** means the Gateway accepted the send, not that the run completed.
+For a long-running task, open the returned run's chat to follow progress and
+answer approvals. **Inspect Run** reports active or terminal status only when
+the Gateway provides a matching fact for that exact run. An input receipt or
+reply alone does not prove completion. Its history read is bounded, so an older
+run can be unobserved or have unknown status without proving that nothing ran.
+
+Native sends do **not** enter the durable offline chat outbox. An uncertain
+send is never automatically repeated. The same in-flight submission is
+one-shot; intentionally running the shortcut again creates a new send, even
+with identical text. There is no cross-launch deduplication guarantee.
+
+### Troubleshoot native actions
+
+- **Unconfigured or disconnected:** open OpenClaw and connect to the intended
+  Gateway. A native action does not queue the message for later delivery.
+- **Account changed or saved selection invalid:** select the session again
+  under the intended account; the action does not retarget another account.
+- **Chat not ready or draft already present:** open the selected chat and
+  resolve the existing draft, queued messages, or current chat action first.
+- **Delivery unconfirmed or run unknown:** inspect the exact chat before
+  deciding whether to send again. Do not add an automatic retry around the action.
 
 ## Common errors
 

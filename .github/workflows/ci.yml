@@ -5068,6 +5068,14 @@ jobs:
         if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: pnpm ios:build
 
+      - name: Prove native iOS actions against a real Gateway
+        if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: |
+          pnpm build qaRuntime
+          node --import ./scripts/tsx.mjs scripts/test-native-action-gateway.mts ios
+
       # Debug's incremental compilation can miss actor-isolation diagnostics
       # that Swift's optimized whole-module Release build enforces.
       - name: Build iOS app (Release)
@@ -5129,6 +5137,7 @@ jobs:
             -only-testing:OpenClawTests/OpenClawTypographyTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/SwiftUIRenderSmokeTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
           xcodebuild \

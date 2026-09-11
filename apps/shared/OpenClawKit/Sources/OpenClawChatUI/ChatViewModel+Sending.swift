@@ -10,7 +10,151 @@ struct SlashFilterCache {
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
+/// One intentional invocation. Retain this object to join or read its result;
+/// recreating an OS delivery does not reconstruct this invocation.
+@MainActor
+public final class OpenClawChatExternalSubmission {
+    public let target: OpenClawNativeSessionRef
+    public let message: String
+    public let operationID = UUID()
+
+    fileprivate enum State {
+        case idle
+        case running(Task<OpenClawChatSubmissionOutcome, Never>)
+        case finished(OpenClawChatSubmissionOutcome)
+    }
+
+    fileprivate var state: State = .idle
+    fileprivate weak var owner: OpenClawChatViewModel?
+    fileprivate var isCurrent: (@Sendable () async -> Bool)?
+
+    public init(target: OpenClawNativeSessionRef, message: String) {
+        self.target = target
+        self.message = message
+    }
+}
+
+public enum OpenClawChatSubmissionOutcome: Equatable, Sendable {
+    case accepted(runID: String)
+    case queued
+    case rejected(reason: String)
+    case notDispatched(reason: String)
+    case cancelled
+    case uncertain(reason: String)
+}
+
+/// Capture before confirmation. The platform adapter binds both closures to
+/// the same authenticated physical connection, not a lookup of "current".
+public struct OpenClawChatExternalSubmissionRoute: Sendable {
+    public let target: OpenClawNativeSessionRef
+    public let lease: OpenClawChatTransportRouteLease
+    public let isCurrent: @Sendable () async -> Bool
+
+    public init(
+        target: OpenClawNativeSessionRef,
+        lease: OpenClawChatTransportRouteLease,
+        isCurrent: @escaping @Sendable () async -> Bool)
+    {
+        self.target = target
+        self.lease = lease
+        self.isCurrent = isCurrent
+    }
+}
+
 extension OpenClawChatViewModel {
+    /// The platform must bind this view model to the verified route owner.
+    /// External submissions never enter the durable outbox or borrow its retry policy.
+    public func submit(
+        _ submission: OpenClawChatExternalSubmission,
+        using route: OpenClawChatExternalSubmissionRoute) async -> OpenClawChatSubmissionOutcome
+    {
+        switch submission.state {
+        case .idle:
+            submission.owner = self
+            submission.isCurrent = route.isCurrent
+            let session = self.currentSessionSnapshot()
+            let branchGeneration = self.nextSessionBranchSwitchGeneration
+            // Bind and reserve before suspension. Only the first caller owns
+            // cancellation; later callers cannot replace the captured route.
+            let task = Task {
+                await self.performExternalSubmission(
+                    submission,
+                    using: route,
+                    session: session,
+                    branchGeneration: branchGeneration)
+            }
+            submission.state = .running(task)
+            let result = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            // Keep every outcome, including known non-dispatch, but release
+            // execution captures. A new intentional attempt needs a new object.
+            submission.state = .finished(result)
+            return result
+        case let .running(task):
+            return await self.readExternalSubmission(submission) { await task.value }
+        case let .finished(result):
+            return await self.readExternalSubmission(submission) { result }
+        }
+    }
+
+    private func readExternalSubmission(
+        _ submission: OpenClawChatExternalSubmission,
+        result: () async -> OpenClawChatSubmissionOutcome) async -> OpenClawChatSubmissionOutcome
+    {
+        guard submission.owner === self, let isCurrent = submission.isCurrent,
+              await isCurrent(),
+              self.matchesExternalTarget(submission.target, session: self.currentSessionSnapshot())
+        else {
+            return .uncertain(
+                reason: "Reconnect to the selected account to check this operation. Do not send it again.")
+        }
+        let outcome = await result()
+        guard await isCurrent(),
+              self.matchesExternalTarget(submission.target, session: self.currentSessionSnapshot())
+        else {
+            return .uncertain(
+                reason: "Reconnect to the selected account to check this operation. Do not send it again.")
+        }
+        return outcome
+    }
+
+    private func performExternalSubmission(
+        _ submission: OpenClawChatExternalSubmission,
+        using route: OpenClawChatExternalSubmissionRoute,
+        session: SessionSnapshot,
+        branchGeneration: UInt64) async -> OpenClawChatSubmissionOutcome
+    {
+        guard !Task.isCancelled else { return .cancelled }
+        guard submission.target == route.target else {
+            return .notDispatched(reason: "The selected action route changed. Select the session again.")
+        }
+        guard self.matchesExternalTarget(submission.target, session: session) else {
+            return .notDispatched(reason: "The selected session changed. Open it again before sending.")
+        }
+        guard !self.isSubmittingDraft, !self.isSending, !self.hasBlockingRunActivity else {
+            return .notDispatched(reason: "Wait for the current chat action before sending.")
+        }
+        let trimmed = submission.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .rejected(reason: "Enter a message to send.") }
+        let draft = SendDraft(
+            input: submission.message,
+            attachments: [],
+            trimmed: trimmed,
+            session: session,
+            branchGeneration: branchGeneration,
+            source: .external(submission.operationID, route))
+        return await self.performSend(draft)
+    }
+
+    private func matchesExternalTarget(_ target: OpenClawNativeSessionRef, session: SessionSnapshot) -> Bool {
+        self.isCurrentSession(session) &&
+            session.key.utf8.elementsEqual(target.sessionKey.utf8) &&
+            session.deliveryAgentID?.utf8.elementsEqual(target.agentID.utf8) == true
+    }
+
     public var canSend: Bool {
         !isSubmittingDraft &&
             !isSending &&
@@ -23,6 +167,12 @@ extension OpenClawChatViewModel {
     public var hasDraftToSend: Bool {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty || !attachments.isEmpty
+    }
+
+    /// Only idle text may survive an explicitly verified replacement transport.
+    public var canPreserveIdleTextDraft: Bool {
+        !self.isSubmittingDraft && !self.isSending && !self.hasBlockingRunActivity &&
+            !self.isAborting && self.replyTarget == nil && !self.isAttachmentOwnerPinned
     }
 
     var hasBlockingRunActivity: Bool {
@@ -324,19 +474,34 @@ extension OpenClawChatViewModel {
     }
 
     private struct SendDraft {
+        enum Source {
+            case composer(replyTarget: OpenClawChatReplyTarget?, revision: UInt64)
+            case external(UUID, OpenClawChatExternalSubmissionRoute)
+        }
+
         let input: String
         let attachments: [OpenClawPendingAttachment]
         let trimmed: String
         let session: SessionSnapshot
-        let replyTarget: OpenClawChatReplyTarget?
-        let composerRevision: UInt64
+        let branchGeneration: UInt64
+        let source: Source
+
+        var isComposer: Bool {
+            if case .composer = self.source { return true }
+            return false
+        }
+
+        var externalRoute: OpenClawChatExternalSubmissionRoute? {
+            if case let .external(_, route) = self.source { return route }
+            return nil
+        }
 
         var messageText: String {
             self.trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : self.trimmed
         }
 
         var outgoingMessageText: String {
-            guard let replyTarget else { return self.messageText }
+            guard case let .composer(replyTarget?, _) = self.source else { return self.messageText }
             // Web quotes attachment-only replies with an empty typed prompt;
             // retain that exact trailing separator rather than adding the
             // native attachment fallback text.
@@ -361,6 +526,14 @@ extension OpenClawChatViewModel {
 
     private func performSend() async {
         guard let draft = captureSendDraft() else { return }
+        _ = await self.performSend(draft)
+    }
+
+    private func performSend(_ draft: SendDraft) async -> OpenClawChatSubmissionOutcome {
+        guard !Task.isCancelled else { return .cancelled }
+        guard !isSubmittingDraft, !isSending, !self.hasBlockingRunActivity else {
+            return .notDispatched(reason: "Wait for the current chat action before sending.")
+        }
 
         // Own every asynchronous validation/probe below. Slash catalog lookup
         // can suspend, so taking this gate later permits duplicate enqueues.
@@ -370,7 +543,19 @@ extension OpenClawChatViewModel {
         isSubmittingDraft = true
         defer { self.isSubmittingDraft = false }
 
-        guard await self.validateSendDraft(draft) else { return }
+        if case let .external(_, route) = draft.source {
+            guard await route.isCurrent() else {
+                return .notDispatched(reason: "The action route changed. Select the session again.")
+            }
+            if let outcome = self.externalSubmissionReadiness(draft) { return outcome }
+        }
+        guard await self.validateSendDraft(draft) else {
+            return .rejected(reason: self.errorText ?? "The message was not submitted.")
+        }
+        guard !Task.isCancelled else { return .cancelled }
+        guard self.isCurrentSession(draft.session) else {
+            return .notDispatched(reason: "The selected session changed before sending.")
+        }
 
         isSending = true
         isSendingAttachmentDraft = !draft.attachments.isEmpty
@@ -380,13 +565,13 @@ extension OpenClawChatViewModel {
             self.applyDeferredExternalStateIfReady()
         }
 
-        guard await self.prepareLiveRoute(for: draft) else { return }
-        guard self.composerModelAvailabilityMessage == nil else {
+        if let outcome = await self.prepareLiveRoute(for: draft) { return outcome }
+        if let reason = self.composerModelAvailabilityMessage {
             logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
-            return
+            return .rejected(reason: reason)
         }
         let attempt = self.beginLiveSend(draft)
-        await self.deliverLiveSend(attempt)
+        return await self.deliverLiveSend(attempt)
     }
 
     private func captureSendDraft() -> SendDraft? {
@@ -419,20 +604,28 @@ extension OpenClawChatViewModel {
             attachments: attachments,
             trimmed: trimmed,
             session: currentSessionSnapshot(),
-            replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
-            composerRevision: composerRevision(for: sessionKey))
+            branchGeneration: self.nextSessionBranchSwitchGeneration,
+            source: .composer(
+                replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
+                revision: composerRevision(for: sessionKey)))
     }
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
         let command = draft.trimmed.lowercased()
         if Self.isLiveOnlyLocalSlashCommand(command) {
+            guard draft.isComposer else {
+                errorText = "Open the session to run this command."
+                return false
+            }
             let canRunCommand = await prepareLiveOnlyLocalSlashCommand(session: draft.session)
             guard canRunCommand else { return false }
         }
-        if await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input) {
+        if case let .composer(_, revision) = draft.source,
+           await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input)
+        {
             self.recordSuccessfulInput(
                 draft.trimmed,
-                submittedRevision: draft.composerRevision,
+                submittedRevision: revision,
                 sessionKey: draft.session.key)
             return false
         }
@@ -441,11 +634,16 @@ extension OpenClawChatViewModel {
             hasAttachments: !draft.attachments.isEmpty)
     }
 
-    private func prepareLiveRoute(for draft: SendDraft) async -> Bool {
+    private func prepareLiveRoute(for draft: SendDraft) async -> OpenClawChatSubmissionOutcome? {
+        guard case let .composer(_, revision) = draft.source else {
+            return self.externalSubmissionReadiness(draft)
+        }
         let sessionKey = draft.session.key
         if !healthOK {
             await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
-            guard isCurrentSession(draft.session) else { return false }
+            guard isCurrentSession(draft.session) else {
+                return .notDispatched(reason: "The selected session changed before sending.")
+            }
             // Offline capture: queue the full draft durably instead of
             // dropping user text or attachment bytes.
             if !healthOK, outbox != nil {
@@ -454,13 +652,13 @@ extension OpenClawChatViewModel {
                 let accepted = await enqueueOutboxCommand(
                     text: draft.outgoingMessageText,
                     draftInput: draft.input,
-                    draftRevision: draft.composerRevision,
+                    draftRevision: revision,
                     draftAttachments: draft.attachments,
                     session: draft.session)
                 if accepted {
                     self.finishAcceptedComposerSend(draft)
                 }
-                return false
+                return accepted ? .queued : .notDispatched(reason: errorText ?? "Could not queue the message.")
             }
         }
 
@@ -471,7 +669,7 @@ extension OpenClawChatViewModel {
         let shouldPersistAttachmentDraft: Bool
         switch attachmentDecision {
         case .stop:
-            return false
+            return .notDispatched(reason: errorText ?? "Could not verify the attachment route.")
         case .persistIfAvailable:
             shouldPersistAttachmentDraft = true
         case .liveOnly:
@@ -497,15 +695,40 @@ extension OpenClawChatViewModel {
             let accepted = await enqueueOutboxCommand(
                 text: draft.outgoingMessageText,
                 draftInput: draft.input,
-                draftRevision: draft.composerRevision,
+                draftRevision: revision,
                 draftAttachments: draft.attachments,
                 session: draft.session)
             if accepted {
                 self.finishAcceptedComposerSend(draft)
             }
-            return false
+            return accepted ? .queued : .notDispatched(reason: errorText ?? "Could not queue the message.")
         }
-        return true
+        return nil
+    }
+
+    private func externalSubmissionReadiness(_ draft: SendDraft) -> OpenClawChatSubmissionOutcome? {
+        guard case let .external(_, route) = draft.source else { return nil }
+        guard self.matchesExternalTarget(route.target, session: draft.session),
+              !self.isSwitchingSessionBranch,
+              self.nextSessionBranchSwitchGeneration == draft.branchGeneration,
+              let capturedContract = route.lease.sessionRoutingContract,
+              let selectedContract = draft.session.sessionRoutingContract,
+              capturedContract.utf8.elementsEqual(selectedContract.utf8),
+              route.lease.supportsSessionSettingsCAS,
+              self.verifiedSessionSettingsExpectation(
+                  sessionKey: route.target.sessionKey, agentID: route.target.agentID) != nil
+        else {
+            return .notDispatched(reason: "Reconnect to verify this action's session and permissions.")
+        }
+        guard self.healthOK else {
+            return .notDispatched(reason: "Reconnect before sending this action. It has not been queued.")
+        }
+        // The iOS outbox namespace does not prove principal ownership. Native
+        // actions cannot persist there, or overtake rows adopted during restore.
+        guard !self.hasPendingOutboxCommandsForCurrentSession else {
+            return .notDispatched(reason: "Resolve queued messages in this chat before sending this action.")
+        }
+        return nil
     }
 
     private func attachmentPersistenceDecision(
@@ -544,7 +767,11 @@ extension OpenClawChatViewModel {
 
     private func beginLiveSend(_ draft: SendDraft) -> LiveSendAttempt {
         errorText = nil
-        let runId = UUID().uuidString
+        let runId: String = if case let .external(operationID, _) = draft.source {
+            operationID.uuidString
+        } else {
+            UUID().uuidString
+        }
         let storedThinkingLevel = preferredThinkingLevel
         pendingRuns.insert(runId)
         logDiagnostic(
@@ -580,11 +807,13 @@ extension OpenClawChatViewModel {
         runMessageScopesByRunID[runId] = currentRunMessageScope()
 
         // Clear input immediately for responsive UX (before network await).
-        if input == draft.input {
-            input = ""
+        if draft.isComposer {
+            if input == draft.input {
+                input = ""
+            }
+            let sentAttachmentIDs = Set(draft.attachments.map(\.id))
+            attachments.removeAll { sentAttachmentIDs.contains($0.id) }
         }
-        let sentAttachmentIDs = Set(draft.attachments.map(\.id))
-        attachments.removeAll { sentAttachmentIDs.contains($0.id) }
 
         return LiveSendAttempt(
             draft: draft,
@@ -631,9 +860,10 @@ extension OpenClawChatViewModel {
         return content
     }
 
-    private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
+    private func deliverLiveSend(_ attempt: LiveSendAttempt) async -> OpenClawChatSubmissionOutcome {
         let sessionKey = attempt.draft.session.key
         var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
+        var requestStarted = false
         do {
             if let settingsError = await waitForCapabilitySettingsBarrier(in: sessionKey) {
                 await self.handleLiveSendFailure(
@@ -643,39 +873,118 @@ extension OpenClawChatViewModel {
                         userInfo: [NSLocalizedDescriptionKey: settingsError]),
                     attempt: attempt,
                     canPreserveInOutbox: false)
-                return
+                return .rejected(reason: settingsError)
             }
-            guard isCurrentSession(attempt.draft.session) else { return }
-            let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
+            guard isCurrentSession(attempt.draft.session) else {
+                return .notDispatched(reason: "The selected session changed before sending.")
+            }
+            let sendSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
+            if case let .external(_, route) = attempt.draft.source {
+                let settingsTarget = self.currentModelPatchTarget()
+                let settingsRevision = self.settingsPatchRevisionsByTarget[settingsTarget, default: 0]
+                guard await route.isCurrent(),
+                      self.settingsPatchRevisionsByTarget[settingsTarget, default: 0] == settingsRevision,
+                      self.inFlightSettingsPatchCountsByTarget[settingsTarget] == nil,
+                      self.externalSubmissionReadiness(attempt.draft) == nil,
+                      let expectation = self.verifiedSessionSettingsExpectation(
+                          sessionKey: route.target.sessionKey, agentID: route.target.agentID)
+                else { throw OpenClawChatTransportSendError.notDispatched }
+                try Task.checkCancellation()
+                sendSessionSettingsExpectation = expectation
+            } else {
+                sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
+            }
             durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
             logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
                     + "localRunId=\(attempt.runId)")
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
-            let response = try await transport.sendMessage(
-                sessionKey: sessionKey,
-                target: OpenClawChatSendTarget(
+            let response: OpenClawChatSendResponse
+            requestStarted = true
+            switch attempt.draft.source {
+            case let .external(_, route):
+                response = try await route.lease.sendMessage(
+                    sessionKey: sessionKey,
                     agentID: attempt.draft.session.deliveryAgentID,
-                    expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
-                    expectedSessionSettings: sendSessionSettingsExpectation),
-                message: attempt.draft.outgoingMessageText,
-                thinking: thinkingLevel,
-                idempotencyKey: attempt.runId,
-                attachments: attempt.encodedAttachments)
-            guard isCurrentSession(attempt.draft.session) else { return }
+                    expectedSessionSettings: sendSessionSettingsExpectation,
+                    message: attempt.draft.outgoingMessageText,
+                    thinking: thinkingLevel,
+                    idempotencyKey: attempt.runId,
+                    attachments: attempt.encodedAttachments)
+            case .composer:
+                response = try await transport.sendMessage(
+                    sessionKey: sessionKey,
+                    target: OpenClawChatSendTarget(
+                        agentID: attempt.draft.session.deliveryAgentID,
+                        expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
+                        expectedSessionSettings: sendSessionSettingsExpectation),
+                    message: attempt.draft.outgoingMessageText,
+                    thinking: thinkingLevel,
+                    idempotencyKey: attempt.runId,
+                    attachments: attempt.encodedAttachments)
+            }
+            if !attempt.draft.isComposer {
+                if !response.runId.isEmpty,
+                   response.status == "error" || (response.status == "timeout" && !response.isAbortedRun)
+                {
+                    await self.handleLiveSendFailure(
+                        NSError(
+                            domain: "OpenClawChatSubmission",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "Run failed to start (\(response.status))."]),
+                        attempt: attempt)
+                    return .rejected(reason: "Run failed to start (\(response.status)).")
+                }
+                guard ["started", "in_flight", "ok"].contains(response.status) || response.isAbortedRun,
+                      !response.runId.isEmpty
+                else {
+                    await self.handleLiveSendFailure(URLError(.badServerResponse), attempt: attempt)
+                    return .uncertain(reason: "The Gateway did not confirm acceptance. Check the chat before retrying.")
+                }
+            }
             await self.handleLiveSendResponse(response, attempt: attempt)
+            // The ACK belongs to the captured target even if presentation was
+            // replaced while it arrived. Never turn known acceptance into retry.
+            return response.status == "error" || (response.status == "timeout" && !response.isAbortedRun)
+                ? .rejected(reason: "Run failed to start (\(response.status)).")
+                : .accepted(runID: response.runId)
         } catch {
             await self.handleLiveSendFailure(
                 error,
                 attempt: attempt,
                 durableSessionSettingsExpectation: durableSessionSettingsExpectation)
+            if error is OpenClawChatTransportSendError || !requestStarted {
+                return Task.isCancelled ? .cancelled : .notDispatched(
+                    reason: "The action route changed before sending. Select the session again.")
+            }
+            if let responseError = error as? GatewayResponseError {
+                if responseError.detailsReason == "EXPECTED_PROFILE_MISMATCH" {
+                    // Only explicit admission evidence proves this attempt had no
+                    // effect. A handler may have accepted work before losing its owner.
+                    guard responseError.details["execution"]?.stringValue == "not_started" else {
+                        return .uncertain(
+                            reason: "The selected account changed. "
+                                + "Delivery is unconfirmed; check the chat before retrying.")
+                    }
+                    return .notDispatched(reason: responseError.localizedDescription)
+                }
+                return .rejected(reason: error.localizedDescription)
+            }
+            return .uncertain(reason: "Delivery is unconfirmed. Check the selected chat before sending again.")
         }
+    }
+
+    private func canPresentLiveSend(_ attempt: LiveSendAttempt) async -> Bool {
+        if let route = attempt.draft.externalRoute, await !route.isCurrent() { return false }
+        // Route validation suspends. Check the captured session afterwards.
+        return self.isCurrentSession(attempt.draft.session)
     }
 
     private func handleLiveSendResponse(
         _ response: OpenClawChatSendResponse,
         attempt: LiveSendAttempt) async
     {
+        guard await self.canPresentLiveSend(attempt) else { return }
         let sessionKey = attempt.draft.session.key
         logDiagnostic(
             "chat.ui transport send accepted sessionKey=\(sessionKey) "
@@ -688,11 +997,50 @@ extension OpenClawChatViewModel {
             ? false
             : self.adoptRemoteRunID(response.runId, replacing: attempt.runId)
 
-        if response.status == "ok" {
+        if attempt.draft.isComposer {
+            await self.reconcileLiveSendResponse(
+                response,
+                attempt: attempt,
+                reusedRunAlreadyFinal: reusedRunAlreadyFinal)
+        } else {
+            // Native actions return the ACK without waiting for history or run
+            // completion. The existing chat owner keeps following the run.
+            if response.status != "ok", response.status != "error", response.status != "timeout",
+               !reusedRunAlreadyFinal
+            {
+                armPendingRunOwner(
+                    runId: response.runId,
+                    sessionSnapshot: attempt.draft.session,
+                    userMessageTimestamp: attempt.userMessageTimestamp)
+            }
+            Task {
+                guard await self.canPresentLiveSend(attempt) else { return }
+                await self.reconcileLiveSendResponse(
+                    response,
+                    attempt: attempt,
+                    reusedRunAlreadyFinal: reusedRunAlreadyFinal)
+            }
+        }
+    }
+
+    private func reconcileLiveSendResponse(
+        _ response: OpenClawChatSendResponse,
+        attempt: LiveSendAttempt,
+        reusedRunAlreadyFinal: Bool) async
+    {
+        guard await self.canPresentLiveSend(attempt) else { return }
+        if response.status == "ok" || response.isAbortedRun {
+            // A cached abort can precede the user transcript commit. Remove the
+            // optimistic row first; only authoritative history may put it back.
+            if response.isAbortedRun { self.removePendingLocalUserEcho(for: response.runId) }
             let historyContext = beginHistoryRequest(for: attempt.draft.session)
-            await refreshHistoryAfterRun(historyRequest: historyContext)
-            guard isCurrentSession(attempt.draft.session) else { return }
-            finishPendingRunAfterTerminalOkSendAck(response)
+            await refreshHistoryAfterRun(
+                historyRequest: historyContext,
+                externalRoute: attempt.draft.externalRoute)
+            guard await self.canPresentLiveSend(attempt) else { return }
+            if !finishPendingRunIfTerminalSendAck(response) {
+                finishPendingRunAfterTerminalOkSendAck(response)
+            }
             return
         }
         guard !finishPendingRunIfTerminalSendAck(response),
@@ -702,8 +1050,10 @@ extension OpenClawChatViewModel {
         }
 
         let historyContext = beginHistoryRequest(for: attempt.draft.session)
-        let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
-        guard isCurrentSession(attempt.draft.session) else { return }
+        let refresh = await refreshHistoryAfterRun(
+            historyRequest: historyContext,
+            externalRoute: attempt.draft.externalRoute)
+        guard await self.canPresentLiveSend(attempt) else { return }
         if refresh.hasInFlightRun || (refresh.applied && !refresh.runSnapshotApplied) ||
             !clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,
@@ -751,8 +1101,9 @@ extension OpenClawChatViewModel {
         durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil,
         canPreserveInOutbox: Bool = true) async
     {
-        guard isCurrentSession(attempt.draft.session) else { return }
-        if canPreserveInOutbox,
+        guard await self.canPresentLiveSend(attempt) else { return }
+        if attempt.draft.isComposer,
+           canPreserveInOutbox,
            let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
            !(error is GatewayResponseError)
@@ -796,6 +1147,7 @@ extension OpenClawChatViewModel {
     }
 
     private func restoreDraftAfterLiveSendFailure(_ attempt: LiveSendAttempt) {
+        guard attempt.draft.isComposer else { return }
         if attempt.encodedAttachments.isEmpty, input.isEmpty {
             input = attempt.draft.input
         } else if !attempt.encodedAttachments.isEmpty {
@@ -815,11 +1167,12 @@ extension OpenClawChatViewModel {
     }
 
     private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        guard case let .composer(replyTarget, revision) = draft.source else { return }
         self.recordSuccessfulInput(
             draft.trimmed,
             transcriptEcho: draft.outgoingMessageText,
-            submittedRevision: draft.composerRevision,
+            submittedRevision: revision,
             sessionKey: draft.session.key)
-        self.consumeReplyTarget(draft.replyTarget)
+        self.consumeReplyTarget(replyTarget)
     }
 }

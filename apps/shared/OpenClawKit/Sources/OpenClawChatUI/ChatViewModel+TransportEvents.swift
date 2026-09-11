@@ -25,6 +25,8 @@ extension OpenClawChatViewModel {
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         guard !self.isTransportDetached else { return }
         switch evt {
+        case let .routeUnavailable(reason):
+            self.detachTransport(reason: reason)
         case let .health(ok):
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
@@ -855,6 +857,14 @@ extension OpenClawChatViewModel {
     }
 
     func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
+        // An aborted continuation identifies the original operation, including
+        // cached pre-admission aborts. It does not prove transcript or execution.
+        if response.isAbortedRun {
+            self.pendingToolCallsById = [:]
+            self.updateStreamingAssistantText(nil)
+            self.retirePendingRun(response.runId, hapticEvent: .runCompleted)
+            return true
+        }
         switch response.status {
         case "timeout":
             self.removePendingLocalUserEcho(for: response.runId)
@@ -1178,12 +1188,22 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func refreshHistoryAfterRun(historyRequest request: HistoryRequest? = nil) async
+    func refreshHistoryAfterRun(
+        historyRequest request: HistoryRequest? = nil,
+        externalRoute: OpenClawChatExternalSubmissionRoute? = nil) async
         -> RunHistoryRefreshResult
     {
         let request = request ?? self.beginHistoryRequest()
         do {
-            let payload = try await transport.requestHistory(sessionKey: request.session.key)
+            let payload: OpenClawChatHistoryPayload
+            if let externalRoute {
+                guard await externalRoute.isCurrent(), self.isCurrentSession(request.session) else { return .failed }
+                payload = try await externalRoute.lease.requestHistory(
+                    sessionKey: request.session.key, agentID: request.session.deliveryAgentID)
+                guard await externalRoute.isCurrent(), self.isCurrentSession(request.session) else { return .failed }
+            } else {
+                payload = try await transport.requestHistory(sessionKey: request.session.key)
+            }
             let runSnapshotApplied = request.runOwnershipGeneration == self.runOwnershipGeneration &&
                 request.id >= self.latestAppliedRunSnapshotRequestID
             let applied = self.applyHistoryPayload(

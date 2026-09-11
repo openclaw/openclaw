@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawProtocol
 import Testing
 @testable import OpenClawKit
@@ -133,6 +134,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloSurfaceURLs: [String: String]
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let connectError: [String: Any]?
@@ -152,6 +154,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloSurfaceURLs: [String: String] = [:],
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         connectError: [String: Any]? = nil,
@@ -161,6 +164,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloSurfaceURLs = helloSurfaceURLs
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.connectError = connectError
@@ -269,7 +273,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                     auth: self.helloAuth,
                     methods: self.helloMethods,
                     capabilities: self.helloCapabilities,
-                    sessionDefaults: self.helloSessionDefaults))
+                    sessionDefaults: self.helloSessionDefaults,
+                    surfaceURLs: self.helloSurfaceURLs))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -281,7 +286,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             auth: self.helloAuth,
             methods: self.helloMethods,
             capabilities: self.helloCapabilities,
-            sessionDefaults: self.helloSessionDefaults))
+            sessionDefaults: self.helloSessionDefaults,
+            surfaceURLs: self.helloSurfaceURLs))
     }
 
     func receive(
@@ -340,6 +346,12 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.emitInbound(.success(.data(data)))
     }
 
+    func emitSurfaceResponse(_ request: [String: Any], token: String) throws {
+        try self.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: ["pluginSurfaceUrls": ["canvas": "https://gateway.example.invalid/__openclaw__/cap/\(token)"]])
+    }
+
     func emitInvokeCancel(id: String) {
         let frame: [String: Any] = [
             "type": "event",
@@ -378,7 +390,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         auth: [String: Any]? = nil,
         methods: [String] = [],
         capabilities: [String] = [],
-        sessionDefaults: [String: Any]? = nil) -> Data
+        sessionDefaults: [String: Any]? = nil,
+        surfaceURLs: [String: String] = [:]) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -407,6 +420,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 "tickIntervalMs": 30000,
             ],
             "auth": [:],
+            "pluginSurfaceUrls": surfaceURLs,
         ]
         if let auth {
             payload["auth"] = auth
@@ -474,6 +488,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloSurfaceURLs: [String: String]
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let connectError: [String: Any]?
@@ -488,6 +503,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloSurfaceURLs: [String: String] = [:],
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         connectError: [String: Any]? = nil,
@@ -498,6 +514,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloSurfaceURLs = helloSurfaceURLs
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.connectError = connectError
@@ -530,6 +547,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloMethods: self.helloMethods,
                 helloCapabilities: self.helloCapabilities,
                 helloSessionDefaults: self.helloSessionDefaults,
+                helloSurfaceURLs: self.helloSurfaceURLs,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 connectError: self.connectError,
@@ -763,6 +781,12 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    enum RequestEncoding: CaseIterable, Sendable {
+        case json
+        case params
+        case chat
+    }
+
     @Test func `authenticated invoke metadata reaches the native dispatcher unchanged`() async throws {
         let gateway = GatewayNodeSession()
         let capture = StringCapture()
@@ -1042,6 +1066,214 @@ struct GatewayNodeSessionTests {
         #expect(laggingURL == newURL)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 2)
         await gateway.disconnect()
+    }
+
+    private func withSurfaceGateway(
+        node: Bool = false,
+        _ run: (GatewayNodeSession, FakeGatewayWebSocketSession, GatewayNodeSessionRoute) async throws -> Void)
+        async throws
+    {
+        let gateway = GatewayNodeSession()
+        let session = FakeGatewayWebSocketSession(
+            helloSurfaceURLs: ["canvas": "https://gateway.example.invalid/__openclaw__/cap/hello"],
+            effectiveTLSFingerprintSHA256: String(repeating: "ab", count: 32))
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"),
+                options: node ? nodeConnectOptions(caps: ["canvas"]) : operatorConnectOptions(),
+                session: session)
+            try await run(gateway, session, #require(await gateway.currentRoute()))
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    private func surfaceRequest(
+        _ session: FakeGatewayWebSocketSession, at index: Int) async throws -> [String: Any]
+    {
+        try await waitUntil("surface request \(index)") {
+            (session.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") ?? 0) > index
+        }
+        return try #require(session.latestTask()).sentRequests(method: "plugin.surface.refresh")[index]
+    }
+
+    @Test(arguments: ["node", "operator"])
+    func `ordinary surface refresh reconnects a closed socket while a native lease cannot`(role: String) async throws {
+        try await self.withSurfaceGateway(node: role == "node") { gateway, session, route in
+            let observed = try #require(await gateway.currentCanvasHostUrl())
+            let oldSocket = try #require(session.latestTask())
+            // Model URLSession publishing closure before its receive callback.
+            // No failure event or automatic reconnect can satisfy this acquisition.
+            oldSocket.state = .completed
+            #expect(await gateway.currentRoute() == nil)
+            #expect(await gateway.refreshCanvasHostRoute(
+                replacing: observed, ifCurrentRoute: route, expectedProfileId: "alice") == nil)
+            #expect(session.snapshotMakeCount() == 1)
+            let ordinary = Task { await gateway.refreshCanvasHostUrl(replacing: observed) }
+            let method = role == "node" ? "node.pluginSurface.refresh" : "plugin.surface.refresh"
+            try await waitUntil("ordinary refresh reconnects and dispatches") {
+                session.snapshotMakeCount() == 2 && session.latestTask()?.sentRequestCount(method: method) == 1
+            }
+            let socket = try #require(session.latestTask())
+            let request = try #require(socket.sentRequests(method: method).first)
+            #expect(request["expectedProfileId"] == nil)
+            try socket.emitSurfaceResponse(request, token: "reconnected")
+            #expect(await ordinary.value?.hasSuffix("/reconnected") == true)
+            #expect(await gateway.currentRoute() != route)
+            #expect(await gateway.currentCanvasHostRoute()?.tlsFingerprintSHA256 == String(repeating: "ab", count: 32))
+        }
+    }
+
+    @Test func `surface cache separates exact profiles and unbound hello authority`() async throws {
+        try await self.withSurfaceGateway { gateway, session, route in
+            #expect(await gateway.currentCanvasHostRoute()?.url.hasSuffix("/hello") == true)
+            let profiles: [String?] = ["alice", " bob ", "profile-e\u{301}", "profile-\u{E9}", nil]
+            for (index, profile) in profiles.enumerated() {
+                #expect(await gateway.currentCanvasHostRoute(
+                    ifCurrentRoute: route, expectedProfileId: profile) == nil)
+                let refresh = Task {
+                    await gateway.refreshCanvasHostRoute(
+                        replacing: nil, ifCurrentRoute: route, expectedProfileId: profile)
+                }
+                let request = try await self.surfaceRequest(session, at: index)
+                #expect((request["expectedProfileId"] as? String).map { Array($0.utf8) } ==
+                    profile.map { Array($0.utf8) })
+                #expect((request["params"] as? [String: Any])?["observedUrl"] == nil)
+                try #require(session.latestTask()).emitSurfaceResponse(request, token: "owner-\(index)")
+                let value = try #require(await refresh.value)
+                #expect(value.url.hasSuffix("/owner-\(index)"))
+                #expect(value.tlsFingerprintSHA256 == String(repeating: "ab", count: 32))
+                #expect(await gateway.currentCanvasHostRoute(
+                    ifCurrentRoute: route, expectedProfileId: profile) == value)
+                if profile != nil { #expect(await gateway.currentCanvasHostRoute() == nil) }
+            }
+        }
+    }
+
+    @Test func `profile refresh waiters share one rotation with independent deadlines`() async throws {
+        try await self.withSurfaceGateway { gateway, session, route in
+            let long = Task {
+                await gateway.refreshCanvasHostRoute(replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice")
+            }
+            let request = try await self.surfaceRequest(session, at: 0)
+            let short = await gateway.refreshPluginSurfaceUrl(
+                surface: "canvas", timeoutSeconds: 1, ifCurrentRoute: route, expectedProfileId: "alice")
+            #expect(short == nil)
+            let cancelled = Task {
+                await gateway.refreshPluginSurfaceUrl(
+                    surface: "canvas", timeoutSeconds: 0, ifCurrentRoute: route, expectedProfileId: "alice")
+            }
+            cancelled.cancel()
+            #expect(await cancelled.value == nil)
+            let follower = Task {
+                await gateway.refreshCanvasHostRoute(replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice")
+            }
+            try #require(session.latestTask()).emitSurfaceResponse(request, token: "shared")
+            let first = try #require(await long.value)
+            #expect(await follower.value == first)
+            #expect(session.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") == 1)
+        }
+    }
+
+    @Test func `different surface owners isolate results and cancelled rotations`() async throws {
+        try await self.withSurfaceGateway { gateway, session, route in
+            async let alice = gateway.refreshCanvasHostRoute(
+                replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice")
+            let request = try await self.surfaceRequest(session, at: 0)
+            let bob = Task {
+                await gateway.refreshPluginSurfaceUrl(
+                    surface: "canvas", timeoutSeconds: 0, ifCurrentRoute: route, expectedProfileId: "bob")
+            }
+            do {
+                try #require(session.latestTask()).emitSurfaceResponse(request, token: "alice")
+                #expect(await alice?.url.hasSuffix("/alice") == true)
+                let bobRequest = try await self.surfaceRequest(session, at: 1)
+                #expect(bobRequest["expectedProfileId"] as? String == "bob")
+                bob.cancel()
+                #expect(await bob.value == nil)
+                #expect(await gateway.currentCanvasHostRoute(ifCurrentRoute: route, expectedProfileId: "bob") == nil)
+                // A late completion after the last eligible waiter cannot publish.
+                try #require(session.latestTask()).emitSurfaceResponse(bobRequest, token: "cancelled-bob")
+                async let retry = gateway.refreshCanvasHostRoute(
+                    replacing: nil, ifCurrentRoute: route, expectedProfileId: "bob")
+                let retryRequest = try await self.surfaceRequest(session, at: 2)
+                try #require(session.latestTask()).emitSurfaceResponse(retryRequest, token: "fresh-bob")
+                #expect(await retry?.url.hasSuffix("/fresh-bob") == true)
+            } catch {
+                bob.cancel()
+                _ = await bob.value
+                throw error
+            }
+        }
+    }
+
+    @Test func `cancelled and expired surface contenders never dispatch after the active owner`() async throws {
+        try await self.withSurfaceGateway { gateway, session, route in
+            let alice = Task {
+                await gateway.refreshCanvasHostRoute(replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice")
+            }
+            let request = try await self.surfaceRequest(session, at: 0)
+            let entered = AsyncGate()
+            let cancelled = Task {
+                await entered.release()
+                return await gateway.refreshPluginSurfaceUrl(
+                    surface: "canvas", timeoutSeconds: 0, ifCurrentRoute: route, expectedProfileId: "cancelled")
+            }
+            await entered.wait()
+            let expired = await gateway.refreshPluginSurfaceUrl(
+                surface: "canvas", timeoutSeconds: 1, ifCurrentRoute: route, expectedProfileId: "expired")
+            #expect(expired == nil)
+            cancelled.cancel()
+            #expect(await cancelled.value == nil)
+            try #require(session.latestTask()).emitSurfaceResponse(request, token: "alice")
+            #expect(await alice.value != nil)
+            let fresh = Task {
+                await gateway.refreshCanvasHostRoute(replacing: nil, ifCurrentRoute: route, expectedProfileId: "fresh")
+            }
+            let freshRequest = try await self.surfaceRequest(session, at: 1)
+            #expect(freshRequest["expectedProfileId"] as? String == "fresh")
+            try #require(session.latestTask()).emitSurfaceResponse(freshRequest, token: "fresh")
+            #expect(await fresh.value?.url.hasSuffix("/fresh") == true)
+            #expect(session.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") == 2)
+        }
+    }
+
+    @Test func `reset retires surface cache waiters and late cleanup before a successor rotation`() async throws {
+        try await self.withSurfaceGateway { gateway, session, route in
+            let old = Task {
+                await gateway.refreshCanvasHostRoute(replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice")
+            }
+            let oldRequest = try await self.surfaceRequest(session, at: 0)
+            let oldSocket = try #require(session.latestTask())
+            await gateway.disconnect()
+            #expect(await old.value == nil)
+            #expect(await gateway.currentCanvasHostRoute() == nil)
+            let successor = FakeGatewayWebSocketSession(
+                helloSurfaceURLs: ["canvas": "https://gateway.example.invalid/__openclaw__/cap/successor"],
+                effectiveTLSFingerprintSHA256: String(repeating: "cd", count: 32))
+            try await gateway.connectForTest(
+                testURL("wss://gateway.example.invalid"), options: operatorConnectOptions(), session: successor)
+            let freshRoute = try #require(await gateway.currentRoute())
+            #expect(freshRoute != route)
+            #expect(await gateway.currentCanvasHostRoute()?.url.hasSuffix("/successor") == true)
+            #expect(await gateway.currentCanvasHostRoute()?.tlsFingerprintSHA256 == String(repeating: "cd", count: 32))
+            #expect(await gateway.currentCanvasHostRoute(ifCurrentRoute: route, expectedProfileId: "alice") == nil)
+            #expect(await gateway.refreshCanvasHostRoute(
+                replacing: nil, ifCurrentRoute: route, expectedProfileId: "alice") == nil)
+            #expect(successor.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") == 0)
+            let fresh = Task {
+                await gateway.refreshCanvasHostRoute(
+                    replacing: nil, ifCurrentRoute: freshRoute, expectedProfileId: "alice")
+            }
+            let freshRequest = try await self.surfaceRequest(successor, at: 0)
+            try oldSocket.emitSurfaceResponse(oldRequest, token: "retired")
+            try #require(successor.latestTask()).emitSurfaceResponse(freshRequest, token: "fresh")
+            let value = try #require(await fresh.value)
+            #expect(value.url.hasSuffix("/fresh"))
+            #expect(value.tlsFingerprintSHA256 == String(repeating: "cd", count: 32))
+        }
     }
 
     @Test func `node requests preserve numeric JSON params`() async throws {
@@ -2107,9 +2339,11 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `upgrade request carries sanitized custom headers read per connect`() async throws {
-        let session = FakeGatewayWebSocketSession()
+    @Test(arguments: [nil, String(repeating: "ab", count: 32)] as [String?])
+    func `upgrade request carries sanitized custom headers read per connect`(
+        reportedFingerprint: String?) async throws
+    {
+        let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: reportedFingerprint)
         let gateway = GatewayNodeSession()
         let secret = MutableHeaderValue(value: "first-secret")
         let options = nodeConnectOptions()
@@ -2135,16 +2369,90 @@ struct GatewayNodeSessionTests {
         #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Id") == "client-id")
         #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "first-secret")
         #expect(request.value(forHTTPHeaderField: "Host") == nil)
+        let route = try #require(await gateway.currentRoute())
+        // A custom transport's session-wide metadata is not an admitted task decision.
+        #expect(await gateway.admittedHTTPContext(ifCurrentRoute: route) == nil)
+        #expect(secret.readCount() == 1)
 
         // Header edits must ride the next upgrade without re-pairing or a new channel identity.
         secret.set("second-secret")
         await gateway.disconnect()
+        #expect(await gateway.admittedHTTPContext(ifCurrentRoute: route) == nil)
         try await connectOnce()
         let reconnectRequest = try #require(session.latestRequest())
         #expect(reconnectRequest.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "second-secret")
 
         await gateway.disconnect()
     }
+
+    #if os(macOS)
+    @Test
+    @MainActor
+    func `admitted HTTP context retains upgrade headers and retires with the physical socket`() async throws {
+        let identity = try NativeGatewayTLSIdentity()
+        let fixture = try await NativeGatewayWebSocketFixture.start(
+            issuedDeviceTokens: [nil, nil],
+            tlsIdentity: identity.identity)
+        defer { fixture.stop() }
+        let session = GatewayTLSPinningSession(
+            params: .init(
+                required: true, expectedFingerprint: identity.fingerprint, allowTOFU: false, storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false)
+        defer { session.finishTasksAndInvalidate() }
+        let secret = MutableHeaderValue(value: "first-secret")
+        let gateway = GatewayNodeSession()
+        let url = fixture.url().appendingPathComponent("gateway/mount")
+        let connect = {
+            try await gateway.connect(
+                url: url,
+                connectOptions: nodeConnectOptions(allowStoredDeviceAuth: false),
+                sessionBox: WebSocketSessionBox(session: session),
+                extraHeadersProvider: {
+                    ["CF-Access-Client-Secret": secret.get(), "Host": "untrusted.example"]
+                },
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        }
+        do {
+            try await connect()
+            let firstRoute = try #require(await gateway.currentRoute())
+            let first = try #require(await gateway.admittedHTTPContext(ifCurrentRoute: firstRoute))
+            #expect(first.gatewayURL == url)
+            #expect(first.tlsFingerprintSHA256 == identity.fingerprint)
+            #expect(first.customHeaders == ["CF-Access-Client-Secret": "first-secret"])
+            #expect(fixture.capturedUpgradeHeader("CF-Access-Client-Secret", at: 0) == "first-secret")
+            #expect(secret.readCount() == 1)
+
+            secret.set("second-secret")
+            try await connect()
+            let unchanged = try #require(await gateway.admittedHTTPContext(ifCurrentRoute: firstRoute))
+            #expect(unchanged.customHeaders == first.customHeaders)
+            #expect(secret.readCount() == 1)
+
+            fixture.closeConnection(at: 0)
+            try await waitUntil("replacement socket admitted") {
+                guard let route = await gateway.currentRoute(), route != firstRoute else { return false }
+                return await gateway.admittedHTTPContext(ifCurrentRoute: route) != nil
+            }
+            let nextRoute = try #require(await gateway.currentRoute())
+            let next = try #require(await gateway.admittedHTTPContext(ifCurrentRoute: nextRoute))
+            #expect(await gateway.admittedHTTPContext(ifCurrentRoute: firstRoute) == nil)
+            #expect(next.gatewayURL == url)
+            #expect(next.tlsFingerprintSHA256 == identity.fingerprint)
+            #expect(next.customHeaders == ["CF-Access-Client-Secret": "second-secret"])
+            #expect(fixture.capturedUpgradeHeader("CF-Access-Client-Secret", at: 1) == "second-secret")
+            #expect(first.customHeaders == ["CF-Access-Client-Secret": "first-secret"])
+            #expect(secret.readCount() == 2)
+            await gateway.disconnect()
+            #expect(await gateway.admittedHTTPContext(ifCurrentRoute: nextRoute) == nil)
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+    }
+    #endif
 
     @Test
     func `cleartext upgrade never reads or attaches custom headers`() async throws {
@@ -2165,14 +2473,16 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `server methods stay bound to the connected route`() async throws {
-        let session = FakeGatewayWebSocketSession(helloMethods: [
-            "approval.get",
-            "approval.resolve",
-            "exec.approval.get",
-            "exec.approval.resolve",
-        ])
+    @Test(arguments: [false, true])
+    func `server methods and capabilities stay bound to the connected route`(profileBinding: Bool) async throws {
+        let session = FakeGatewayWebSocketSession(
+            helloMethods: [
+                "approval.get",
+                "approval.resolve",
+                "exec.approval.get",
+                "exec.approval.resolve",
+            ],
+            helloCapabilities: profileBinding ? ["profile-binding-v1"] : [])
         let gateway = GatewayNodeSession()
         let options = operatorConnectOptions(scopes: [], clientMode: "operator")
 
@@ -2180,9 +2490,100 @@ struct GatewayNodeSessionTests {
         let route = try #require(await gateway.currentRoute())
         #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == true)
         #expect(await gateway.supportsServerMethod("missing", ifCurrentRoute: route) == false)
+        #expect(await gateway.supportsServerCapability(.profileBinding, ifCurrentRoute: route) == profileBinding)
 
         await gateway.disconnect()
         #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == nil)
+        #expect(await gateway.supportsServerCapability(.profileBinding, ifCurrentRoute: route) == nil)
+    }
+
+    @Test(arguments: RequestEncoding.allCases, [false, true])
+    func `requests preserve per request profile bytes without binding later requests`(
+        encoding: RequestEncoding,
+        captureRoute: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("ws://gateway.example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+        do {
+            let currentRoute = try #require(await gateway.currentRoute())
+            let route = captureRoute ? currentRoute : nil
+            let socket = try #require(session.latestTask())
+            let profiles: [String?] = [nil, " Profile-\u{00E9} ", " Profile-e\u{0301} ", nil]
+            for (index, profile) in profiles.enumerated() {
+                let pending = Task {
+                    switch encoding {
+                    case .json:
+                        try await gateway.request(
+                            method: "chat.history",
+                            paramsJSON: #"{"sessionKey":"agent:main:main"}"#,
+                            ifCurrentRoute: route,
+                            expectedProfileId: profile)
+                    case .params:
+                        try await gateway.request(
+                            method: "chat.history",
+                            params: ["sessionKey": OpenClawKit.AnyCodable("agent:main:main")],
+                            ifCurrentRoute: route,
+                            expectedProfileId: profile)
+                    case .chat:
+                        try await gateway.request(
+                            OpenClawChatGatewayRequest(
+                                method: "chat.history",
+                                params: ["sessionKey": OpenClawKit.AnyCodable("agent:main:main")],
+                                timeoutMs: 15000),
+                            ifCurrentRoute: route,
+                            expectedProfileId: profile)
+                    }
+                }
+                defer { pending.cancel() }
+                try await waitUntil("profile request sent") {
+                    socket.sentRequestCount(method: "chat.history") == index + 1
+                }
+                let frame = try #require(socket.sentRequests(method: "chat.history").last)
+                let expectedKeys: Set<String> = profile == nil
+                    ? ["type", "id", "method", "params"]
+                    : ["type", "id", "method", "params", "expectedProfileId"]
+                #expect(Set(frame.keys) == expectedKeys)
+                if let profile {
+                    let encodedProfile = try #require(frame["expectedProfileId"] as? String)
+                    #expect(Array(encodedProfile.utf8) == Array(profile.utf8))
+                }
+                let params = try #require(frame["params"] as? [String: String])
+                #expect(params == ["sessionKey": "agent:main:main"])
+                let execution = profile == nil ? nil : (index == 1 ? "not_started" : "may_have_executed")
+                try socket.emitResponse(
+                    id: #require(frame["id"] as? String),
+                    payload: ["messages": []],
+                    error: execution.map { execution in
+                        [
+                            "code": "INVALID_REQUEST",
+                            "message": "Selected profile is no longer active",
+                            "details": [
+                                "reason": "EXPECTED_PROFILE_MISMATCH",
+                                "execution": execution,
+                            ],
+                        ]
+                    })
+                do {
+                    let result = try await pending.value
+                    #expect(execution == nil)
+                    let payload = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
+                    #expect((payload["messages"] as? [Any])?.isEmpty == true)
+                } catch let error as GatewayResponseError {
+                    #expect(execution != nil)
+                    #expect(error.details["reason"]?.stringValue == "EXPECTED_PROFILE_MISMATCH")
+                    #expect(error.details["execution"]?.stringValue == execution)
+                }
+            }
+            #expect(session.snapshotMakeCount() == 1)
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
     }
 
     @Test
@@ -2309,8 +2710,113 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `captured route bound operations never use a replacement channel`() async throws {
+    @Test(arguments: [
+        "receipt", "unbound-receipt", "ack-first-disconnect", "default",
+        "read", "wrong-case", "denial", "cancel-first", "disconnect-first",
+    ])
+    func `chat send completion policy preserves only the response that won`(scenario: String) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://receipt.example.invalid"),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: nodeConnectOptions())
+        try await channel.connect()
+        let socket = try #require(session.latestTask())
+        let generation = try #require(await channel.currentConnectionGeneration())
+        let resumed = AsyncGate()
+        await channel._test_setRequestResumedHandler { await resumed.wait() }
+        let method = scenario == "read" ? "chat.history" : scenario == "wrong-case" ? "Chat.send" : "chat.send"
+        let request = Task {
+            if scenario == "default" {
+                return try await channel.request(method: method, params: nil)
+            }
+            if scenario == "unbound-receipt" {
+                return try await channel.request(
+                    method: method, params: nil, completionPolicy: .preserveChatSendSuccess)
+            }
+            return try await channel.request(
+                method: method, params: nil,
+                ifCurrentConnectionGeneration: generation,
+                completionPolicy: .preserveChatSendSuccess)
+        }
+        do {
+            try await waitUntil("receipt request sent") { socket.sentRequestCount(method: method) == 1 }
+            let sent = try #require(socket.sentRequests(method: method).first)
+            if scenario == "cancel-first" {
+                request.cancel()
+                try await waitUntil("cancellation won pending removal") { await resumed.hasStarted() }
+            } else if scenario == "disconnect-first" {
+                await channel.shutdown()
+                try await waitUntil("disconnect won pending removal") { await resumed.hasStarted() }
+            }
+            try socket.emitResponse(
+                id: #require(sent["id"] as? String),
+                payload: ["runId": "original-run", "status": "started"],
+                error: scenario == "denial" ? ["code": "INVALID_REQUEST", "message": "Denied"] : nil)
+            try await waitUntil("request resumed") { await resumed.hasStarted() }
+            #expect(await channel._test_pendingRequestCount() == 0)
+            if scenario == "ack-first-disconnect" { await channel.shutdown() }
+            request.cancel()
+            await resumed.release()
+            if ["receipt", "unbound-receipt", "ack-first-disconnect"].contains(scenario) {
+                let payload = try JSONDecoder().decode([String: String].self, from: await request.value)
+                #expect(payload == ["runId": "original-run", "status": "started"])
+            } else {
+                await #expect(throws: CancellationError.self) { try await request.value }
+            }
+            #expect(socket.sentRequestCount(method: method) == 1)
+        } catch {
+            request.cancel()
+            await resumed.release()
+            await channel.shutdown()
+            _ = try? await request.value
+            throw error
+        }
+        await channel.shutdown()
+    }
+
+    @Test(arguments: ["receipt", "default", "read", "denial"])
+    func `received send success survives node route retirement but reads and errors do not`(
+        scenario: String) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("ws://receipt.example.invalid"), options: nodeConnectOptions(), session: session)
+        let route = try #require(await gateway.currentRoute())
+        let socket = try #require(session.latestTask())
+        let method = scenario == "read" ? "chat.history" : "chat.send"
+        let request = Task {
+            try await gateway.request(
+                method: method, paramsJSON: nil, ifCurrentRoute: route,
+                completionPolicy: scenario == "default" ? .requireCurrentRoute : .preserveChatSendSuccess)
+        }
+        do {
+            try await waitUntil("bound receipt request sent") { socket.sentRequestCount(method: method) == 1 }
+            let sent = try #require(socket.sentRequests(method: method).first)
+            await gateway._test_handleChannelDisconnected("retired admission", socketGeneration: 1)
+            try socket.emitResponse(
+                id: #require(sent["id"] as? String),
+                payload: ["runId": "original-run", "status": "started"],
+                error: scenario == "denial" ? ["code": "INVALID_REQUEST", "message": "Denied"] : nil)
+            if scenario == "receipt" {
+                let data = try await request.value
+                #expect(try JSONDecoder().decode([String: String].self, from: data)["runId"] == "original-run")
+            } else {
+                await #expect(throws: CancellationError.self) { try await request.value }
+            }
+        } catch {
+            request.cancel()
+            await gateway.disconnect()
+            _ = try? await request.value
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test(arguments: [String?.none, "profile-a"])
+    func `captured route bound operations never use a replacement channel`(expectedProfileId: String?) async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let composedGatewayID = "gw-\u{00E9}"
@@ -2344,7 +2850,8 @@ struct GatewayNodeSessionTests {
             _ = try await gateway.request(
                 method: "approval.get",
                 paramsJSON: "{}",
-                ifCurrentRoute: firstRoute)
+                ifCurrentRoute: firstRoute,
+                expectedProfileId: expectedProfileId)
             Issue.record("stale route request unexpectedly reached the replacement channel")
         } catch is CancellationError {
             // Expected: the route lease belongs to the first channel.
@@ -2354,7 +2861,8 @@ struct GatewayNodeSessionTests {
                 method: "approval.get",
                 paramsJSON: "{}",
                 ifCurrentRoute: firstRoute,
-                distinguishPreDispatchRouteChange: true)
+                distinguishPreDispatchRouteChange: true,
+                expectedProfileId: expectedProfileId)
             Issue.record("typed stale route request unexpectedly reached the replacement channel")
         } catch is GatewayNodeSessionRequestError {
             // Expected: callers can distinguish a request rejected before dispatch.

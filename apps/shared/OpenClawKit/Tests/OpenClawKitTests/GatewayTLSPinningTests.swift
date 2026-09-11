@@ -24,8 +24,120 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
     return trustValue
 }
 
+private final class GatewayTLSTestProtectionSpace: URLProtectionSpace, @unchecked Sendable {
+    private let trust: SecTrust
+
+    init(trust: SecTrust) {
+        self.trust = trust
+        super.init(
+            host: "gateway.example",
+            port: 443,
+            protocol: "https",
+            realm: nil,
+            authenticationMethod: NSURLAuthenticationMethodServerTrust)
+    }
+
+    required init?(coder _: NSCoder) {
+        nil
+    }
+
+    override var serverTrust: SecTrust? {
+        self.trust
+    }
+
+    override func copy(with _: NSZone? = nil) -> Any {
+        self
+    }
+}
+
+private final class GatewayTLSTestChallengeSender: NSObject, URLAuthenticationChallengeSender {
+    func use(_: URLCredential, for _: URLAuthenticationChallenge) {
+        Issue.record("Expected the task delegate completion handler")
+    }
+
+    func continueWithoutCredential(for _: URLAuthenticationChallenge) {
+        Issue.record("Expected the task delegate completion handler")
+    }
+
+    func cancel(_: URLAuthenticationChallenge) {
+        Issue.record("Expected the task delegate completion handler")
+    }
+}
+
 @Suite(.gatewayTLSStoreIsolated)
 struct GatewayTLSPinningTests {
+    enum AdmissionCase: CaseIterable, Sendable {
+        case explicitPin
+        case firstUsePin
+        case systemTrust
+        case mismatchedPin
+        case untrusted
+    }
+
+    @Test(arguments: AdmissionCase.allCases)
+    func `TLS admission belongs to the accepted task and cannot survive completion`(
+        mode: AdmissionCase) async throws
+    {
+        let fingerprint = SHA256.hash(data: gatewayTLSTestCertificateDER)
+            .map { String(format: "%02x", $0) }.joined()
+        let expectedFingerprint: String? = switch mode {
+        case .explicitPin: fingerprint
+        case .mismatchedPin: String(repeating: "0", count: 64)
+        default: nil
+        }
+        let expectedAdmission: GatewayTLSAdmission? = switch mode {
+        case .explicitPin, .firstUsePin: .pinned(fingerprint)
+        case .systemTrust: .unpinned
+        case .mismatchedPin, .untrusted: nil
+        }
+        let policy = GatewayTLSPinningSession(params: .init(
+            required: true,
+            expectedFingerprint: expectedFingerprint,
+            allowTOFU: mode == .firstUsePin,
+            storeKey: mode == .firstUsePin ? "profile:task-admission" : nil))
+        let url = try #require(URL(string: "wss://gateway.example/"))
+        let owner = policy.makeWebSocketTask(url: url)
+        let sibling = policy.makeWebSocketTask(url: url)
+        let task = try #require(owner.task as? URLSessionWebSocketTask)
+        let transport = URLSession(configuration: .ephemeral)
+        defer {
+            owner.cancel(with: .goingAway, reason: nil)
+            sibling.cancel(with: .goingAway, reason: nil)
+            policy.finishTasksAndInvalidate()
+            transport.invalidateAndCancel()
+        }
+        #expect(policy.tlsAdmission(for: owner) == nil)
+        #expect(policy.tlsAdmission(for: sibling) == nil)
+
+        let trust = try gatewayTLSTestTrust(systemTrusted: mode != .explicitPin && mode != .untrusted)
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: GatewayTLSTestProtectionSpace(trust: trust),
+            proposedCredential: nil,
+            previousFailureCount: 0,
+            failureResponse: nil,
+            error: nil,
+            sender: GatewayTLSTestChallengeSender())
+        let completeChallenge = {
+            await withCheckedContinuation { continuation in
+                policy.urlSession(
+                    transport,
+                    task: task,
+                    didReceive: challenge,
+                    completionHandler: { disposition, _ in continuation.resume(returning: disposition) })
+            }
+        }
+        let disposition = await completeChallenge()
+        #expect(disposition == (expectedAdmission == nil ? .cancelAuthenticationChallenge : .useCredential))
+        #expect(policy.tlsAdmission(for: owner) == expectedAdmission)
+        #expect(policy.tlsAdmission(for: sibling) == nil)
+
+        policy.urlSession(transport, task: task, didCompleteWithError: nil)
+        #expect(policy.tlsAdmission(for: owner) == nil)
+        _ = await completeChallenge()
+        #expect(policy.tlsAdmission(for: owner) == nil)
+        #expect(policy.tlsAdmission(for: sibling) == nil)
+    }
+
     @Test(
         arguments: [true, false],
         ["https://other.example/", "http://gateway.example/", "https://gateway.example/login"])

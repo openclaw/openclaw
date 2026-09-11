@@ -93,6 +93,24 @@ extension OpenClawChatViewModel {
             toolOverrides: entry.toolOverrides)
     }
 
+    func verifiedSessionSettingsExpectation(
+        sessionKey: String,
+        agentID: String) -> OpenClawChatSessionSettingsExpectation?
+    {
+        // Native submission negotiates CAS on its captured lease, independently
+        // of composer UI support. Alias or stale metadata cannot supply defaults.
+        guard self.hasCurrentSessionMetadata,
+              self.sessionKey.utf8.elementsEqual(sessionKey.utf8),
+              let entry = self.sessions.first(where: {
+                  $0.key.utf8.elementsEqual(sessionKey.utf8) &&
+                      $0.agentId?.utf8.elementsEqual(agentID.utf8) == true
+              })
+        else { return nil }
+        return OpenClawChatSessionSettingsExpectation(
+            permissionMode: entry.permissionMode,
+            toolOverrides: entry.toolOverrides)
+    }
+
     func durableSessionSettingsExpectation() -> OpenClawChatSessionSettingsExpectation {
         let entry = self.currentSessionEntry()
         return OpenClawChatSessionSettingsExpectation(

@@ -23,21 +23,23 @@ public enum OpenClawChatHistoryPresentation {
         submittedAtMs: Int64? = nil,
         inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]? = nil) -> String?
     {
+        // Run and transcript identifiers are byte-exact, not Unicode-normalized text.
         let entries = rawMessages.compactMap(Self.decodeMessage)
         if let directReply = entries.last(where: {
-            Self.isTerminalAssistant($0) && ($0.runID ?? $0.message.idempotencyKey) == runID
+            Self.isTerminalAssistant($0) &&
+                ($0.runID ?? $0.message.idempotencyKey)?.utf8.elementsEqual(runID.utf8) == true
         }) {
             return directReply.text
         }
 
-        let consumedEventID = inputConsumptions?.first { $0.runId == runID }?.consumedByEventId
+        let consumedEventID = inputConsumptions?.first { $0.runId.utf8.elementsEqual(runID.utf8) }?.consumedByEventId
         let userIdempotencyKey = "\(runID):user"
         var userIndex = entries.lastIndex(where: { entry in
             guard entry.message.role.lowercased() == "user" else { return false }
             if let consumedEventID {
-                return entry.message.transcriptMessageID == consumedEventID
+                return entry.message.transcriptMessageID?.utf8.elementsEqual(consumedEventID.utf8) == true
             }
-            return entry.message.idempotencyKey == userIdempotencyKey
+            return entry.message.idempotencyKey?.utf8.elementsEqual(userIdempotencyKey.utf8) == true
         })
         if userIndex == nil, consumedEventID == nil, inputConsumptions == nil,
            let submittedText, !submittedText.isEmpty, let submittedAtMs
@@ -59,7 +61,9 @@ public enum OpenClawChatHistoryPresentation {
             // Attachment-only user rows still bound the turn even when previews hide them.
             guard entry.message.role.lowercased() != "user" else { return nil }
             // A collected input may execute under a fresh run ID; only its receipt permits that.
-            if consumedEventID == nil, let candidateRunID = entry.runID, candidateRunID != runID {
+            if consumedEventID == nil, let candidateRunID = entry.runID,
+               !candidateRunID.utf8.elementsEqual(runID.utf8)
+            {
                 return nil
             }
             if Self.isTerminalAssistant(entry) { return entry.text }

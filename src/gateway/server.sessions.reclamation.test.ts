@@ -163,14 +163,11 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   });
   seedTranscriptState(storePath);
 
-  const samples: number[] = [];
-  let previous = performance.now();
-  const heartbeat = setInterval(() => {
-    const current = performance.now();
-    samples.push(current - previous);
-    previous = current;
-  }, 10);
+  const prepStartedAt = performance.now();
   const { ws } = await openClient();
+  const prepMs = performance.now() - prepStartedAt;
+  const samples: number[] = [];
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -182,21 +179,30 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     >
   >;
   let deleteMs = 0;
+  let tailGapMs = 0;
   try {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
+    // Client preparation is outside the deletion's responsiveness boundary.
     const deleteStartedAt = performance.now();
+    let previous = deleteStartedAt;
+    heartbeat = setInterval(() => {
+      const current = performance.now();
+      samples.push(current - previous);
+      previous = current;
+    }, 10);
     // The 200k-row fixture can take longer than the generic RPC helper's 10s
     // wall-clock budget on slower CI hosts. Responsiveness is asserted
     // independently below via the event-loop heartbeat.
     deleted = await rpcReq(ws, "sessions.delete", { key: SESSION_KEY }, 60_000);
-    deleteMs = performance.now() - deleteStartedAt;
+    const deleteFinishedAt = performance.now();
+    deleteMs = deleteFinishedAt - deleteStartedAt;
+    // A blocked final continuation can prevent one last timer tick.
+    tailGapMs = deleteFinishedAt - previous;
   } finally {
     clearInterval(heartbeat);
     ws.close();
   }
-  const maxGatewayGapMs = Math.max(...samples);
+  const tickMaxMs = Math.max(0, ...samples);
+  const maxGatewayGapMs = Math.max(tickMaxMs, tailGapMs);
 
   const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
   if (!target.path) {
@@ -258,8 +264,12 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   if (process.env.OPENCLAW_TEST_RECLAMATION_LOG === "1") {
     process.stdout.write(
       `${JSON.stringify({
+        prepMs,
         deleteMs,
         maxGatewayGapMs,
+        heartbeatTicks: samples.length,
+        tickMaxMs,
+        tailGapMs,
         rows: ROWS,
         historicalCounts,
         targetCounts,
