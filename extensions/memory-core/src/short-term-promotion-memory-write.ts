@@ -21,9 +21,43 @@ export class MemoryWriteConflictError extends Error {
   }
 }
 
+async function realpathMemoryPath(filePath: string): Promise<string> {
+  if (!process.versions.bun || process.platform === "win32") {
+    return await fs.realpath(filePath);
+  }
+
+  // Bun compatibility: keep this segment-wise path walk until fs.realpath preserves
+  // symlink semantics for `symlink/..`; lexical normalization can escape the target dir.
+  const parsed = path.parse(filePath);
+  let current = parsed.root || (await fs.realpath("."));
+  const relative = parsed.root ? filePath.slice(parsed.root.length) : filePath;
+  const assertDirectory = async () => {
+    await fs.stat(`${current}${path.sep}`);
+  };
+  for (const segment of relative.split(path.sep)) {
+    if (!segment) {
+      continue;
+    }
+    if (segment === ".") {
+      await assertDirectory();
+      continue;
+    }
+    if (segment === "..") {
+      await assertDirectory();
+      current = path.dirname(current);
+      continue;
+    }
+    current = await fs.realpath(path.join(current, segment));
+  }
+  if (relative.endsWith(path.sep)) {
+    await assertDirectory();
+  }
+  return current;
+}
+
 export async function resolveMemoryWritePath(filePath: string): Promise<string> {
   try {
-    return await fs.realpath(filePath);
+    return await realpathMemoryPath(filePath);
   } catch (err) {
     const hasTrailingSeparator =
       filePath.endsWith(path.sep) ||
@@ -35,7 +69,7 @@ export async function resolveMemoryWritePath(filePath: string): Promise<string> 
 
   // Canonicalize each parent before applying a relative link target. Lexical
   // normalization would change `..` semantics when an earlier component is a symlink.
-  const parentPath = await fs.realpath(path.dirname(filePath));
+  const parentPath = await realpathMemoryPath(path.dirname(filePath));
   const canonicalPath = path.join(parentPath, path.basename(filePath));
   let linkTarget: string;
   try {
