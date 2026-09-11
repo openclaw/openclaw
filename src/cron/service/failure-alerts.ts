@@ -338,7 +338,7 @@ function emitFailureAlert(
   const providerLoginRecovery =
     params.status === "error" && (errorReason === "auth" || errorReason === "auth_permanent")
       ? buildProviderLoginRecovery({
-          provider: oauthRefreshFailure?.provider,
+          provider: normalizeOptionalString(oauthRefreshFailure?.provider),
           oauthReason: oauthRefreshFailure?.reason,
         })
       : undefined;
