@@ -248,8 +248,15 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";
   now?: number;
+  agentId?: string;
 }): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  // Without an agentId the snapshot falls back to the default agent, so a
+  // caller viewing another agent gets that agent's auth profile order applied
+  // to someone else's quota windows.
+  const snapshot = getProviderUsageRuntimeSnapshot({
+    config: options.config,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+  });
   const params: ProviderUsageCacheParams = {
     agentId: snapshot.agentId,
     agentDir: snapshot.agentDir,

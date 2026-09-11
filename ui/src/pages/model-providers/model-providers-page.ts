@@ -125,6 +125,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setData: (data) => (this.data = data),
     setDataClient: (client) => (this.dataClient = client),
     refreshPolicy: this.refreshPolicy,
+    getAgentId: () => this.selectedAgentId,
   });
   private readonly catalogDiscovery = createCatalogDiscoveryController({
     getGateway: () => this.gateway,
