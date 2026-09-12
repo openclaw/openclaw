@@ -63,8 +63,8 @@ export function isCopilotTokenUsable(params: {
 
 type CopilotTokenCache = {
   path: string;
-  load(): CachedCopilotToken | undefined;
-  save(value: CachedCopilotToken): void;
+  load(): Promise<CachedCopilotToken | undefined>;
+  save(value: CachedCopilotToken): Promise<void>;
 };
 
 export async function resolveCopilotTokenCache(params: {
@@ -87,14 +87,13 @@ export async function resolveCopilotTokenCache(params: {
     const saveJsonFileFn = params.saveJsonFileImpl ?? writeJsonTarget;
     return {
       path: cachePath,
-      load: () => loadJsonFileFn(cachePath) as CachedCopilotToken | undefined,
-      save: (value) => saveJsonFileFn(cachePath, value),
+      load: async () => loadJsonFileFn(cachePath) as CachedCopilotToken | undefined,
+      save: async (value) => saveJsonFileFn(cachePath, value),
     };
   }
 
-  const { createCorePluginStateSyncKeyedStore } =
-    await import("../plugin-state/plugin-state-store.js");
-  const store = createCorePluginStateSyncKeyedStore<CachedCopilotToken>({
+  const { createCorePluginStateKeyedStore } = await import("../plugin-state/plugin-state-store.js");
+  const store = createCorePluginStateKeyedStore<CachedCopilotToken>({
     ownerId: "core:provider-auth",
     namespace: COPILOT_CACHE_NAMESPACE,
     maxEntries: COPILOT_TOKEN_CACHE_MAX_ENTRIES,

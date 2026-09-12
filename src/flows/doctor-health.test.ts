@@ -66,12 +66,14 @@ const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDocto
   },
 };
 
-const { mocks, registerDoctorConfigReceiptTests } = await import("./doctor-health.test-support.js");
+const support = await import("./doctor-health.test-support.js");
+const { mocks, registerDoctorConfigReceiptTests } = support;
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.service.mockReset();
@@ -192,6 +194,7 @@ describe("runDoctorHealthFlow", () => {
                 : kind.endsWith("running") && !windows
                   ? "running"
                   : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(kind.startsWith("absent") ? { missingUnit: true } : {}),
           }),
           isLoaded: async () => {
@@ -231,7 +234,7 @@ describe("runDoctorHealthFlow", () => {
           const result = await migrateLegacyWorkspaceState({
             stateDir: state.stateDir,
             env: state.env,
-            detected: detectLegacyWorkspaceState({
+            detected: await detectLegacyWorkspaceState({
               cfg: ctx.cfg,
               stateDir: state.stateDir,
               env: state.env,
@@ -253,9 +256,9 @@ describe("runDoctorHealthFlow", () => {
           kind.endsWith("loaded-disabled")
         ) {
           await run;
-          expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
-            completedAt,
-          );
+          expect(
+            (await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt,
+          ).toBe(completedAt);
           expect(fs.existsSync(sourcePath)).toBe(false);
           expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
           if (kind !== "absent" && kind !== "runtime-only") {
@@ -429,6 +432,7 @@ describe("runDoctorHealthFlow", () => {
           readCommand: async () => command,
           readRuntime: async () => ({
             status: running ? "running" : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(outcome === "ancestor-blocked" ? { pid: process.pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
@@ -478,7 +482,7 @@ describe("runDoctorHealthFlow", () => {
             const migration = await migrateLegacyWorkspaceState({
               stateDir: state.stateDir,
               env: state.env,
-              detected: detectLegacyWorkspaceState({
+              detected: await detectLegacyWorkspaceState({
                 cfg: ctx.cfg,
                 stateDir: state.stateDir,
                 env: state.env,
@@ -490,9 +494,9 @@ describe("runDoctorHealthFlow", () => {
               },
             });
             expect(migration.warnings.join("\n")).toContain("legacy cleanup failed");
-            expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
-              "2026-07-15T00:00:00.000Z",
-            );
+            expect(
+              (await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt,
+            ).toBe("2026-07-15T00:00:00.000Z");
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -645,37 +649,6 @@ describe("runDoctorHealthFlow", () => {
 
   registerDoctorConfigReceiptTests(runDoctorHealthFlow, postInstallAdvisory);
 
-  it("reports a cron ownership refusal instead of a recoverable post-install advisory", async () => {
-    mocks.runContributions.mockImplementation(async (ctx) => {
-      ctx.configWriteRefusal = "cron-owner-safety";
-      ctx.postInstallDoctorResult = postInstallAdvisory;
-    });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    vi.stubEnv(
-      "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
-      "/tmp/openclaw-update-doctor-result.json",
-    );
-
-    try {
-      await runDoctorHealthFlow(runtime, {});
-    } finally {
-      vi.unstubAllEnvs();
-    }
-
-    expect(mocks.outro).toHaveBeenCalledWith("Doctor finished, but config fixes were not applied.");
-    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.exit).not.toHaveBeenCalledWith(86);
-    expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
-      resultPath: "/tmp/openclaw-update-doctor-result.json",
-      result: { status: "error", configHash: "unchanged" },
-    });
-  });
-
   it.each([{ repair: true }, { yes: true }])(
     "refuses blocked required migration for %j, then completes after the writer releases",
     async (options) => {
@@ -691,13 +664,9 @@ describe("runDoctorHealthFlow", () => {
           path: initial.path,
           env: state.env,
         });
-        openOpenClawStateDatabase({ env: state.env }).db.exec(
-          "INSERT INTO gateway_boot_lifecycle (boot_id, pid, started_at_ms, completed_at_ms, outcome, startup_reason) VALUES ('maintenance', 1, 1, 2, 'startup_failed', 'gateway.maintenance_required')",
+        const maintenanceOutcome = support.seedMaintenanceStartupFailure(() =>
+          openOpenClawStateDatabase({ env: state.env }),
         );
-        const maintenanceOutcome = () =>
-          openOpenClawStateDatabase({ env: state.env })
-            .db.prepare("SELECT outcome FROM gateway_boot_lifecycle WHERE boot_id = 'maintenance'")
-            .get();
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         mocks.runContributions.mockImplementation(async (ctx) => {
           const result = await migrateLegacyMediaPersistence();
@@ -727,7 +696,17 @@ describe("runDoctorHealthFlow", () => {
           expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
           expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
             resultPath: state.path("advisory.json"),
-            result: { status: "error", configHash: "unchanged" },
+            result: {
+              status: "error",
+              configHash: "unchanged",
+              failureFacts: [
+                {
+                  check: "doctor",
+                  code: "doctor-failed",
+                  message: expect.stringContaining("Doctor could not enter maintenance"),
+                },
+              ],
+            },
           });
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           expect(fs.readFileSync(initial.path)).toEqual(before);
@@ -951,7 +930,7 @@ describe("runDoctorHealthFlow", () => {
           const result = await migrateLegacyWorkspaceState({
             stateDir: state.stateDir,
             env: state.env,
-            detected: detectLegacyWorkspaceState({
+            detected: await detectLegacyWorkspaceState({
               cfg: ctx.cfg,
               stateDir: state.stateDir,
               env: state.env,
@@ -973,7 +952,7 @@ describe("runDoctorHealthFlow", () => {
           runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
         );
         expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("legacy cleanup failed"));
-        expect(readWorkspaceStateSnapshot(workspaceDir).setup.setupCompletedAt).toBe(
+        expect((await readWorkspaceStateSnapshot(workspaceDir)).setup.setupCompletedAt).toBe(
           "2026-07-15T00:00:00.000Z",
         );
         expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);

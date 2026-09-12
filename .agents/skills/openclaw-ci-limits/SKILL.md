@@ -56,10 +56,10 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 Before changing CI, collect current pressure:
 
 ```bash
-ghx api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-ghx api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
+gh api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
 blacksmith testbox list --all
 curl -fsS https://clawsweeper.openclaw.ai/api/status | jq '{generated_at,fleet,diagnostics:{errors:.diagnostics.errors}}'
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '{generated_at,review:.lanes.review,publication:.lanes.publication,state_writer,state_append}'
@@ -207,11 +207,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Android at 2. Every compact profile has an enforced 80-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 64 push or
   120 PR rows, including precise plans. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories. Jobs requesting the existing
-  Blacksmith class admit at most two project processes with one Vitest worker
-  each; hosted fallbacks remain serial. Runtime preparation completes before
-  project readers start. Native proof must cover available CPUs/RAM, concurrent
-  fixture memory and cleanup. This adds no runner registrations.
+- Windows keeps two disjoint file inventories and at most two concurrent jobs.
+  Each job runs project processes serially with one Vitest worker on every
+  backend, after runtime preparation completes. Native allocation can be smaller
+  than the runner label. Native proof must cover available CPUs/RAM, fixture
+  memory and cleanup. This adds no runner registrations.
 - macOS Swift regular PR/main and PR `release_gate` CI retains the complete
   shared/app test workload plus lint/schema guards in one `tests` phase.
   Ordinary full-scope manual validation adds independent release compilation,
@@ -272,6 +272,15 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   250s and co-locate split siblings, provided each original child still fits
   150s. Keep file splits, workers, process isolation and other profiles unchanged.
   Runtime consumers in ordinary bins share preparation only with other consumers;
+  hybrid main runtime-placement observations apply only after file splitting.
+  Whole pinned groups may move between existing compatible serial runtime bins
+  under a 440s budget including the existing 100s build reserve. Preserve runner
+  anchors, all descriptors and invocation/generation counts; no additional jobs,
+  builds, worker limits or test deadlines. Reapply shared admission to both bins;
+  do not bypass a failed budget or count a runtime subset as a complete parent.
+  An unfit optimization keeps the complete runnable plan and its truthful estimate.
+  Compare recipients with the donor job's fixed anchor, not only its group class.
+  Other serial, exclusive, private-QA, dist and hosted policies stay unchanged.
   Affordable generated CLI runtime children may share one preparation in an
   exclusive serial bin within the same 150s budget; fixed stripe families remain
   separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
@@ -300,10 +309,23 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   that contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
   including the browser-extension row. Failed-job-only PR and hybrid push retries
   retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
-  The browser-extension row stays on 8 and real-Gateway
-  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
-  native timing proof and does not refresh stale timing weights.
-- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+  The browser-extension row stays on 8. Twelve rows finished by 4:38 in run
+  33695337496; the reduced width needs native timing proof and does not refresh
+  stale timing weights.
+- Eligible real-Gateway jobs request the existing 32-class for the private artifact
+  build's two canonical SDK cache misses. Overlap requires at least two available
+  CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
+  768 MiB native headroom each. Unknown finite-cgroup usage or insufficient capacity
+  keeps compilation serial. Keep browser workers, inventory, build/read ordering,
+  routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
+  Compiler-only AWS evidence does not prove CI timing; validate the complete job
+  through exact-head native CI before claiming an improvement.
+- Current-target `build-artifacts` uses the existing 16-class after a complete
+  four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
+  The SDK memory owner keeps declarations serial when two heaps do not fit.
+  Frozen or unclassified targets retain 32-class; hosted fallbacks, job counts,
+  concurrency and deadlines stay unchanged. Measured compute fit does not prove
+  queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
@@ -380,11 +402,12 @@ git diff --check
 If `pnpm docs:list` tries to reconcile dependencies in a linked Codex worktree,
 stop and use `node scripts/docs-list.js`.
 
-For a PR before requesting maintainer approval:
+For a PR before requesting maintainer approval, bind the watcher to the PR's
+full 40-character head SHA:
 
 ```bash
 .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
-ghx pr checks <pr> -R openclaw/openclaw --watch --interval 15
+node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
 Use hosted exact-head gates for CI workflow tuning. Do not burn local
@@ -409,9 +432,9 @@ land the PR. Both commands mutate GitHub state.
 After merge, watch at least one fresh main cycle and the adjacent repos:
 
 ```bash
-ghx run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 for repo in openclaw/clawsweeper openclaw/clawhub openclaw/clownfish openclaw/openclaw-rtt openclaw/clawbench; do
-  ghx run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
+  gh run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
 done
 curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '.'
 ```

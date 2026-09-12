@@ -64,8 +64,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 79% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#gateway-web-app">
-      <span className="maturity-surface-title">Gateway Web App</span>
+    <a className="maturity-surface-link" href="#control-ui">
+      <span className="maturity-surface-title">Control UI</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
@@ -79,8 +79,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#automation-cron-hooks-tasks-polling">
-      <span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span>
+    <a className="maturity-surface-link" href="#automation-and-durable-work">
+      <span className="maturity-surface-title">Automation and durable work</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
@@ -142,8 +142,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#raspberry-pi-and-small-linux-devices">
-      <span className="maturity-surface-title">Raspberry Pi and small Linux devices</span>
+    <a className="maturity-surface-link" href="#chromeos-raspberry-pi-and-small-linux-devices">
+      <span className="maturity-surface-title">ChromeOS, Raspberry Pi, and small Linux devices</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 79% complete</span></span>
     </a>
 
@@ -155,6 +155,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a className="maturity-surface-link" href="#linux-companion-app">
       <span className="maturity-surface-title">Linux companion app</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 76% complete</span></span>
+    </a>
+
+    <a className="maturity-surface-link" href="#windows-app-node">
+      <span className="maturity-surface-title">Windows App / Node</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 21% complete</span></span>
     </a>
 
     <a className="maturity-surface-link" href="#native-windows">
@@ -175,11 +180,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a className="maturity-surface-link" href="#watchos-companion-surfaces">
       <span className="maturity-surface-title">watchOS companion surfaces</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-experimental"><span className="maturity-level-code">M1</span><span>Experimental</span></span><span>5 areas - 44% complete</span></span>
-    </a>
-
-    <a className="maturity-surface-link" href="#native-windows-companion-app">
-      <span className="maturity-surface-title">Native Windows companion app</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-experimental"><span className="maturity-level-code">M0</span><span>Planned</span></span><span>5 areas - 21% complete</span></span>
     </a>
 
   </Tab>
@@ -1095,7 +1095,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Gateway Web App - M3 Beta - 6 areas">
+  <Accordion title="Control UI - M3 Beta - 6 areas">
+    <a id="control-ui" />
     <a id="gateway-web-app" />
 
     Web UI is documented with pairing, chat, PWA, Talk, push, and remote Gateway flows. Promote after cross-browser and mobile-PWA scorecards.
@@ -1428,10 +1429,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Automation: cron, hooks, tasks, polling - M3 Beta - 6 areas">
+  <Accordion title="Automation and durable work - M3 Beta - 6 areas">
+    <a id="automation-and-durable-work" />
     <a id="automation-cron-hooks-tasks-polling" />
 
-    Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
+    Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
 
     <div className="maturity-surface-rollup"><span>Coverage Experimental - 49%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -1482,14 +1484,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Background Tasks and Flows</span>
-          <span>10 capabilities</span>
+          <span>14 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Tasks](/automation/tasks), [Index](/automation/index), [Tasks](/cli/tasks), [Taskflow](/automation/taskflow), [Sdk Runtime](/plugins/sdk-runtime)
+    [Tasks](/automation/tasks), [Index](/automation/index), [Standing Orders](/automation/standing-orders), [Tasks](/cli/tasks), [Workboard](/cli/workboard), [Taskflow](/automation/taskflow), [Workboard](/plugins/workboard), [Sdk Runtime](/plugins/sdk-runtime), [Progress Card](/tools/progress-card)
 
     </div>
       </div>
@@ -2555,10 +2557,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Raspberry Pi and small Linux devices - M3 Beta - 4 areas">
+  <Accordion title="ChromeOS, Raspberry Pi, and small Linux devices - M3 Beta - 4 areas">
+    <a id="chromeos-raspberry-pi-and-small-linux-devices" />
     <a id="raspberry-pi-and-small-linux-devices" />
 
-    Platform docs exist and Gateway path is Linux-based. Needs hardware-specific release smoke proof to move higher.
+    Raspberry Pi and ChromeOS/Crostini guides cover supported Linux-based Gateway paths. Needs platform-specific release smoke proof to move higher.
 
     <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Alpha - 67%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -2567,14 +2570,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Setup and Compatibility</span>
-          <span>12 capabilities</span>
+          <span>13 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>67%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "67%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Raspberry Pi](/install/raspberry-pi), [Index](/install/index), [Faq First Run](/help/faq-first-run), [Faq](/help/faq), [Linux](/platforms/linux), [Installer](/install/installer)
+    [Chromeos](/platforms/chromeos), [Raspberry Pi](/install/raspberry-pi), [Index](/install/index), [Faq First Run](/help/faq-first-run), [Faq](/help/faq), [Linux](/platforms/linux), [Installer](/install/installer)
 
     </div>
       </div>
@@ -2825,6 +2828,90 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Linux](/platforms/linux), [OpenClaw](/start/openclaw), [Doctor](/gateway/doctor)
+
+    </div>
+      </div>
+    </div>
+
+  </Accordion>
+
+  <Accordion title="Windows App / Node - M3 Beta - 5 areas">
+    <a id="windows-app-node" />
+    <a id="native-windows-companion-app" />
+
+    The Windows App ships signed x64 and ARM64 installers from openclaw/openclaw-windows-node with local or remote Gateway setup, native chat, diagnostics, updates, and opt-in Windows node capabilities.
+
+    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Experimental - 19%</span><span>Completeness Experimental - 21%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+
+    <div className="maturity-category-list">
+      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Installation and Updates</span>
+          <span>4 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Windows](/platforms/windows), [Index](/install/index)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Gateway Connection</span>
+          <span>3 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Windows](/platforms/windows), [Index](/gateway/index), [Pairing](/gateway/pairing), [Remote](/gateway/remote)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Chat Sessions</span>
+          <span>2 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Windows](/platforms/windows), [Protocol](/gateway/protocol)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Status and Repair</span>
+          <span>5 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Windows](/platforms/windows), [Doctor](/gateway/doctor), [Index](/gateway/index)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Desktop Tools and Permissions</span>
+          <span>9 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Windows](/platforms/windows), [Index](/nodes/index), [Exec](/tools/exec), [Exec Approvals](/tools/exec-approvals), [Index](/gateway/security/index)
 
     </div>
       </div>
@@ -3129,89 +3216,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Ios](/platforms/ios)
-
-    </div>
-      </div>
-    </div>
-
-  </Accordion>
-
-  <Accordion title="Native Windows companion app - M0 Planned - 5 areas">
-    <a id="native-windows-companion-app" />
-
-    Planned only.
-
-    <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Experimental - 19%</span><span>Completeness Experimental - 21%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
-
-    <div className="maturity-category-list">
-      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Installation and Updates</span>
-          <span>4 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Windows](/platforms/windows), [Index](/install/index)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Gateway Connection</span>
-          <span>3 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Windows](/platforms/windows), [Index](/gateway/index), [Pairing](/gateway/pairing), [Remote](/gateway/remote)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Chat Sessions</span>
-          <span>2 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Windows](/platforms/windows), [Protocol](/gateway/protocol)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Status and Repair</span>
-          <span>5 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Windows](/platforms/windows), [Doctor](/gateway/doctor), [Index](/gateway/index)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Desktop Tools and Permissions</span>
-          <span>9 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>0%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "0%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>19%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "19%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-experimental"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-experimental">Experimental</span><span>21%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "21%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Windows](/platforms/windows), [Index](/nodes/index), [Exec](/tools/exec), [Exec Approvals](/tools/exec-approvals), [Index](/gateway/security/index)
 
     </div>
       </div>

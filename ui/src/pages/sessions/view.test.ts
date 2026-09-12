@@ -32,6 +32,7 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    refreshing: false,
     agentId: "main",
     mainKey: "main",
     result,
@@ -106,6 +107,37 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("identifies agents on plain chat sessions in a mixed-agent list", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            { key: "agent:main:chat-one", kind: "direct" },
+            { key: "agent:research:chat-two", kind: "direct" },
+            { key: "legacy-chat", agentId: "research", kind: "direct" },
+          ]),
+        ),
+      ),
+      container,
+    );
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".session-data-row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research", "research"]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("renders local calendar date headings with their session rows", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
     const container = document.createElement("div");
@@ -376,6 +408,7 @@ describe("sessions view", () => {
           ],
           indexing: true,
           truncated: true,
+          archivedTranscriptsExcluded: 0,
         },
         onNavigateToChat,
       }),
@@ -896,6 +929,32 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
     popover?.dispatchEvent(new Event("wa-hide"));
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not invent thinking choices for an empty session profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            modelProvider: "thinking-fixture",
+            model: "no-effort",
+            thinkingLevels: [],
+          }),
+        ),
+        expandedSessionKey: "agent:main:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector<HTMLSelectElement>("tbody select");
+    expect(thinking).not.toBeNull();
+    expect(Array.from(thinking?.options ?? []).map((option) => option.value)).toEqual([""]);
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Unknown");
   });
 
   it("renders and patches provider-owned thinking ids", async () => {

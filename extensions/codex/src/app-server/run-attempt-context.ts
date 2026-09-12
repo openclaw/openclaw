@@ -114,6 +114,7 @@ export async function prepareCodexAttemptContext(
       ? { modelProviderId: params.provider, modelId: params.modelId }
       : {}),
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,
@@ -159,6 +160,8 @@ export async function prepareCodexAttemptContext(
     });
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
+  // The admission fence intentionally excludes this logical turn's committed results.
+  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,

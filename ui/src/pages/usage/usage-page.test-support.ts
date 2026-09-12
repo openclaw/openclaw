@@ -6,6 +6,7 @@ import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
 import { page as usageRoute } from "./route.ts";
+import type { UsageSessionEntry } from "./types.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 import "./usage-page.ts";
 
@@ -105,6 +106,17 @@ export function cleanupUsagePageTest(): void {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
+}
+
+export function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeight"]> {
+  return {
+    source: "run",
+    generatedAt: 1,
+    systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
+    skills: { promptChars: 10, entries: [{ name, blockChars: 10 }] },
+    tools: { listChars: 0, schemaChars: 0, entries: [] },
+    injectedWorkspaceFiles: [],
+  };
 }
 
 export function cacheSnapshot(

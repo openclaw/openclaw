@@ -1,10 +1,8 @@
 // @vitest-environment node
-import { createRouter, type RouteLoaderOptions } from "@openclaw/uirouter";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -17,14 +15,6 @@ import type { UsageRouteData } from "./usage-page.ts";
 const usageMethods = ["sessions.usage", "usage.cost", "usage.status"];
 const payload = { sessions: [], daily: [], providers: [] };
 const cleanups: Array<() => void> = [];
-const loaderOptions: RouteLoaderOptions = {
-  signal: new AbortController().signal,
-  shouldRun: () => true,
-  revalidating: false,
-  location: { pathname: "/usage", search: "", hash: "" },
-  deps: "",
-  cause: "navigation",
-};
 
 function createUsageRouter() {
   const store = createGatewayStoreTestStore();
@@ -36,8 +26,11 @@ function createUsageRouter() {
     subscribe: () => () => {},
   });
   selection.set("main");
-  const context = { gateway: store.gateway, agentSelection: selection } as ApplicationContext;
-  const router = createRouter<"usage" | "other", ApplicationContext, null, UsageRouteData>({
+  const context = {
+    gateway: store.gateway,
+    agentSelection: selection,
+  } satisfies Parameters<NonNullable<typeof page.loader>>[0];
+  const router = createRouter<"usage" | "other", typeof context, null, UsageRouteData>({
     routes: [
       { ...page, component: () => null },
       { id: "other", path: "/other", component: () => null },
@@ -45,6 +38,7 @@ function createUsageRouter() {
   });
   cleanups.push(() => {
     router.stop();
+    selection.dispose();
     store.gateway.stop();
   });
   return {
@@ -173,7 +167,8 @@ describe("usage route", () => {
   );
 
   it("records a provider usage request failure separately from an empty response", async () => {
-    const request = vi.fn(async (method: string) => {
+    const { router, context, request } = createUsageRouter();
+    request.mockImplementation(async (method) => {
       switch (method) {
         case "sessions.usage":
           return { sessions: [], totals: null };
@@ -185,46 +180,27 @@ describe("usage route", () => {
           return {};
       }
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = { snapshot: { phase: "connected", client } };
-    const context = {
-      gateway,
-      agentSelection: { state: { scopeId: "main" } },
-    } as unknown as ApplicationContext;
+    await router.navigate("usage", context);
+    const result = router.getState().matches[0]?.data;
 
-    const result = (await page.loader?.(context, loaderOptions)) as UsageRouteData;
-
-    expect(result.error).toBeNull();
-    expect(result.providerUsage).toEqual({
+    expect(result?.error).toBeNull();
+    expect(result?.providerUsage).toEqual({
       state: "settled",
       result: { ok: false, error: { kind: "request-failed" } },
     });
   });
 
   it("redacts secrets in displayed loader failures", async () => {
-    const request = vi.fn(async (method: string) => {
+    const { router, context, request } = createUsageRouter();
+    request.mockImplementation(async (method) => {
       if (method === "sessions.usage") {
         throw new Error("OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return {};
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = { snapshot: { phase: "connected", client } };
-    const context = {
-      gateway,
-      agentSelection: { state: { scopeId: "main" } },
-    } as unknown as ApplicationContext;
-    const options = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: { pathname: "/usage", search: "", hash: "" },
-      deps: "",
-      cause: "navigation",
-    } satisfies RouteLoaderOptions;
+    await router.navigate("usage", context);
+    const result = router.getState().matches[0]?.data;
 
-    const result = (await page.loader?.(context, options)) as UsageRouteData;
-
-    expect(result.error).toBe("OPENAI_API_KEY=sk-123...cdef");
+    expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
   });
 });

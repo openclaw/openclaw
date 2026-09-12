@@ -127,7 +127,7 @@ export type SqliteSessionReclamationWorkerData = {
   type: "sqlite-transcript-archive-v2";
 };
 
-export type SqliteSessionReclamationWorkerResult = {
+type SqliteSessionReclamationWorkerResult = {
   cleanupIncomplete?: true;
   cleanupWarnings?: string[];
   result: SqliteSessionReclamationResult;
@@ -439,17 +439,22 @@ export async function runSqliteSessionReclamation(params: {
           },
         });
       },
+      "session.reclamation.in-process",
       params.diagnostics,
     );
   }
-  const retained = await runExclusiveSqliteSessionWrite(params.plan.databaseOptions, async () => {
-    params.assertCommitAllowed?.();
-    return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
-  });
+  const retained = await runExclusiveSqliteSessionWrite(
+    params.plan.databaseOptions,
+    async () => {
+      params.assertCommitAllowed?.();
+      return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
+    },
+    "session.reclamation.retain",
+  );
   if (!retained.found) {
     throw new Error("SQLite session reclamation lost its prepared database");
   }
-  const { claim } = retained;
+  const { database, claim } = retained;
   try {
     const assertCommitAllowed = () => {
       claim.assertCurrent();
@@ -461,7 +466,7 @@ export async function runSqliteSessionReclamation(params: {
       ...params.plan,
       databaseOptions: {
         ...params.plan.databaseOptions,
-        path: readOpenClawAgentDatabaseIdentity(claim.database).filename,
+        path: readOpenClawAgentDatabaseIdentity(database).filename,
       },
     };
     const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
@@ -469,7 +474,7 @@ export async function runSqliteSessionReclamation(params: {
     let publishCommitted: (() => void) | undefined;
     const [workerResult] = await withSqliteReclamationAuthorization(
       commitGate,
-      claim.database.db,
+      database.db,
       () => {
         assertCommitAllowed();
         // A blocked writer may authorize before the Worker's queued request.
@@ -480,7 +485,7 @@ export async function runSqliteSessionReclamation(params: {
           diagnostics: params.diagnostics,
           expectedMessageType: "reclaimed",
           onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
-          withWriteAdmission: async (run) =>
+          withWriteAdmission: async (run, reclamationAdmission) =>
             await runExclusiveSqliteSessionWrite(
               plan.databaseOptions,
               async () => {
@@ -496,7 +501,8 @@ export async function runSqliteSessionReclamation(params: {
                   publishCommitted?.();
                 }
               },
-              params.diagnostics,
+              "session.reclamation.worker-commit",
+              { ...params.diagnostics, reclamationAdmission },
             ),
           transferList: prepareReclamationWorkerTransferList(plan),
           workerData: {

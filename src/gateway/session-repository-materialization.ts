@@ -1,6 +1,7 @@
 import os from "node:os";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
@@ -21,7 +22,7 @@ import { withSessionRepositoryCheckpoint } from "./worker-environments/session-r
 import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
-/** Called only by an explicit Gateway move, after the source result is accepted. */
+/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
@@ -180,7 +181,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   const git = (args: string[]) =>
     command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
       cwd: root,
-      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+      env: { GIT_CONFIG_GLOBAL: gitNullConfigPath(), GIT_CONFIG_SYSTEM: gitNullConfigPath() },
     });
   const alignPublication = async () => {
     if (published?.pushed_head_commit) {
@@ -209,6 +210,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
           assertCurrent();
           const applied = await applyStagedWorkerWorkspace({
             ...snapshot,
+            acceptance: { kind: "reconcile" },
             root,
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.

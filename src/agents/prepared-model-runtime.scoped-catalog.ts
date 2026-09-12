@@ -1,6 +1,7 @@
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
@@ -56,7 +57,9 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   return materializePreparedModelCatalog(
     modelCatalog,
     agentFactsForInput.runtimeCapabilityModels,
-    configuredRuntimeModels,
+    scopedInput.config.models?.mode === "replace"
+      ? []
+      : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
   );
 }
 
@@ -84,6 +87,7 @@ export async function prepareAgentCatalogSource(
   sourceOptions: {
     authStore?: AuthProfileStore;
     providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
   } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
@@ -118,7 +122,8 @@ export async function prepareAgentCatalogSource(
           providerDiscoveryEntriesOnly: true as const,
         }
       : {
-          providerDiscoveryTimeoutMs: MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
+          providerDiscoveryTimeoutMs:
+            sourceOptions.providerDiscoveryTimeoutMs ?? MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
         }),
   };
   const prepareSource = async () => {

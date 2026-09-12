@@ -79,7 +79,7 @@ describeLive("agent exec Code Mode with environment authentication", () => {
             "Do not use a shell command. Reply with exactly DONE after the write completes.",
           "--auth-env-only",
           "--model",
-          "openai/gpt-5.6-sol",
+          "openai/gpt-5.6-luna",
           "--code-mode",
           "code",
           "--local-model-lean",
@@ -115,7 +115,7 @@ describeLive("agent exec Code Mode with environment authentication", () => {
       ok: true,
       status: "ok",
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       codeModeEngaged: true,
       final: "DONE",
     });

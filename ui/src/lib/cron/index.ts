@@ -234,8 +234,6 @@ export type CronState = {
   // only the current filtered/paged table cache.
   cronEditingJob: CronJob | null;
   cronCloningJob: CronJob | null;
-  cronEditingJobId: string | null;
-  cronEditingConfigRevision: string | null;
   cronRunsJobId: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
@@ -286,8 +284,6 @@ export function createInitialCronState(
     cronFieldErrors: {},
     cronEditingJob: null,
     cronCloningJob: null,
-    cronEditingJobId: null,
-    cronEditingConfigRevision: null,
     cronRunsJobId: null,
     cronRunsLoadingMore: false,
     cronRuns: [],
@@ -774,8 +770,6 @@ function clearCronEditState(state: CronState) {
   state.cronError = null;
   state.cronEditingJob = null;
   state.cronCloningJob = null;
-  state.cronEditingJobId = null;
-  state.cronEditingConfigRevision = null;
 }
 
 function clearCronRunsPage(state: CronState) {
@@ -1156,7 +1150,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
 
     const editingJob = state.cronEditingJob;
     const expectedConfigRevision = editingJob
-      ? requireCronConfigRevision(state.cronEditingConfigRevision)
+      ? requireCronConfigRevision(editingJob.configRevision)
       : undefined;
     const sourceJob = editingJob ?? state.cronCloningJob;
     const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
@@ -1574,8 +1568,6 @@ function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
   state.cronError = null;
   state.cronEditingJob = job;
   state.cronCloningJob = null;
-  state.cronEditingJobId = job.id;
-  state.cronEditingConfigRevision = job.configRevision ?? null;
   state.cronRunsJobId = job.id;
   state.cronForm = form;
   state.cronFieldErrors = validateCronForm(form);

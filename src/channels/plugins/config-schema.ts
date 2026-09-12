@@ -154,7 +154,10 @@ type MultiAccountChannelSchema<
   T extends z.ZodObject,
   TAccount extends ZodTypeAny,
   TOptional extends boolean,
-> = z.ZodObject<z.util.Extend<T["shape"], MultiAccountEnvelopeShape<TAccount, TOptional>>>;
+> = z.ZodObject<
+  z.util.Extend<T["shape"], MultiAccountEnvelopeShape<TAccount, TOptional>>,
+  T["_zod"]["config"]
+>;
 
 /** Add the standard accounts/defaultAccount envelope and optional shared account/root refinement. */
 export function buildMultiAccountChannelSchema<

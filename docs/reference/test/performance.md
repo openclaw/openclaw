@@ -50,6 +50,7 @@ pnpm test:startup:bench:check
 pnpm tsx scripts/bench-cli-startup.ts --runs 12
 pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --case gatewayStatus --runs 3
 pnpm tsx scripts/bench-cli-startup.ts --entry openclaw.mjs --entry-secondary dist/entry.js --preset all
+pnpm tsx scripts/bench-cli-startup.ts --runtime-rss --case status --runs 3
 ```
 
 Presets:
@@ -58,7 +59,15 @@ Presets:
 - `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
-Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and max RSS per command. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and RSS per command. The `maxRssMb` fields use MiB. By default, RSS uses the last preload marker received on stderr, preserving the historical fixture's attribution. A respawning launcher can supply that last marker. Default reports omit `memoryMetric` and sample `memory`; no runtime identity or temporary observation files are required. For a silent command, the exit marker can count as first output.
+
+Pass `--runtime-rss` to opt into runtime-process attribution. `primary.memoryMetric` identifies `cli-runtime-max-rss-v1`, and each sample's `memory` records PID, parent PID, role, and high-water RSS in bytes. The runtime is the terminal process in a unique matching CLI invocation chain; launcher and auxiliary observations are not added to it. This is not simultaneous process-tree memory.
+
+High-water RSS is observed when the preload's `exit` listener runs. Allocations in later application exit handlers are outside this observation; this is not a full-lifetime OS measurement.
+
+With `--runtime-rss`, the preload records observations in temporary files, separate from stdout/stderr and first-output timing. Runtime identity does not depend on command output; a silent entry has `firstOutputMs: null`. Missing or ambiguous runtime identity fails the sample only in this opt-in mode. Both modes are instrumented launches, separate from the no-preload, no-respawn `scripts/check-cli-startup-memory.mjs` diagnostic. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+
+Saved-report comparison uses report metadata, not `--runtime-rss`. Comparison, enforced fixture budgets, and source-summary memory trends reject mixed legacy/runtime metrics rather than silently comparing different processes. Historical fixtures cannot be relabeled; any replacement baseline needs separate validation and approval.
 
 Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-bench-smoke.json`; `pnpm test:startup:bench:save` writes `.artifacts/cli-startup-bench-all.json` (`runs=5 warmup=1`). Checked-in fixture: `test/fixtures/cli-startup-bench.json`, refreshed by `pnpm test:startup:bench:update`, compared by `pnpm test:startup:bench:check`.
 
@@ -86,6 +95,72 @@ Output includes first process output, `/healthz`, `/readyz`, HTTP listen log tim
 `/healthz` is liveness (HTTP server can answer). `/readyz` is usable readiness (startup plugin sidecars, channels, and ready-critical post-attach work have settled). Startup hooks dispatch asynchronously and are not part of the readiness guarantee. Ready log time is the Gateway's internal timestamp, useful for process-side attribution but not a substitute for the external `/readyz` probe.
 
 Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only after trace output points at import, compile, or CPU-bound work that phase timings alone cannot explain.
+
+</Accordion>
+
+<Accordion title="Gateway concurrency (scripts/bench-gateway-concurrency.ts)">
+
+Runs synthetic streaming agent turns in parallel sessions on one isolated
+Gateway. Add tool calls, session history, observers, and control-plane probes to
+reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
+first; no provider key is required.
+
+```bash
+pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
+pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json
+```
+
+`--concurrency` controls parallel sessions; `--turns-per-session` controls serial
+turns in each session (default 1, maximum 100). The second example completes 512
+turns across 64 sessions. Each session starts its next turn as soon as its
+previous turn completes, retaining its conversation history and workspace;
+there is no barrier between rounds. The fresh-connection probe runs once after
+every session has started its first turn. `--tool-events` requests a tool call
+on every turn, including follow-ups. The per-run timeout still bounds the whole
+workload. Health/control sampling is capped at 2,048 samples, while heap
+sampling continues until the full workload finishes.
+
+Use `--probe-rounds N` for allocation comparisons with equal probe work. It
+attempts exactly N sampler rounds and N history bursts per configured history
+client, regardless of which finishes first. Each sampler round requests
+`/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
+of `tasks.list`, `cron.list`, and `cron.status`. Enabling `--subscribers` adds
+one subscribe attempt per round and an unsubscribe after each successful
+subscription. History attempts total `N × historyClients × historyBurst`, capped
+at 2048 per run. Slow clients receive the same history budget as fast clients.
+Failed probes remain recorded failures; counts describe attempts, not successes.
+Omitting the flag retains adaptive probing until agent turns and mutations end.
+
+Fixed probes can finish before or after agent turns. Every configured workload
+joins before final memory and allocation capture; an exhausted load deadline
+fails the run instead of reporting a partial fixed workload as complete. Output
+records the mode and requested counts in `probeWorkload`; actual sampler and
+history counts remain in `summary.sampleCount` and `summary.historySampleCount`.
+Peak RSS is sampled during sampler rounds plus the final memory observation. If
+those rounds finish early, a later transient RSS peak can be missed; this is not
+continuous peak-RSS coverage of the entire agent workload.
+Equal request counts do not equalize their overlap with agent turns or the
+Gateway's time-dependent background work.
+
+`--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
+after startup, session seeding, and probe warmup. Sampling ends after the load
+and its final memory probe, before profile serialization and teardown. It uses
+a 32 KiB sampling interval and includes objects collected by both minor and
+major GC, so `sampledAllocatedBytes` estimates gross allocations rather than
+retained heap. Native allocations and separate worker isolates are outside this
+profile. Each run records its `.heapprofile` path and the twenty largest
+allocation stacks; open the raw file in the Chrome DevTools Memory panel.
+
+The summary includes sampled allocation bytes per run and per completed turn.
+The per-turn figure also includes concurrent probes and session mutations;
+compare identical workload settings and Node versions across multiple runs.
+Initial and follow-up turns overlap across sessions, so the allocation profile
+covers their combined workload rather than attributing separate cold and warm
+allocations. Compare matched one-turn and sustained runs to study reuse.
+Sampling is statistical and adds overhead. Use unprofiled runs for latency
+comparisons. Existing heap/RSS measurements are taken before exporting the
+profile. `--cpu-prof-dir` remains available separately and includes startup;
+the recorded `loadWindow` identifies the measured interval in that CPU profile.
 
 </Accordion>
 

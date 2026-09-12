@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
@@ -16,6 +17,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
+  selectInstalledPluginManifestRecords,
 } from "./manifest-registry-installed.js";
 import {
   loadBundledPluginManifestRegistry,
@@ -58,9 +60,14 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function throwReadonlyPluginMetadataMutation(): never {
-  throw new TypeError("Plugin metadata snapshots are immutable");
-}
+// Retained snapshots cross source/require module graphs. Frozen descriptors
+// require the same function identity when another graph finalizes them again.
+const throwReadonlyPluginMetadataMutation = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginMetadataReadonlyMutation"),
+  () => (): never => {
+    throw new TypeError("Plugin metadata snapshots are immutable");
+  },
+);
 
 function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object") {
@@ -186,8 +193,10 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
 }
 
 function buildPluginMetadataOwnerMaps(
-  plugins: readonly PluginManifestRecord[],
+  manifestRegistry: PluginManifestRegistry,
+  index: InstalledPluginIndex,
 ): PluginMetadataSnapshotOwnerMaps {
+  const plugins = manifestRegistry.plugins;
   const owners: Record<PluginMetadataContributionKey, Map<string, string[]>> = {
     channels: new Map(),
     channelConfigs: new Map(),
@@ -210,6 +219,9 @@ function buildPluginMetadataOwnerMaps(
       }
     }
     for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      if (typeof target !== "string") {
+        continue;
+      }
       const alias = normalizeProviderId(rawAlias);
       const targetProvider = normalizeProviderId(target);
       if (
@@ -228,17 +240,47 @@ function buildPluginMetadataOwnerMaps(
   for (const map of Object.values(owners)) {
     map.forEach((pluginIds) => Object.freeze(pluginIds));
   }
-  return { ...owners, ...buildPluginMetadataProviderFacts(plugins) };
+  const channelAccountKeyPolicies = new Map<
+    string,
+    NonNullable<PluginManifestRecord["channelAccountKeyPolicies"]>[string]
+  >();
+  const selectedChannels = new Set<string>();
+  const enabledPluginIds = new Set(
+    index.plugins.filter((plugin) => plugin.enabled).map((plugin) => plugin.pluginId),
+  );
+  // Maintenance can load a disabled owner; active owners retain runtime precedence.
+  const channelOwners = selectInstalledPluginManifestRecords(
+    index,
+    manifestRegistry,
+    null,
+    true,
+  ).toSorted((a, b) => Number(enabledPluginIds.has(b.id)) - Number(enabledPluginIds.has(a.id)));
+  for (const owner of channelOwners) {
+    for (const channel of owner.channels) {
+      if (selectedChannels.has(channel)) {
+        continue;
+      }
+      selectedChannels.add(channel);
+      const policy = owner.channelAccountKeyPolicies?.[channel];
+      if (policy) {
+        channelAccountKeyPolicies.set(channel, policy);
+      }
+    }
+  }
+  return { ...owners, channelAccountKeyPolicies, ...buildPluginMetadataProviderFacts(plugins) };
 }
 
-function buildPluginMetadataManifestFacts(manifestRegistry: PluginManifestRegistry) {
+function buildPluginMetadataManifestFacts(
+  manifestRegistry: PluginManifestRegistry,
+  index: InstalledPluginIndex,
+) {
   const plugins = manifestRegistry.plugins;
   return {
     manifestRegistry,
     plugins,
     diagnostics: manifestRegistry.diagnostics,
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    owners: buildPluginMetadataOwnerMaps(plugins),
+    owners: buildPluginMetadataOwnerMaps(manifestRegistry, index),
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
   };
 }
@@ -264,7 +306,7 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
 ): PluginMetadataSnapshot {
   const rebased = {
     ...snapshot,
-    ...buildPluginMetadataManifestFacts(manifestRegistry),
+    ...buildPluginMetadataManifestFacts(manifestRegistry, snapshot.index),
     normalizePluginId: snapshot.index
       ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
       : snapshot.normalizePluginId,
@@ -456,7 +498,10 @@ export function completePluginMetadataSnapshot(params: {
       inputs.snapshot.bundledManifestRegistry ??
       loadBundledPluginManifestRegistry({ env: inputs.env });
     const manifestRegistryMs = performance.now() - manifestStartedAt;
-    const rebased = rebasePluginMetadataSnapshotManifestRegistry(inputs.snapshot, manifestRegistry);
+    const rebased =
+      snapshot.pluginIds === undefined
+        ? snapshot
+        : rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry);
     const { pluginIds: _pluginIds, ...unscoped } = rebased;
     const completed = finalizePluginMetadataSnapshot({
       ...unscoped,
@@ -576,7 +621,7 @@ function loadPluginMetadataSnapshotImpl(
   });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const ownerMapsStartedAt = performance.now();
-  const manifestFacts = buildPluginMetadataManifestFacts(manifestRegistry);
+  const manifestFacts = buildPluginMetadataManifestFacts(manifestRegistry, index);
   const ownerMapsMs = performance.now() - ownerMapsStartedAt;
   const totalMs = performance.now() - totalStartedAt;
 

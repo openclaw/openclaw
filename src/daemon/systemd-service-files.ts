@@ -1,7 +1,6 @@
 /** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -9,6 +8,7 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -17,16 +17,20 @@ import type {
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
 } from "./service-types.js";
-import { execBusctlUser } from "./systemd-exec.js";
+import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import type {
+  SystemdCommandSnapshotParams,
+  SystemdEnvironmentFilesParams,
+} from "./systemd-service-files.types.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   splitSystemdLogicalLines,
+  splitSystemdEnvironmentWords,
 } from "./systemd-unit.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
-const SYSTEMD_MANAGER_QUERY_TIMEOUT_MS = 5_000;
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -47,23 +51,14 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
-type SystemdEnvironmentFileSpec = string | [string, boolean];
-
 const UNKNOWN_SYSTEMD_OVERRIDES = {
   launcher: "command",
   environment: true,
 } satisfies GatewayServiceManagedOverrides;
 
-async function buildSystemdCommandSnapshot(params: {
-  programArguments: string[];
-  workingDirectory: string;
-  inlineEnvironment: Record<string, string>;
-  environmentFileSpecs: SystemdEnvironmentFileSpec[];
-  unsetEnvironment: string[];
-  env: GatewayServiceEnv;
-  unitPath: string;
-  failOnUnavailable?: boolean;
-}): Promise<GatewayServiceCommandSnapshot> {
+async function buildSystemdCommandSnapshot(
+  params: SystemdCommandSnapshotParams,
+): Promise<GatewayServiceCommandSnapshot> {
   const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
   const environment = { ...params.inlineEnvironment, ...fileEnvironment };
   const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
@@ -97,44 +92,49 @@ async function readSystemdManagerCommand(
   const manager = "org.freedesktop.systemd1";
   const unitName = `${resolveSystemdServiceName(env)}.service`;
   const unavailable = () => new Error("Effective systemd service command could not be inspected.");
-  const timeoutMs =
-    opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
-  const deadlineAt = performance.now() + timeoutMs;
-  let remainingCalls = 3;
-  // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
-  const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
-    const result = await execBusctlUser(
-      env,
-      ["--json=short", ...args],
-      Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
+  const inspection = opts?.requireLoaded ? opts.loadForInspection : undefined;
+  const { query, binding, destination } = await createSystemdCommandQuery(
+    env,
+    unitName,
+    opts,
+    unavailable,
+  );
+  const assertAbsentWithoutLoading = async (): Promise<null> => {
+    // Missing loaded objects do not prove an authored/native unit definition is absent.
+    if (localDefinition) {
+      throw unavailable();
+    }
+    const fileState = await query(
+      [
+        "call",
+        destination,
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "GetUnitFileState",
+        "s",
+        unitName,
+      ],
+      ["s"],
     );
-    if (result.code !== 0) {
-      if (
-        args.includes("LoadUnit") &&
-        result.stderr.trim() === `Call failed: Unit ${unitName} not found.`
-      ) {
-        return null;
-      }
+    if (fileState !== null) {
       throw unavailable();
     }
-    const properties = result.stdout
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => asOptionalRecord(JSON.parse(line)));
-    if (
-      properties.length !== signatures.length ||
-      !properties.every((property, index) => property?.type === signatures[index])
-    ) {
-      throw unavailable();
-    }
-    return properties.map((property) => property?.data);
+    return null;
   };
   const loaded = await query(
-    ["call", manager, "/org/freedesktop/systemd1", `${manager}.Manager`, "LoadUnit", "s", unitName],
+    [
+      "call",
+      destination,
+      "/org/freedesktop/systemd1",
+      `${manager}.Manager`,
+      opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
+      "s",
+      unitName,
+    ],
     ["o"],
   );
   if (!loaded) {
-    return null;
+    return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
   }
   const loadedUnit = loaded[0];
   const unitPath = Array.isArray(loadedUnit) && loadedUnit.length === 1 ? loadedUnit[0] : null;
@@ -142,7 +142,7 @@ async function readSystemdManagerCommand(
     throw unavailable();
   }
   const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
-    query(["get-property", manager, unitPath, `${manager}.${scope}`, ...names], signatures);
+    query(["get-property", destination, unitPath, `${manager}.${scope}`, ...names], signatures);
   const isStringArray = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((entry) => typeof entry === "string");
   const unitProperties = await readProperties(
@@ -153,7 +153,7 @@ async function readSystemdManagerCommand(
   const [sourcePath, dropInPaths, reloadPending, loadState] = unitProperties ?? [];
   // LoadUnit also returns objects for missing units; only LoadState proves absence.
   if (loadState === "not-found") {
-    return null;
+    return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
   }
   if (
     loadState !== "loaded" ||
@@ -208,6 +208,7 @@ async function readSystemdManagerCommand(
     inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
   }
 
+  await binding?.verify();
   const managedDefinition = sourcePath === resolveSystemdUnitPath(env) ? localDefinition : null;
   const managedOverrides =
     !reloadPending && managedDefinition
@@ -345,14 +346,6 @@ async function readSystemdDropInOverrides(
   return Object.keys(overrides).length ? overrides : undefined;
 }
 
-function splitSystemdEnvironmentWords(value: string): string[] {
-  return splitArgsPreservingQuotes(value, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  });
-}
-
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
@@ -375,11 +368,8 @@ export async function readSystemdServiceExecStart(
     const unsetEnvironment: string[] = [];
     for (const rawLine of splitSystemdLogicalLines(content ?? "")) {
       const line = rawLine.trim();
-      if (!line || line.startsWith("#")) {
-        continue;
-      }
       const separator = line.indexOf("=");
-      if (separator < 0) {
+      if (separator < 0 || line.startsWith("#")) {
         continue;
       }
       const directive = line.slice(0, separator).trim();
@@ -422,18 +412,21 @@ export async function readSystemdServiceExecStart(
     const managerRead = readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts);
     const manager = opts?.requireEffective
       ? await managerRead
-      : await managerRead.catch(() => null);
-    if (manager || opts?.requireEffective) {
+      : await managerRead.catch((error: unknown) => {
+          if (error instanceof ServiceInspectionError) {
+            opts?.onInspectionFailure?.(error.reason);
+          }
+          return null;
+        });
+    if (manager || opts?.requireEffective || !managedDefinition.programArguments.length) {
       return manager;
     }
-    return managedDefinition.programArguments.length
-      ? {
-          ...managedDefinition,
-          managedDefinition,
-          managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
-          sourcePath: unitPath,
-        }
-      : null;
+    return {
+      ...managedDefinition,
+      managedDefinition,
+      managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
+      sourcePath: unitPath,
+    };
   } catch (error) {
     if (opts?.requireEffective) {
       throw error;
@@ -488,8 +481,7 @@ function decodeSystemdEnvironmentFileValue(rawValue: string): {
     | "double-quoted"
     | "double-quoted-escape";
 
-  // Mirror systemd's parse_env_file_internal state transitions. In particular,
-  // a closing quoted segment returns to `pre`, so `"foo"bar` decodes to `foobar`.
+  // Match systemd parse_env_file_internal: closing quotes return to pre ("foo"bar -> foobar).
   let state: ParseState = "pre";
   let decoded = "";
   let literalDollar = false;
@@ -594,8 +586,7 @@ function parseEnvironmentFileLine(
 }
 
 function serializeSystemdEnvironmentFileValue(value: string): string {
-  // EnvironmentFile double quotes only unescape \", \\, \`, and \$. Escape
-  // exactly that set so credentials survive systemd parsing byte-for-byte.
+  // Quote only systemd's supported escapes so credential bytes survive EnvironmentFile parsing.
   if (!/[\s\\'"`$]/u.test(value)) {
     return value;
   }
@@ -635,12 +626,9 @@ export async function readSystemdEnvironmentFile(pathname: string): Promise<{
   return { environment, literalShellReferenceKeys };
 }
 
-async function resolveSystemdEnvironmentFiles(params: {
-  environmentFileSpecs: SystemdEnvironmentFileSpec[];
-  env: GatewayServiceEnv;
-  unitPath: string;
-  failOnUnavailable?: boolean;
-}): Promise<Record<string, string>> {
+async function resolveSystemdEnvironmentFiles(
+  params: SystemdEnvironmentFilesParams,
+): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
   const unitDir = path.posix.dirname(params.unitPath);
   const failIfUnavailable = (error: unknown, optional: boolean) => {

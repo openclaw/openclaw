@@ -81,8 +81,11 @@ export function openOpenClawAgentDatabaseReadOnly(
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }
+  // Lock policy belongs to the open: node:sqlite has no busy handler until one
+  // is set, so a later PRAGMA leaves every earlier statement unprotected.
   const db = openNodeSqliteDatabase(pathname, {
     readOnly: true,
+    timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     ...(behavior.allowExtension ? { allowExtension: true } : {}),
   });
   let closed = false;
@@ -96,7 +99,6 @@ export function openOpenClawAgentDatabaseReadOnly(
   };
   try {
     registerOpenClawAgentDatabaseIdentity(db);
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
     assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
     const schemaMeta = readExistingAgentSchemaMeta(db);
@@ -116,17 +118,22 @@ export function openOpenClawAgentDatabaseReadOnly(
 export function retainOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
 ):
-  | { found: true; claim: OpenClawAgentDatabaseClaim }
+  | { found: true; database: OpenClawAgentReadOnlyDatabase; claim: OpenClawAgentDatabaseClaim }
   | { found: false; reason: "database-missing" | "schema-missing" } {
   const opened = findOpenAgentDatabase(options);
   if (opened && !opened.db.isTransaction) {
     const borrowed = borrowOpenClawAgentDatabase(options);
-    return { found: true, claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release) };
+    return {
+      found: true,
+      database: opened,
+      claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
+    };
   }
   const fresh = openOpenClawAgentDatabaseReadOnly(options);
   return fresh.found
     ? {
         found: true,
+        database: fresh.database,
         claim: createOpenClawAgentDatabaseClaim(fresh.database, fresh.database.close),
       }
     : fresh;

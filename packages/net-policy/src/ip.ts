@@ -412,7 +412,12 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     );
   }
   if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-    return comparableIp.match([comparableBase, prefixLength]);
+    // A base normalized from IPv6 is mapped: its prefix includes 96 mapped bits.
+    // Shorter prefixes contain the whole mapped block, equivalent to IPv4 /0.
+    const ipv4PrefixLength = isIpv6Address(baseAddress)
+      ? Math.max(0, prefixLength - 96)
+      : prefixLength;
+    return comparableIp.match([comparableBase, ipv4PrefixLength]);
   }
   if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
     return comparableIp.match([comparableBase, prefixLength]);

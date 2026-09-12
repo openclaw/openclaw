@@ -1,8 +1,12 @@
 // Cron status/list/add command registration and create-payload normalization.
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -135,14 +139,15 @@ export function registerCronAddCommand(cron: Command) {
               );
             }
 
-            const payload = (() => {
+            const resolvedPayload = await (async () => {
               // Main-session jobs use system events; isolated/current/session jobs use messages.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);
               const commandShell = normalizeOptionalString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
-              const scriptPath = normalizeOptionalString(opts.script);
+              // File arguments identify exact local paths; trimming can select another file.
+              const scriptPath = readNonBlankString(opts.script);
               const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new CronCliError(
@@ -193,15 +198,17 @@ export function registerCronAddCommand(cron: Command) {
                 }
                 return {
                   kind: "script" as const,
-                  scriptPath,
                   timeoutSeconds: scriptTimeoutSeconds,
                   toolBudget: scriptToolBudget,
                   toolsAllow,
+                  script: await readCronPayloadScript(scriptPath),
                 };
               }
-              const timeoutSeconds = parseStrictPositiveInteger(opts.timeoutSeconds);
+              const timeoutSeconds = parseStrictNonNegativeInteger(opts.timeoutSeconds);
               if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
-                throw new CronCliError("Invalid --timeout-seconds (must be a positive integer).");
+                throw new CronCliError(
+                  "Invalid --timeout-seconds (must be a non-negative integer).",
+                );
               }
               if (commandShell || commandArgv) {
                 const rawNoOutputTimeoutSeconds =
@@ -247,16 +254,6 @@ export function registerCronAddCommand(cron: Command) {
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow,
-              };
-            })();
-            const resolvedPayload = await (async () => {
-              if (payload.kind !== "script") {
-                return payload;
-              }
-              const { scriptPath, ...scriptPayload } = payload;
-              return {
-                ...scriptPayload,
-                script: await readCronPayloadScript(scriptPath),
               };
             })();
 
@@ -387,7 +384,7 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
-            const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+            const triggerScriptPath = readNonBlankString(opts.triggerScript);
             if ((opts.triggerOnce || opts.triggerScript !== undefined) && !triggerScriptPath) {
               throw new CronCliError(
                 `--trigger-${opts.triggerOnce ? "once requires --trigger-script" : "script must not be blank"}`,

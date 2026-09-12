@@ -247,7 +247,7 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path));
+  files.push(...scan.entries.map((entry) => entry.path).toSorted());
 }
 
 export async function listMemoryFiles(
@@ -551,14 +551,17 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
 
 /** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
 function takeTailByEstimatedChars(text: string, budget: number): string {
-  const chars = Array.from(text);
   let acc = 0;
-  let start = chars.length;
-  while (start > 0 && acc + estimateStringChars(chars[start - 1] ?? "") <= budget) {
-    acc += estimateStringChars(chars[start - 1] ?? "");
-    start -= 1;
+  let start = text.length;
+  while (start > 0) {
+    const previous = start - ((text.codePointAt(start - 2) ?? 0) > 0xffff ? 2 : 1);
+    acc += estimateStringChars(text.slice(previous, start));
+    if (!(acc <= budget)) {
+      break;
+    }
+    start = previous;
   }
-  return chars.slice(start).join("");
+  return text.slice(start);
 }
 
 export function chunkMarkdown(
@@ -579,9 +582,6 @@ export function chunkMarkdown(
     : undefined;
 
   const flush = () => {
-    if (current.length === 0) {
-      return;
-    }
     const firstEntry = current[0];
     const lastEntry = current[current.length - 1];
     if (!firstEntry || !lastEntry) {

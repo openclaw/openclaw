@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { readPersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -75,7 +75,7 @@ describe("installed plugin index install-record persistence", () => {
       await withPluginLifecycleLease(
         { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
         async () => {
-          expect(readPersistedInstalledPluginIndexInstallRecordsSync({ stateDir })).toBeNull();
+          expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
           expect(readPersistedInstalledPluginIndexSync({ stateDir })).toBeNull();
           const records = { demo: { source: "npm" as const, spec: "demo@1.0.0" } };
           await writePersistedInstalledPluginIndex(createIndex(records), { stateDir });
@@ -93,10 +93,9 @@ describe("installed plugin index install-record persistence", () => {
           }
           const { StatementSync } = requireNodeSqlite();
           const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+          const get = vi.spyOn(StatementSync.prototype, "get");
           const readRecords = () =>
-            expect(readPersistedInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual(
-              records,
-            );
+            expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual(records);
           const readIndex = () => {
             const index = readPersistedInstalledPluginIndexSync({ stateDir });
             if (validIndex) {
@@ -113,16 +112,18 @@ describe("installed plugin index install-record persistence", () => {
           }
 
           expect(
-            iterate.mock.calls.filter((params, index) => {
-              const statement = iterate.mock.contexts[index];
-              return (
-                statement instanceof StatementSync &&
-                params.includes("plugins.installedIndex") &&
-                /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
-                  statement.sourceSQL,
-                )
-              );
-            }),
+            [iterate, get].flatMap((spy) =>
+              spy.mock.calls.filter((params, index) => {
+                const statement = spy.mock.contexts[index];
+                return (
+                  statement instanceof StatementSync &&
+                  params.includes("plugins.installedIndex") &&
+                  /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
+                    statement.sourceSQL,
+                  )
+                );
+              }),
+            ),
           ).toHaveLength(1);
         },
       );

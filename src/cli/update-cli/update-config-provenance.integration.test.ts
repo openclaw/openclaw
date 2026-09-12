@@ -51,13 +51,14 @@ vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
     changes: [],
     warnings: [],
     installRecords: {},
+    smokeFailures: [],
     errored: false,
   }),
 }));
 vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
-vi.mock("../plugins-location-bridges.js", () => ({
+vi.mock("../../plugins/location-bridges.js", () => ({
   listPersistedBundledPluginLocationBridges: async () => [],
 }));
 vi.mock("./shared.js", async (importOriginal) => ({

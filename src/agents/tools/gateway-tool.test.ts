@@ -26,6 +26,7 @@ vi.mock("../../gateway/server-plugins.js", () => ({
 describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
+    dispatchMock.mockReset();
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
@@ -44,6 +45,30 @@ describe("gateway tool", () => {
       "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     );
   });
+
+  it("exposes only local update arguments without config read authority", () => {
+    const tool = createGatewayTool({ allowConfigReads: false });
+    const parameters = tool.parameters as {
+      properties: { action: { enum: string[] } };
+    };
+
+    expect(parameters.properties.action.enum).toEqual(["update.run"]);
+    expect(Object.keys(parameters.properties).toSorted()).toEqual(["action", "note"]);
+    expect(tool.description).not.toContain("Read gateway config/schema");
+  });
+
+  it.each(["config.get", "config.schema.lookup"])(
+    "rejects %s without config read authority before calling the Gateway",
+    async (action) => {
+      const tool = createGatewayTool({ allowConfigReads: false, senderIsOwner: true });
+
+      await expect(tool.execute("denied-config", { action, path: "channels" })).rejects.toThrow(
+        `Action not available: ${action}`,
+      );
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["restart", "config.apply", "config.patch"])(
     "rejects removed action %s",
@@ -188,6 +213,19 @@ describe("gateway update action", () => {
       action: "update.run",
     });
     expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("runs the existing update action without config read authority", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok", steps: [] } });
+
+    const result = await createGatewayTool({
+      allowConfigReads: false,
+      senderIsOwner: true,
+    }).execute("update-only", { action: "update.run" });
+
+    expect(dispatchMock).toHaveBeenCalledWith("update.run", expect.anything(), expect.anything());
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({ ok: true });
   });

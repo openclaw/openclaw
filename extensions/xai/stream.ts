@@ -9,16 +9,11 @@ import {
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveXaiFastModelId } from "./fast-mode.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
-const XAI_FAST_MODEL_IDS = new Map<string, string>([
-  ["grok-3", "grok-3-fast"],
-  ["grok-3-mini", "grok-3-mini-fast"],
-  ["grok-4", "grok-4-fast"],
-  ["grok-4-0709", "grok-4-fast"],
-]);
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
 function isXaiEndpoint(model: Parameters<StreamFn>[0], endpoint: string): boolean {
@@ -50,13 +45,6 @@ function createXaiGrokOAuthHeadersWrapper(
       headers: Object.fromEntries(headers.entries()),
     });
   };
-}
-
-function resolveXaiFastModelId(modelId: unknown): string | undefined {
-  if (typeof modelId !== "string") {
-    return undefined;
-  }
-  return XAI_FAST_MODEL_IDS.get(modelId.trim());
 }
 
 function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknown }): boolean {
@@ -239,17 +227,11 @@ function createXaiFastModeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const supportsFastAliasTransport =
-      model.api === "openai-completions" || model.api === "openai-responses";
-    if (
-      (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
-      !supportsFastAliasTransport ||
-      !isXaiProviderId(model.provider)
-    ) {
+    if ((typeof fastMode === "function" ? fastMode() : fastMode) !== true) {
       return underlying(model, context, options);
     }
 
-    const fastModelId = resolveXaiFastModelId(model.id);
+    const fastModelId = resolveXaiFastModelId(model);
     if (!fastModelId) {
       return underlying(model, context, options);
     }

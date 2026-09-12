@@ -1,5 +1,7 @@
 import { stat } from "node:fs/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
@@ -57,27 +59,32 @@ export async function runHostedSetup(params: {
     | { keptCurrent: true }
   >;
 }): Promise<HostedSetupCompletion> {
-  const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
-  const snapshot = await readSetupConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-    throw new Error(
-      `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
-    );
-  }
-  const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-  const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
-  const result = await params.run({ baseConfig, runtime });
-  if ("keptCurrent" in result) {
-    return "kept-current";
-  }
-  await params.beforePersistentApply(runtime);
-  const committed = await writeWizardConfigFile(result.nextConfig, {
-    allowConfigSizeDrop: false,
-    baseHash: snapshot.hash,
-    ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
-  });
-  await result.afterWrite?.(committed.path);
-  return "applied";
+  await using cache = createPluginCache();
+  return await runOutsidePluginRuntimeGenerationScope(() =>
+    withPluginCache(cache, async (): Promise<HostedSetupCompletion> => {
+      const { readSetupConfigFileSnapshot, writeWizardConfigFile } = await loadSetupShared();
+      const snapshot = await readSetupConfigFileSnapshot();
+      if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+        throw new Error(
+          `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
+        );
+      }
+      const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+      const runtime = params.runtime ?? createHostedWizardRuntime(defaultRuntime);
+      const result = await params.run({ baseConfig, runtime });
+      if ("keptCurrent" in result) {
+        return "kept-current";
+      }
+      await params.beforePersistentApply(runtime);
+      const committed = await writeWizardConfigFile(result.nextConfig, {
+        allowConfigSizeDrop: false,
+        baseHash: snapshot.hash,
+        ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
+      });
+      await result.afterWrite?.(committed.path);
+      return "applied";
+    }),
+  );
 }
 
 export async function runHostedChannelSetup(

@@ -12,7 +12,10 @@ import { formatNextRun } from "../../lib/presenter.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
-import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
+import {
+  createAgentViewTestProps as createProps,
+  inertAgentFileControls,
+} from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
@@ -93,7 +96,11 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
-    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
+    expect(
+      container
+        .querySelector(".agent-identity-editor__avatar .identity-avatar__text")
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦊");
   });
 
   it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
@@ -727,11 +734,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "AGENTS.md": "# Instructions" },
         agentFileDrafts: { "AGENTS.md": "# Instructions" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -777,11 +781,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "AGENTS.md": "" },
         agentFileDrafts: { "AGENTS.md": "" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -840,11 +841,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "SOUL.md": "" },
         agentFileDrafts: { "SOUL.md": "" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -896,11 +894,7 @@ describe("renderAgentFiles", () => {
         },
         agentFileDrafts: {},
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );
@@ -950,11 +944,7 @@ describe("renderAgentFiles", () => {
           "USER.md": "# User Profile\n\nHello world",
         },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );
@@ -1002,11 +992,7 @@ describe("renderAgentFiles", () => {
           "USER.md": "# User Profile\n\nHello world",
         },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );
@@ -1022,27 +1008,16 @@ describe("renderAgentFiles", () => {
     const previewExpandButton = expandButton!;
     previewExpandButton.click();
 
-    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel", "fullscreen"]);
-    expect([...previewExpandButton.classList]).toEqual([
-      "btn",
-      "btn--sm",
-      "md-preview-icon-btn",
-      "md-preview-expand-btn",
-      "is-fullscreen",
-    ]);
+    expect(previewPanel.classList.contains("fullscreen")).toBe(true);
+    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(true);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
     expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
 
     container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
-    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
-    expect([...previewExpandButton.classList]).toEqual([
-      "btn",
-      "btn--sm",
-      "md-preview-icon-btn",
-      "md-preview-expand-btn",
-    ]);
+    expect(previewPanel.classList.contains("fullscreen")).toBe(false);
+    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(false);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
     expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");

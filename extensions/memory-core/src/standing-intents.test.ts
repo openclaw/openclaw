@@ -60,14 +60,14 @@ describe("standing intents", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("lazy-ensures the additive table idempotently", () => {
-    const first = createStandingIntent({
+  it("lazy-ensures the additive table idempotently", async () => {
+    const first = await createStandingIntent({
       agentId: "main",
       description: "Mention the launch checklist.",
       triggerKeywords: ["launch checklist"],
       nowMs: 1_000,
     });
-    const second = createStandingIntent({
+    const second = await createStandingIntent({
       agentId: "main",
       description: "Mention the rollback owner.",
       triggerKeywords: ["rollback owner"],
@@ -75,7 +75,7 @@ describe("standing intents", () => {
     });
 
     expect(first.id).not.toBe(second.id);
-    expect(listStandingIntents({ agentId: "main", nowMs: 2_000 })).toHaveLength(2);
+    expect(await listStandingIntents({ agentId: "main", nowMs: 2_000 })).toHaveLength(2);
   });
 
   it("creates, lists, and explicitly cancels through the agent tool", async () => {
@@ -127,7 +127,7 @@ describe("standing intents", () => {
       await tool.execute("call-3", { action: "cancel", id: created.id }),
     );
     expect(cancelResult.cancelled).toBe(true);
-    expect(cancelStandingIntent({ agentId: "main", id: created.id })).toBeNull();
+    expect(await cancelStandingIntent({ agentId: "main", id: created.id })).toBeNull();
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {
@@ -145,14 +145,16 @@ describe("standing intents", () => {
       }),
     ).intent as { id: string };
     expect(
-      matchStandingIntents({
-        agentId: "main",
-        prompt: "owner signal",
-        channel: "qa-dm-5",
-        provider: "qa-channel",
-        senderId: "owner-1",
-        nowMs: Date.now(),
-      }).map((intent) => intent.id),
+      (
+        await matchStandingIntents({
+          agentId: "main",
+          prompt: "owner signal",
+          channel: "qa-dm-5",
+          provider: "qa-channel",
+          senderId: "owner-1",
+          nowMs: Date.now(),
+        })
+      ).map((intent) => intent.id),
     ).toEqual([created.id]);
 
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
@@ -182,7 +184,7 @@ describe("standing intents", () => {
     );
 
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "missing creator signal and unknown creator signal",
         nowMs: Date.now(),
@@ -223,7 +225,7 @@ describe("standing intents", () => {
     });
     expect(conversationResult.message).toContain("Intent is armed for this conversation.");
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "conversation reminder",
         channel: "QA-DM-5",
@@ -261,9 +263,9 @@ describe("standing intents", () => {
       }),
     ).rejects.toThrow("authenticated channel and sender identity is unavailable");
 
-    expect(listStandingIntents({ agentId: "main" })).toEqual([]);
+    expect(await listStandingIntents({ agentId: "main" })).toEqual([]);
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "identity free",
         provider: "qa-channel",
@@ -273,8 +275,8 @@ describe("standing intents", () => {
     ).toEqual([]);
   });
 
-  it("applies scope, cooldown, fire-budget, and expiry transitions", () => {
-    const created = createStandingIntent({
+  it("applies scope, cooldown, fire-budget, and expiry transitions", async () => {
+    const created = await createStandingIntent({
       agentId: "main",
       description: "Surface the review checklist.",
       triggerKeywords: ["review checklist"],
@@ -287,7 +289,7 @@ describe("standing intents", () => {
     });
 
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "Can we review the checklist?",
         channel: "qa-dm-5",
@@ -297,7 +299,7 @@ describe("standing intents", () => {
       }),
     ).toStrictEqual([]);
 
-    const first = matchStandingIntents({
+    const first = await matchStandingIntents({
       agentId: "main",
       prompt: "Can we review the checklist?",
       channel: "qa-dm-5",
@@ -307,7 +309,7 @@ describe("standing intents", () => {
     });
     expect(first[0]).toMatchObject({ id: created.id, status: "fired", fireCount: 1 });
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "Review checklist again",
         channel: "qa-dm-5",
@@ -317,7 +319,7 @@ describe("standing intents", () => {
       }),
     ).toStrictEqual([]);
 
-    const second = matchStandingIntents({
+    const second = await matchStandingIntents({
       agentId: "main",
       prompt: "Review checklist again",
       channel: "qa-dm-5",
@@ -327,7 +329,7 @@ describe("standing intents", () => {
     });
     expect(second[0]).toMatchObject({ id: created.id, status: "done", fireCount: 2 });
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "Review checklist once more",
         channel: "qa-dm-5",
@@ -337,21 +339,21 @@ describe("standing intents", () => {
       }),
     ).toStrictEqual([]);
 
-    createStandingIntent({
+    await createStandingIntent({
       agentId: "main",
       description: "Expired intent.",
       triggerKeywords: ["expired signal"],
       expiresAt: 150_000,
       nowMs: 1_000,
     });
-    sweepStandingIntents({ agentId: "main", nowMs: 150_000 });
+    await sweepStandingIntents({ agentId: "main", nowMs: 150_000 });
     expect(
-      listStandingIntents({ agentId: "main", status: "expired", nowMs: 150_000 }),
+      await listStandingIntents({ agentId: "main", status: "expired", nowMs: 150_000 }),
     ).toHaveLength(1);
   });
 
-  it("keeps provider, conversation, sender, and account identities namespaced", () => {
-    createStandingIntent({
+  it("keeps provider, conversation, sender, and account identities namespaced", async () => {
+    await createStandingIntent({
       agentId: "main",
       description: "Account-scoped reminder.",
       triggerKeywords: ["account reminder"],
@@ -371,7 +373,7 @@ describe("standing intents", () => {
     });
 
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "account reminder",
         channel: "other-room",
@@ -382,7 +384,7 @@ describe("standing intents", () => {
       }),
     ).toHaveLength(0);
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "account reminder",
         channel: "slack",
@@ -393,7 +395,7 @@ describe("standing intents", () => {
       }),
     ).toHaveLength(0);
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "account reminder",
         channel: "slack",
@@ -405,8 +407,8 @@ describe("standing intents", () => {
     ).toHaveLength(1);
   });
 
-  it("requires complete trigger phrases and supports one-character keywords", () => {
-    createStandingIntent({
+  it("requires complete trigger phrases and supports one-character keywords", async () => {
+    await createStandingIntent({
       agentId: "main",
       description: "Check the candidate owner.",
       triggerKeywords: ["release candidate"],
@@ -415,30 +417,32 @@ describe("standing intents", () => {
     });
 
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "Please summarize the release notes.",
         nowMs: 2_000,
       }),
     ).toStrictEqual([]);
     expect(
-      matchStandingIntents({
+      await matchStandingIntents({
         agentId: "main",
         prompt: "The candidate release is ready.",
         nowMs: 3_000,
       }),
     ).toHaveLength(1);
 
-    createStandingIntent({
+    await createStandingIntent({
       agentId: "main",
       description: "Handle the X project.",
       triggerKeywords: ["x"],
       maxFires: 1,
       nowMs: 4_000,
     });
-    expect(matchStandingIntents({ agentId: "main", prompt: "X", nowMs: 5_000 })).toHaveLength(1);
+    expect(await matchStandingIntents({ agentId: "main", prompt: "X", nowMs: 5_000 })).toHaveLength(
+      1,
+    );
 
-    createStandingIntent({
+    await createStandingIntent({
       agentId: "main",
       description: "Keep a multiline trigger intact.",
       triggerKeywords: ["alpha\nbeta"],
@@ -446,10 +450,10 @@ describe("standing intents", () => {
       nowMs: 6_000,
     });
     expect(
-      matchStandingIntents({ agentId: "main", prompt: "alpha only", nowMs: 7_000 }),
+      await matchStandingIntents({ agentId: "main", prompt: "alpha only", nowMs: 7_000 }),
     ).toStrictEqual([]);
     expect(
-      matchStandingIntents({ agentId: "main", prompt: "alpha and beta", nowMs: 8_000 }),
+      await matchStandingIntents({ agentId: "main", prompt: "alpha and beta", nowMs: 8_000 }),
     ).toHaveLength(1);
   });
 
@@ -464,23 +468,23 @@ describe("standing intents", () => {
     ).toBe(true);
   });
 
-  it("matches late prompt terms and does not let stale FTS rows starve an armed intent", () => {
+  it("matches late prompt terms and does not let stale FTS rows starve an armed intent", async () => {
     for (let index = 0; index < 33; index += 1) {
-      const stale = createStandingIntent({
+      const stale = await createStandingIntent({
         agentId: "main",
         description: `Stale deployment intent ${index}.`,
         triggerKeywords: ["deployment"],
         nowMs: index,
       });
-      cancelStandingIntent({ agentId: "main", id: stale.id });
-      createStandingIntent({
+      await cancelStandingIntent({ agentId: "main", id: stale.id });
+      await createStandingIntent({
         agentId: "main",
         description: `Phrase decoy ${index}.`,
         triggerKeywords: [`deployment decoy${index}`],
         nowMs: index,
       });
     }
-    const active = createStandingIntent({
+    const active = await createStandingIntent({
       agentId: "main",
       description: "Use the current deployment intent.",
       triggerKeywords: ["deployment needle"],
@@ -489,7 +493,7 @@ describe("standing intents", () => {
     });
     const prefix = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
 
-    const matches = matchStandingIntents({
+    const matches = await matchStandingIntents({
       agentId: "main",
       prompt: `${prefix} deployment needle`,
       nowMs: 1_000,
@@ -498,23 +502,26 @@ describe("standing intents", () => {
     expect(matches.map((intent) => intent.id)).toStrictEqual([active.id]);
   });
 
-  it("does not consume fire budgets for intents that do not fit hidden context", () => {
-    const intents = Array.from({ length: 3 }, (_, index) =>
-      createStandingIntent({
-        agentId: "main",
-        description: `${String(index)}${"x".repeat(499)}`,
-        triggerKeywords: ["bounded trigger"],
-        maxFires: 1,
-        nowMs: index + 1,
-      }),
-    );
+  it("does not consume fire budgets for intents that do not fit hidden context", async () => {
+    const intents: Awaited<ReturnType<typeof createStandingIntent>>[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      intents.push(
+        await createStandingIntent({
+          agentId: "main",
+          description: `${String(index)}${"x".repeat(499)}`,
+          triggerKeywords: ["bounded trigger"],
+          maxFires: 1,
+          nowMs: index + 1,
+        }),
+      );
+    }
 
-    const matches = matchStandingIntents({
+    const matches = await matchStandingIntents({
       agentId: "main",
       prompt: "bounded trigger",
       nowMs: 10_000,
     });
-    const stored = listStandingIntents({ agentId: "main", nowMs: 10_000 });
+    const stored = await listStandingIntents({ agentId: "main", nowMs: 10_000 });
 
     expect(matches).toHaveLength(2);
     expect(buildStandingIntentContext(matches)?.length).toBeLessThanOrEqual(
@@ -526,8 +533,8 @@ describe("standing intents", () => {
     });
   });
 
-  it("uses anti-nagging defaults and bounds hidden injection", () => {
-    const intent = createStandingIntent({
+  it("uses anti-nagging defaults and bounds hidden injection", async () => {
+    const intent = await createStandingIntent({
       agentId: "main",
       description: "x".repeat(500),
       triggerKeywords: ["bounded"],

@@ -15,6 +15,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -106,7 +107,7 @@ export function registerDirectoryCli(program: Command) {
   const withChannel = (cmd: Command) =>
     cmd
       .option("--channel <name>", "Channel (auto when only one is configured)")
-      .option("--account <id>", "Account id (accountId)")
+      .option("--account <id>", "Account id (accountId)", parseAccountSelector)
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
@@ -334,6 +335,10 @@ export function registerDirectoryCli(program: Command) {
     .action((opts) =>
       runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
+        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
+        if (!groupId) {
+          throw new Error("Missing --group-id");
+        }
         const resolved = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
@@ -345,10 +350,6 @@ export function registerDirectoryCli(program: Command) {
         const fn = plugin.directory?.listGroupMembers;
         if (!fn) {
           throw new Error(`Channel ${channelId} does not support group members listing`);
-        }
-        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
-        if (!groupId) {
-          throw new Error("Missing --group-id");
         }
         const result = await fn({
           cfg,

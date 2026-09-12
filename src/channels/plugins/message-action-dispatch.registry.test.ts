@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { revokePluginRecordLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
+import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -277,7 +277,7 @@ describe("official channel delegated read provenance", () => {
         params: { ...context.params, assertConversationReadAuthority: callerAssertion },
       });
       if (revoked) {
-        revokePluginRecordLifecycleEpoch(fixture.owner.registry, fixture.record);
+        revokePluginRecord(fixture.owner.registry, fixture.record);
       }
       prepared.resolve();
       if (revoked) {
@@ -433,7 +433,7 @@ describe("official channel delegated read provenance", () => {
           fixture.record.enabled = false;
           break;
         case "revoke":
-          revokePluginRecordLifecycleEpoch(fixture.owner.registry, fixture.record);
+          revokePluginRecord(fixture.owner.registry, fixture.record);
           break;
         case "trust-downgrade":
           fixture.record.trustedOfficialInstall = false;

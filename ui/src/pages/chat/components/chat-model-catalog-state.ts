@@ -1,12 +1,9 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
-export type ChatModelCatalogState = {
-  hasSnapshot: boolean;
-  refreshFailed?: boolean;
-  status: "idle" | "loading" | "ready" | "error" | "offline";
-};
+export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 
 export function renderChatModelCatalogState(
   state: ChatModelCatalogState | undefined,
@@ -19,8 +16,9 @@ export function renderChatModelCatalogState(
   if (!state) {
     return nothing;
   }
-  const status = state.status === "ready" && state.refreshFailed ? "error" : state.status;
-  if (status === "ready" && hasSelectableOptions) {
+  const { status } = state;
+  const checking = state.pendingProviders?.join(", ");
+  if (status === "ready" && hasSelectableOptions && !checking) {
     return nothing;
   }
   const label =
@@ -30,15 +28,18 @@ export function renderChatModelCatalogState(
         ? hasOptions
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
-        : status === "ready"
-          ? t("chat.modelControls.noModelsAvailable")
-          : t("chat.modelControls.loadingModels");
+        : checking
+          ? t("chat.modelControls.checkingProviderModels", { providers: checking })
+          : status === "ready"
+            ? t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${
         hasOptions ? "" : "chat-controls__model-catalog-state--empty"
       }"
       data-chat-model-catalog-state=${status}
+      role="status"
       aria-live="polite"
     >
       <span class="chat-controls__model-catalog-state-label">

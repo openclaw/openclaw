@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
@@ -17,6 +19,50 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 describe("createAgentCommandLifecycle", () => {
+  it.each(["basic", "post-turn"] as const)(
+    "turns an embedded-runtime stale install %s error into restart guidance",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const missingChunk = path.join(
+        process.cwd(),
+        "dist",
+        "session-transcript-reconcile-stale.mjs",
+      );
+      const importingChunk = path.join(process.cwd(), "dist", "embedded-agent-stale.mjs");
+      const error = Object.assign(
+        new Error(`Cannot find module '${missingChunk}' imported from ${importingChunk}`),
+        {
+          code: "ERR_MODULE_NOT_FOUND",
+          url: pathToFileURL(missingChunk).href,
+        },
+      );
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "stale-install",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else {
+        lifecycle.emitPostTurnError(error, {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+        });
+      }
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toMatch(/installation may have changed.*gateway restart/i);
+      expect(JSON.stringify(event)).not.toContain(missingChunk);
+      expect(JSON.stringify(event)).not.toContain(importingChunk);
+    },
+  );
+
   it.each([
     { name: "successful stops", status: "ok", stopReason: "stop", level: "info" },
     { name: "tool-use stops", status: "ok", stopReason: "toolUse", level: "info" },

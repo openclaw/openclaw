@@ -340,6 +340,7 @@ export function renderSidebarSessionSortMenu(params: {
   position: { x: number; y: number };
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
+  rosterMode: boolean;
   sortMode: SidebarSessionSortMode;
   peopleSortAvailable: boolean;
   statusFilter: SidebarSessionStatusFilter;
@@ -416,17 +417,25 @@ export function renderSidebarSessionSortMenu(params: {
         ${
           params.compact && params.view === "specific-owner"
             ? renderCompactSidebarOwnerFilter(params)
-            : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-                ${groupingOptions
-                  .filter((option) => option.grouping !== "person" || params.peopleSortAvailable)
-                  .map((option) =>
-                    renderSidebarMenuRadioItem({
-                      value: `grouping:${option.grouping}`,
-                      checked: params.grouping === option.grouping,
-                      label: option.label,
-                    }),
-                  )}
-                <div class="session-menu__separator" role="separator"></div>
+            : html`${
+                  params.rosterMode
+                    ? nothing
+                    : html`<div class="sidebar-session-sort-menu__title">
+                          ${t("sessionsView.groupBy")}
+                        </div>
+                        ${groupingOptions
+                          .filter(
+                            (option) => option.grouping !== "person" || params.peopleSortAvailable,
+                          )
+                          .map((option) =>
+                            renderSidebarMenuRadioItem({
+                              value: `grouping:${option.grouping}`,
+                              checked: params.grouping === option.grouping,
+                              label: option.label,
+                            }),
+                          )}
+                        <div class="session-menu__separator" role="separator"></div> `
+                }
                 <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
                 ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
                   (option) => option.mode !== "people" || params.peopleSortAvailable,
@@ -486,17 +495,21 @@ export function renderSidebarSessionSortMenu(params: {
                     >${params.showSystem ? icons.check : nothing}</span
                   >
                 </wa-dropdown-item>
-                <wa-dropdown-item
-                  class="sidebar-session-sort-menu__item"
-                  type="checkbox"
-                  value="hide-empty-groups"
-                  .checked=${params.hideEmptyGroups}
-                >
-                  <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
-                  <span slot="details" class="session-menu__check" aria-hidden="true"
-                    >${params.hideEmptyGroups ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>`
+                ${
+                  params.rosterMode
+                    ? nothing
+                    : html` <wa-dropdown-item
+                        class="sidebar-session-sort-menu__item"
+                        type="checkbox"
+                        value="hide-empty-groups"
+                        .checked=${params.hideEmptyGroups}
+                      >
+                        <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
+                        <span slot="details" class="session-menu__check" aria-hidden="true"
+                          >${params.hideEmptyGroups ? icons.check : nothing}</span
+                        >
+                      </wa-dropdown-item>`
+                }`
         }
       </wa-dropdown>
     `,

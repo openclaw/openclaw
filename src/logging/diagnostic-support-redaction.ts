@@ -1,12 +1,17 @@
 // Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
+import { getSystemErrorMap } from "node:util";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { valid as validVersion } from "semver";
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { redactSensitiveText } from "./redact.js";
+import { parseRedactPatternSource, replaceRedactPattern } from "./redact-pattern-runtime.js";
+import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
+import { redactSensitiveText, redactText } from "./redact.js";
 
 // Redaction helpers for support bundles; preserve operational shape while removing private data.
 const SECRET_SUPPORT_FIELD_RE =
@@ -23,8 +28,9 @@ const SENSITIVE_COMMAND_ARG_RE =
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
-const AWS_SECRET_ACCESS_KEY_RE =
-  /(?<![A-Za-z0-9/+=_,-])(?<!;base64,[A-Za-z0-9+/=]*)(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_,-])/gu;
+const vendorTokenPatterns = VENDOR_TOKEN_REDACT_PATTERNS.map(
+  (pattern) => new RegExp(...parseRedactPatternSource(pattern)),
+);
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -32,7 +38,8 @@ const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const MATRIX_USER_ID_RE = /@[A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
 const MATRIX_ROOM_ID_RE = /![A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
 const MATRIX_EVENT_ID_RE = /\$[A-Za-z0-9_-]{16,}/gu;
-const HANDLE_RE = /(^|[^\w:/])@[A-Za-z0-9_]{5,}\b(?!\.)/gu;
+// Public OpenClaw package references must remain usable in repair commands.
+const HANDLE_RE = /(^|[^\w:/])@(?!openclaw\/[a-z0-9])[A-Za-z0-9_]{5,}\b(?!\.)/gu;
 const LONG_DECIMAL_ID_RE = /\b\d{9,}\b/gu;
 const MAX_SUPPORT_STRING_LENGTH = 2000;
 const MAX_SUPPORT_SNAPSHOT_DEPTH = 10;
@@ -297,12 +304,17 @@ function redactSensitiveTextForSupport(value: string): string {
 }
 
 function redactCommonCredentialTextForSupport(value: string): string {
-  return value
+  const redacted = value
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
-    .replace(JWT_RE, "<redacted-jwt>")
-    .replace(AWS_SECRET_ACCESS_KEY_RE, "<redacted-aws-secret-key>");
+    .replace(JWT_RE, "<redacted-jwt>");
+  // Whole vendor tokens precede bare keys; field masking must not consume the full support mask.
+  return replaceRedactPattern(
+    redactText(redacted, vendorTokenPatterns, { fullContext: true }),
+    AWS_SECRET_ACCESS_KEY_MATCHER,
+    () => "<redacted-aws-secret-key>",
+  );
 }
 
 function redactUrlSecretsForSupport(value: string): string {
@@ -348,6 +360,104 @@ export function redactSupportString(
     return pathRedacted;
   }
   return `${truncateUtf16Safe(pathRedacted, maxLength)}${truncationSuffix}`;
+}
+
+/** One diagnostic line; paths never expose private suffixes in public reports. */
+export function redactSupportDiagnosticLine(
+  value: string,
+  context: SupportRedactionContext,
+  maxLength = 200,
+): string {
+  const first = sanitizeForLog(
+    stripAnsi(value)
+      .split(/[\r\n\u2028\u2029]/u)
+      .find((line) => line.trim()) ?? "",
+  );
+  const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
+  // Quoted paths have a known end. An unquoted path may contain spaces, so
+  // retain the diagnostic prefix and redact the rest rather than guess.
+  const paths = redacted
+    .replace(
+      /(["'`])(?:\$OPENCLAW_STATE_DIR|~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)[^"'`]*\1/gu,
+      "[redacted-path]",
+    )
+    .replace(
+      /(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+      "[redacted-path]",
+    );
+  const commandRedacted = paths.replace(
+    /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
+    "[redacted-command]",
+  );
+  return truncateUtf16Safe(commandRedacted.trim(), maxLength);
+}
+
+const PUBLIC_ERROR_CODES = new Set([
+  ...Array.from(getSystemErrorMap().values(), ([code]) => code),
+  "ENOTFOUND",
+  "ERESOLVE",
+  "E401",
+  "E403",
+  "E404",
+  "ETARGET",
+  "EUSAGE",
+  "EOVERRIDE",
+  "EINVALIDTAGNAME",
+  "EUNSUPPORTEDPROTOCOL",
+  "EBADENGINE",
+  "EINTEGRITY",
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_PACKAGE_PATH_NOT_EXPORTED",
+]);
+
+/** Error-code syntax alone cannot distinguish private identifiers from known errors. */
+export function normalizeSupportDiagnosticErrorCode(value: string | undefined): string | undefined {
+  return value && PUBLIC_ERROR_CODES.has(value) ? value : undefined;
+}
+
+/** Public diagnostics expose recognized causes, never arbitrary prose or executable arguments. */
+export function redactPublicSupportDiagnosticLine(
+  value: string,
+  context: SupportRedactionContext,
+): string {
+  const line = redactSupportDiagnosticLine(value, context);
+  const runtime =
+    /^Target package: openclaw@(\S+); Minimum Node engine: (\S+); Running Node: (\S+)$/u.exec(line);
+  if (runtime) {
+    // Custom SemVer labels can contain private project or host names.
+    const [target, minimum, running] = runtime
+      .slice(1)
+      .map((version) =>
+        version === "unknown" ||
+        version === "unspecified" ||
+        (validVersion(version) &&
+          /^\d+\.\d+\.\d+(?:-(?:0|(?:alpha|beta|rc|dev)(?:\.\d{1,8})?))?$/u.test(version))
+          ? version
+          : "[redacted-version]",
+      );
+    return truncateUtf16Safe(
+      `Target package: openclaw@${target}; Minimum Node engine: ${minimum}; Running Node: ${running}`,
+      200,
+    );
+  }
+  if (
+    /^Gateway readiness endpoint returned HTTP (?:[1-5]\d{2}|unavailable); expected HTTP 200\.$/u.test(
+      line,
+    )
+  ) {
+    return line;
+  }
+  const codes = (line.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+    normalizeSupportDiagnosticErrorCode(code),
+  );
+  const causes =
+    line.match(
+      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory)\b/gu,
+    ) ?? [];
+  return truncateUtf16Safe(
+    [...new Set([...codes, ...causes])].join("; ") || "[redacted-diagnostic]",
+    200,
+  );
 }
 
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {

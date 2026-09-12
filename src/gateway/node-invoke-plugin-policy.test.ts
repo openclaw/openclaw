@@ -16,7 +16,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
@@ -95,6 +95,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
       timeoutMs: undefined,
+      deadlineAtMs: undefined,
       idempotencyKey: undefined,
       isDispatchAuthorized: expect.any(Function),
       onDispatchReady: expect.any(Function),
@@ -292,9 +293,14 @@ describe("applyPluginNodeInvokePolicy", () => {
     }
   });
 
-  it.each([5_000, 0])(
-    "bounds plugin timeout override %i by the remaining invocation deadline",
-    async (overrideTimeoutMs) => {
+  it.each([
+    { overrideTimeoutMs: 5_000, expectedTimeoutMs: 250, expectedDeadlineAtMs: 1_250 },
+    { overrideTimeoutMs: 0, expectedTimeoutMs: 250, expectedDeadlineAtMs: 1_250 },
+    { overrideTimeoutMs: 80, expectedTimeoutMs: 80, expectedDeadlineAtMs: 1_080 },
+  ])(
+    "bounds plugin timeout override $overrideTimeoutMs by the original or earlier deadline",
+    async ({ overrideTimeoutMs, expectedTimeoutMs, expectedDeadlineAtMs }) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
       setDangerousDemoCommandRegistry([
         createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) =>
           ctx.invokeNode({ timeoutMs: overrideTimeoutMs }),
@@ -303,24 +309,27 @@ describe("applyPluginNodeInvokePolicy", () => {
       const { context, invoke } = createContext();
       const controller = new AbortController();
 
-      const result = await applyPluginNodeInvokePolicy({
-        context,
-        client: null,
-        nodeSession: createNodeSession(),
-        command: DEMO_COMMAND,
-        params: DEMO_PARAMS,
-        timeoutMs: 1_000,
-        signal: controller.signal,
-        resolveRemainingTimeoutMs: () => 250,
-      });
+      try {
+        const result = await applyPluginNodeInvokePolicy({
+          context,
+          client: null,
+          nodeSession: createNodeSession(),
+          command: DEMO_COMMAND,
+          params: DEMO_PARAMS,
+          timeoutMs: 1_000,
+          deadlineAtMs: 1_250,
+          signal: controller.signal,
+          resolveRemainingTimeoutMs: () => 250,
+        });
 
-      expect(result).toMatchObject({ ok: true });
-      const request = invoke.mock.calls[0]?.[0] as
-        | { timeoutMs?: number; signal?: AbortSignal }
-        | undefined;
-      expect(request?.signal).toBe(controller.signal);
-      expect(request?.timeoutMs).toBeGreaterThan(0);
-      expect(request?.timeoutMs).toBeLessThanOrEqual(250);
+        expect(result).toMatchObject({ ok: true });
+        const request = invoke.mock.calls[0]?.[0];
+        expect(request?.signal).toBe(controller.signal);
+        expect(request?.timeoutMs).toBe(expectedTimeoutMs);
+        expect(request?.deadlineAtMs).toBe(expectedDeadlineAtMs);
+      } finally {
+        clock.mockRestore();
+      }
     },
   );
 

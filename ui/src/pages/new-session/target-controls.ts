@@ -124,6 +124,8 @@ export function renderNewSessionPlaceControls({
         })
       : renderWhereChip({
           state: whereState,
+          environmentQuery: browser.environmentQuery,
+          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
           gatewayName: gateway.gatewayName,
           cloudProfileId: place.cloudProfileId,
           machineClass,
@@ -141,7 +143,12 @@ export function renderNewSessionPlaceControls({
           ...browser.popoverCallbacks("where"),
           onSelectDevice: (deviceId) => place.selectDevice(deviceId),
           onSelectAutoDevice: () => place.selectDevice("", true),
-          onSelectCloudProfile: (profileId) => place.selectCloudProfile(profileId),
+          onSelectCloudProfile: (profileId, useDefaults) => {
+            if (useDefaults) {
+              place.cloudMachines.applyPending(profileId);
+            }
+            place.selectCloudProfile(profileId);
+          },
           onSelectCloudOs: (osId) =>
             place.cloudMachines.selectOs(
               place.cloudProfileId,
@@ -159,6 +166,10 @@ export function renderNewSessionPlaceControls({
               requestUpdate,
             ),
           onConnectMachine,
+          onManageCloudWorkers: () => {
+            browser.close();
+            context?.navigate("cloud-workers");
+          },
         })
   }${
     nativeTerminal && place.terminalOnNode

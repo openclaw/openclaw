@@ -47,6 +47,32 @@ describe("renderSkills", () => {
     expect(container.querySelector('input[name="skills-filter"]')).toBeInstanceOf(HTMLInputElement);
   });
 
+  it("keeps settings focused on installed skills when remote results are available", () => {
+    const container = document.createElement("div");
+    render(
+      renderSkills(
+        createProps({
+          surface: "settings",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "remote-skill",
+              registry: "https://clawhub.ai",
+              displayName: "Remote Skill",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector('input[name="skills-filter"]')).not.toBeNull();
+    expect(container.querySelector(".skills-group")?.textContent).toContain("Repo Skill");
+    expect(container.querySelector('input[name="clawhub-search"]')).toBeNull();
+    expect(container.textContent).not.toContain("Remote Skill");
+    expect(container.querySelector(".plugin-catalog-card")).toBeNull();
+  });
+
   it("renders the agent selector and routes agent changes", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -83,9 +109,9 @@ describe("renderSkills", () => {
       ["Main (default)", undefined],
       ["Research", undefined],
     ]);
-    expect(
-      selector?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
-    ).toBe("R");
+    await vi.waitFor(() =>
+      expect(selector?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+    );
 
     selector?.onSelect("main");
 
@@ -229,7 +255,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const warning = container.querySelector(".md-preview-dialog__body .callout");
+    const warning = container.querySelector(".skill-reader-dialog__body .callout");
     expect(normalizeText(expectDefined(warning, "alternative binary requirement"))).toContain(
       "bin:any of (claude, codex, opencode)",
     );
@@ -407,22 +433,26 @@ describe("renderSkills", () => {
     const onInstall = vi.fn();
     const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          report,
-          detailKey: "calendar",
-          operation: { kind: "skill", skillKey: "repo-skill" },
-          clawhubResults: [{ score: 1, slug: "github", displayName: "GitHub", version: "1.0.0" }],
-          onRefresh,
-          onToggle,
-          onSaveKey,
-          onInstall,
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    const props = createProps({
+      report,
+      detailKey: "calendar",
+      operation: { kind: "skill", skillKey: "repo-skill" },
+      clawhubResults: [
+        {
+          score: 1,
+          slug: "github",
+          registry: "https://clawhub.ai",
+          displayName: "GitHub",
+          version: "1.0.0",
+        },
+      ],
+      onRefresh,
+      onToggle,
+      onSaveKey,
+      onInstall,
+      onClawHubInstall,
+    });
+    render(renderSkills(props), container);
     await Promise.resolve();
 
     expect(
@@ -441,18 +471,14 @@ describe("renderSkills", () => {
         ),
       ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
-    expect(
-      Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find(
-        (toggle) => normalizeText(toggle) === "Repo Skill enabled",
-      ),
-    ).toBeInstanceOf(HTMLElement);
+    expect(container.querySelectorAll(".plugins-item wa-switch")).toHaveLength(0);
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
     const mutationButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button"),
     ).filter((button) => /^(Install|Save key)/.test(normalizeText(button)));
-    expect(mutationButtons.length).toBeGreaterThanOrEqual(3);
+    expect(mutationButtons).toHaveLength(2);
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
     refresh?.click();
@@ -466,10 +492,17 @@ describe("renderSkills", () => {
     expect(onToggle).not.toHaveBeenCalled();
     expect(onSaveKey).not.toHaveBeenCalled();
     expect(onInstall).not.toHaveBeenCalled();
+
+    render(renderSkills({ ...props, surface: "discovery" }), container);
+    const remoteInstall = container.querySelector<HTMLButtonElement>(
+      ".plugin-catalog-card__install",
+    );
+    expect(remoteInstall?.disabled).toBe(true);
+    remoteInstall?.click();
     expect(onClawHubInstall).not.toHaveBeenCalled();
   });
 
-  it("does not transfer toggle state when a skill leaves the disabled tab", async () => {
+  it("keeps the remaining skill's status and details target when a skill leaves the disabled tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     dialogRestores.push(() => container.remove());
@@ -489,19 +522,7 @@ describe("renderSkills", () => {
     render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
     await Promise.resolve();
 
-    const toggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
-      "wa-switch.settings-toggle",
-    );
-    expect(toggles).toHaveLength(2);
-    const passwordToggle = expectDefined(toggles[0], "password skill toggle");
-    const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
-    expect(passwordToggle.checked).toBe(false);
-    expect(appleNotesToggle.checked).toBe(false);
-
-    // Simulate the user clicking the 1password toggle before the re-render propagates.
-    // Without repeat(), Lit's dirty-check skips re-setting `.checked = false` on the reused
-    // DOM node, so apple-notes inherits this stale user-driven state.
-    passwordToggle.checked = true;
+    expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 
     const updatedReport: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
@@ -509,19 +530,19 @@ describe("renderSkills", () => {
       skills: [{ ...passwordSkill, disabled: false }, appleNotesSkill],
     };
 
+    const onDetailOpen = vi.fn();
     render(
-      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled" })),
+      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled", onDetailOpen })),
       container,
     );
     await Promise.resolve();
 
-    const updatedToggles = container.querySelectorAll<HTMLElement & { checked: boolean }>(
-      "wa-switch.settings-toggle",
-    );
-    expect(updatedToggles).toHaveLength(1);
-    expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
-      false,
-    );
+    const row = container.querySelector(".plugins-item")!;
+    expect(container.querySelectorAll(".plugins-item")).toHaveLength(1);
+    expect(row.textContent).toContain("Apple Notes");
+    expect(row.querySelector("[role=img]")?.getAttribute("title")).toContain("Disabled");
+    row.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+    expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
   it("treats skills blocked by the selected agent filter as needing setup", async () => {

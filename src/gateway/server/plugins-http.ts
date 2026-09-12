@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runPluginHttpRoute } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -138,6 +139,9 @@ function createPluginRouteRuntimeScope(params: {
   );
   return {
     pluginRegistry: params.registry,
+    ...(params.route.auth === "gateway" && params.gatewayRequestAuth?.revalidate
+      ? { revalidate: params.gatewayRequestAuth.revalidate }
+      : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
@@ -269,7 +273,8 @@ export function createGatewayPluginRequestHandler(params: {
               gatewayRequestOperatorScopes,
               gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
             }),
-            async () => route.handler(req, res),
+            async () =>
+              runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
           )) !== false;
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
@@ -349,7 +354,12 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
-              async () => route.handleUpgrade?.(req, socket, head),
+              async () => {
+                const handleUpgrade = route.handleUpgrade!;
+                return runPluginHttpRoute(registry, route, handleUpgrade, () =>
+                  handleUpgrade(req, socket, head),
+                );
+              },
             )) !== false,
         );
         if (handled) {

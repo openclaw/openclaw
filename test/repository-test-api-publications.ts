@@ -8,8 +8,6 @@ const publications: Record<string, string | symbol> = {
   "extensions/memory-lancedb/lancedb-runtime.ts": Symbol.for(
     "openclaw.memoryLanceDbRuntimeTestApi",
   ),
-  "packages/ai/src/transports/openai-responses-transport.ts":
-    "openclawOpenAIResponsesTransportTestApi",
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
@@ -27,7 +25,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
   "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
   "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
-  "src/agents/cli-credentials.ts": Symbol.for("openclaw.cliCredentialsTestApi"),
   "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
   "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
     "openclaw.attemptExecutionHelpersTestApi",
@@ -36,15 +33,12 @@ const publications: Record<string, string | symbol> = {
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
-  "src/agents/embedded-agent-runner/extra-params.ts": Symbol.for("openclaw.extraParamsTestApi"),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
     "openclaw.mediaGenerationDuplicateGuardTestApi",
   ),
-  "src/agents/models-config.plan.ts": Symbol.for("openclaw.modelsConfigPlanTestApi"),
-  "src/agents/models-config.ts": Symbol.for("openclaw.modelsConfigTestApi"),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
   "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
@@ -63,8 +57,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
-  "src/agents/tools/model-config.helpers.ts": Symbol.for("openclaw.modelConfigHelpersTestApi"),
-  "src/agents/tools/web-fetch.ts": Symbol.for("openclaw.webFetchTestApi"),
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
@@ -87,9 +79,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/commands/doctor-sandbox.ts": Symbol.for("openclaw.doctorSandboxTestApi"),
   "src/commands/doctor-session-snapshots.ts": Symbol.for("openclaw.doctorSessionSnapshotsTestApi"),
-  "src/commands/doctor-whatsapp-responsiveness.ts": Symbol.for(
-    "openclaw.doctorWhatsappResponsivenessTestApi",
-  ),
   "src/commands/doctor/shared/codex-native-assets.ts": Symbol.for(
     "openclaw.codexNativeAssetsTestApi",
   ),
@@ -114,9 +103,7 @@ const publications: Record<string, string | symbol> = {
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
-  "src/media-understanding/runner.ts": Symbol.for("openclaw.mediaUnderstandingRunnerTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
-  "src/media/store.ts": Symbol.for("openclaw.mediaStoreTestApi"),
   "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),
   "src/node-host/invoke.ts": Symbol.for("openclaw.nodeHostInvokeTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),

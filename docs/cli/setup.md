@@ -39,8 +39,12 @@ models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
 discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
 connection before testing it. A failed or cancelled attempt never selects another
-provider automatically. A selected candidate must answer a real completion before
-its provider and model configuration is saved.
+provider automatically. Setup saves the credential, then sends one tool-free
+confirmation turn using the candidate settings in memory. It saves the provider
+and model configuration only after that turn succeeds. A failed connection keeps
+the credential and leaves the configuration unchanged. Choose the saved sign-in
+to retry without signing in again. Custom endpoint settings stay available for
+retry while the Gateway runs; after a restart, enter the endpoint settings again.
 
 Initial Claude Code and Codex detection checks executable versions without
 running auth-status commands or starting an app server. Readable Codex
@@ -69,6 +73,9 @@ asking you to choose token or password. Existing password-mode configs are
 preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
 choose a password explicitly; Tailscale Funnel still requires password mode.
 
+Use `setup --team` for the same small-team onboarding as `onboard --team`.
+`--agent-name <name>` names the first agent or, with `--team`, the coordinator.
+
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
 </Note>
@@ -82,6 +89,8 @@ choose a password explicitly; Tailscale Funnel still requires password mode.
 | `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
 | `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
 | `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--classic`                    | Run the classic multi-step onboarding wizard; not valid with `--non-interactive`.                    |
+| `--agent-name <name>`          | Name for the first agent (default: `main`).                                                          |
 | `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
 | `--non-interactive`            | Run onboarding without prompts.                                                                      |
 | `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |

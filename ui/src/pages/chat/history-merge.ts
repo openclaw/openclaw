@@ -26,7 +26,7 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
+import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
 const chatSessionProjections = new WeakMap<
   object,
@@ -53,6 +53,7 @@ type ChatSessionProjectionOwner = ChatComposerScope & {
   chatDisplayedLeafEntryId?: string | null;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
+  providerPolicyNotice?: ProviderPolicyNotice | null;
 };
 
 function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
@@ -219,6 +220,9 @@ export function publishChatSessionProjection(
         previousScope[key] !== undefined &&
         previousScope[key] !== projection.scope[key],
     );
+    if (sessionChanged) {
+      owner.providerPolicyNotice = null;
+    }
     // Appending the completed marker advances the active leaf. Retain its live
     // identity through that refresh, but never carry it into another session or branch.
     if (
@@ -471,6 +475,7 @@ export function reduceChatSessionProjection(
   projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
   if (event.type === "sessionReset" && projection !== current) {
     resetCompactionProjection(owner);
+    owner.providerPolicyNotice = null;
   }
   // Without a transcript anchor this is best-effort display chronology, assuming
   // comparable browser/Gateway clocks. Never assign a sequence or reorder canonical

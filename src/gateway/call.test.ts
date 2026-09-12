@@ -19,6 +19,7 @@ import {
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
 } from "./gateway-connection.test-mocks.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 
@@ -283,7 +284,7 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-vi.mock("./event-loop-ready.js", () => ({
+vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   waitForEventLoopReady: vi.fn(async (params?: { maxWaitMs?: number }) => {
     eventLoopReadyState.calls.push(params);
     if (eventLoopReadyState.promise) {
@@ -419,6 +420,77 @@ describe("callGateway url resolution", () => {
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
   });
+
+  it.each(["local config", "remote config", "environment"])(
+    "binds an observed %s endpoint without replacing its authentication",
+    async (source) => {
+      setGatewayNetworkDefaults();
+      const expected =
+        source === "local config" ? "ws://127.0.0.1:18789" : "wss://gateway.example/ws";
+      if (source === "local config") {
+        setGatewayConfig({ mode: "local", auth: { token: "fixture-local-token" } });
+      } else {
+        setGatewayConfig({
+          mode: "remote",
+          remote: { url: expected, token: "fixture-remote-token" },
+        });
+      }
+      if (source === "environment") {
+        process.env.OPENCLAW_GATEWAY_URL = expected;
+        process.env.OPENCLAW_GATEWAY_TOKEN = "fixture-env-token";
+      }
+      await callGateway({
+        method: "chat.send",
+        params: { message: "observed destination" },
+        expectUrl: expected,
+      });
+      expect(lastClientOptions?.url).toBe(expected);
+      expect(lastClientOptions?.token).toBe(
+        source === "local config"
+          ? "fixture-local-token"
+          : source === "environment"
+            ? "fixture-env-token"
+            : "fixture-remote-token",
+      );
+
+      // The user's snapshot names the first endpoint; a later CLI invocation
+      // reloads configuration before sending its selected-session prompt.
+      if (source === "environment") {
+        process.env.OPENCLAW_GATEWAY_URL = "wss://replacement.example/ws";
+      } else {
+        setGatewayConfig({
+          mode: "remote",
+          remote: { url: "wss://replacement.example/ws", token: "fixture-replacement-token" },
+        });
+      }
+      startCalls = 0;
+      lastClientOptions = null;
+      lastRequestOptions = null;
+      await expect(
+        callGateway({
+          method: "chat.send",
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          params: { message: "must not retarget" },
+          expectUrl: expected,
+        }),
+      ).rejects.toThrow("Gateway destination changed");
+      expect(startCalls).toBe(0);
+      expect(lastClientOptions).toBeNull();
+      expect(lastRequestOptions).toBeNull();
+    },
+  );
+
+  it.each(["", " "])(
+    "does not disable an explicitly empty expected endpoint (%j)",
+    async (expectUrl) => {
+      setLocalLoopbackGatewayConfig();
+      await expect(callGateway({ method: "chat.send", expectUrl })).rejects.toThrow(
+        "Gateway destination changed",
+      );
+      expect(startCalls).toBe(0);
+      expect(lastRequestOptions).toBeNull();
+    },
+  );
 
   it("classifies only the implicit configured local Gateway as local", async () => {
     setLocalLoopbackGatewayConfig();
@@ -924,6 +996,13 @@ describe("callGateway url resolution", () => {
   });
 
   it.each([
+    ["plain environment inventory", "environments.list", {}, ["operator.read"]],
+    [
+      "runtime-aware environment inventory",
+      "environments.list",
+      { runtimeId: "openclaw" },
+      ["operator.write"],
+    ],
     [
       "device dispatch",
       "sessions.dispatch",
@@ -982,15 +1061,7 @@ describe("callGateway url resolution", () => {
 
     await callGatewayCli({ method: "plugin.custom.unclassified" });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
@@ -1005,15 +1076,7 @@ describe("callGateway url resolution", () => {
       },
     });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("passes explicit scopes through, including empty arrays", async () => {

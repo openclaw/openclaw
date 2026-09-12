@@ -33,6 +33,18 @@ export function classifySessionAttention(params: {
   stuckSessionAbortMs?: number;
   runtimeOwnsLiveness?: boolean;
 }): SessionAttentionClassification {
+  if (
+    params.activity.activeRetryWaitDeadlineAtMs !== undefined &&
+    Date.now() < params.activity.activeRetryWaitDeadlineAtMs
+  ) {
+    return {
+      eventType: "session.long_running",
+      reason: "provider_retry_wait",
+      classification: "long_running",
+      activeWorkKind: params.activity.activeWorkKind,
+      recoveryEligible: false,
+    };
+  }
   if (params.runtimeOwnsLiveness) {
     return {
       eventType: "session.long_running",

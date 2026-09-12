@@ -17,14 +17,19 @@ import {
   findActiveUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  getUpdateRunAsync,
   listUpdateRuns,
+  listUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -70,6 +75,205 @@ afterEach(() => {
 });
 
 describe("update run ledger", () => {
+  it.each(["selected", "refused", "unavailable"] as const)(
+    "retains and reports snapshot capacity evidence (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const directory = `${options.env.OPENCLAW_STATE_DIR}.update-captures`;
+      const snapshotCapacity = {
+        reason:
+          outcome === "unavailable"
+            ? ("snapshot-location-unavailable" as const)
+            : outcome === "selected"
+              ? ("state-volume" as const)
+              : ("snapshot-capacity-insufficient" as const),
+        sqliteBytes: 1_048_576,
+        pluginBytes: 2_097_152,
+        requiredBytes: 8_388_608,
+        candidates: [
+          {
+            kind: "explicit-tmpdir" as const,
+            directory: "/synthetic/tmp",
+            availableBytes: outcome === "refused" ? 1024 : 16_777_216,
+            ...(outcome !== "refused" ? { allocationError: "not a directory" } : {}),
+          },
+          {
+            kind: "state-volume" as const,
+            directory,
+            availableBytes: outcome === "refused" ? 2048 : 16_777_216,
+            ...(outcome === "unavailable" ? { allocationError: "permission denied" } : {}),
+          },
+        ],
+        selection: outcome === "selected" ? { kind: "state-volume" as const, directory } : null,
+      };
+      const step = {
+        name: "candidate snapshot",
+        exitCode: outcome === "selected" ? 0 : 1,
+        snapshotCapacity,
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        { status: outcome === "selected" ? "succeeded" : "failed" },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const redactedDirectory = "$OPENCLAW_STATE_DIR.update-captures";
+      expect(retained.steps.find((entry) => entry.step === step.name)?.snapshotCapacity).toEqual({
+        ...snapshotCapacity,
+        candidates: [
+          snapshotCapacity.candidates[0],
+          { ...snapshotCapacity.candidates[1], directory: redactedDirectory },
+        ],
+        selection:
+          outcome === "selected" ? { kind: "state-volume", directory: redactedDirectory } : null,
+      });
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(redactedDirectory);
+      expect(report).toContain("8 MiB");
+      expect(report).toContain("1 MiB SQLite");
+      expect(report).toContain("2 MiB plugin files");
+      expect(report).not.toContain(options.env.OPENCLAW_STATE_DIR);
+      if (outcome !== "selected") {
+        expect(report).toContain("TMPDIR");
+      }
+      expect(snapshotCapacity.candidates[1]?.directory).toBe(directory);
+    },
+  );
+
+  it("bounds Doctor evidence before ledger validation without changing full messages", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const changes: NonNullable<UpdateStepResult["configChanges"]> = [
+      { kind: "key", key: "k".repeat(2048) },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        kind: "migration" as const,
+        message: `${index}: ${"🤖".repeat(2000)}`,
+      })),
+    ];
+    const original = structuredClone(changes);
+    const steps = updateRunStepsFromResultStep({
+      name: "openclaw doctor",
+      exitCode: 1,
+      configChanges: changes,
+      configWriteRefusal: {
+        reason: "r".repeat(2048),
+        message: "m".repeat(2048),
+        keys: Array.from({ length: 40 }, (_, index) => `${index}:${"k".repeat(2048)}`),
+      },
+    });
+    expect(steps.filter((step) => step.configChange)).toHaveLength(32);
+    for (const step of steps) {
+      expect(step.detail?.length ?? 0).toBeLessThanOrEqual(1024);
+      if (step.configChange) {
+        expect(
+          (step.configChange.kind === "key" ? step.configChange.key : step.configChange.message)
+            .length,
+        ).toBeLessThanOrEqual(1024);
+      }
+      if (step.configWriteRefusal) {
+        expect(step.configWriteRefusal.keys).toHaveLength(32);
+        expect(step.configWriteRefusal.message.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.reason.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.keys.every((key) => key.length <= 1024)).toBe(true);
+      }
+      expect(() => recordUpdateRunStep(run.runId, step, options)).not.toThrow();
+    }
+    expect(changes).toEqual(original);
+  });
+  it.each(["committed", "refused"] as const)(
+    "retains typed Doctor config evidence in the terminal summary (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const keys = ["meta", "plugins", "wizard"];
+      recordUpdateRunRepairAttempt(
+        run.runId,
+        { attempt: 1, status: "succeeded", startedAtMs: 1, reason: "Candidate validation passed." },
+        options,
+      );
+      const migration = "Enabled the configured provider plugin.";
+      const step: UpdateStepResult = {
+        name: "openclaw doctor",
+        command: "doctor --fix",
+        cwd: "/synthetic",
+        durationMs: 1,
+        exitCode: outcome === "committed" ? 0 : 1,
+        ...(outcome === "committed"
+          ? {
+              configChanges: [
+                ...keys.map((key) => ({ kind: "key" as const, key })),
+                { kind: "migration" as const, message: migration },
+              ],
+            }
+          : {
+              configWriteRefusal: {
+                keys,
+                reason: "config-input-changed",
+                message: "An operator saved the config before publication.",
+              },
+            }),
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        {
+          status: outcome === "committed" ? "succeeded" : "failed",
+          ...(outcome === "refused" ? { reason: "repair-requires-config-change" } : {}),
+        },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(keys.join(", "));
+      if (outcome === "committed") {
+        expect(
+          retained.steps.flatMap((entry) => (entry.configChange ? [entry.configChange] : [])),
+        ).toEqual(step.configChanges);
+        expect(report).toContain(migration);
+        expect(report).not.toContain("repair-requires-config-change");
+      } else {
+        expect(
+          retained.steps.find((entry) => entry.step === step.name)?.configWriteRefusal,
+        ).toEqual(step.configWriteRefusal);
+        expect(report).toContain("config-input-changed");
+        expect(report).toContain("An operator saved the config before publication.");
+        expect(report).toContain("Doctor could not promote config changes.");
+      }
+    },
+  );
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "keeps a terminal %s result unchanged for running-only boot observations",
+    (status) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
+      const actual = recordUpdateRunVerification(
+        run.runId,
+        { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
+        { ...options, onlyIfRunning: true },
+      );
+      expect(actual).toEqual(terminal);
+      expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+      const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
+      expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
+      expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+    },
+  );
+
   it("keeps reads non-creating and adds the table on first write without changing the older schema", () => {
     const options = isolatedOptions();
     const runId = randomUUID();
@@ -95,7 +299,9 @@ describe("update run ledger", () => {
       .join(";\n");
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow("Unknown update run");
+    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow(
+      "missing table update_runs",
+    );
     expect(hasLedger()).toBeUndefined();
 
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
@@ -116,12 +322,12 @@ describe("update run ledger", () => {
   });
 
   it.each(
-    (["get", "list", "active"] as const).flatMap((reader) =>
+    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
       [false, true].map((retainedWal) => ({ reader, retainedWal })),
     ),
   )(
     "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
-    ({ reader, retainedWal }) => {
+    async ({ reader, retainedWal }) => {
       const sourceOptions = isolatedOptions();
       const created = createUpdateRun({ trigger: "cli" }, sourceOptions);
       const sourcePath = resolveOpenClawStateSqlitePath(sourceOptions.env);
@@ -159,8 +365,12 @@ describe("update run ledger", () => {
           ? getUpdateRun(created.runId, options)
           : reader === "list"
             ? listUpdateRuns({}, options)
-            : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" ? [expected] : expected);
+            : reader === "get-async"
+              ? await getUpdateRunAsync(created.runId, options)
+              : reader === "list-async"
+                ? await listUpdateRunsAsync({}, options)
+                : findActiveUpdateRun(options);
+      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
       expect(snapshotDatabaseFiles(filename)).toEqual(before);
     },
   );
@@ -178,7 +388,7 @@ describe("update run ledger", () => {
     expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
   });
 
-  it("leaves a cold store without the history table unchanged", () => {
+  it("leaves a cold store without the history table unchanged", async () => {
     const options = isolatedOptions();
     const { db } = openOpenClawStateDatabase(options);
     expect(
@@ -190,6 +400,8 @@ describe("update run ledger", () => {
     expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(findActiveUpdateRun(options)).toBeUndefined();
+    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
+    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
     expect(snapshotDatabaseFiles(filename)).toEqual(before);
   });
 
@@ -708,7 +920,21 @@ describe("update run ledger", () => {
           code === 0 ? resolve() : reject(new Error(`${role} exited ${code}: ${output}`)),
         );
       });
-      return { child, ready, exited };
+      const written = ready.then(() =>
+        Promise.race([
+          new Promise<void>((resolve, reject) => {
+            child.once("message", (message) =>
+              message === "written"
+                ? resolve()
+                : reject(new Error(`Unexpected ${role} write message`)),
+            );
+          }),
+          exited.then(() => {
+            throw new Error(`${role} exited before acknowledging writes: ${output}`);
+          }),
+        ]),
+      );
+      return { child, ready, written, exited };
     });
     const deadline = setTimeout(() => {
       for (const { child } of children) {
@@ -716,11 +942,17 @@ describe("update run ledger", () => {
       }
     }, 20_000);
     try {
-      await Promise.all(children.map(({ ready }) => ready));
+      const allWritten = Promise.all(children.map(({ written }) => written));
+      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
       for (const { child } of children) {
         child.send("start");
       }
-      await Promise.all(children.map(({ exited }) => exited));
+      await allWritten;
+      // Writes stay concurrent; handle retirement must not race another lifecycle writer.
+      for (const { child, exited } of children) {
+        child.send("close");
+        await exited;
+      }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
         Array.from({ length: 16 }, (_, index) => `${role}-${index}`),
@@ -752,7 +984,7 @@ describe("update run ledger", () => {
           child.kill();
         }
       }
-      await Promise.allSettled(children.map(({ exited }) => exited));
+      await Promise.allSettled(children.flatMap(({ written, exited }) => [written, exited]));
     }
   }, 30_000);
 });

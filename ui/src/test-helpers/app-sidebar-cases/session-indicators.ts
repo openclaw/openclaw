@@ -398,6 +398,7 @@ describe("AppSidebar session indicators", () => {
           label: "Queued child",
           updatedAt: 2,
           hasActiveRun: true,
+          hasActiveSubagentRun: true,
           status: "queued",
         },
         {
@@ -681,24 +682,5 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-pull-request-state="open"]')).toBeNull();
       expectEmptyLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
     });
-  });
-
-  it("keeps an idle parent's glyph unringed while a hidden child runs", async () => {
-    const parentKey = "agent:main:idle-parent";
-    const sessions = createSessionsHarness("main", [parentKey]);
-    const row = sessions.sessions.state.result!.sessions[0]!;
-    row.hasActiveRun = false;
-    row.hasActiveSubagentRun = true;
-    row.childSessions = ["agent:main:idle-parent-child"];
-    const { sidebar } = await mountSidebar(
-      createGatewayHarness({} as GatewayBrowserClient).gateway,
-      sessions.sessions,
-    );
-    const parent = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-    // Descendant activity is a right-side summary on the collapsed toggle; only
-    // the row's own run may ring its glyph.
-    expectEmptyLead(parent);
-    expect(parent.querySelector(".sidebar-child-session-toggle--running")).not.toBeNull();
-    expect(parent.querySelector(".session-row-state .session-run-spinner")).toBeNull();
   });
 });

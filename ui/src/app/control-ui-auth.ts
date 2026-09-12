@@ -1,4 +1,32 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { formatUiExternalText } from "../lib/format-error.ts";
+
+/** Decode a Gateway JSON response once, preserving validation details and HTTP status. */
+export async function readControlUiJsonResponse(response: Response, signal: AbortSignal) {
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = asNullableRecord(await response.json());
+  } catch {
+    signal.throwIfAborted();
+  }
+  const error = data?.error;
+  const message =
+    typeof error === "string"
+      ? error
+      : error &&
+          typeof error === "object" &&
+          "message" in error &&
+          typeof error.message === "string"
+        ? error.message
+        : "";
+  const detail = formatUiExternalText(message);
+  return {
+    data,
+    response,
+    errorMessage: detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
+  };
+}
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -20,7 +48,35 @@ export function resolveControlUiAuthToken(source: ControlUiAuthSource): string |
   return resolveControlUiAuthCandidates(source)[0] ?? null;
 }
 
-export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string | null {
-  const token = resolveControlUiAuthToken(source);
-  return token ? `Bearer ${token}` : null;
+export async function fetchWithControlUiAuth(
+  url: string,
+  init: Omit<RequestInit, "headers" | "signal"> & {
+    headers?: Record<string, string>;
+    signal: AbortSignal;
+  },
+  authCandidates: readonly string[],
+  isCurrent: () => boolean,
+): Promise<Response> {
+  const candidates = authCandidates.length ? authCandidates : [""];
+  const readOnly = !init.method || init.method === "GET" || init.method === "HEAD";
+  for (let index = 0; ; index++) {
+    init.signal.throwIfAborted();
+    if (!isCurrent()) {
+      throw new DOMException("Gateway request is no longer current", "AbortError");
+    }
+    const token = candidates[index];
+    const response = await fetch(url, {
+      ...init,
+      ...(token ? { headers: { ...init.headers, Authorization: `Bearer ${token}` } } : {}),
+    });
+    init.signal.throwIfAborted();
+    // A mutation's 403 is a scope/origin rejection, not a rejected credential.
+    if (
+      index === candidates.length - 1 ||
+      (response.status !== 401 && !(readOnly && response.status === 403))
+    ) {
+      return response;
+    }
+    void response.body?.cancel().catch(() => undefined);
+  }
 }

@@ -13,6 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -63,6 +64,18 @@ type TranscriptIndexAppend = {
   event: unknown;
   eventId: string | null;
   createdAt: number;
+};
+
+type SessionTranscriptIndexProjectionRow =
+  PreparedSessionTranscriptProjection["activeRows"][number] & {
+    ftsEntry?: TranscriptIndexEntry;
+  };
+
+export type SessionTranscriptIndexProjection = {
+  activeMessageCount: number;
+  activeRows: SessionTranscriptIndexProjectionRow[];
+  indexedSeq: number;
+  leafEventId: string | null;
 };
 
 // FTS rebuilds cost about 60 ms per 1,000 events/1 MiB on dev hardware; cap synchronous
@@ -378,6 +391,125 @@ export function deleteSessionTranscriptIndexInTransaction(
       .deleteFrom("session_transcript_index_state")
       .where("session_id", "=", sessionId),
   );
+}
+
+/** Replaces only the derived rows affected by an exact raw transcript suffix mutation. */
+export function replaceSessionTranscriptIndexSuffixInTransaction(
+  db: DatabaseSync,
+  sessionId: string,
+  params: {
+    unchangedBeforeSeq: number;
+    previous?: SessionTranscriptIndexProjection;
+    next: SessionTranscriptIndexProjection;
+    removedMessageIds?: readonly string[];
+    retainedActiveCount?: number;
+  },
+): void {
+  const kysely = getIndexKysely(db);
+  const incremental = params.retainedActiveCount !== undefined;
+  let retainedCount: number;
+  if (incremental) {
+    retainedCount = params.retainedActiveCount!;
+  } else {
+    const previous = params.previous;
+    if (!previous) {
+      throw new Error(`Missing previous transcript projection: ${sessionId}`);
+    }
+    const currentRows = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("session_transcript_active_events")
+        .select(["active_position", "context_eligible", "event_seq", "message_position"])
+        .where("session_id", "=", sessionId)
+        .where("event_seq", "<", params.unchangedBeforeSeq)
+        .orderBy("active_position", "asc"),
+    ).rows;
+    const sameRow = (
+      current: (typeof currentRows)[number] | undefined,
+      expected: SessionTranscriptIndexProjectionRow | undefined,
+    ): boolean =>
+      current?.active_position === expected?.activePosition &&
+      current?.context_eligible === expected?.contextEligible &&
+      current?.event_seq === expected?.eventSeq &&
+      current?.message_position === expected?.messagePosition;
+    const expectedCurrentRows = previous.activeRows.filter(
+      (row) => row.eventSeq < params.unchangedBeforeSeq,
+    );
+    if (
+      currentRows.length !== expectedCurrentRows.length ||
+      currentRows.some((row, index) => !sameRow(row, expectedCurrentRows[index]))
+    ) {
+      throw new Error(`Transcript projection changed before suffix replacement: ${sessionId}`);
+    }
+    const prefixCount = params.next.activeRows.findIndex(
+      (row) => row.eventSeq >= params.unchangedBeforeSeq,
+    );
+    retainedCount = prefixCount < 0 ? params.next.activeRows.length : prefixCount;
+    if (
+      retainedCount !== expectedCurrentRows.length ||
+      params.next.activeRows
+        .slice(0, retainedCount)
+        .some((row, index) => !sameRow(currentRows[index], row))
+    ) {
+      throw new Error(
+        `Transcript projection prefix changed before suffix replacement: ${sessionId}`,
+      );
+    }
+  }
+
+  const removedMessageIds = incremental
+    ? (params.removedMessageIds ?? [])
+    : [
+        ...new Set(
+          params
+            .previous!.activeRows.slice(retainedCount)
+            .flatMap((row) => (row.ftsEntry ? [row.ftsEntry.messageId] : [])),
+        ),
+      ];
+  if (removedMessageIds.length > 0) {
+    // FTS metadata is unindexed; bind larger sets once instead of rescanning every 400 IDs.
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("session_transcript_fts")
+        .where("session_id", "=", sessionId)
+        .where(
+          "message_id",
+          "in",
+          removedMessageIds.length <= 400 ? removedMessageIds : sqliteStringSet(removedMessageIds),
+        ),
+    );
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .deleteFrom("session_transcript_active_events")
+      .where("session_id", "=", sessionId)
+      .where("active_position", ">=", retainedCount),
+  );
+
+  const insertActive = createActiveEventInserter(db, sessionId);
+  const insertFts = createFtsInserter(db, sessionId);
+  const rowsToInsert = incremental
+    ? params.next.activeRows
+    : params.next.activeRows.slice(retainedCount);
+  for (const row of rowsToInsert) {
+    insertActive(row);
+    if (row.ftsEntry) {
+      insertFts(row.ftsEntry);
+    }
+  }
+  createWatermarkWriter(
+    db,
+    sessionId,
+  )({
+    activeEventCount: params.next.activeRows.length + (incremental ? retainedCount : 0),
+    activeMessageCount: params.next.activeMessageCount,
+    indexedSeq: params.next.indexedSeq,
+    leafEventId: params.next.leafEventId,
+    needsRebuild: false,
+    updatedAt: Date.now(),
+  });
 }
 
 /**

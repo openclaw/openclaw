@@ -3,7 +3,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective, type ModelSelectionScope } from "../model.js";
-import { isSessionDefaultDirectiveValue } from "../thinking.js";
+import { isSessionDefaultDirectiveValue } from "../thinking.shared.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -46,6 +46,17 @@ export function resolveReplyDirectiveCommand(
   return commandKey && Object.hasOwn(REPLY_DIRECTIVE_COMMANDS, commandKey)
     ? (commandKey as ReplyDirectiveCommand)
     : undefined;
+}
+
+/** Shares the server's directive/prose boundary with browser command admission. */
+export function isModelIndependentDirectiveCommand(
+  name: ReplyDirectiveCommand,
+  args: string,
+): boolean {
+  const directives = parseInlineSessionDirectives(`/${name} ${args}`, {
+    command: { kind: "text", name },
+  });
+  return directives.command !== undefined || directives.cleaned.trim() === "";
 }
 
 type DirectiveCommandInvocation = {

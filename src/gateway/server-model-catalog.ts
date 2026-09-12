@@ -29,6 +29,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
+  providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
@@ -38,6 +39,7 @@ type LoadGatewayModelCatalogParams = {
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
+  providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
@@ -83,6 +85,9 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     readOnly: params?.readOnly !== false,
     ...(params?.refreshFullCatalog !== undefined
       ? { refreshFullCatalog: params.refreshFullCatalog }
+      : {}),
+    ...(params?.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
       : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
@@ -142,7 +147,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
         // replacement auth cannot be combined with stale catalog or metadata.
         continue;
       }
-      refreshedAuth = undefined;
+      throw error;
     }
     return {
       ...projectGatewayModelCatalogSnapshot(owner),

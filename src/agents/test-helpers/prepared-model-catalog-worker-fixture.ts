@@ -12,7 +12,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 
 export function usePreparedCatalogWorkerFixtures() {
   const waitTimeoutMs = 30_000;
-  const retirements = new Set<() => void>();
+  const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
   // Synchronous capture also covers failures before a worker request is awaited.
   const workerChannel = channel("worker_threads");
@@ -36,7 +36,7 @@ export function usePreparedCatalogWorkerFixtures() {
       // Direct snapshots bypass registered owners. Fence them even when worker warmup times out,
       // before late continuations can use a removed fixture or enter the next test's catalog queue.
       for (const retire of retirements) {
-        retire();
+        await retire();
       }
       retirements.clear();
       await resetPreparedModelRuntimeSnapshotsForTest();
@@ -55,7 +55,7 @@ export function usePreparedCatalogWorkerFixtures() {
   });
   return {
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
-    retireAfterTest: (retire: () => void) => {
+    retireAfterTest: (retire: () => void | Promise<void>) => {
       retirements.add(retire);
     },
     waitForWorkers,
@@ -72,6 +72,7 @@ export function writeSyntheticAuthDiscoveryFixture(params: {
   unrelatedId: string;
   pluginVersion: string;
   asyncSyntheticAuth?: boolean;
+  syntheticAuthAvailable?: boolean;
 }): void {
   const probePath = path.join(params.root, "synthetic-auth-probes.txt");
   fs.writeFileSync(
@@ -109,7 +110,7 @@ module.exports = {
         : ""
     }
     fs.appendFileSync(${JSON.stringify(probePath)}, provider + "\\n");
-    return provider === ${JSON.stringify(params.harnessId)}
+    return ${params.syntheticAuthAvailable !== false} && provider === ${JSON.stringify(params.harnessId)}
       ? { apiKey: "native-login-not-real", source: "fixture native login", mode: "oauth" }
       : undefined;
   },

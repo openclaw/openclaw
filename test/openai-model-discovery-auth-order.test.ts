@@ -40,15 +40,61 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
-function withCatalogProviders<T>(run: () => T): T {
+vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
+  const { createProviderHookRuntime } =
+    await import("../src/plugins/provider-hook-runtime-core.js");
+  const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
+  const selectProviders = (params: {
+    onlyPluginIds?: string[];
+    providerRefs?: readonly string[];
+  }) =>
+    discovery.providers.filter(
+      (provider) =>
+        (!params.onlyPluginIds || params.onlyPluginIds.includes(provider.id)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
+    );
+  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
+  return createProviderHookRuntime({
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviderRegistryCore: (params) => {
+      const providers = selectProviders(params);
+      if (providers.length === 0) {
+        return undefined;
+      }
+      return {
+        registry: createCatalogProviderRegistry(providers),
+        workspaceDir: params.workspaceDir,
+        onlyPluginIds: params.onlyPluginIds,
+        isProviderOwnerEligible: (pluginId, providerRef) =>
+          providers.some(
+            (provider) =>
+              provider.id === pluginId && matchesProviderPluginRef(provider, providerRef),
+          ),
+      };
+    },
+    resolvePluginProvidersCore: (params, onSelectedRegistry) => {
+      const providers = selectProviders(params);
+      if (providers.length) {
+        onSelectedRegistry?.(createCatalogProviderRegistry(providers));
+      }
+      return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
+    },
+  });
+});
+
+function createCatalogProviderRegistry(providers = discovery.providers) {
   const registry = createEmptyPluginRegistry();
-  registry.providers = discovery.providers.map((provider) => ({
+  registry.providers = providers.map((provider) => ({
     pluginId: provider.id,
     provider,
     source: "test",
   }));
-  // Exhausted auth must consult the same providers as discovery, without loading a second runtime.
-  return withPluginRuntimeRegistryScope(registry, run);
+  return registry;
+}
+
+function withCatalogProviders<T>(run: () => T): T {
+  return withPluginRuntimeRegistryScope(createCatalogProviderRegistry(), run);
 }
 
 describe("Provider model discovery auth preparation", () => {
@@ -59,6 +105,11 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
+    // These fixtures supply refreshable providers and mock their refresh operation.
+    // Keep capability discovery at the same boundary instead of loading the full runtime.
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
   });
 
   afterEach(async () => {
@@ -264,6 +315,12 @@ describe("Provider model discovery auth preparation", () => {
         ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
       });
 
+      expect(
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+      ).toHaveBeenCalledOnce();
+      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: providerId }),
+      );
       expect(refresh).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -470,6 +527,7 @@ describe("Provider model discovery auth preparation", () => {
       }
       const auth = {
         authStore: store,
+        providerAuthLabels: new Map(),
         authModes: { [providerId]: "oauth" as const },
         credentials: { [providerId]: previousCredential },
       };
@@ -486,6 +544,7 @@ describe("Provider model discovery auth preparation", () => {
             { provider: providerId, profileId: previousProfileId, status: "ready" },
           ],
         },
+        new Map(),
         undefined,
         auth,
         (provider) => provider,
@@ -501,7 +560,8 @@ describe("Provider model discovery auth preparation", () => {
           ),
           providerOutcomes: outcomes,
         },
-        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        new Map(),
+        previous,
         auth,
         (provider) => provider,
       );
@@ -764,6 +824,9 @@ describe("provider catalog late-result finalization", () => {
     };
     await state.writeAuthProfiles(store);
     vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
     vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
       new Error("fixture refresh failed"),
     );

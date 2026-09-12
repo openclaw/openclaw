@@ -523,45 +523,68 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.commandVisible).toBe(true);
   });
 
-  it("reports skills blocked by an agent skill filter", () => {
-    const alpha: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "alpha",
-        description: "test",
-        filePath: "/tmp/alpha/SKILL.md",
-        baseDir: "/tmp/alpha",
-        source: "test",
-      }),
-      frontmatter: {},
-    };
-    const beta: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "beta",
-        description: "test",
-        filePath: "/tmp/beta/SKILL.md",
-        baseDir: "/tmp/beta",
-        source: "test",
-      }),
-      frontmatter: {},
-    };
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", {
-      entries: [alpha, beta],
+  it("preserves source, custom keys, order, and agent exclusion in status", () => {
+    const workspaceDir = tempDirs.make("openclaw-skill-status-");
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      entries: [
+        createEntry("workspace", {
+          source: "openclaw-workspace",
+          baseDir: path.join(workspaceDir, "workspace"),
+          metadata: { skillKey: "workspace-key" },
+        }),
+        createEntry("custodian", {
+          source: "openclaw-custodian",
+          baseDir: path.join(workspaceDir, "custodian"),
+        }),
+        createEntry("bundle", {
+          source: "openclaw-bundled",
+          baseDir: path.join(workspaceDir, "bundle"),
+        }),
+      ],
       agentId: "specialist",
-      config: {
-        agents: {
-          list: [{ id: "specialist", skills: ["alpha"] }],
-        },
-      },
+      config: { agents: { list: [{ id: "specialist", skills: ["workspace"] }] } },
     });
 
     expect(report.agentId).toBe("specialist");
-    expect(report.agentSkillFilter).toEqual(["alpha"]);
-    expect(report.skills.find((skill) => skill.name === "alpha")?.blockedByAgentFilter).toBe(false);
-    const byName = skillStatusByName(report.skills);
-    expect(requireSkillStatus(byName, "alpha").modelVisible).toBe(true);
-    expect(requireSkillStatus(byName, "beta").blockedByAgentFilter).toBe(true);
-    expect(report.skills.find((skill) => skill.name === "beta")?.modelVisible).toBe(false);
+    expect(report.agentSkillFilter).toEqual(["workspace"]);
+    expect(
+      report.skills.map(
+        ({ name, source, skillKey, bundled, blockedByAgentFilter, modelVisible }) => ({
+          name,
+          source,
+          skillKey,
+          bundled,
+          blockedByAgentFilter,
+          modelVisible,
+        }),
+      ),
+    ).toEqual([
+      {
+        name: "workspace",
+        source: "openclaw-workspace",
+        skillKey: "workspace-key",
+        bundled: false,
+        blockedByAgentFilter: false,
+        modelVisible: true,
+      },
+      {
+        name: "custodian",
+        source: "openclaw-custodian",
+        skillKey: "custodian",
+        bundled: true,
+        blockedByAgentFilter: true,
+        modelVisible: false,
+      },
+      {
+        name: "bundle",
+        source: "openclaw-bundled",
+        skillKey: "bundle",
+        bundled: true,
+        blockedByAgentFilter: true,
+        modelVisible: false,
+      },
+    ]);
   });
 
   it("classifies a mixed broken skill pack without flattening visibility reasons", () => {

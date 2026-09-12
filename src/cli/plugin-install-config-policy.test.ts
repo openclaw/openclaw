@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
+} from "../plugins/install-config.js";
+import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
+import { resolvePluginInstallPreactionRequest } from "./plugin-install-config-policy.js";
 
 const fixture = vi.hoisted(() => ({
   bundledPath: "",
@@ -69,25 +69,28 @@ describe("plugin install recovery source ownership", () => {
     fs.rmSync(fixture.bundledPath, { recursive: true, force: true });
   });
 
-  it.each([false, true])("honors official recovery=%s before bundled recovery", (allowed) => {
-    fixture.entries = [
-      {
-        name: "@fixture/recovery",
-        openclaw: {
-          plugin: { id: "official-demo" },
-          install: { npmSpec: "@fixture/recovery", allowInvalidConfigRecovery: allowed },
+  it.each([false, true].flatMap((allowed) => ["npm:", ""].map((prefix) => ({ allowed, prefix }))))(
+    "respects $prefix source ownership with official recovery=$allowed",
+    ({ allowed, prefix }) => {
+      fixture.entries = [
+        {
+          name: "@fixture/recovery",
+          openclaw: {
+            plugin: { id: "official-demo" },
+            install: { npmSpec: "@fixture/recovery", allowInvalidConfigRecovery: allowed },
+          },
         },
-      },
-    ];
-    const request = parseInstallRequest("npm:@fixture/recovery@1.2.3");
-    expect(request).toMatchObject({
-      bundledPluginId: "official-demo",
-      allowInvalidConfigRecovery: allowed,
-    });
-    expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
-      allowed ? "allow-plugin-recovery" : "deny",
-    );
-  });
+      ];
+      const request = parseInstallRequest(`${prefix}@fixture/recovery@1.2.3`);
+      expect(request).toMatchObject({
+        bundledPluginId: prefix ? "official-demo" : "bundled-demo",
+        allowInvalidConfigRecovery: prefix ? allowed : true,
+      });
+      expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
+        !prefix || allowed ? "allow-plugin-recovery" : "deny",
+      );
+    },
+  );
 
   it("uses bundled recovery when no official descriptor owns the spec", () => {
     const request = parseInstallRequest("@fixture/recovery");

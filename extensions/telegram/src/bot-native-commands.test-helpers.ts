@@ -199,6 +199,7 @@ export function createNativeCommandsHarness(params?: {
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
 
   registerTelegramNativeCommands({
+    cancelPendingInbound: vi.fn(),
     bot,
     cfg,
     runtime: params?.runtime ?? ({ log } as unknown as RuntimeEnv),

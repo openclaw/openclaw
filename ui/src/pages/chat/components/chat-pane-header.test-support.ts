@@ -60,7 +60,6 @@ export function mountChatPaneHeader(
     onBranchSelect: vi.fn(),
     ...patch,
   };
-  props.gatewaysSnapshot ??= props.nativeGateways?.snapshot;
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
 }

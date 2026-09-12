@@ -231,7 +231,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         });
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(cfg, entry, agentId);
+        const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
         const lookupModel =
           resolveStatusModelLookupRef({
@@ -404,7 +404,11 @@ export async function getStatusSummary(
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
       let waitingForRoute = false;
-      if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+      if (
+        summary.enabled &&
+        !agent.admissionRefusal &&
+        (summary.target === "last" || summary.target === "owner")
+      ) {
         const heartbeatSession = resolveHeartbeatSessionKey(
           cfg,
           agent.id,
@@ -434,7 +438,7 @@ export async function getStatusSummary(
       }
       return {
         agentId: agent.id,
-        enabled: summary.enabled,
+        enabled: summary.enabled && !agent.admissionRefusal,
         every: summary.every,
         everyMs: summary.everyMs,
         waitingForRoute,
@@ -492,6 +496,10 @@ export async function getStatusSummary(
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
+      ...(agent.status ? { status: agent.status } : {}),
+      ...(includeSensitive && agent.admissionRefusal
+        ? { admissionRefusal: agent.admissionRefusal }
+        : {}),
       path: includeSensitive ? path : "[redacted]",
       count,
       recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],

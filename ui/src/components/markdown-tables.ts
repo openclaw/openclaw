@@ -244,9 +244,7 @@ export function handleMarkdownTableInteraction(event: Event): void {
         return;
       }
       copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-      if (copied) {
-        render(icons.check, copy);
-      }
+      render(copied ? icons.check : icons.copy, copy);
       clearTimeout(tableCopyResetTimers.get(copy));
       const resetTimer = setTimeout(
         () => {

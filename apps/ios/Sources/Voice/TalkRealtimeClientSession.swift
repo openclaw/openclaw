@@ -62,6 +62,7 @@ struct TalkRealtimeToolCallResponse: Decodable {
 struct TalkRealtimeServerEvent: Decodable {
     let type: String
     let error: TalkRealtimeServerError?
+    let reason: String?
     let itemId: String?
     let item: TalkRealtimeServerItem?
     let turn: TalkRealtimeServerTurn?
@@ -75,6 +76,7 @@ struct TalkRealtimeServerEvent: Decodable {
     enum CodingKeys: String, CodingKey {
         case type
         case error
+        case reason
         case itemId = "item_id"
         case item
         case turn
@@ -106,6 +108,15 @@ struct TalkRealtimeServerEvent: Decodable {
         guard self.type == "error", let message = self.error?.message?.lowercased() else { return false }
         return message.contains("session") && message.contains("maximum duration")
     }
+
+    var sessionCloseFailureStatus: String? {
+        guard self.type == "session.closed" else { return nil }
+        return switch self.reason {
+        case "content": "Realtime error"
+        case "connection_lost": "Realtime disconnected"
+        default: nil
+        }
+    }
 }
 
 struct TalkRealtimeServerError: Decodable {
@@ -133,5 +144,36 @@ struct TalkRealtimeServerItem: Decodable {
         case callId = "call_id"
         case name
         case arguments
+    }
+}
+
+/// Live speech overlaps, so caption fragments accumulate independently for each speaker.
+struct TalkRealtimeLiveCaptionBuffer {
+    struct Entry {
+        let role: TalkRealtimeTranscriptRole
+        var text: String
+    }
+
+    private var entries: [Entry] = []
+
+    mutating func append(_ event: TalkRealtimeServerEvent) -> Entry? {
+        let role: TalkRealtimeTranscriptRole
+        switch event.type {
+        case "session.input_transcript.delta": role = .user
+        case "session.output_transcript.delta": role = .assistant
+        default: return nil
+        }
+        guard let delta = event.delta, !delta.isEmpty else { return nil }
+        if let index = self.entries.firstIndex(where: { $0.role == role }) {
+            self.entries[index].text = String((self.entries[index].text + delta).suffix(8192))
+            return self.entries[index]
+        }
+        let entry = Entry(role: role, text: String(delta.suffix(8192)))
+        self.entries.append(entry)
+        return entry
+    }
+
+    mutating func reset() {
+        self.entries.removeAll(keepingCapacity: true)
     }
 }

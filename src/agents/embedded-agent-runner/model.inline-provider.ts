@@ -3,6 +3,7 @@
  */
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
@@ -156,12 +157,17 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
+    // Provider defaults must not mask omissions before exact duplicate rows merge.
+    const models = resolveMergedModelProviderModels({
+      models: entry?.models,
+      normalizeModelId: (modelId) => modelId.trim(),
+    });
+    return Array.from(models.values()).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
-        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
+        baseUrl: model.baseUrl ?? entry?.baseUrl,
       });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+      const modelHeaders = sanitizeModelHeaders(model.headers, {
         stripSecretRefMarkers: true,
       });
       const requestConfig = resolveProviderRequestConfig({

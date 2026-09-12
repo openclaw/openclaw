@@ -27,14 +27,16 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
+import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -66,6 +68,7 @@ type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
 
 const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
+const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
 
 class DoctorLintStateSnapshotError extends Error {
@@ -95,7 +98,9 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
-  const execution = await prepareDoctorLintExecution(runtime, opts);
+  const execution = await withArtifactPreservingStateReads(() =>
+    prepareDoctorLintExecution(runtime, opts),
+  );
   execution.writeOutput();
   return execution.exitCode;
 }
@@ -104,7 +109,9 @@ export async function runDoctorLintCli(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await prepareDoctorLintExecution(runtime, { severityMin: "info" });
+  const execution = await withArtifactPreservingStateReads(() =>
+    prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+  );
   return execution.findings;
 }
 
@@ -163,7 +170,12 @@ async function executeDoctorLint(
 ): Promise<DoctorLintExecution> {
   const snapshot = await stateView.readConfigSnapshot();
   if (snapshot.exists && !snapshot.valid) {
-    const findings = configValidationIssuesToHealthFindings(snapshot.issues);
+    const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
+    const runtimeFindings = await collectNodeRuntimeFindings(stateView.sourceEnv);
+    const findings = [
+      ...configValidationIssuesToHealthFindings(snapshot.issues),
+      ...runtimeFindings,
+    ];
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
     return {
       exitCode: exitCodeFromFindings(findings, sevMin),
@@ -182,6 +194,13 @@ async function executeDoctorLint(
         for (const issue of snapshot.issues) {
           const issuePath = issue.path || "<root>";
           runtime.error(`- ${issuePath}: ${issue.message}`);
+        }
+        for (const finding of runtimeFindings.filter((entry) =>
+          healthFindingMeetsSeverity(entry, sevMin),
+        )) {
+          runtime.error(
+            finding.fixHint ? `${finding.message}\n${finding.fixHint}` : finding.message,
+          );
         }
       },
     };
@@ -242,6 +261,11 @@ async function executeDoctorLint(
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
   const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
+  const warnings = isUpdateDoctorLintPass(stateView.sourceEnv)
+    ? result.findings.filter(
+        (finding) => finding.severity === "warning" && !healthFindingMeetsSeverity(finding, sevMin),
+      )
+    : [];
   const exitCode = exitCodeFromFindings(result.findings, sevMin);
   return {
     exitCode,
@@ -254,6 +278,7 @@ async function executeDoctorLint(
           checksRun: result.checksRun,
           checksSkipped: result.checksSkipped,
           findings: visible,
+          warnings,
         });
         return;
       }
@@ -303,52 +328,59 @@ async function withReadOnlyPluginStateSnapshot<T>(
   } catch (error) {
     throw new DoctorLintStateSnapshotError(error);
   }
-  let outcome: { ok: true; value: T } | { ok: false; error: unknown };
-  let runStarted = false;
-  try {
-    const privateStateDir = path.join(privateRoot, "openclaw-state");
-    const privateDatabasePath = resolveOpenClawStateSqlitePath({
-      ...sourceEnv,
-      OPENCLAW_STATE_DIR: privateStateDir,
-    });
-    fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
-    if (prepared) {
-      for (const suffix of ["", "-journal", "-shm", "-wal"]) {
-        const sourcePath = `${prepared.location}${suffix}`;
-        if (fs.existsSync(sourcePath)) {
-          fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+  const privateStateDir = path.join(privateRoot, "openclaw-state");
+  const privateDatabasePath = resolveOpenClawStateSqlitePath({
+    ...sourceEnv,
+    OPENCLAW_STATE_DIR: privateStateDir,
+  });
+  const privateEnv = {
+    ...sourceEnv,
+    OPENCLAW_CONFIG_PATH: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
+    OPENCLAW_STATE_DIR: privateStateDir,
+  };
+  return await withDoctorLintStateEnv(privateEnv, async () => {
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    let runStarted = false;
+    try {
+      fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
+      if (prepared) {
+        for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+          const sourcePath = `${prepared.location}${suffix}`;
+          if (fs.existsSync(sourcePath)) {
+            fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+          }
         }
       }
+      const installRoots = resolvePluginInstallRoots(sourceEnv);
+      // Global readers and OAuth refresh/challenge writers share the private state view.
+      outcome = {
+        ok: true,
+        value: await withPluginInstallRoots(
+          { ...installRoots, stateDir: privateStateDir },
+          async () => {
+            runStarted = true;
+            return await run(privateEnv);
+          },
+        ),
+      };
+    } catch (error) {
+      outcome = { ok: false, error };
     }
-    const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
-    const privateEnv = {
-      ...sourceEnv,
-      OPENCLAW_CONFIG_PATH: sourceConfigPath,
-      OPENCLAW_STATE_DIR: privateStateDir,
-    };
-    const installRoots = resolvePluginInstallRoots(sourceEnv);
-    // Global readers and OAuth refresh/challenge writers share the private state view.
-    outcome = {
-      ok: true,
-      value: await withDoctorLintStateEnv(privateEnv, () =>
-        withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
-          runStarted = true;
-          return await run(privateEnv);
-        }),
-      ),
-    };
-  } catch (error) {
-    outcome = { ok: false, error };
-  }
-  if (!cleanup()) {
-    throw new DoctorLintStateSnapshotError(
-      new Error("Temporary doctor lint state snapshot cleanup did not complete."),
-    );
-  }
-  if (!outcome.ok) {
-    throw runStarted ? outcome.error : new DoctorLintStateSnapshotError(outcome.error);
-  }
-  return outcome.value;
+    try {
+      // Inspectors can cache private writers. Retire only this snapshot's handle
+      // before restoring the ambient state or deleting files; failed retirement retains files.
+      await closeOpenClawStateDatabaseByPathAsync(privateDatabasePath);
+      if (!cleanup()) {
+        throw new Error("Temporary doctor lint state snapshot cleanup did not complete.");
+      }
+    } catch (error) {
+      throw new DoctorLintStateSnapshotError(error);
+    }
+    if (!outcome.ok) {
+      throw runStarted ? outcome.error : new DoctorLintStateSnapshotError(outcome.error);
+    }
+    return outcome.value;
+  });
 }
 
 async function withDoctorLintStateEnv<T>(
@@ -377,12 +409,12 @@ async function withDoctorLintStateEnv<T>(
   }
 }
 
-function createStateSnapshotFailureExecution(
+async function createStateSnapshotFailureExecution(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
   sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
   error: DoctorLintStateSnapshotError,
-): DoctorLintExecution {
+): Promise<DoctorLintExecution> {
   const finding: HealthFinding = {
     checkId: "core/doctor/lint-state-inspection",
     severity: "error",
@@ -395,9 +427,11 @@ function createStateSnapshotFailureExecution(
     fixHint:
       "Keep the current Gateway running, resolve the state database inspection error, then rerun this check.",
   };
-  const visible = healthFindingMeetsSeverity(finding, sevMin) ? [finding] : [];
+  const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
+  const findings = [finding, ...(await collectNodeRuntimeFindings())];
+  const visible = findings.filter((entry) => healthFindingMeetsSeverity(entry, sevMin));
   return {
-    exitCode: exitCodeFromFindings([finding], sevMin),
+    exitCode: exitCodeFromFindings(findings, sevMin),
     findings: visible,
     writeOutput() {
       if (detectMode(opts) === "json") {
@@ -409,8 +443,12 @@ function createStateSnapshotFailureExecution(
         });
         return;
       }
-      runtime.error(`doctor --lint: ${finding.message}`);
-      runtime.error(`fix: ${finding.fixHint}`);
+      for (const entry of visible) {
+        runtime.error(`doctor --lint: ${entry.message}`);
+        if (entry.fixHint) {
+          runtime.error(`fix: ${entry.fixHint}`);
+        }
+      }
     },
   };
 }
@@ -427,6 +465,10 @@ function withCoreLintContext(
     ...check,
     detect(_ctx, scope) {
       const detect = async () => await check.detect(ctx, scope);
+      if (check.id === SKILLS_READINESS_CHECK_ID) {
+        // Discovery needs source-profile eligibility; generated links use the private install roots.
+        return ctx.runWithPrivateStateSnapshot(() => ctx.runWithSourceState(detect));
+      }
       if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
         return ctx.runWithPrivateStateSnapshot(detect);
       }
@@ -441,6 +483,7 @@ function writeJsonResult(result: {
   checksRun: number;
   checksSkipped: number;
   findings: readonly HealthFinding[];
+  warnings?: readonly HealthFinding[];
 }): void {
   process.stdout.write(
     JSON.stringify({
@@ -448,6 +491,8 @@ function writeJsonResult(result: {
       checksRun: result.checksRun,
       checksSkipped: result.checksSkipped,
       findings: result.findings.map(toJsonFinding),
+      // Shipped updater gates require findings to be empty on success.
+      ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
     }) + "\n",
   );
 }

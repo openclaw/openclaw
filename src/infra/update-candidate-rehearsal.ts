@@ -1,24 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { runCommandBuffered } from "../process/exec.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
-import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
+import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
 } from "./update-control-plane-sentinel.js";
+import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_CHANNEL_ENV,
@@ -28,7 +21,9 @@ import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
+import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateCandidateRehearsal = {
   sourceConfig: OpenClawConfig;
@@ -38,7 +33,8 @@ export type UpdateCandidateRehearsal = {
   workspaceDir: string;
   env: NodeJS.ProcessEnv;
   port: number;
-  changedConfigKeys: () => Promise<string[]>;
+  snapshotCapacity: UpdateSnapshotCapacity;
+  cleanupDirectories: string[];
   cleanup: () => Promise<void>;
 };
 
@@ -54,7 +50,7 @@ function isolatedConfig(
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
     if (!projected) {
-      throw new Error("Plugin locator was not included in the candidate snapshot");
+      throw new Error("Plugin locator was not included in the update snapshot");
     }
     return projected;
   };
@@ -106,7 +102,13 @@ function isolatedConfig(
     mode: "local",
     bind: "loopback",
     port,
-    auth: { mode: "token", token: randomUUID() },
+    auth: {
+      ...copied.gateway?.auth,
+      mode: "token",
+      token: randomUUID(),
+      password: undefined,
+      allowTailscale: false,
+    },
     tls: { enabled: false },
     tailscale: { mode: "off" },
     controlUi: { enabled: false },
@@ -115,6 +117,9 @@ function isolatedConfig(
   copied.hooks = { enabled: false, internal: { enabled: false } };
   copied.transcripts = { enabled: false, autoStart: [] };
   copied.discovery = { mdns: { mode: "off" } };
+  if (copied.mcp?.apps) {
+    copied.mcp.apps.enabled = false;
+  }
   return copied;
 }
 
@@ -129,132 +134,84 @@ export async function prepareUpdateCandidateRehearsal(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<UpdateCandidateRehearsal> {
-  const deadline = Date.now() + (params.timeoutMs ?? 300_000);
-  const remaining = () => {
-    params.signal?.throwIfAborted();
-    const milliseconds = deadline - Date.now();
-    if (milliseconds <= 0) {
-      throw new Error("Candidate snapshot deadline exceeded");
-    }
-    return milliseconds;
-  };
-  const tempDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-")),
-  );
   const sourceEnv = params.env ?? process.env;
+  const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
+    const copiedAgentDir = (directory: string | undefined) =>
+      directory?.trim()
+        ? resolveUpdateCandidateStatePath(
+            path.resolve(params.stateDir),
+            tempDir,
+            resolveUserPath(directory, sourceEnv),
+          )
+        : undefined;
+    const env: NodeJS.ProcessEnv = {
+      ...sourceEnv,
+      ...buildUpdateRehearsalPathEnv(tempDir),
+      // Validation must resolve the candidate SDK, not the source launcher's checkout.
+      OPENCLAW_DEV_SOURCE_ROOT: params.candidateRoot,
+      OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
+      PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_GATEWAY_SERVICE_PID: undefined,
+      OPENCLAW_GATEWAY_PORT: undefined,
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      ...buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+        deferConfiguredPluginInstallRepair: true,
+      }),
+    };
+    // These selectors name the serving owner's service or files outside copied
+    // state. Rehearsal must never inherit its update continuation authority.
+    for (const key of [
+      ...SUPERVISOR_HINT_ENV_VARS,
+      CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+      UPDATE_RUN_ID_ENV,
+      UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+      "OPENCLAW_UPDATE_RUN_HANDOFF",
+      POST_CORE_UPDATE_ENV,
+      POST_CORE_UPDATE_CHANNEL_ENV,
+      POST_CORE_UPDATE_RESULT_PATH_ENV,
+      POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
+      POST_CORE_UPDATE_STARTED_AT_ENV,
+      POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+      POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+    ]) {
+      delete env[key];
+    }
+    return env;
+  };
+  const {
+    stateDir: tempDir,
+    pluginPaths,
+    snapshotCapacity,
+    cleanupDirectories,
+  } = await prepareUpdateCandidateStateSnapshot({
+    ...params,
+    env: sourceEnv,
+    workerEnv,
+  });
+  const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const copiedAgentDir = (directory: string | undefined) =>
-    directory?.trim()
-      ? resolveUpdateCandidateStatePath(
-          path.resolve(params.stateDir),
-          tempDir,
-          resolveUserPath(directory, sourceEnv),
-        )
-      : undefined;
-  const env: NodeJS.ProcessEnv = {
-    ...sourceEnv,
-    HOME: tempDir,
-    USERPROFILE: tempDir,
-    TMPDIR: tempDir,
-    TMP: tempDir,
-    TEMP: tempDir,
-    XDG_CONFIG_HOME: path.join(tempDir, "config"),
-    XDG_CACHE_HOME: path.join(tempDir, "cache"),
-    XDG_DATA_HOME: path.join(tempDir, "data"),
-    XDG_STATE_HOME: path.join(tempDir, "state"),
-    OPENCLAW_HOME: tempDir,
-    OPENCLAW_STATE_DIR: tempDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
-    PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    OPENCLAW_SKIP_CHANNELS: "1",
-    OPENCLAW_SKIP_PROVIDERS: "1",
-    OPENCLAW_SKIP_CRON: "1",
-    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-    OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_GATEWAY_SERVICE_PID: undefined,
-    OPENCLAW_GATEWAY_PORT: undefined,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-    OPENCLAW_GATEWAY_TOKEN: undefined,
-    OPENCLAW_GATEWAY_PASSWORD: undefined,
-    OPENCLAW_PROFILE: undefined,
-    OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-    ...buildUpdateDoctorEnv({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-      serviceRepairPolicy: "external",
-      deferConfiguredPluginInstallRepair: true,
-    }),
-  };
-  // These selectors name the serving owner's service or files outside copied
-  // state. Rehearsal must never inherit its update continuation authority.
-  for (const key of [
-    ...SUPERVISOR_HINT_ENV_VARS,
-    CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
-    UPDATE_RUN_ID_ENV,
-    "OPENCLAW_UPDATE_RUN_HANDOFF",
-    POST_CORE_UPDATE_ENV,
-    POST_CORE_UPDATE_CHANNEL_ENV,
-    POST_CORE_UPDATE_RESULT_PATH_ENV,
-    POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-    POST_CORE_UPDATE_STARTED_AT_ENV,
-    POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
-    POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
-  ]) {
-    delete env[key];
-  }
-  try {
-    const snapshot = await runCommandBuffered(
-      [
-        params.nodeRunner ?? process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-          params.nodeRunner,
-        ),
-      ],
-      {
-        input: JSON.stringify({
-          mode: "snapshot",
-          stateDir: params.stateDir,
-          config: params.config,
-          targetStateDir: tempDir,
-          candidateRoot: params.candidateRoot,
-          env: {
-            HOME: sourceEnv.HOME,
-            OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
-            USERPROFILE: sourceEnv.USERPROFILE,
-            OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
-            PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
-          },
-        }),
-        baseEnv: env,
-        timeoutMs: remaining(),
-        signal: params.signal,
-        killGraceMs: 500,
-        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-      },
-    );
-    if (snapshot.code !== 0) {
-      throw new Error(
-        `Candidate state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
-      );
+  const cleanup = async () => {
+    for (const directory of cleanupDirectories) {
+      await fs.rm(directory, { recursive: true, force: true });
     }
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
-      JSON.parse(snapshot.stdout.toString("utf8")),
-    );
+  };
+  try {
+    params.signal?.throwIfAborted();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
-      signal: AbortSignal.timeout(remaining()),
+      signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 300_000),
     });
     const serialized = JSON.stringify(
       isolatedConfig(
@@ -266,7 +223,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
         pluginPaths,
       ),
     );
-    const baseline: Record<string, unknown> = JSON.parse(serialized);
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
@@ -277,21 +233,12 @@ export async function prepareUpdateCandidateRehearsal(params: {
       workspaceDir,
       env,
       port,
-      changedConfigKeys: async () => {
-        const current: unknown = JSON5.parse(await fs.readFile(configPath, "utf8"));
-        if (!isRecord(current)) {
-          throw new Error("Rehearsal config is not an object.");
-        }
-        // Compare against the same live config projection: private paths, the
-        // canary token and disabled background services are isolation, not repairs.
-        return [...new Set([...Object.keys(baseline), ...Object.keys(current)])]
-          .filter((key) => !isDeepStrictEqual(baseline[key], current[key]))
-          .toSorted();
-      },
-      cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),
+      snapshotCapacity,
+      cleanupDirectories,
+      cleanup,
     };
   } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanup();
     throw error;
   }
 }

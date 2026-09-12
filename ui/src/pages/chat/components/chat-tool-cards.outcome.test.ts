@@ -35,6 +35,7 @@ describe("tool-card outcomes", () => {
       show();
       expect(container.querySelector(".chat-tool-row--running")).not.toBeNull();
       expect(container.querySelector(".chat-tool-card--error")).toBeNull();
+      expect(container.querySelector(".chat-tool-failure")).toBeNull();
       expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Running");
       expect(container.textContent).toContain(card.outputText);
       container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
@@ -132,6 +133,52 @@ describe("tool-card outcomes", () => {
       "Unknown",
     );
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.querySelector(".chat-tool-failure")?.textContent).toContain("Tool not found");
+  });
+
+  it("shows a redacted failure reason without opening the command details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "login-failure",
+          name: "exec",
+          isError: true,
+          completed: true,
+          args: { title: "Sign in to GitHub", command: "gh auth login" },
+          outputText: JSON.stringify({ error: "Cannot connect: token=example-secret-value" }),
+          exitCode: 1,
+        },
+        { messageKey: "login", expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    expect(container.textContent).toContain("Sign in to GitHub");
+    expect(container.querySelector(".chat-tool-failure")?.textContent).toContain("Cannot connect");
+    expect(container.textContent).not.toContain("example-secret-value");
+    expect(container.textContent).not.toContain("gh auth login");
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("previews only the first diagnostic line and removes terminal escapes", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "multiline-failure",
+          name: "exec",
+          isError: true,
+          completed: true,
+          outputText: "\n\u001b[31mgh: command not found\u001b[0m\nVerbose process diagnostics",
+        },
+        { messageKey: "login", expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    const preview = container.querySelector(".chat-tool-failure")?.textContent;
+    expect(preview).toContain("gh: command not found");
+    expect(preview).not.toContain("Verbose process diagnostics");
+    expect(preview).not.toContain("\u001b");
   });
 
   it("renders a neutral summary when the tool card has an explicit error flag", () => {

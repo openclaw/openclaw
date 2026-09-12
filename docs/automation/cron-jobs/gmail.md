@@ -35,7 +35,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
       main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         sandbox: {
           mode: "all",
           scope: "session",
@@ -115,7 +115,7 @@ The two tokens protect different hops: `hooks.gmail.pushToken` authenticates Pub
 <Warning>
 The built-in Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
 
-For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. Agent-to-agent access is on by default. If the reader needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent.allow`; otherwise set `tools.agentToAgent.enabled: false` to disable cross-agent access. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. Agent-to-agent access is on by default. If the reader needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent.allow`; otherwise set `tools.agentToAgent.enabled: false` to disable cross-agent access. See [Prompt injection](/gateway/security/prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 </Warning>
 
 ### Verify the reader boundary
@@ -178,7 +178,7 @@ These steps show the project, topic, publisher permission, and watch registratio
 {
   hooks: {
     gmail: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       thinking: "high",
     },
   },

@@ -374,7 +374,7 @@ async function executeThink(
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
+    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,

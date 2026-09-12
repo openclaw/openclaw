@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -13,6 +14,7 @@ import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -273,6 +275,60 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("preserves explicit default intent across reopen and unrelated whole-entry writes", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      {
+        sessionId: "parent-session",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "child-session",
+        updatedAt: 2,
+        parentSessionKey: parentKey,
+        modelOverrideSource: "default",
+      },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const olderReaderEntry = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "reopened child entry",
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      { ...olderReaderEntry, label: "preserved by older reader" },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopenedChild = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "re-upgraded child entry",
+    );
+    expect(reopenedChild).toMatchObject({
+      label: "preserved by older reader",
+      modelOverrideSource: "default",
+    });
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: reopenedChild,
+        sessionKey: childKey,
+        sessionStore: Object.fromEntries(
+          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        ),
+      }),
+    ).toBeNull();
   });
 
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
@@ -1141,6 +1197,10 @@ describe("session accessor seam", () => {
         { agentId: "main", sessionKey: childSessionKey, storePath },
         { ...lineage, sessionId: childSessionKey, updatedAt: 43 },
       );
+      recordSessionParticipant(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        { identity: { type: "agent", id: childSessionKey }, promptedAt: 43 },
+      );
     }
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
@@ -1155,16 +1215,30 @@ describe("session accessor seam", () => {
       .run("agent:main:unrelated-session", "unrelated-session", unrelatedEntryJson, 1);
 
     const parse = vi.spyOn(JSON, "parse");
+    const participantReads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
+      sql.includes('from "session_participants"') ? "participants" : null,
+    );
     try {
-      expect(
-        listSessionChildEntriesReadOnly({ agentId: "main", sessionKey, storePath }).map(
-          (child) => child.sessionKey,
-        ),
-      ).toEqual([
+      const children = listSessionChildEntriesReadOnly({ agentId: "main", sessionKey, storePath });
+      expect(children.map((child) => child.sessionKey)).toEqual([
         "agent:main:focused-both-child",
         "agent:main:focused-parent-child",
         "agent:main:focused-spawned-child",
       ]);
+      expect(
+        children.map(({ sessionKey: childKey, entry }) => ({
+          sessionKey: childKey,
+          participants: entry.participants,
+          participantCount: entry.participantCount,
+        })),
+      ).toEqual(
+        children.map(({ sessionKey: childKey }) => ({
+          sessionKey: childKey,
+          participants: [{ identity: { type: "agent", id: childKey } }],
+          participantCount: 1,
+        })),
+      );
+      expect(participantReads.counts.participants).toBeLessThanOrEqual(1);
       expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
       expect(
         resolveSessionEntrySelection({ agentId: "main", sessionKey, storePath }),
@@ -1191,6 +1265,7 @@ describe("session accessor seam", () => {
       ).toMatchObject({ agentId: "main", sessionId: "focused-session", sessionKey });
       expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
     } finally {
+      participantReads.restore();
       parse.mockRestore();
     }
   });

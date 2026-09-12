@@ -19,6 +19,8 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
+import { sendHttpRequestRejection } from "../infra/http-request-lifecycle.js";
 import { logDebug, logWarn } from "../logger.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -44,9 +46,6 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
-  isMcpHttpBodyTooLargeError,
-  isMcpHttpBodyTimeoutError,
-  readMcpHttpBody,
   resolveMcpCliCaptureKey,
   resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
@@ -57,6 +56,8 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
+
+const MAX_MCP_BODY_BYTES = 1_048_576;
 
 let closeActiveMcpLoopbackServer: (() => Promise<void>) | undefined;
 let activeMcpLoopbackServerPromise: Promise<void> | null = null;
@@ -213,7 +214,11 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
       let parsed: unknown;
       let cliCaptureHandles: Array<ReturnType<typeof markMcpLoopbackToolCallStarted>> = [];
       try {
-        const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
+        const body = await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_MCP_BODY_BYTES,
+          timeoutMs: resolveMcpHttpBodyTimeoutMs(),
+          destroyOnLimit: false,
+        });
         parsed = parseMcpJsonBody(body);
         if (Array.isArray(parsed) && parsed.length === 0) {
           markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
@@ -447,21 +452,33 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
           }
         });
       } catch (error) {
-        logWarn(`mcp-loopback: request handling failed: ${formatErrorMessage(error)}`);
-        logMcpLoopbackTraffic("request-failed", {
-          message: formatErrorMessage(error),
-        });
+        const message = isRequestBodyLimitError(error)
+          ? {
+              PAYLOAD_TOO_LARGE: `Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`,
+              REQUEST_BODY_TIMEOUT: "Request body timed out",
+              CONNECTION_CLOSED: "Request body connection closed",
+            }[error.code]
+          : formatErrorMessage(error);
+        logWarn(`mcp-loopback: request handling failed: ${message}`);
+        logMcpLoopbackTraffic("request-failed", { message });
         if (!res.headersSent) {
-          if (isMcpHttpBodyTooLargeError(error)) {
-            res.writeHead(413, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "payload_too_large" }), () => {
-              req.destroy();
-            });
-          } else if (isMcpHttpBodyTimeoutError(error)) {
-            res.writeHead(408, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "request_body_timeout" }), () => {
-              req.destroy();
-            });
+          // Capture settles when rejection is queued; the transport owner joins socket cleanup.
+          if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+            void sendHttpRequestRejection(
+              req,
+              res,
+              413,
+              JSON.stringify({ error: "payload_too_large" }),
+              "application/json",
+            );
+          } else if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+            void sendHttpRequestRejection(
+              req,
+              res,
+              408,
+              JSON.stringify({ error: "request_body_timeout" }),
+              "application/json",
+            );
           } else if (isMcpJsonParseError(error)) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));

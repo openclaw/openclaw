@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -9,6 +10,28 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
+});
+
+describe("collectPackageDistImports", () => {
+  it("limits URL dependencies without filtering ordinary relative imports", () => {
+    const imports = collectPackageDistImports({
+      files: ["package\\dist\\index.mjs"],
+      readText: () =>
+        [
+          'import("./data.json");',
+          'require("../outside.cjs");',
+          'new URL("./worker.mjs?rev=1", import.meta.url);',
+          'new URL("./asset.png", import.meta.url);',
+          'new URL("../outside.cjs", import.meta.url);',
+        ].join("\n"),
+    });
+    expect(imports).toEqual(
+      ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
+        importerPath: "dist/index.mjs",
+        importedPath,
+      })),
+    );
+  });
 });
 
 describe("check-package-dist-imports", () => {
@@ -36,16 +59,35 @@ describe("check-package-dist-imports", () => {
     expect(extra.stderr).not.toContain("missing dist directory");
   });
 
-  it("accepts a minimal package dist root", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
+  it.each([
+    { leading: [], tail: [], accepted: true },
+    { leading: ["--"], tail: [], accepted: true },
+    { leading: [], tail: [""], accepted: false },
+    { leading: [], tail: [" \t "], accepted: false },
+    { leading: [], tail: ["", "extra"], accepted: false },
+    { leading: [], tail: ["", "--unexpected"], accepted: false },
+    { leading: ["--"], tail: [""], accepted: false },
+  ])(
+    "enforces one dist root with leading $leading and tail $tail",
+    ({ leading, tail, accepted }) => {
+      const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+      mkdirSync(join(root, "dist"), { recursive: true });
+      writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
 
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+      const result = spawnSync(process.execPath, [CHECK_SCRIPT, ...leading, root, ...tail], {
+        encoding: "utf8",
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
-  });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      if (accepted) {
+        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+      } else {
+        expect(result.stderr).toContain("Unexpected package dist import check argument");
+        expect(result.stdout).not.toContain("OpenClaw package dist import closure passed.");
+      }
+    },
+  );
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
     const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");

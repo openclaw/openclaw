@@ -39,8 +39,10 @@ import {
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
   prepareQueuedChatPayload,
+  resolveQueuedChatLeaf,
   setChatError,
   updateQueuedSendItem,
+  waitForQueuedChatHistory,
 } from "./chat-send-queue-state.ts";
 import { isActiveLeafChangedError, requestChatSend } from "./chat-send-request.ts";
 import {
@@ -146,6 +148,15 @@ async function sendQueuedChatMessage(
   const approvedReset = queued?.localCommandName === "reset" && Boolean(options?.target);
   if (!queued || queued.pendingRunId || (queued.localCommandName && !approvedReset)) {
     return "failed";
+  }
+  let expectedLeafEntryId = resolveQueuedChatLeaf(host, queued, options);
+  const history = waitForQueuedChatHistory(host, queued, queuedSessionKey, options);
+  if (history) {
+    const ready = await history;
+    if (!ready) {
+      return "pending";
+    }
+    ({ item: queued, expectedLeafEntryId } = ready);
   }
   if (
     storageMode === "durable" &&
@@ -286,6 +297,7 @@ async function sendQueuedChatMessage(
     // Keep the current run intact until an ACK or live event owns its replacement.
     if (!host.chatRunId) {
       resetToolStream(host);
+      host.providerPolicyNotice = null;
     }
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {
@@ -296,9 +308,9 @@ async function sendQueuedChatMessage(
   }
 
   try {
-    const expectedLeafEntryId = prepared.intent
+    const deliveryLeafEntryId = prepared.intent
       ? prepared.expectedLeafEntryId
-      : options?.expectedLeafEntryId;
+      : expectedLeafEntryId;
     const ack = await requestChatSend(host, {
       message,
       mentions: submitted.mentions,
@@ -309,8 +321,8 @@ async function sendQueuedChatMessage(
       ...(prepared.sessionId ? { sessionId: prepared.sessionId } : {}),
       ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
       ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
-      ...(prepared.queueMode !== "steer" && expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId }
+      ...(prepared.queueMode !== "steer" && deliveryLeafEntryId !== undefined
+        ? { expectedLeafEntryId: deliveryLeafEntryId }
         : {}),
       ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
     });
@@ -427,6 +439,20 @@ async function sendQueuedChatMessage(
         // A steer ACK identifies its client operation, not the active model run.
         if (prepared.queueMode !== "steer" || !host.chatRunId) {
           adoptStartedChatRun(host, ack.runId, startedAt);
+        }
+        // Hydrate approved custody during setup without changing ordinary send
+        // reconciliation or steering, whose ACK does not identify a new input.
+        const setupHeld =
+          prepared.sessionId &&
+          host.sessionsResult?.sessions.some(
+            (row) =>
+              row.sessionId === prepared.sessionId &&
+              ["requested", "provisioning", "syncing", "starting"].includes(
+                row.placement?.state ?? "",
+              ),
+          );
+        if (prepared.queueMode !== "steer" && ack.messageSeq === undefined && setupHeld) {
+          void loadChatHistory(host, { deferBranches: true });
         }
       }
     }
@@ -690,10 +716,8 @@ export async function deliverChatQueueItem(
   return result;
 }
 
-const sendResetSlashCommand = createResetSlashCommandSender(deliverChatQueueItem);
-
 export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
   sendQueuedChatMessage,
-  sendResetSlashCommand,
+  sendResetSlashCommand: createResetSlashCommandSender(deliverChatQueueItem),
   setChatError,
 };

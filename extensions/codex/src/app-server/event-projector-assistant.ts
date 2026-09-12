@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAsyncQuestions, type CodexAsyncQuestion } from "./async-questions.js";
 import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -22,6 +23,7 @@ export class CodexAssistantProjection {
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly assistantDeliveryByItem = new Map<string, string>();
+  private readonly assistantQuestionsByItem = new Map<string, CodexAsyncQuestion[]>();
   private latestTerminalAssistantCandidateItemId: string | undefined;
   private latestTerminalAssistantCandidateSuperseded = false;
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
@@ -348,20 +350,8 @@ export class CodexAssistantProjection {
 
   collectAsyncMessages(): Array<{ itemId: string; message: AssistantMessage }> {
     return this.assistantItemOrder.flatMap((itemId) => {
-      if (!this.isAsyncAssistantItem(itemId)) {
-        return [];
-      }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      const timestamp = this.assistantTimestampByItem.get(itemId);
-      if (!text || timestamp === undefined) {
-        return [];
-      }
-      return [
-        {
-          itemId,
-          message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
-        },
-      ];
+      const delivery = this.createAsyncDelivery(itemId);
+      return delivery ? [{ itemId, message: delivery.message }] : [];
     });
   }
 
@@ -489,6 +479,14 @@ export class CodexAssistantProjection {
     const delivery = readItemString(item, "delivery");
     if (delivery) {
       this.assistantDeliveryByItem.set(item.id, delivery);
+    }
+    if (item.questions !== undefined) {
+      const questions = readCodexAsyncQuestions(item.questions);
+      if (questions && delivery === "async") {
+        this.assistantQuestionsByItem.set(item.id, questions);
+      } else {
+        this.assistantQuestionsByItem.delete(item.id);
+      }
     }
   }
 
@@ -695,7 +693,13 @@ export class CodexAssistantProjection {
     }
     return {
       itemId,
-      message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
+      message: buildAssistantAsyncMessage(
+        this.params,
+        text,
+        itemId,
+        timestamp,
+        this.assistantQuestionsByItem.get(itemId),
+      ),
       text,
     };
   }

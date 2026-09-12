@@ -62,6 +62,7 @@ const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_BUILD_INFO = "dist/build-info.json";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1 = "dist/shared-DFJEouXv.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
@@ -180,6 +181,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
@@ -200,6 +202,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
       DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
       ...previousReleaseInventory.releases.flatMap((release) =>
         release.chunks.map((chunk) => `dist/${chunk.path}`),
@@ -420,8 +423,9 @@ async function trackProjectWithGit(tmp: string) {
 type RunNodeTestOptions = NonNullable<Parameters<typeof runNodeMain>[0]> & {
   stdout?: NodeJS.WriteStream;
 };
+type RunNodeResult = Awaited<ReturnType<typeof runNodeMain>>;
 
-async function runNodeCommand(tmp: string, options: RunNodeTestOptions): Promise<number> {
+async function runNodeCommand(tmp: string, options: RunNodeTestOptions): Promise<RunNodeResult> {
   const { env, ...overrides } = options;
   return await runNodeMain({
     cwd: tmp,
@@ -446,11 +450,11 @@ type RunCommandParams = {
   }) => void | Promise<void>;
 };
 
-async function runStatusCommand({ tmp, ...options }: RunCommandParams): Promise<number> {
+async function runStatusCommand({ tmp, ...options }: RunCommandParams): Promise<RunNodeResult> {
   return await runNodeCommand(tmp, options);
 }
 
-async function runQaCommand(params: RunCommandParams): Promise<number> {
+async function runQaCommand(params: RunCommandParams): Promise<RunNodeResult> {
   return await runStatusCommand({
     ...params,
     args: ["qa", "suite", "--transport", "qa-channel", "--provider-mode", "mock-openai"],
@@ -1234,59 +1238,71 @@ describe("run-node script", () => {
     expect(runRuntimePostBuild).toHaveBeenCalledOnce();
   });
 
-  it("serializes runtime postbuild restaging across concurrent clean launchers", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+  it.for(["stamp", "overlay"])(
+    "serializes concurrent runtime restaging with a missing %s",
+    async (missing, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files:
+          missing === "overlay"
+            ? {
+                [DIST_EXTENSION_INDEX]: "export default {};\n",
+                [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+              }
+            : {},
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+      });
 
-    let activePostbuilds = 0;
-    let maxActivePostbuilds = 0;
-    let markPostbuildStarted!: () => void;
-    let releasePostbuild!: () => void;
-    const postbuildStarted = new Promise<void>((resolve) => {
-      markPostbuildStarted = resolve;
-    });
-    const postbuildRelease = new Promise<void>((resolve) => {
-      releasePostbuild = resolve;
-    });
-    const runRuntimePostBuild = vi.fn(async () => {
-      activePostbuilds += 1;
-      maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
-      markPostbuildStarted();
-      await postbuildRelease;
-      activePostbuilds -= 1;
-    });
-    const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      let markPostbuildStarted!: () => void;
+      let releasePostbuild!: () => void;
+      const postbuildStarted = new Promise<void>((resolve) => {
+        markPostbuildStarted = resolve;
+      });
+      const postbuildRelease = new Promise<void>((resolve) => {
+        releasePostbuild = resolve;
+      });
+      let markWaiting!: () => void;
+      const waitingForLock = new Promise<void>((resolve) => {
+        markWaiting = resolve;
+      });
+      const runRuntimePostBuild = vi.fn(async () => {
+        markPostbuildStarted();
+        await postbuildRelease;
+        if (missing === "overlay") {
+          const runtimePath = resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX);
+          await fs.mkdir(path.dirname(runtimePath), { recursive: true });
+          await fs.copyFile(resolvePath(tmp, DIST_EXTENSION_INDEX), runtimePath);
+        }
+      });
+      const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
 
-    const runs = Promise.all([
-      runStatusCommand({
-        tmp,
+      const options = {
         spawn,
         spawnSync,
         env: {
+          OPENCLAW_RUNNER_LOG: "1",
           OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
         },
-        runRuntimePostBuild,
-      }),
-      runStatusCommand({
-        tmp,
-        spawn,
-        spawnSync,
-        env: {
-          OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+        stderr: {
+          write: (chunk: string | Uint8Array) => {
+            if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
+              markWaiting();
+            }
+            return true;
+          },
         },
         runRuntimePostBuild,
-      }),
-    ]);
+      };
+      const runs = Promise.all([runNodeCommand(tmp, options), runNodeCommand(tmp, options)]);
 
-    await postbuildStarted;
-    releasePostbuild();
-    await expect(runs).resolves.toEqual([0, 0]);
+      await postbuildStarted;
+      await waitingForLock;
+      releasePostbuild();
+      await expect(runs).resolves.toEqual([0, 0]);
 
-    expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
-    expect(maxActivePostbuilds).toBe(1);
-    expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
-  });
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+    },
+  );
 
   it("returns the canonical build failure without starting the CLI", async ({ tmp }) => {
     const spawn = vi.fn((cmd: string, args: string[] = []) => {
@@ -1326,6 +1342,29 @@ describe("run-node script", () => {
     expect(spawn).toHaveBeenCalledOnce();
     expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
   });
+
+  it.for([
+    { platform: "linux", signal: "SIGKILL", expected: "SIGKILL" },
+    { platform: "linux", signal: "SIGTERM", expected: "SIGTERM" },
+    { platform: "win32", signal: "SIGKILL", expected: 1 },
+    { platform: "win32", signal: "SIGTERM", expected: 143 },
+  ] as const)(
+    "preserves child signal outcomes without changing Windows exits: %j",
+    async ({ platform, signal, expected }, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      for (const rebuild of [false, true]) {
+        const spawn = vi.fn(() => createExitedProcess(null, signal));
+        const outcome = await runNodeCommand(tmp, {
+          env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
+          platform,
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        });
+        expect(outcome).toBe(expected);
+        expect(spawn).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it.for([false, true])(
     "forwards SIGTERM to the active child and returns 143 (rebuild: %s)",
@@ -1928,7 +1967,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("reports missing runtime overlay outputs from restored dist without plugin sources", async ({
+  it("restages missing runtime overlays from restored dist without plugin sources", async ({
     tmp,
   }) => {
     await setupStampedProject(tmp, {
@@ -1945,12 +1984,21 @@ describe("run-node script", () => {
     await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
     await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX));
 
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: true,
-      reason: "missing_runtime_postbuild_output",
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const runRuntimePostBuild = vi.fn(async () => {
+      await fs.copyFile(
+        resolvePath(tmp, DIST_EXTENSION_INDEX),
+        resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX),
+      );
     });
+    const exitCode = await runStatusCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
+
+    expect(exitCode).toBe(0);
+    expect(spawnCalls).toEqual([statusCommandSpawn()]);
+    expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    await expect(fs.readFile(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX), "utf8")).resolves.toBe(
+      "export default {};\n",
+    );
   });
 
   it("does not require OpenClaw SDK alias outputs when dist extensions are absent", async ({
@@ -2132,6 +2180,7 @@ describe("run-node script", () => {
       DIST_BUILD_INFO,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,

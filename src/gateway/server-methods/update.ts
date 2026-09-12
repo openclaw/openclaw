@@ -62,6 +62,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   resolveUpdateInstallSurface,
   runGatewayUpdate,
@@ -118,7 +119,8 @@ export const updateHandlers: GatewayRequestHandlers = {
             (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
           ? "control-ui"
           : "api";
-    const config = context.getRuntimeConfig();
+    const getConfig = context.getRuntimeConfig;
+    const config = getConfig();
     const noticeTarget = resolveUpdateRunNoticeTarget({
       cfg: config,
       sessionKey,
@@ -171,41 +173,51 @@ export const updateHandlers: GatewayRequestHandlers = {
     let acknowledgement: string | undefined;
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
-    const ownerRequiredMessage = () =>
-      `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: context.getRuntimeConfig(), channel: params.requester?.channel, id: params.requester?.senderId })}`;
-    const refuseNonOwner = () => {
+    const refuseUnauthorizedChatUpdate = () => {
       const requester = params.requester;
-      // Only external chat identities are revocable here; internal or channel-less
-      // requesters retain the owner authority established at admission.
-      if (
-        !requester?.channel ||
-        isInternalMessageChannel(requester.channel) ||
-        isConfiguredCommandOwner(context.getRuntimeConfig(), requester)
-      ) {
+      // Chat update authority is revocable; internal or channel-less requesters
+      // retain the operator authority established at admission.
+      if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
         return false;
       }
+      const currentConfig = getConfig();
+      const reason = !isConfiguredCommandOwner(currentConfig, requester)
+        ? "owner_required"
+        : !isRestartEnabled(currentConfig)
+          ? "restart-disabled"
+          : undefined;
+      if (!reason) {
+        return false;
+      }
+      const message =
+        reason === "owner_required"
+          ? `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: currentConfig, channel: requester.channel, id: requester.senderId })}`
+          : "Updates from chat are disabled (commands.restart=false). Use the Control UI or ask the Gateway operator to update OpenClaw.";
       if (adoptedCampaignId && gatewayUpdateCampaign.getState()?.id === adoptedCampaignId) {
         gatewayUpdateCampaign.clear();
       }
-      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: ownerRequiredMessage() } });
-      const refusedRun = finishUpdateRun(runId, { status: "failed", reason: "owner_required" });
+      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: message } });
+      const refusedRun = finishUpdateRun(runId, {
+        status: reason === "owner_required" ? "failed" : "skipped",
+        reason,
+      });
       respond(true, {
         runId,
         ok: false,
-        code: "owner_required",
-        message: ownerRequiredMessage(),
+        code: reason,
+        message,
         ackDelivered,
         ackQueued,
         acknowledgement,
-        result: { status: "error", reason: "owner_required" },
+        result: { status: reason === "owner_required" ? "error" : "skipped", reason },
       });
       return refusedRun;
     };
-    if (refuseNonOwner()) {
+    if (refuseUnauthorizedChatUpdate()) {
       return;
     }
     const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
-    const notify = createUpdateRunNotifier(run, config, context.deps, noticeTarget);
+    const notify = createUpdateRunNotifier(run, getConfig, context.deps, noticeTarget);
     const sentinelMeta: UpdateRestartSentinelMeta = {
       runId,
       ...(sessionKey ? { sessionKey } : {}),
@@ -306,7 +318,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           ? `version ${adoptedPackageTargetVersion}`
           : `${effectiveChannel} channel`;
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
-        if (refuseNonOwner()) {
+        if (refuseUnauthorizedChatUpdate()) {
           return false;
         }
         const targetVersion = adoptedPackageTargetVersion ?? getUpdateAvailable()?.latestVersion;
@@ -387,7 +399,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               return;
             }
             // Recheck after the awaited acknowledgement, immediately before the effect.
-            const refusal = refuseNonOwner();
+            const refusal = refuseUnauthorizedChatUpdate();
             if (refusal) {
               if (ackDelivered || ackQueued) {
                 await notify(refusal, "finished");
@@ -497,7 +509,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           return;
         }
         // Recheck after the awaited acknowledgement, immediately before the effect.
-        const refusal = refuseNonOwner();
+        const refusal = refuseUnauthorizedChatUpdate();
         if (refusal) {
           if (ackDelivered || ackQueued) {
             await notify(refusal, "finished");
@@ -516,15 +528,11 @@ export const updateHandlers: GatewayRequestHandlers = {
                 status: "in_progress",
                 startedAtMs: Date.now(),
               }),
-            onStepComplete: (step) =>
-              recordUpdateRunStep(runId, {
-                step: step.name,
-                status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-                endedAtMs: Date.now(),
-                ...(step.exitCode !== 0
-                  ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-                  : {}),
-              }),
+            onStepComplete: (step) => {
+              for (const entry of updateRunStepsFromResultStep(step)) {
+                recordUpdateRunStep(runId, { ...entry, endedAtMs: Date.now() });
+              }
+            },
           },
           timeoutMs,
           cwd: installSurface.root,
@@ -592,6 +600,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         status: completed ? "completed" : "failed",
         ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
+      for (const warning of updateRunStepsFromResultStep(step).slice(1)) {
+        recordUpdateRunStep(runId, warning);
+      }
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
     // refusals and synchronous failures have no later process to finish the run.

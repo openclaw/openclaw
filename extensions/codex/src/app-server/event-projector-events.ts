@@ -144,6 +144,9 @@ export function projectNormalizedToolItem(params: {
 
 export class CodexEventProjection {
   private reviewCount = 0;
+  private cyberNoticeState: "buffering" | "blocked" | "fallback" | undefined;
+  private safetyBufferingEnded = false;
+  private responseModel: string | undefined;
   private pendingGuardianWarning: string | undefined;
   private activeGuardianReview:
     | {
@@ -156,6 +159,7 @@ export class CodexEventProjection {
     | undefined;
 
   constructor(
+    private readonly provider: string,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
@@ -294,12 +298,81 @@ export class CodexEventProjection {
     const fromModel = readString(params, "fromModel");
     const toModel = readString(params, "toModel");
     const reason = readString(params, "reason");
+    this.responseModel = toModel ?? this.responseModel;
     if (fromModel && toModel && fromModel !== toModel) {
       this.emitAgentEvent({
         stream: "fallback",
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
+      if (reason === "highRiskCyberActivity") {
+        this.cyberNoticeState = "fallback";
+        this.emitCyberNotice("fallback", { model: fromModel, fallbackModel: toModel });
+      }
     }
+  }
+
+  handleSafetyBuffering(params: JsonObject): void {
+    if (params.showBufferingUi === false) {
+      this.clearSafetyBuffering();
+      return;
+    }
+    if (
+      this.safetyBufferingEnded ||
+      this.cyberNoticeState === "blocked" ||
+      this.cyberNoticeState === "fallback" ||
+      params.showBufferingUi !== true ||
+      !Array.isArray(params.useCases) ||
+      !params.useCases.includes("cyber")
+    ) {
+      return;
+    }
+    this.cyberNoticeState = "buffering";
+    const model = readString(params, "model");
+    const fallbackModel = readString(params, "fasterModel");
+    this.emitCyberNotice("buffering", {
+      ...(model ? { model } : {}),
+      ...(fallbackModel ? { fallbackModel } : {}),
+    });
+  }
+
+  handleCyberPolicyError(codexErrorInfo: unknown, model: string): void {
+    if (codexErrorInfo !== "cyberPolicy" || this.cyberNoticeState === "blocked") {
+      return;
+    }
+    this.cyberNoticeState = "blocked";
+    this.emitCyberNotice("blocked", { model: this.responseModel ?? model });
+  }
+
+  endSafetyBuffering(): void {
+    this.safetyBufferingEnded = true;
+    this.clearSafetyBuffering();
+  }
+
+  markSafetyBufferingAssistantStarted(): void {
+    if (this.cyberNoticeState === "buffering") {
+      this.endSafetyBuffering();
+    }
+  }
+
+  private clearSafetyBuffering(): void {
+    if (this.cyberNoticeState !== "buffering") {
+      return;
+    }
+    this.cyberNoticeState = undefined;
+    this.emitCyberNotice("cleared");
+  }
+
+  private emitCyberNotice(
+    state: "buffering" | "blocked" | "fallback" | "cleared",
+    models: { model?: string; fallbackModel?: string } = {},
+  ): void {
+    if (this.provider !== "openai") {
+      return;
+    }
+    this.emitAgentEvent({
+      stream: "notice",
+      data: { phase: "provider_policy", category: "cyber", state, provider: "openai", ...models },
+    });
   }
 
   handleRetry(params: JsonObject): void {

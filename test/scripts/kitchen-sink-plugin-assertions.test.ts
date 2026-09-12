@@ -26,6 +26,27 @@ const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
   "session scheduler job registration requires unique id, sessionKey, and kind",
 ];
+const WIDGET_PROBE_DIAGNOSTIC = "invalid widget presenter registration";
+// A concrete synchronized probe report, not an inventory parsed from the checker.
+const SYNCHRONIZED_FULL_DIAGNOSTICS = [
+  ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+  "cli registration missing explicit commands metadata",
+  "only bundled plugins can register Codex app-server extension factories",
+  'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
+  "context engine registration missing id",
+  "control UI descriptor registration requires id, surface, label, and valid optional fields",
+  "hosted media resolver registration missing resolver",
+  "http route registration missing or invalid auth: /kitchen-sink/http-route",
+  WIDGET_PROBE_DIAGNOSTIC,
+  "node invoke policy registration missing commands",
+  "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
+  "memory prompt preparation registration missing prepare function",
+  "memory prompt supplement registration missing builder",
+  "MCP server connection resolver registration missing serverName or resolve",
+  "model catalog provider registration missing provider",
+  "session extension registration requires namespace and description",
+  "tool metadata registration missing toolName",
+];
 const FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC =
   "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider";
 
@@ -311,10 +332,73 @@ describe("kitchen-sink plugin assertions", () => {
 
   it("accepts published full-surface installs with stable diagnostic canaries", () => {
     const result = runAssertInstalled({
-      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      diagnostics: diagnosticErrors([
+        ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+        "memory prompt preparation registration missing prepare function",
+      ]),
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it.each(["full", "adversarial"])(
+    "accepts the declared widget rejection in %s mode",
+    (surfaceMode) => {
+      const result = runAssertInstalled({
+        diagnostics: diagnosticErrors([
+          ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+          WIDGET_PROBE_DIAGNOSTIC,
+        ]),
+        surfaceMode,
+      });
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
+
+  it.each(["basic", "conformance"])("rejects the widget diagnostic in %s mode", (surfaceMode) => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors([WIDGET_PROBE_DIAGNOSTIC]),
+      surfaceMode,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `unexpected kitchen-sink diagnostic errors: ${WIDGET_PROBE_DIAGNOSTIC}`,
+    );
+  });
+
+  it.each(["full", "adversarial"])(
+    "does not turn widget rejection into a broad error waiver in %s mode",
+    (surfaceMode) => {
+      const unexpected = `${WIDGET_PROBE_DIAGNOSTIC}: unexpected mutation`;
+      const result = runAssertInstalled({
+        diagnostics: diagnosticErrors([
+          ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+          WIDGET_PROBE_DIAGNOSTIC,
+          unexpected,
+        ]),
+        surfaceMode,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`unexpected kitchen-sink diagnostic error: ${unexpected}`);
+    },
+  );
+
+  it("requires the widget rejection in a synchronized exhaustive report", () => {
+    const complete = runAssertInstalled({
+      diagnostics: diagnosticErrors(SYNCHRONIZED_FULL_DIAGNOSTICS),
+      env: { KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS: "1" },
+    });
+    expect(complete.status, complete.stderr).toBe(0);
+    const missing = runAssertInstalled({
+      diagnostics: diagnosticErrors(
+        SYNCHRONIZED_FULL_DIAGNOSTICS.filter((message) => message !== WIDGET_PROBE_DIAGNOSTIC),
+      ),
+      env: { KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS: "1" },
+    });
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain(
+      `missing expected kitchen-sink diagnostic error: ${WIDGET_PROBE_DIAGNOSTIC}`,
+    );
   });
 
   it("rejects diagnostics in conformance mode", () => {

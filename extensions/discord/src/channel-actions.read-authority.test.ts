@@ -2,7 +2,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordMessagingActionRuntime as runtime } from "./actions/runtime.messaging.runtime.js";
+import * as runtime from "./actions/runtime.messaging.runtime.js";
 import { discordMessageActions } from "./channel-actions.js";
 import { RequestClient } from "./internal/rest.js";
 import { createJsonResponse } from "./internal/test-builders.test-support.js";

@@ -102,6 +102,12 @@ Assistant tool-call blocks missing both `input` and `arguments` are dropped
 before model context is built. This prevents provider rejections from
 partially persisted tool calls (for example, after a rate limit failure).
 
+Completed call/result pairs remain history when their tool is disabled, removed,
+or unavailable in the current catalog. Their names still require valid syntax;
+malformed calls, ambiguous pairing, and synthetic missing-result repairs do not
+grant this exception. Replaying a completed pair does not advertise or authorize
+the tool for a new call.
+
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`

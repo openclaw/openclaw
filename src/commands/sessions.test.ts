@@ -88,9 +88,9 @@ describe("sessionsCommand", () => {
     { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
   ])("aligns $name columns for Unicode keys and full model names", async ({ run, options }) => {
     const entries = [
-      { key: "agent:main:main", model: "gpt-5.6-sol" },
+      { key: "agent:main:main", model: "gpt-5.6-luna" },
       { key: "agent:main:東京", model: "gemini-3-flash-preview" },
-      { key: "agent:main:e\u0301", model: "gpt-5.6-sol" },
+      { key: "agent:main:e\u0301", model: "gpt-5.6-luna" },
       { key: "agent:main:👩‍💻", model: "claude-sonnet-4-6" },
     ];
     const store = await writeStore(
@@ -240,16 +240,16 @@ describe("sessionsCommand", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-5.6-luna" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
         },
       },
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+            models: [{ id: "gpt-5.6-luna", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
           },
         },
       },
@@ -260,7 +260,7 @@ describe("sessionsCommand", () => {
           sessionId: "stale-openclaw-window",
           updatedAt: Date.now() - 60_000,
           modelProvider: "openai",
-          model: "gpt-5.6-sol",
+          model: "gpt-5.6-luna",
           agentHarnessId: "openclaw",
           contextTokens: 272_000,
           contextTokensSource: "runtime",

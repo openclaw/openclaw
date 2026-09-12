@@ -9,6 +9,7 @@ import {
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
@@ -611,6 +612,9 @@ export async function maybeRepairGatewayServiceConfig(
     expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: port,
   });
+  if (audit.runtimeNote) {
+    note(audit.runtimeNote, "Gateway runtime");
+  }
   const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {
     audit.issues.push({
@@ -622,7 +626,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  // Unsupported Bun and version-managed Node services migrate through a concrete system Node.
+  // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
@@ -916,6 +920,9 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway",
       );
     } catch (err) {
+      if (err instanceof ConfigWritePostCommitError) {
+        throw err;
+      }
       runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
       return cfg;
     }

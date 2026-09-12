@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
-import { resolveHomePath } from "../openclaw-state-paths.mjs";
+import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
@@ -326,13 +326,16 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "invalid widget presenter registration",
     "node invoke policy registration missing commands",
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
     'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
+    "memory prompt preparation registration missing prepare function",
     "memory prompt supplement registration missing builder",
+    "MCP server connection resolver registration missing serverName or resolve",
     "model catalog provider registration missing provider",
     "session extension registration requires namespace and description",
     "session scheduler job registration requires unique id, sessionKey, and kind",
@@ -377,17 +380,6 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
         throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
       }
     }
-  }
-}
-
-function assertRealPathInside(parentPath, childPath, label) {
-  const parentRealPath = fs.realpathSync(parentPath);
-  const childRealPath = fs.realpathSync(childPath);
-  if (
-    childRealPath !== parentRealPath &&
-    !childRealPath.startsWith(`${parentRealPath}${path.sep}`)
-  ) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${childRealPath}`);
   }
 }
 

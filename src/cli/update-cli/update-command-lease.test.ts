@@ -1,12 +1,16 @@
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stageBundledPluginRuntime } from "../../../scripts/stage-bundled-plugin-runtime.mts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -34,6 +38,15 @@ const mocks = vi.hoisted(() => ({
   plugins: vi.fn<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>(),
   restart: vi.fn(async () => "ok"),
   print: vi.fn(),
+  publication: vi.fn(
+    async (
+      params: { assertCurrent: () => void },
+      publish: (assertCurrent: () => Promise<void>) => Promise<unknown>,
+    ) => {
+      params.assertCurrent();
+      return await publish(async () => params.assertCurrent());
+    },
+  ),
 }));
 
 vi.mock("../../daemon/gateway-entrypoint.js", () => ({
@@ -51,19 +64,27 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartService: mocks.restart,
   tryInstallShellCompletion: vi.fn(),
 }));
+// Native service custody has separate boundary tests; this fixture retains the
+// real plugin lease, artifact ownership, installed adapter, and canonical writer.
+vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+  withGatewayRuntimeArtifactPublication: mocks.publication,
+}));
 
 // The fixture CLI owns lease probes and Doctor phases; triage has its own owner tests.
 vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
 }));
 
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-const pluginResult: PostCorePluginUpdateResult = {
+const pluginResult: ProducedPluginUpdateResult = {
+  assessment: { kind: "no-payload-repair" },
   status: "ok",
   changed: true,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
@@ -76,6 +97,10 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.publication.mockReset().mockImplementation(async (params, publish) => {
+    params.assertCurrent();
+    return await publish(async () => params.assertCurrent());
+  });
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {
@@ -91,15 +116,23 @@ beforeEach(async () => {
       OPENCLAW_UPDATE_RUN_ID: undefined,
     },
   });
+  // Config-write custody is stored outside the profile; isolate both process owners.
+  const control = state.path("control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
   await state.writeText("events.jsonl", "");
-  await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
   entrypoint = await state.writeText(
     "entry.mjs",
     `
-    import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
-    const { runUpdateLeaseChild } = await tsImport(${JSON.stringify(new URL("./update-command-lease.test-support.ts", import.meta.url).href)}, { parentURL: import.meta.url, tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+    import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
+    import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+    const loader = register({ namespace: "update-lease-fixture", tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+    const { registerSealedRuntime } = await loader.import(${JSON.stringify(new URL("../../infra/sealed-runtime-registry.ts", import.meta.url).href)}, import.meta.url);
+    registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(control)} });
+    const { runUpdateLeaseChild } = await loader.import(${JSON.stringify(new URL("./update-command-lease.test-support.ts", import.meta.url).href)}, import.meta.url);
     await runUpdateLeaseChild();
+    await loader.unregister();
   `,
   );
   mocks.entrypoint.mockResolvedValue(entrypoint);
@@ -121,6 +154,12 @@ async function writeScenario(
   lane: Lane,
   scenario: Omit<LeaseScenario, "lane"> = {},
 ): Promise<void> {
+  // Fresh-process fixtures must advertise a runtime supporting continuation;
+  // legacy targets intentionally exercise the current-process fallback.
+  await fs.writeFile(
+    state.path("package.json"),
+    JSON.stringify({ version: lane === "fresh-process" ? VERSION : "1.0.0" }),
+  );
   await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
 }
 
@@ -152,7 +191,7 @@ async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promi
       mode: "npm",
       root: state.root,
       before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
-      after: { version: "1.0.0" },
+      after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
       steps: [],
       durationMs: 1,
     },
@@ -244,7 +283,198 @@ function expectRecoveredRun(run: UpdateRunRecord | undefined): void {
   });
 }
 
+async function prepareIncompleteSourceRuntime() {
+  await runExec("git", ["init", "--quiet", state.root], { timeoutMs: 15_000 });
+  await fs.symlink(
+    fileURLToPath(new URL("../../../scripts", import.meta.url)),
+    state.path("scripts"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const files = {
+    "tsconfig.json": JSON.stringify({
+      extends: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
+    }),
+    "package.json": JSON.stringify({
+      name: "openclaw",
+      version: VERSION,
+      type: "module",
+      exports: { "./plugin-sdk/demo": "./dist/plugin-sdk/demo.js" },
+    }),
+    "dist/plugin-sdk/demo.js": "export const generation = 'candidate';\n",
+    "dist/extensions/demo/index.js": "export const generation = 'candidate';\n",
+    "dist/extensions/demo/package.json": JSON.stringify({
+      name: "demo",
+      type: "module",
+      generation: "candidate",
+    }),
+  };
+  for (const [relative, content] of Object.entries(files)) {
+    const target = state.path(relative);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content);
+  }
+  stageBundledPluginRuntime({ repoRoot: state.root });
+  const aliasRoot = state.path("dist/extensions/node_modules/openclaw");
+  const runtimeEntry = state.path("dist-runtime/extensions/demo/index.js");
+  const runtimeMetadata = state.path("dist-runtime/extensions/demo/package.json");
+  await fs.unlink(runtimeEntry);
+  await fs.writeFile(runtimeMetadata, '{"name":"demo","generation":"stale"}\n');
+  return { aliasRoot, runtimeEntry, runtimeMetadata, aliasBefore: await fs.stat(aliasRoot) };
+}
+
 describe("update orchestration lifecycle ownership", () => {
+  it.each([
+    { shape: "legacy-mjs", version: "2026.4.27", source: undefined, failure: undefined },
+    {
+      shape: "legacy-mts",
+      version: VERSION,
+      source:
+        "export function stageBundledPluginRuntime() { throw new Error('legacy stager ran'); }",
+      failure: undefined,
+    },
+    {
+      shape: "malformed-prepare",
+      version: VERSION,
+      source: "export const prepareBundledPluginRuntime = 1;",
+      failure: /cannot complete its runtime artifacts/,
+    },
+    {
+      shape: "missing-dependency",
+      version: VERSION,
+      source: "import './missing-dependency.mjs'; export function prepareBundledPluginRuntime() {}",
+      failure: /missing-dependency/,
+    },
+    {
+      shape: "missing-ownership",
+      version: VERSION,
+      source:
+        "export function prepareBundledPluginRuntime() { throw new Error('stager ran without ownership'); }",
+      failure: /dist-artifact-ownership/,
+    },
+  ])(
+    "converges target-owned source completion contracts: $shape",
+    async ({ version, source, failure }) => {
+      await writeScenario("current-process");
+      const { runtimeEntry } = await prepareIncompleteSourceRuntime();
+      stageBundledPluginRuntime({ repoRoot: state.root });
+      const original = await fs.stat(runtimeEntry);
+      const packageJson = JSON.parse(await fs.readFile(state.path("package.json"), "utf8"));
+      await fs.writeFile(state.path("package.json"), JSON.stringify({ ...packageJson, version }));
+      await fs.unlink(state.path("scripts"));
+      await fs.mkdir(state.path("scripts"));
+      await fs.writeFile(
+        state.path("scripts/stage-bundled-plugin-runtime.mjs"),
+        "throw new Error('legacy CLI shim imported');",
+      );
+      if (source) {
+        await fs.writeFile(state.path("scripts/stage-bundled-plugin-runtime.mts"), source);
+      }
+      mocks.plugins.mockResolvedValue({ ...pluginResult, changed: false });
+      const current = version === VERSION;
+      const result = convergeUpdatePlugins({
+        coreAlreadyCurrent: current,
+        result: {
+          status: current ? "skipped" : "ok",
+          mode: "git",
+          root: state.root,
+          before: { version: VERSION },
+          after: { version },
+          steps: [],
+          durationMs: 1,
+        },
+        root: state.root,
+        installKindChanged: false,
+        configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: !current,
+        opts: { json: true, yes: true },
+        preUpdatePluginInstallRecords: {},
+        startedAt: Date.now(),
+        updateStepTimeoutMs: 15_000,
+      });
+      if (failure) {
+        await expect(result).rejects.toThrow(failure);
+        expect(mocks.plugins).not.toHaveBeenCalled();
+      } else {
+        expect((await result).resultWithPostUpdate.status).toBe(current ? "skipped" : "ok");
+        expect(mocks.plugins).toHaveBeenCalledOnce();
+      }
+      expect(mocks.publication).not.toHaveBeenCalled();
+      expect(await fs.stat(runtimeEntry)).toMatchObject({
+        ino: original.ino,
+        mtimeMs: original.mtimeMs,
+      });
+    },
+  );
+
+  it.each(["resume", "repair"] as const)(
+    "%s completes missing source artifacts before consumers and leaves an exact online retry untouched",
+    async (lane) => {
+      await writeScenario(lane, { runtimeRoot: state.root });
+      const { aliasRoot, runtimeEntry, runtimeMetadata, aliasBefore } =
+        await prepareIncompleteSourceRuntime();
+      mocks.plugins.mockImplementation(async () => {
+        await runExec(process.execPath, [entrypoint, "runtime-proof"], { timeoutMs: 15_000 });
+        return pluginResult;
+      });
+
+      await invoke(lane);
+      expectSuccess(lane, lane === "repair");
+      expect(mocks.publication).toHaveBeenCalledOnce();
+      expect((await fs.stat(aliasRoot)).ino).toBe(aliasBefore.ino);
+      expect(JSON.parse(await fs.readFile(runtimeMetadata, "utf8")).generation).toBe("candidate");
+      const firstEvents = await events();
+      expect(firstEvents).toContain("runtime-proof:runtime-proof");
+      if (lane === "repair") {
+        expect(firstEvents.indexOf("runtime-proof:doctor")).toBeLessThan(
+          firstEvents.indexOf("pre-attempt"),
+        );
+      }
+
+      const beforeRetry = await fs.stat(runtimeEntry);
+      mocks.publication.mockImplementationOnce(async () => {
+        throw new Error("A running Gateway cannot publish changed artifacts.");
+      });
+      await invoke(lane);
+      expectSuccess(lane, lane === "repair");
+      expect(mocks.publication).toHaveBeenCalledOnce();
+      expect(await fs.stat(runtimeEntry)).toMatchObject({
+        ino: beforeRetry.ino,
+        mtimeMs: beforeRetry.mtimeMs,
+      });
+      expect((await fs.stat(aliasRoot)).ino).toBe(aliasBefore.ino);
+    },
+  );
+
+  it("resume preserves publication failure details when staging cleanup also fails", async () => {
+    await writeScenario("resume", { runtimeRoot: state.root });
+    await prepareIncompleteSourceRuntime();
+    const resultPath = state.path("post-core-result.json");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+    mocks.publication.mockRejectedValueOnce(new Error("publication authority revoked"));
+    const remove = fsSync.rmSync.bind(fsSync);
+    const cleanup = vi.spyOn(fsSync, "rmSync").mockImplementation((target, options) => {
+      if (String(target).startsWith(state.root) && String(target).includes(".openclaw-runtime-")) {
+        throw new Error("staging cleanup unavailable");
+      }
+      return remove(target, options);
+    });
+    try {
+      await expect(invoke("resume")).rejects.toThrow(
+        "Runtime completion and staging cleanup failed",
+      );
+      const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("publication authority revoked");
+      expect(result.error).toContain("staging cleanup unavailable");
+      expect(mocks.plugins).not.toHaveBeenCalled();
+    } finally {
+      cleanup.mockRestore();
+    }
+  });
+
   it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
@@ -256,7 +486,7 @@ describe("update orchestration lifecycle ownership", () => {
         });
       }
       await writeScenario(lane, {
-        hostVersion: lane === "repair" ? undefined : "1.0.0",
+        hostVersion: lane === "current-process" ? "1.0.0" : undefined,
       });
       if (lane === "current-process") {
         vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", "1");
@@ -349,10 +579,24 @@ describe("update orchestration lifecycle ownership", () => {
         }
       });
       void completed.promise.catch(() => {});
+      const beforeDoctor = createDeferred();
+      if (lane === "repair") {
+        // Enter with the old config, then release the foreign writer before the
+        // fixture's zero-retry Doctor acquisition. This still detects a parent
+        // retaining its own lease without racing the deliberately competing one.
+        mocks.entrypoint.mockImplementationOnce(async () => {
+          beforeDoctor.resolve();
+          await completed.promise;
+          return entrypoint;
+        });
+      }
       try {
         await acquired.promise;
         const update = invoke(lane);
         void update.catch(() => {});
+        if (lane === "repair") {
+          await Promise.race([beforeDoctor.promise, update]);
+        }
         child.send("commit");
         await completed.promise;
         await update;
@@ -484,7 +728,7 @@ describe("update orchestration lifecycle ownership", () => {
 
   it("repair reconciles captured runs before publishing successful convergence with warnings", async () => {
     const recovery = seedInterruptedPostCoreRun();
-    const warning: PostCorePluginUpdateResult = {
+    const warning: ProducedPluginUpdateResult = {
       ...pluginResult,
       status: "warning",
       changed: false,
@@ -590,7 +834,7 @@ describe("update orchestration lifecycle ownership", () => {
     async ({ lane, failure, reason }) => {
       await writeScenario(lane, {
         readinessFailure: failure,
-        hostVersion: lane === "repair" ? undefined : "1.0.0",
+        hostVersion: lane === "current-process" ? "1.0.0" : undefined,
       });
 
       await invokeReportedFailure(lane);

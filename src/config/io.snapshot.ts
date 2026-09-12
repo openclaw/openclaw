@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -220,7 +221,15 @@ export async function readConfigFileSnapshotInternal(
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = effectiveParsed;
-    const snapshotHash = rawHash;
+    // The write revision covers every authored input, without hashing runtime defaults or env.
+    const revision = createHash("sha256").update(raw);
+    for (const [includePath, includeHash] of Object.entries(includeFileHashesForWrite)) {
+      revision.update(
+        JSON.stringify([includePath, includeFileTargetsForWrite[includePath], includeHash]),
+      );
+    }
+    const snapshotHash = revision.digest("hex");
+    fallbackHash = snapshotHash;
     fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
       effectiveConfigRaw,
@@ -506,6 +515,7 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
 
 export async function readConfigFileSnapshotForWriteFromContext(
   context: ConfigIoContext,
+  options: Pick<ConfigSnapshotReadOptions, "observe"> = {},
 ): Promise<ReadConfigFileSnapshotForWriteResult> {
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
@@ -515,7 +525,11 @@ export async function readConfigFileSnapshotForWriteFromContext(
     }
   };
   assertConfigPathForWrite();
-  const result = await readConfigFileSnapshotInternal(context);
+  // Per-call observation policy must not recapture the factory's path or environment.
+  const readContext =
+    options.observe === false ? { ...context, deps: { ...context.deps, observe: false } } : context;
+  const read = () => readConfigFileSnapshotInternal(readContext);
+  const result = await (readContext.deps.observe ? read() : withArtifactPreservingStateReads(read));
   assertConfigPathForWrite();
   return {
     snapshot: result.snapshot,

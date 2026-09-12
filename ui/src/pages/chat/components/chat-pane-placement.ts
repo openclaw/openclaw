@@ -1,6 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import "../../../components/elapsed-time.ts";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
+import { resolveCloudWorkerStopAction } from "../../../components/cloud-worker-stop.ts";
 import { icons } from "../../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { t } from "../../../i18n/index.ts";
@@ -37,7 +39,11 @@ export function renderChatPanePlacement(props: {
   const hasFacts = Boolean(providerId || profileId || environmentId);
   const runner = placement?.state === "active" ? placement.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
+  const workspaceResultReconciling =
+    (placement?.state === "active" || placement?.state === "draining") &&
+    placement.workspaceResultReconciling === true;
   const restartable = placement?.state === "failed" && placement.recoveryAction === "restart";
+  const stopAction = resolveCloudWorkerStopAction(placement);
   const worker = resolveChatPaneWorkerPresentation(session, props.placementStartupStatus);
   const moveTarget =
     placementMove?.target.kind === "gateway"
@@ -57,7 +63,11 @@ export function renderChatPanePlacement(props: {
           ? t("sessionsView.movingSessionGeneric")
           : deviceOffline
             ? t("sessionsView.deviceOffline")
-            : worker.label;
+            : workspaceResultReconciling ||
+                placementState === "draining" ||
+                placementState === "reconciling"
+              ? t("sessionsView.syncingCloudFiles")
+              : worker.label;
   const moveDisabledReason = props.placementMoveDisabledReason;
   const reclaimDisabledReason = props.placementReclaimDisabledReason;
   const restartDisabledReason = props.placementRestartDisabledReason;
@@ -154,9 +164,8 @@ export function renderChatPanePlacement(props: {
             : nothing
         }
         ${
-          restartable
-            ? nothing
-            : html`<wa-dropdown-item
+          stopAction
+            ? html`<wa-dropdown-item
                 class="session-menu__item session-menu__item--destructive chat-pane__placement-reclaim"
                 variant="danger"
                 ?disabled=${Boolean(reclaimDisabledReason)}
@@ -166,6 +175,7 @@ export function renderChatPanePlacement(props: {
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
                 <span class="session-menu__text">${worker.stopLabel}</span>
               </wa-dropdown-item>`
+            : nothing
         }
       </wa-dropdown>
       ${
@@ -173,7 +183,18 @@ export function renderChatPanePlacement(props: {
           ? html`<div class="chat-pane__placement-note" role="status">
               ${t("sessionsView.waitingForDevice")}
             </div>`
-          : nothing
+          : workspaceResultReconciling
+            ? html`<div class="chat-pane__placement-note" role="status">
+                ${t("sessionsView.syncingCloudFilesDetail")}
+              </div>`
+            : placement && (placement.state === "draining" || placement.state === "reconciling")
+              ? html`<div class="chat-pane__placement-note" role="status">
+                  ${t("sessionsView.syncingCloudFilesDetail")} ·
+                  <openclaw-elapsed-time
+                    .startMs=${placement.stateChangedAtMs}
+                  ></openclaw-elapsed-time>
+                </div>`
+              : nothing
       }
     </div>
   `;

@@ -1,6 +1,7 @@
 // Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -47,11 +48,7 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 function resetRuntime() {
   runtime.log.mockClear();

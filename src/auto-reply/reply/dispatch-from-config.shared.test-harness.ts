@@ -149,7 +149,7 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
   databaseEntryLoader: undefined as
-    | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryWithDatabase
+    | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryForAdmission
     | undefined,
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
@@ -549,7 +549,7 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
   ...(await importOriginal<
     typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
   >()),
-  loadSessionEntryWithDatabase: (
+  loadSessionEntryForAdmission: (
     ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
   ) =>
     sessionStoreMocks.databaseEntryLoader

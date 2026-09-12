@@ -30,7 +30,7 @@ const META_KEYS = new Set([
 ]);
 const jsonTextareaState = new WeakMap<
   HTMLTextAreaElement,
-  { sourceValue: unknown; rowIdentity: unknown; fallback: string; pathKey: string }
+  { sourceValue: unknown; fallback: string; pathKey: string }
 >();
 
 export type ConfigNodeRenderParams = {
@@ -44,7 +44,6 @@ export type ConfigNodeRenderParams = {
   isRequired?: boolean;
   sourceIdentity?: unknown;
   controlIdentity?: unknown;
-  rowIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
@@ -91,27 +90,6 @@ export function formatConfigValueText(value: unknown): string {
 
 export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
   return { ...schema, default: value };
-}
-
-function formatComparablePrimitive(value: unknown): string | null {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
-  return null;
-}
-
-function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  const leftComparable = formatComparablePrimitive(left);
-  const rightComparable = formatComparablePrimitive(right);
-  return leftComparable !== null && leftComparable === rightComparable;
 }
 
 export function isSecretRefObject(value: unknown): value is {
@@ -327,7 +305,7 @@ export function renderSegmentedControl(params: {
   onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
-    matchesComparablePrimitiveValue(option, params.resolvedValue),
+    configValuesEqual(option, params.resolvedValue),
   );
   return renderSettingsSegmented({
     value: selectedIndex < 0 ? "" : String(selectedIndex),
@@ -366,7 +344,6 @@ export function renderJsonTextareaControl(params: {
   ariaLabel: string;
   descriptionId?: string;
   sourceValue: unknown;
-  rowIdentity?: unknown;
   fallback: string;
   rows: number;
   sensitiveState: SensitiveRenderState;
@@ -407,7 +384,7 @@ export function renderJsonTextareaControl(params: {
     return !message;
   };
   const renderedFallback = sensitiveState.isRedacted ? "" : fallback;
-  const pathKey = JSON.stringify(path);
+  const pathKey = JSON.stringify(path.filter((segment) => typeof segment === "string"));
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
       return true;
@@ -430,7 +407,6 @@ export function renderJsonTextareaControl(params: {
           // (possibly not-yet-valid) JSON the operator is typing.
           ((!Object.is(previous.sourceValue, params.sourceValue) &&
             !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
-            !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)
         ) {
@@ -439,7 +415,6 @@ export function renderJsonTextareaControl(params: {
         }
         jsonTextareaState.set(element, {
           sourceValue: params.sourceValue,
-          rowIdentity: params.rowIdentity,
           fallback: renderedFallback,
           pathKey,
         });

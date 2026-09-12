@@ -31,6 +31,12 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -452,10 +458,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(tailAbortSignal).toBeDefined();
       expect(replyRunRegistry.abort("agent:tail-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:tail-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(tailAbortSignal?.aborted).toBe(true);
@@ -528,10 +531,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:reply-dispatch-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:reply-dispatch-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
@@ -665,10 +665,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(replyRunRegistry.abort(boundAcpSessionKey)).toBe(false);
       expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
       expect(replyRunRegistry.get(boundAcpSessionKey)).toBeUndefined();
       expect(operation?.abortSignal.aborted).toBe(true);
@@ -724,10 +721,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:pre-dispatch-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:pre-dispatch-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
@@ -787,10 +781,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:diagnostics-disabled-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:diagnostics-disabled-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalled();
@@ -904,10 +895,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyResolver: vi.fn(),
     });
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
@@ -995,10 +983,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(existingOperation.abortSignal.aborted).toBe(true);
     expect(hookAbortSignal?.aborted).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
 
     releaseHook();
@@ -1040,10 +1025,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     expect(replyRunRegistry.abort("agent:already-active-resolver")).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1081,10 +1063,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     callerAbort.abort();
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toBeNull();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1092,59 +1071,67 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("suppresses late callback and final replies when the resolver ignores a dispatch abort", async () => {
-    let resolverStarted!: () => void;
-    let releaseResolver!: () => void;
-    const resolverStartedPromise = new Promise<void>((resolve) => {
-      resolverStarted = resolve;
-    });
-    const releaseResolverPromise = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:resolver-abort",
-      BodyForAgent: "hang in resolver",
-    });
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
+  it.each([
+    { abort: "abortByUser", expected: "cancelled" },
+    { abort: "abortForRestart", expected: "cancelled" },
+    { abort: "supersede", expected: "superseded" },
+  ] as const)(
+    "records $abort before an abort-insensitive resolver settles",
+    async ({ abort, expected }) => {
+      const resolverStarted = createDeferred();
+      const releaseResolver = createDeferred();
+      const resolverFinished = createDeferred();
+      const runState: ReplyOperationRunState = {};
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:resolver-abort",
+        BodyForAgent: "hang in resolver",
+      });
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx,
+        cfg: {
+          diagnostics: { enabled: true },
+          session: {
+            sendPolicy: { default: "allow" },
+          },
+        } as OpenClawConfig,
+        dispatcher,
+        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
+        replyResolver: async (_resolverCtx, options) => {
+          resolverStarted.resolve();
+          await releaseResolver.promise;
+          try {
+            await options?.onToolResult?.({ text: "late tool should not send" });
+            await options?.onBlockReply?.({ text: "late block should not send" });
+            return { text: "late final should not send" };
+          } finally {
+            resolverFinished.resolve();
+          }
         },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver: async (_resolverCtx, options) => {
-        resolverStarted();
-        await releaseResolverPromise;
-        await options?.onToolResult?.({ text: "late tool should not send" });
-        await options?.onBlockReply?.({ text: "late block should not send" });
-        return { text: "late final should not send" };
-      },
-    });
+      });
 
-    await resolverStartedPromise;
-    expect(replyRunRegistry.abort("agent:resolver-abort")).toBe(true);
+      await resolverStarted.promise;
+      const operation = replyRunRegistry.get("agent:resolver-abort");
+      try {
+        expect(operation?.[abort]()).toBe(true);
+        await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+        expect(runState.agentTurnOwner).toBe(operation);
+        expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } finally {
+        releaseResolver.resolve();
+        await resolverFinished.promise;
+        await replyRunRegistry.waitForIdle("agent:resolver-abort");
+      }
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-
-    releaseResolver();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(getActiveReplyRunCount()).toBe(0);
+    },
+  );
 
   it("treats a resolver AbortError after dispatch abort as a handled dispatch", async () => {
     let resolverStarted!: () => void;
@@ -1186,10 +1173,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await resolverStartedPromise;
     expect(replyRunRegistry.abort("agent:resolver-abort-error")).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: "skipped",
@@ -1257,10 +1241,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(replyRunRegistry.abort(targetSessionKey)).toBe(false);
       expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
       expect(replyRunRegistry.get(targetSessionKey)).toBeUndefined();
       expect(operation?.abortSignal.aborted).toBe(true);
@@ -1465,6 +1446,76 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await dispatchPromise;
     expect(replyResolver).not.toHaveBeenCalled();
     expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("admits login cancellation past a pending command ticket while executable commands wait", async () => {
+    const sessionKey = "agent:main:login-ticket";
+    const releaseLogin = createDeferred();
+    const loginEntered = vi.fn();
+    const cancelEntered = vi.fn();
+    const shellEntered = vi.fn();
+    const dispatchCommand = (
+      body: string,
+      commandName: string,
+      replyResolver: NonNullable<Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"]>,
+    ) =>
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          CommandAuthorized: true,
+          CommandSource: "text",
+          CommandTurn: {
+            kind: "text-slash",
+            source: "text",
+            authorized: true,
+            commandName,
+            body,
+          },
+          SessionKey: sessionKey,
+          MessageSid: body,
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
+          BodyForAgent: body,
+        }),
+        cfg: {
+          diagnostics: { enabled: true },
+          session: { sendPolicy: { default: "allow" } },
+        },
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+    const login = dispatchCommand("/login openrouter", "login", async () => {
+      loginEntered();
+      await releaseLogin.promise;
+      return markCommandReplyForDelivery({ text: "Login ended." });
+    });
+    const pending = [login];
+    try {
+      await vi.waitFor(() => expect(loginEntered).toHaveBeenCalledOnce());
+      const shell = dispatchCommand("/bash echo ready", "bash", async () => {
+        shellEntered();
+        return markCommandReplyForDelivery({ text: "Shell command completed." });
+      });
+      pending.push(shell);
+      const cancel = dispatchCommand("/login cancel", "login", async () => {
+        cancelEntered();
+        return markCommandReplyForDelivery({ text: "Provider login cancelled for this chat." });
+      });
+      pending.push(cancel);
+
+      await vi.waitFor(() => expect(cancelEntered).toHaveBeenCalledOnce());
+      expect(shellEntered).not.toHaveBeenCalled();
+      expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
+      releaseLogin.resolve();
+      await Promise.all(pending);
+      expect(shellEntered).toHaveBeenCalledOnce();
+      expect(getActiveReplyRunCount()).toBe(0);
+    } finally {
+      releaseLogin.resolve();
+      await Promise.all(pending);
+    }
   });
 
   it("delivers a directive acknowledgement while its terminal path stays serialized", async () => {

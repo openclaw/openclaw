@@ -67,7 +67,7 @@ const workboardEnabled = {
 };
 
 suite.define(() => {
-  it("drains a pending draft before re-enabling an accepted external plugin without review", async () => {
+  it("config.set drains a pending draft before re-enabling an accepted external plugin without review", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -107,7 +107,7 @@ suite.define(() => {
         });
         await waitForControlUiRoute(page, {
           pathname: "/settings/plugins",
-          routeId: "plugins",
+          routeId: "plugin-settings",
         });
 
         const workboardRow = page.locator('[data-plugin-id="workboard"]');
@@ -119,13 +119,24 @@ suite.define(() => {
           });
         }
 
+        await workboardRow.click();
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/plugins/workboard",
+          routeId: "plugin-settings",
+        });
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
+
         await gateway.deferNext("plugins.setEnabled");
-        await workboardRow.getByRole("button", { name: "Enable", exact: true }).click();
+        const enabledSwitch = page.getByRole("switch", {
+          name: "Enable or disable Workboard",
+          exact: true,
+        });
+        await page.locator("wa-switch").click();
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
         const pendingDraft = await gateway.waitForRequest("config.set");
         expect(pendingDraft.params).toMatchObject({ baseHash: "config-hash-1" });
-        await gateway.resolveDeferred("config.set", { ok: true, hash: "config-hash-2" });
+        await gateway.resolveDeferred("config.set");
 
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "workboard", enabled: true });
@@ -144,14 +155,14 @@ suite.define(() => {
           restartRequired: true,
         });
 
-        await workboardRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
-        expect(await gateway.getRequests("plugins.inspect")).toHaveLength(0);
+        await expect.poll(() => enabledSwitch.isChecked()).toBe(true);
+        expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
         expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);
         if (captureUiProofEnabled) {
-          await workboardRow.screenshot({
+          await page.locator(".content").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-after-enable.png"),
           });

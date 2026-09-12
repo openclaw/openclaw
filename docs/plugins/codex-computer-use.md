@@ -98,7 +98,7 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
 }
@@ -229,6 +229,7 @@ marketplace fields choose where Codex should find `computer-use`.
 Fresh Codex homes may need a short moment to seed their official
 marketplaces. During install, OpenClaw polls `plugin/list` for up to
 `marketplaceDiscoveryTimeoutMs` milliseconds (default 60 seconds).
+When Codex reports `features.plugins` as disabled, OpenClaw skips this discovery wait.
 
 If multiple known marketplaces contain Computer Use, OpenClaw prefers
 `openai-bundled`, then `openai-curated`, then `local`. Unknown ambiguous

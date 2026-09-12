@@ -7,13 +7,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it("releases closed shared database wrappers after path and global retirement", () => {
   const stateDir = tempDirs.make("openclaw-state-retention-");
   const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+  const cacheModuleUrl = new URL("./openclaw-state-db-cache.ts", import.meta.url).href;
   const script = `
     import assert from "node:assert/strict";
     import {
       closeOpenClawStateDatabase,
-      closeOpenClawStateDatabaseByPath,
       openOpenClawStateDatabase,
     } from ${JSON.stringify(moduleUrl)};
+    import { closeOpenClawStateDatabaseByPath } from ${JSON.stringify(cacheModuleUrl)};
 
     function retire(byPath) {
       const owner = openOpenClawStateDatabase();

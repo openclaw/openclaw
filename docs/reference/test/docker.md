@@ -54,6 +54,30 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at the latest stable release by default. The `Update Migration` workflow pins that baseline before fanout; pass `baselines=all-since-2026.4.23` for an explicit historical cleanup replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pnpm test:docker:plugins`                                                                   | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
+### Anthropic runtime-context cache regression
+
+Run `pnpm test:docker:live-anthropic-cache` with `ANTHROPIC_API_KEY` to verify
+the package-installed Anthropic provider and managed transport against
+`claude-sonnet-4-6`. The functional image uses the prepared candidate package;
+`OPENCLAW_SKIP_DOCKER_BUILD=1` reuses an existing image.
+First run `pnpm test:docker:live-anthropic-cache --mock` for secretless HTTP/SSE
+proof through the same installed builders. Mock output labels its synthetic
+usage; only the default live mode proves provider cache reads and writes.
+
+Each builder makes four requests: initial conversation, two actual tool-result
+continuations, and the next user turn. The harness moves a synthetic temporary
+runtime-context carrier to the request tail and checks that it never becomes a
+cache breakpoint or part of a cached prefix. The initial conversation must write
+at least 4,096 cache tokens; subsequent reads must reach 90% of that write and
+grow after each continuation, while new writes stay below 25% of the initial
+write. A short system prompt prevents a system-only cache hit from satisfying
+the conversation floor. Every request has a 90-second deadline and no retries.
+
+This blocking lane runs in the stable/full Full Release Validation Docker `core`
+chunk. Logs contain token usage and breakpoint positions, with synthetic prompt
+contents kept out of output. Gateway session lifecycle and retained runtime
+context remain covered by their owner tests.
+
 ### Sandbox compatibility lanes
 
 | Command                                      | Verifies                                                                                                                                                                                                                                                           |

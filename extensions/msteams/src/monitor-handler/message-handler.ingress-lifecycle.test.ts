@@ -203,6 +203,38 @@ describe("Microsoft Teams drain claim ownership", () => {
     expect(second.abandonedCount()).toBe(0);
   });
 
+  it("dispatches HTML-only text through the immediate debounce flush without double stripping", async () => {
+    const handler = createHandler({
+      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const lifecycle = createLifecycle();
+
+    await handler(
+      context({
+        ...directActivity("activity-html", ""),
+        attachments: [
+          {
+            contentType: "text/html",
+            content: "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
+          },
+        ],
+      }),
+      lifecycle,
+    );
+
+    expect(
+      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
+    ).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          BodyForAgent: expect.stringContaining("Use x < 5 ©; literal <at>Alice</at>"),
+        }),
+      }),
+    );
+    expect(lifecycle.adoptedCount()).toBe(1);
+    expect(lifecycle.abandonedCount()).toBe(0);
+  });
+
   it("completes a gated no-dispatch turn instead of stalling its claim", async () => {
     const { deps } = createMessageHandlerDeps(
       {

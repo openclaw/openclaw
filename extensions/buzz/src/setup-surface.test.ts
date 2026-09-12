@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SecretInput, WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createBuzzSetupWizard } from "./setup-surface.js";
 
 const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
@@ -103,14 +104,6 @@ function createPrompter(): WizardPrompter {
   };
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as RuntimeEnv["exit"],
-  };
-}
-
 describe("Buzz guided setup", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
@@ -129,7 +122,7 @@ describe("Buzz guided setup", () => {
       verifyAfterWrite,
     });
     const prompter = createPrompter();
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const hooks: Array<{
       run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => void | Promise<void>;
     }> = [];
@@ -199,7 +192,7 @@ describe("Buzz guided setup", () => {
     const configure = (accountId: string) =>
       wizard.configure({
         cfg,
-        runtime: createRuntime(),
+        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
         shouldPromptAccountIds: false,
@@ -240,7 +233,7 @@ describe("Buzz guided setup", () => {
       .mockResolvedValueOnce("wss://ada.example.com");
     const result = await wizard.configure({
       cfg: { channels: { buzz: root } } as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: true,
@@ -287,7 +280,7 @@ describe("Buzz guided setup", () => {
 
     const result = await wizard.configure({
       cfg: {} as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       options: { secretInputMode: "ref" },
       accountOverrides: {},
@@ -325,7 +318,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: false,
@@ -368,7 +361,7 @@ describe("Buzz guided setup", () => {
       vi.mocked(prompter.multiselect).mockResolvedValueOnce([]).mockResolvedValueOnce([ROOM_A]);
       const result = await createBuzzSetupWizard({ discoverRooms }).configure({
         cfg,
-        runtime: createRuntime(),
+        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
         shouldPromptAccountIds: false,
@@ -430,7 +423,7 @@ describe("Buzz guided setup", () => {
       cfg: {
         channels: { buzz: { relayUrl: "ws://127.attacker.example" } },
       } as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: false,
@@ -470,7 +463,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: false,
@@ -522,7 +515,7 @@ describe("Buzz guided setup", () => {
 
       const result = await wizard.configure({
         cfg,
-        runtime: createRuntime(),
+        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
         shouldPromptAccountIds: false,
@@ -590,7 +583,7 @@ describe("Buzz guided setup", () => {
       await expect(
         wizard.configure({
           cfg,
-          runtime: createRuntime(),
+          runtime: createRuntimeSpies(),
           prompter: createPrompter(),
           options: { onPostWriteHook },
           accountOverrides: { buzz: accountId },
@@ -627,7 +620,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       options: { secretInputMode: "ref" },
       accountOverrides: {},
@@ -659,7 +652,7 @@ describe("Buzz guided setup", () => {
 
     const result = await wizard.configure({
       cfg: {} as OpenClawConfig,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: false,

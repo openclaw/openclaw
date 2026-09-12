@@ -61,11 +61,11 @@ Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
 The running Gateway captures `logging.audit.enabled`,
 `logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
-restart it after changing any of these settings. Message coverage currently includes
+restart it after changing any of these settings. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
-yet covered. The bounded background
+covered. The bounded background
 writer is best-effort, not a lossless compliance archive.
 
 ---
@@ -84,12 +84,12 @@ writer is best-effort, not a lossless compliance archive.
 }
 ```
 
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`.
+- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`. When `/tmp/openclaw` is unsafe or unavailable (and always on Windows), OpenClaw uses a directory under the OS temp dir instead: `openclaw-<uid>` where a numeric user id is available, and plain `openclaw` where it is not, which includes Windows. Dated log files are pruned after 24 hours.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
-- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** the built-in default patterns for log and transcript output, so include the defaults you still want; omitting them also turns off form-body and structured auth-header redaction. Tool payload redaction is separate and always merges your patterns with the defaults.
+- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** only the default string regex list for log and transcript output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Tool payload redaction is separate and always merges your patterns with the default string list.
 - Redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files; the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
 
 ---

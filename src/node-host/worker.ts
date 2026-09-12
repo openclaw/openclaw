@@ -55,11 +55,18 @@ export async function runNodeHostWorker(): Promise<void> {
   let generation = 0;
   let connected = false;
   let readySent = false;
+  let workerHostingEnabled = false;
   let currentManifest = prepared.manifest;
   const runtime = startNodeHostConnection({
     prepared,
     client,
     writeStderrLine,
+    onWorkerHostingChanged: (enabled) => {
+      workerHostingEnabled = enabled;
+      if (readySent) {
+        writeMessage({ type: "worker-hosting", enabled });
+      }
+    },
     onManifestChanged: (manifest) => {
       currentManifest = manifest;
       if (readySent) {
@@ -74,6 +81,7 @@ export async function runNodeHostWorker(): Promise<void> {
     type: "ready",
     version: VERSION,
     manifest: currentManifest,
+    workerHostingEnabled,
   });
 
   readySent = true;
@@ -114,6 +122,10 @@ export async function runNodeHostWorker(): Promise<void> {
       return;
     }
     if (!connected || message.generation !== generation) {
+      return;
+    }
+    if (message.type === "runner-inventory-refresh") {
+      runtime.refreshRunnerInventory();
       return;
     }
     if (message.type === "invoke-input") {

@@ -279,7 +279,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     };
   });
   const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
-  activeSession.agent.prepareNextTurn = async (signal) => {
+  const prepareNextTurn: typeof activeSession.agent.prepareNextTurn = async (signal) => {
+    if (attempt.pluginRuntimeRefreshPending?.()) {
+      return { stop: true };
+    }
     const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
     const refreshedPrompt = await refreshPermissionPrompt(snapshot?.context?.systemPrompt, signal);
     return snapshot?.context && refreshedPrompt !== undefined
@@ -293,6 +296,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
         }
       : snapshot;
   };
+  activeSession.agent.prepareNextTurn = prepareNextTurn;
+  attempt.registerPluginRuntimeRefreshConsumer?.(
+    () =>
+      activeSession.agent.prepareNextTurn === prepareNextTurn &&
+      activeSession.agent.state.isStreaming &&
+      !input.runAbortSignal.aborted,
+  );
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
   const markSourceReplyDelivered = () => {

@@ -57,9 +57,6 @@ export function setBootEchoContextForSession(sessionKey: string, bootPrompt: str
     return;
   }
   const normalizedBootPrompt = normalizeEchoComparisonText(bootPrompt);
-  if (normalizedBootPrompt.length >= MIN_ECHO_CHARS) {
-    getBootPromptChunks(normalizedBootPrompt, MIN_ECHO_CHARS);
-  }
   bootContextBySessionKey.set(sessionKey, { bootPrompt, normalizedBootPrompt });
 }
 
@@ -94,8 +91,11 @@ function containsSubstantialBootEcho(
   minLen: number = MIN_ECHO_CHARS,
 ): boolean {
   const haystack = normalizeEchoComparisonText(outboundText ?? "");
+  if (haystack.length < minLen) {
+    return false;
+  }
   const needle = normalizeEchoComparisonText(bootPrompt ?? "");
-  if (haystack.length < minLen || needle.length < minLen) {
+  if (needle.length < minLen) {
     return false;
   }
   const bootChunks = getBootPromptChunks(needle, minLen);

@@ -94,12 +94,12 @@ describe("AppSidebar new session navigation", () => {
       Array.from(actions?.querySelectorAll("[aria-label]") ?? [], (action) =>
         action.getAttribute("aria-label"),
       ),
-    ).toEqual(["Collapse sidebar", "Open command palette", "New session"]);
+    ).toEqual(["Collapse sidebar", "Open command palette", "New conversation"]);
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
     sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(brandLink?.getAttribute("aria-label")).toBe("New session");
+    expect(brandLink?.getAttribute("aria-label")).toBe("New conversation");
     expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
     expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
     expect(brandLink?.hasAttribute("href")).toBe(false);
@@ -114,7 +114,7 @@ describe("AppSidebar new session navigation", () => {
       ".sidebar-session-toolbar .sidebar-new-session",
     ]) {
       const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
-      expect(link.getAttribute("aria-label")).toBe("New session");
+      expect(link.getAttribute("aria-label")).toBe("New conversation");
       expect(link.getAttribute("href")).toBe("/control/new?agent=research");
       expect(link.hasAttribute("aria-disabled")).toBe(false);
       for (const modifiers of [
@@ -162,7 +162,24 @@ describe("AppSidebar new session navigation", () => {
           archive: false,
           startTerminal: true,
         },
-        hosts: [],
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "local-thread",
+                name: "Local plan",
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
       },
     ];
     sidebar.sessionData.requestSessionDataUpdate();
@@ -179,6 +196,40 @@ describe("AppSidebar new session navigation", () => {
     link.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
+  });
+
+  it("hides a successful empty catalog even when it can start sessions", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+    );
+    sidebar.connected = true;
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false, startTerminal: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [],
+          },
+        ],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
+    expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();
+    // Without a visible peer section the lone Other zone stays headerless.
+    expect(
+      sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head'),
+    ).toBeNull();
   });
 });
 
@@ -260,6 +311,36 @@ describe("AppSidebar agent chip", () => {
       pathname: "/chat/main/00000002",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
     });
+  });
+
+  it("switches the Skills owner without opening an agent conversation", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.activeRouteId = "skills";
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await sidebar.updateComplete;
+    sidebar
+      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .click();
+    await sidebar.updateComplete;
+
+    expect(context.agentSelection.state).toEqual({
+      selectedId: "research",
+      scopeId: "research",
+    });
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("keeps agent ids distinct from utility command values", async () => {

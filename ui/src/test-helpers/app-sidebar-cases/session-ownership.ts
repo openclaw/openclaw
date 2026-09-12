@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -181,9 +181,9 @@ describe("AppSidebar session ownership", () => {
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
-  it("derives owner initials from agent labels and whole grapheme clusters", async () => {
+  it("uses agent faces while preserving human owner grapheme initials", async () => {
     for (const { type, label, expected } of [
-      { type: "agent" as const, label: "Roboclaw", expected: "R" },
+      { type: "agent" as const, label: "Roboclaw", expected: null },
       { type: "human" as const, label: "🦞小明", expected: "🦞" },
       { type: "human" as const, label: "👨‍👩‍👧‍👦Family", expected: "👨‍👩‍👧‍👦" },
     ]) {
@@ -210,7 +210,13 @@ describe("AppSidebar session ownership", () => {
       const chip = sidebar.querySelector(
         '[data-session-key="agent:main:lobster"] .session-owner-chip',
       );
-      expect(chip?.textContent?.trim()).toBe(expected);
+      if (type === "agent") {
+        await vi.waitFor(() =>
+          expect(chip?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+        );
+      } else {
+        expect(chip?.textContent?.trim()).toBe(expected);
+      }
     }
   });
 
@@ -340,6 +346,43 @@ describe("AppSidebar session ownership", () => {
     );
     await sidebar.updateComplete;
     expect(harness.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
+  });
+
+  it("traces the run around a stacked owner row and rings a solo owner row", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:solo",
+      "agent:main:collab",
+    ]);
+    const result = harness.sessions.state.result!;
+    const solo = result.sessions.find((row) => row.key.endsWith(":solo"))!;
+    const collab = result.sessions.find((row) => row.key.endsWith(":collab"))!;
+    setEffectiveOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveOwner(collab, { type: "human", id: "profile-ada", label: "Ada" });
+    collab.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
+    collab.participantCount = 1;
+    for (const row of [solo, collab]) {
+      row.hasActiveRun = true;
+      row.status = "running";
+    }
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    const soloRow = sidebar.querySelector('[data-session-key="agent:main:solo"]')!;
+    const collabRow = sidebar.querySelector('[data-session-key="agent:main:collab"]')!;
+    expect(soloRow.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(soloRow.querySelector(".session-glyph__trace")).toBeNull();
+    expect(collabRow.querySelector(".session-glyph__ring")).toBeNull();
+    const trace = collabRow.querySelector(".session-glyph__trace");
+    expect(trace?.getAttribute("aria-label")).toBe("Active run");
+    expect(trace?.querySelector(".session-glyph__trace-run")?.getAttribute("pathLength")).toBe(
+      "100",
+    );
   });
 
   it.each([
@@ -572,7 +615,16 @@ describe("AppSidebar session ownership", () => {
         ?.querySelector(".sidebar-recent-sessions__head")
         ?.getAttribute("draggable"),
     ).toBe("false");
-    expect(ownerSections()[0]?.querySelector(".sidebar-session-group-actions")).toBeNull();
+    // Derived person sections carry no stored-group menu; the only header action
+    // is the owner filter, which reuses the group-actions reveal styling.
+    expect(
+      ownerSections()[0]?.querySelector('.sidebar-session-group-actions[aria-haspopup="menu"]'),
+    ).toBeNull();
+    expect(
+      ownerSections()[0]
+        ?.querySelector(".sidebar-session-person-filter")
+        ?.getAttribute("aria-label"),
+    ).toBe("Show only Zoe");
 
     gateway.publish({ hello: null });
     await sidebar.updateComplete;

@@ -106,9 +106,19 @@ function isSlackSafeExecSummary(message: { text: string }) {
   return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
 }
 
-function hasSlackExecHeader(message: { text: string }) {
+function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
   // Full output includes the runtime's command-derived label after the Exec glyph.
-  return /^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "");
+  if (/^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "")) {
+    return true;
+  }
+  // Compact progress cards keep the native tool row in Block Kit while their
+  // fallback text remains a generic status headline. Command-derived suffixes
+  // can be truncated, so identify the row by its stable native label.
+  return (message.blockText ?? []).some((text) =>
+    text
+      .split(/\r?\n/u)
+      .some((line) => /^(?:•|🛠️|:hammer_and_wrench:) \*Exec\* — \S/u.test(line.trim())),
+  );
 }
 
 function slackMarkerEnvelope(text: string, marker: string) {

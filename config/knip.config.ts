@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
@@ -16,12 +17,18 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
+  "apps/linux/scripts/test-inline-browser.mjs!",
+  "scripts/render-proof-video.mts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // mobile-release-authority invokes this helper from composite-action YAML.
   ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
+  // setup-pnpm-store-cache invokes this helper from composite-action YAML.
+  ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
@@ -46,6 +53,8 @@ const repositoryScriptEntries = [
   "scripts/docker/verify-fs-safe-native.mjs!",
   // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
   "scripts/resolve-fs-safe-native-contract.mjs!",
+  // The live Docker launcher executes this runner by path inside the package image.
+  "scripts/e2e/anthropic-cache-live.mts!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -76,6 +85,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
   "scripts/e2e/lib/openai-chat-tools/client.mjs!",
+  "scripts/e2e/lib/openai-chat-tools/cold-recall.mjs!",
   "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
   "scripts/e2e/lib/package-git-fixture.mjs!",
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
@@ -88,6 +98,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
+  "scripts/e2e/lib/session-cold-storage/client.mjs!",
   // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
   "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
   "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
@@ -107,13 +118,18 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
+  "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
+  // Generates the native browser page scripts from their UI source modules.
+  "scripts/generate-browser-inspect-script-swift.mts!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
   "scripts/ios-screenshot-evidence.mjs!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
+  // The frozen compatibility shell invokes this CLI and imports it from inline bundle resolution.
+  "scripts/lib/frozen-target-source.mjs!",
   // CI loads the native Vitest reporter through its CLI path.
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
@@ -123,8 +139,12 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // Existing explicit Linux proof driver imports the inactive capsule adapter.
+  // Reachability for auditing is not registration or permission to execute it.
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Protected preparation/button workflows invoke this coordinator by path.
+  "scripts/openclaw-release-ready.mjs!",
   // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
   "scripts/plugin-npm-security-prepare.mts!",
   "scripts/plugin-npm-security-scan-runner.mjs!",
@@ -133,6 +153,8 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  // Frozen-target contract admission is invoked as a standalone Node CLI.
+  "scripts/preflight-frozen-target-contracts.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
@@ -141,6 +163,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
+  // worktree.sh invokes this journal-state validator by path before native replay.
+  "scripts/pr-lib/review-transition-state.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
@@ -198,6 +222,9 @@ const rootEntries = [
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
+  // OpenGrep rule tests read these as static source inputs; they are never executed.
+  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
+  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
@@ -227,10 +254,7 @@ const rootEntries = [
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
-  "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
-  // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
-  "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -560,6 +584,8 @@ const config = {
     },
     ui: {
       entry: [
+        // The standalone proof-video skill imports this developer API by path.
+        "src/test-helpers/proof-video.ts!",
         "index.html!",
         "src/main.ts!",
         "src/lib/browser-redact.ts!",
@@ -932,22 +958,29 @@ const config = {
 } as const;
 
 const configuredWorkspaces = new Map(Object.entries(config.workspaces));
-// Browser roots come from authoring metadata; the runtime manifest names only
-// compiled assets. Keep each plugin's remaining files subject to reachability.
-const browserWorkspaces = Object.fromEntries(
+// Declared runtime, setup, worker, and browser roots need no static import edge.
+// Keep each plugin's remaining files subject to reachability.
+const artifactWorkspaces = Object.fromEntries(
   fs
     .globSync(`${BUNDLED_PLUGIN_ROOT_DIR}/*/package.json`)
     .toSorted()
     .flatMap((manifestPath) => {
-      const source = controlUiSource(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
-      if (!source) {
-        return [];
-      }
+      const packageJson = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const browserSource = controlUiSource(packageJson);
+      const sources = [
+        ...(browserSource ? [browserSource] : []),
+        ...collectPluginSourceEntries(packageJson),
+      ];
       const workspace = path.dirname(manifestPath).replaceAll("\\", "/");
       const settings =
         configuredWorkspaces.get(workspace) ?? config.workspaces[`${BUNDLED_PLUGIN_ROOT_DIR}/*`];
-      return [[workspace, { ...settings, entry: [...settings.entry, `${source}!`] }]];
+      return [
+        [
+          workspace,
+          { ...settings, entry: [...settings.entry, ...sources.map((source) => `${source}!`)] },
+        ],
+      ];
     }),
 );
 
-export default { ...config, workspaces: { ...config.workspaces, ...browserWorkspaces } };
+export default { ...config, workspaces: { ...config.workspaces, ...artifactWorkspaces } };

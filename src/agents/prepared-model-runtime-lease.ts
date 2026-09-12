@@ -4,6 +4,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -24,6 +25,7 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
@@ -217,7 +219,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           return {
             snapshot: borrowed,
             pluginGeneration: options.pluginGeneration,
-            release: () => {},
+            [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
           };
         }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -310,9 +312,27 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   }
   try {
     assertAdmission();
+    const configuredOwner = resolveConfiguredOwner(context.owners, input);
+    const catalogOwner =
+      configuredOwner &&
+      ownerKey({
+        ...configuredOwner.input,
+        loadRuntimePlugins: false,
+        runtimePluginSelections: undefined,
+      }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
+        ? configuredOwner
+        : owner;
+    snapshot = capturePreparedModelRuntimeCatalog(
+      snapshot,
+      catalogOwner.snapshot?.readPublishedModels?.(),
+    );
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
-      return { snapshot, pluginGeneration, release: () => {} };
+      return {
+        snapshot,
+        pluginGeneration,
+        [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
+      };
     }
     assertAdmission();
     if (provenance === "run" && options.retainIdleRunOwner) {
@@ -320,13 +340,14 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     } else if (provenance === "run" && context.getGatewayLifecycleActive()) {
       context.retainedGatewayRunOwners.retain(key, owner, context.owners);
     }
+    const releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
     owner.leaseCount = (owner.leaseCount ?? 0) + 1;
     admission.release();
     let released = false;
     return {
       snapshot,
       pluginGeneration,
-      release: () => {
+      [Symbol.asyncDispose]: async () => {
         if (released) {
           return;
         }
@@ -341,6 +362,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           context.retainedDirectRunOwners.has(key, owner) ||
             context.retainedGatewayRunOwners.has(key, owner),
         );
+        await releaseGeneration();
       },
     };
   } finally {

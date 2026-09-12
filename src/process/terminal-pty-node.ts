@@ -162,7 +162,12 @@ export async function spawnNodeTerminalPty(
   }
   return {
     pid,
-    write: (data) => send({ type: "input", data }),
+    write: (data) =>
+      send(
+        typeof data === "string"
+          ? { type: "input", data }
+          : { type: "input", dataBase64: data.toString("base64") },
+      ),
     resize: (cols, rows) => send({ type: "resize", cols, rows }),
     pause: () => {
       paused = true;
@@ -180,12 +185,22 @@ export async function spawnNodeTerminalPty(
       if (!paused) {
         stdout.resume();
       }
+      return {
+        dispose() {
+          stdout.off("data", listener);
+          subscribed = stdout.listenerCount("data") > 0;
+          if (!subscribed) {
+            stdout.pause();
+          }
+        },
+      };
     },
     onExit: (listener) => {
       listeners.add(listener);
       if (exited) {
         listener(exited);
       }
+      return { dispose: () => listeners.delete(listener) };
     },
     kill: (signal) => {
       send({ type: "kill", signal });

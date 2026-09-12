@@ -760,7 +760,18 @@ export async function handleTelegramAction(
       throw durableResult.error;
     }
     if (durableResult.status === "suppressed") {
-      throw new Error("Telegram sendMessage was suppressed before delivery.");
+      const mayHaveReachedRecipient =
+        durableResult.reason === "adapter_returned_no_identity" ||
+        durableResult.payloadOutcomes?.some((outcome) =>
+          outcome.status === "failed"
+            ? outcome.sentBeforeError
+            : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
+        );
+      if (mayHaveReachedRecipient) {
+        throw new Error("Telegram sendMessage was suppressed before delivery.");
+      }
+      // Hook diagnostics remain private; only the durable owner's bounded reason crosses here.
+      return jsonResult({ status: "suppressed", reason: durableResult.reason });
     }
     const result = getLastDurableTelegramActionResult(durableResult);
     notifyVisibleOutboundSuccess(to, messageThreadId);
@@ -1037,7 +1048,7 @@ export async function handleTelegramAction(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
       }) ?? 5;
-    const results = telegramActionRuntime.searchStickers(query, limit);
+    const results = await telegramActionRuntime.searchStickers(query, limit);
     return jsonResult({
       ok: true,
       count: results.length,
@@ -1051,7 +1062,7 @@ export async function handleTelegramAction(
   }
 
   if (action === "stickerCacheStats") {
-    const stats = telegramActionRuntime.getCacheStats();
+    const stats = await telegramActionRuntime.getCacheStats();
     return jsonResult({ ok: true, ...stats });
   }
 

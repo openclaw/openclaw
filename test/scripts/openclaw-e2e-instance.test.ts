@@ -417,6 +417,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(result.stdout).toContain("Installing fixture package...");
+      expect(result.stdout).toContain("Installed fixture package.");
       expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
         `--kill-after=30s 42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
       );
@@ -525,6 +526,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       });
 
       expect(result.status).toBe(42);
+      expect(result.stdout).not.toContain("Installed fixture package.");
       expect(result.stderr).toContain("npm install failed for fixture package");
       expect(result.stderr).toContain("recent npm tail");
       expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_NPM_LOG");

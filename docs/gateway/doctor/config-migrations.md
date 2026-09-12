@@ -39,6 +39,8 @@ beyond the grace period.
     If this is a git checkout and doctor is running interactively, it offers to update (fetch/rebase/build) before running doctor.
   </Accordion>
   <Accordion title="1. Config normalization">
+    GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. The retired `plugins.entries.github-copilot.config.discovery.enabled` setting is ignored during config loading, including malformed values, and removed when Doctor saves the config.
+
     Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools from plugins that actually load; it does not bypass the exclusive plugin allowlist.
@@ -50,6 +52,10 @@ beyond the grace period.
     Gateway startup automatically applies deterministic, prompt-free legacy config migrations when an otherwise invalid single-file config can be fully migrated. It uses the same migration transforms as `openclaw doctor --fix`, validates the complete result including plugin config before writing, and reports the applied changes. The write runs under the startup migration lease and preserves the previous config in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring.
 
     Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.
+
+    When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
+
+    During an update, Doctor records model-retirement repairs that must wait until plugin installation finishes. The updated OpenClaw completes those repairs after plugin convergence, even when no plugin version changed. `openclaw update status` records their completion so retired subscription models do not fall through to metered API credentials.
 
     Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
 
@@ -66,7 +72,8 @@ beyond the grace period.
       `routing.transcribeAudio`, top-level `agent.*`, or top-level `identity`
       from the pre-multi-agent config shape) no longer have a migration path;
       config using them now fails validation instead of being rewritten. Fix
-      those keys by hand against the current config reference before doctor
+      those keys by hand against the current
+      [configuration reference](/gateway/configuration-reference) before doctor
       can proceed.
     </Note>
 
@@ -132,7 +139,6 @@ beyond the grace period.
     | `gateway.controlUi.chatMessageMaxWidth`, presentation-only `ui.prefs` keys                       | removed (text scale, chat width, and live sidebar activity are browser-local) |
     | `agents.list`                                                                                    | keyed `agents.entries`                                                        |
     | top-level `defaultModel`                                                                         | `agents.defaults.model`                                                      |
-    | `messages.messagePrefix`                                                                         | `channels.whatsapp.responsePrefix`                                            |
     | `session.maintenance.pruneDays`, `session.resetByType.dm`                                        | `session.maintenance.pruneAfter`, `session.resetByType.direct`               |
     | top-level `tui`                                                                                  | removed (the TUI footer uses the compact default)                            |
     | `plugins.entries.codex.config.codexDynamicToolsProfile`                                          | removed (Codex app-server always keeps Codex-native workspace tools native) |

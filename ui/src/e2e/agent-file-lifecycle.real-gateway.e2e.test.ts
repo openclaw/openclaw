@@ -14,6 +14,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -21,6 +22,8 @@ import {
   selectAgentFileWorkspace,
 } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
@@ -158,7 +161,7 @@ catalogSuite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -240,7 +243,9 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
 
           await publish("published");
           await expect
@@ -249,7 +254,9 @@ catalogSuite.define(() => {
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
           ).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           inventoryModel = "inventory-after";
           const refreshed = await owner.cli(refreshInventoryArgs);
@@ -280,9 +287,22 @@ catalogSuite.define(() => {
           for (const release of heldCatalogs) {
             release();
           }
-          await page.screenshot({
-            path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
+          // Fence the released replies on this connection before checking that stale data was ignored.
+          await page.evaluate(async () => {
+            // SAFETY: Gateway readiness above establishes this app's connected runtime.
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
+            };
+            await app.runtime.context.gateway.snapshot.client.request("health", {});
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
           });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
+            });
+          }
           expect(
             await picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
           ).toBe(1);
@@ -299,7 +319,11 @@ catalogSuite.define(() => {
           expect(
             await picker.locator('[role="option"][data-value="fixture/published"]').count(),
           ).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
           rejectCatalog = false;
           await publish("recovered");
@@ -335,7 +359,9 @@ catalogSuite.define(() => {
           commands.push(persisted);
           expect(persisted.code, persisted.stderr).toBe(0);
           expect(JSON.parse(persisted.stdout)).toBe("fixture/anchor");
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {
@@ -457,6 +483,63 @@ suite.define(() => {
               .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
               .toBe("# Saved through real Gateway\n");
             await captureAgentFileScreenshot(page, "07-real-gateway-main-save.png");
+
+            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
+            const appended = "# Saved through real Gateway\n- agent appended a memory\n";
+            await writeFile(agentsFile, appended, "utf8");
+            await editor.fill("# Operator draft that never saw the memory\n");
+            await save.click();
+            const conflict = page.locator(".callout.danger");
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+            await captureAgentFileScreenshot(page, "08-real-gateway-stale-save-refused.png");
+
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+
+            await conflict.getByRole("button", { name: "Overwrite" }).click();
+            await expect
+              .poll(() => readFile(agentsFile, "utf8"))
+              .toBe("# Operator draft that never saw the memory\n");
+            await expect.poll(() => conflict.isVisible()).toBe(false);
+
+            const secondAppend = "# Operator draft that never saw the memory\n- second memory\n";
+            await writeFile(agentsFile, secondAppend, "utf8");
+            await editor.fill("# Another operator draft\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await conflict.getByRole("button", { name: "Reload" }).click();
+            await expect.poll(() => editor.inputValue()).toBe(secondAppend);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await captureAgentFileScreenshot(page, "09-real-gateway-conflict-reloaded.png");
+
+            await editor.fill("# Draft typed before the refresh\n");
+            const thirdAppend = `${secondAppend}- third memory\n`;
+            await writeFile(agentsFile, thirdAppend, "utf8");
+            await page
+              .locator(".settings-section__header")
+              .filter({ hasText: "Core Files" })
+              .getByRole("button", { name: "Refresh" })
+              .click();
+            await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(thirdAppend);
+            await captureAgentFileScreenshot(page, "10-real-gateway-refresh-then-save.png");
+
+            await page
+              .locator(".agent-file-header")
+              .getByRole("button", { name: "Reset", exact: true })
+              .click();
+            await expect.poll(() => editor.inputValue()).toBe(thirdAppend);
+            const afterReset = `${thirdAppend}- edited after Reset\n`;
+            await editor.fill(afterReset);
+            await save.click();
+            await expect.poll(() => readFile(agentsFile, "utf8")).toBe(afterReset);
+            await expect.poll(() => conflict.isVisible()).toBe(false);
+            await captureAgentFileScreenshot(page, "11-real-gateway-reset-then-save.png");
           },
         );
       },

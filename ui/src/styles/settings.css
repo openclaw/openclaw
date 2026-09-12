@@ -13,6 +13,28 @@
  * ui/src/components/settings-ui.ts rather than hand-rolled markup.
  */
 
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.settings-summary__tile {
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-summary dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-summary dd {
+  margin: var(--space-2) 0 0;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+}
+
 /* ── Workspace shell (shared by every settings takeover page) ── */
 
 .settings-workspace {
@@ -29,6 +51,21 @@
 
 .settings-workspace__body > * + * {
   margin-top: var(--space-5);
+}
+
+.content-header--settings {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
+.content-header--settings .page-header-actions {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.content-header--settings .page-header-actions > * {
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .settings-workspace--fill-height {

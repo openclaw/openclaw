@@ -332,7 +332,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
                 // have the validation cache yet, and a stale external CLI must not win.
-                if state.connectionMode == .local {
+                if state.connectionMode == .local ||
+                    (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
+                {
                     _ = await CLIInstaller.status()
                 }
                 await ConnectionModeCoordinator.shared.apply(
@@ -392,7 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            self.openDashboardAction()
+            DashboardManager.shared.presentDashboard(userGesture: false)
         }
     }
 

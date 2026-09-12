@@ -22,7 +22,7 @@ Runtime policy decides which harness executes a model run. It lives on providers
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       models: {
         "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
@@ -93,4 +93,4 @@ The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Mat
 - `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
 - `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
 
-See [OpenAI GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution) for provider and native Codex behavior.
+See [OpenAI GPT-5 prompt contribution](/providers/openai/advanced#gpt-5-prompt-contribution) for provider and native Codex behavior.

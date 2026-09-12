@@ -150,7 +150,7 @@ function createTalkRealtimeRelaySession(
 function stopTalkRealtimeRelaySession(
   params: Parameters<typeof stopTalkRealtimeRelaySessionRaw>[0],
 ): void {
-  stopTalkRealtimeRelaySessionRaw(params);
+  void stopTalkRealtimeRelaySessionRaw(params);
   activeRelaySessions.delete(params.relaySessionId);
 }
 
@@ -231,6 +231,28 @@ describe("talk realtime gateway relay", () => {
       ).claimFailureAppend?.(),
     ).toBe(false);
     expect(claimFailureAppend).toHaveBeenCalledOnce();
+  });
+
+  it("forwards requester-final revocation through the relay wrapper", () => {
+    const revokeRequesterFinal = vi.fn();
+    const runPrompt = Object.assign(
+      vi.fn<RealtimeVoiceAgentConsultRunner>(async () => ({ text: "done" })),
+      {
+        adoptCompletionClaims: vi.fn(),
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend: vi.fn(() => true),
+        revokeRequesterFinal,
+      },
+    );
+    const runAgentConsult = bindTalkRealtimeRelayAgentConsult(runPrompt as never, () => true);
+
+    (
+      runAgentConsult as RealtimeVoiceAgentConsultRunner & {
+        revokeRequesterFinal?: () => void;
+      }
+    ).revokeRequesterFinal?.();
+
+    expect(revokeRequesterFinal).toHaveBeenCalledOnce();
   });
 
   beforeEach(async () => {
@@ -458,7 +480,7 @@ describe("talk realtime gateway relay", () => {
     try {
       for (const [relaySessionId, connId] of activeRelaySessions) {
         try {
-          stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
+          await stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
         } catch (error) {
           if (
             !(error instanceof Error) ||
@@ -469,7 +491,10 @@ describe("talk realtime gateway relay", () => {
         }
       }
       await Promise.all(
-        [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
+        [...drainingRelaySessions].map(
+          (session) =>
+            session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
+        ),
       );
     } finally {
       activeRelaySessions.clear();
@@ -623,13 +648,13 @@ describe("talk realtime gateway relay", () => {
       expect(bridgeCloses[0]).toHaveBeenCalledOnce();
       expect(bridgeCloses[1]).toHaveBeenCalledOnce();
       expect(bridgeCloses[2]).not.toHaveBeenCalled();
-      expect(logGateway.warn).toHaveBeenCalledWith(
-        "failed to close realtime relay session after connection disconnect: provider close failed",
-      );
       await vi.waitFor(() =>
         expect(
           clientVoiceSessionTesting.readRecord("main", firstOwned.relaySessionId)?.status,
         ).toBe("closed"),
+      );
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        "failed to close realtime relay session: provider close failed",
       );
       expect(
         broadcastToConnIds.mock.calls.some(

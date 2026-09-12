@@ -186,7 +186,7 @@ it.each([true, false])(
         if (result.status === "owned") {
           expect(result.operation.sessionId).toBe(successorId);
           expect(result.operation.agentId).toBe("main");
-          expect(result.databaseClaim?.database.db).toBe(databaseClaim.database.db);
+          expect(result.databaseClaim?.incarnation).toBe(databaseClaim.incarnation);
           result.operation.complete();
         }
       } else {

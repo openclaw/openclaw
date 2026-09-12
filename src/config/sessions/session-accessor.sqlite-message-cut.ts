@@ -6,6 +6,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -98,7 +99,7 @@ function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) 
 }
 
 function readSessionBranchWatermark(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): Pick<SessionBranchCacheEntry, "generation" | "maxSeq"> {
   const db = getSessionKysely(database.db);
@@ -120,7 +121,7 @@ function readSessionBranchWatermark(
 }
 
 function loadSessionBranchSummaries(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): SessionBranchSummary[] {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
@@ -156,15 +157,35 @@ export async function listSessionBranches(
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
   try {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const currentEntry = readSessionEntryRow(database, sourceKey)?.entry;
+    const databaseOptions = toDatabaseOptions(resolved);
+    const selected = withOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionEntryRow(database, sourceKey)?.entry,
+      databaseOptions,
+    );
+    const currentEntry = selected.found ? selected.value : undefined;
     if (!currentEntry?.sessionId) {
       return { status: "missing-session" };
     }
-    return {
-      status: "ok",
-      branches: loadSessionBranchSummaries(database, currentEntry.sessionId),
-    };
+    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+    return await readRestoredSessionTranscript(
+      { ...params, agentId: resolved.agentId, sessionId: currentEntry.sessionId },
+      () => {
+        const result = withOpenClawAgentDatabaseReadOnly((database) => {
+          const latest = readSessionEntryRow(database, sourceKey)?.entry;
+          if (
+            latest?.sessionId !== currentEntry.sessionId ||
+            latest.lifecycleRevision !== currentEntry.lifecycleRevision
+          ) {
+            return { status: "failed" as const };
+          }
+          return {
+            status: "ok" as const,
+            branches: loadSessionBranchSummaries(database, currentEntry.sessionId),
+          };
+        }, databaseOptions);
+        return result.found ? result.value : { status: "missing-session" as const };
+      },
+    );
   } catch {
     return { status: "failed" };
   }
@@ -240,48 +261,61 @@ async function mutateSqliteSessionAtMessage(
           lifecycleRevision: preparedEntry.lifecycleRevision,
         }
       : undefined);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let previousIdentity = new Map<string, SessionEntry>();
-    const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
-      params.commitGuard?.();
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
-        entryId: params.entryId,
-        canonicalSourceKey,
-        creation: params.creation,
-        mode,
-        expectedState: preparedExpectedState,
-        repositoryWorkspaceId: params.repositoryWorkspaceId,
-        sourceKey,
-        targetKey,
-      });
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      return {
-        databasePath: database.path,
-        result: mutationResult,
-        publish: prepareSessionIdentityPublication(
-          database,
-          resolved.agentId,
-          previousIdentity,
-          currentIdentity,
-        ),
-      };
-    }, toDatabaseOptions(resolved));
-    if (result.status === "created") {
-      invalidateSessionBranchCache(databasePath, [
-        ...[...previousIdentity.values()].flatMap((entry) =>
-          entry.sessionId ? [entry.sessionId] : [],
-        ),
-        ...(result.entry.sessionId ? [result.entry.sessionId] : []),
-      ]);
-    }
-    publish();
-    return result;
-  });
+  if (preparedEntry?.sessionId) {
+    params.commitGuard?.();
+    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+    await restoreSessionColdTranscript({
+      ...params,
+      agentId: resolved.agentId,
+      sessionId: preparedEntry.sessionId,
+    });
+  }
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      let previousIdentity = new Map<string, SessionEntry>();
+      const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
+        params.commitGuard?.();
+        const identityKeys = uniqueStrings([
+          ...collectSessionEntryLookupKeys(database, sourceKey),
+          ...collectSessionEntryLookupKeys(database, targetKey),
+        ]);
+        previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
+          entryId: params.entryId,
+          canonicalSourceKey,
+          creation: params.creation,
+          mode,
+          expectedState: preparedExpectedState,
+          repositoryWorkspaceId: params.repositoryWorkspaceId,
+          sourceKey,
+          targetKey,
+        });
+        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        return {
+          databasePath: database.path,
+          result: mutationResult,
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          ),
+        };
+      }, toDatabaseOptions(resolved));
+      if (result.status === "created") {
+        invalidateSessionBranchCache(databasePath, [
+          ...[...previousIdentity.values()].flatMap((entry) =>
+            entry.sessionId ? [entry.sessionId] : [],
+          ),
+          ...(result.entry.sessionId ? [result.entry.sessionId] : []),
+        ]);
+      }
+      publish();
+      return result;
+    },
+    "session.message-cut.mutate",
+  );
 }
 
 function mutateSqliteSessionAtMessageInTransaction(

@@ -29,8 +29,10 @@ async function collectRuntimeDirectories(
       "-z",
       "--",
       "dist",
+      "dist-runtime",
       "node_modules",
       "**/dist",
+      "**/dist-runtime",
       "**/node_modules",
       ":(exclude).artifacts/**",
       ":(exclude).worktrees/**",
@@ -49,7 +51,7 @@ async function collectRuntimeDirectories(
       // Git's --directory can collapse an excluded subtree to its ignored parent.
       .filter(
         (entry) =>
-          ["dist", "node_modules"].includes(path.basename(entry)) &&
+          ["dist", "dist-runtime", "node_modules"].includes(path.basename(entry)) &&
           !entry.split("/").some((part) => part.startsWith(".")),
       )
   );

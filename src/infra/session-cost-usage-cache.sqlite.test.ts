@@ -11,7 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
@@ -38,12 +38,12 @@ afterEach(() => {
 });
 
 describe("session cost usage SQLite cache", () => {
-  it("reads only requested rollups, including an empty selection", () => {
+  it("reads only requested rollups, including an empty selection", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-selection-");
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       for (const rollupId of ["selected.jsonl", "unrelated.jsonl"]) {
-        writeSessionCostUsageRollup({
+        await writeSessionCostUsageRollup({
           agentId,
           rollupId,
           previousValueJson: null,
@@ -59,10 +59,10 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
-  it("removes a persisted refresh lock owned by a Linux zombie", () => {
+  it("removes a persisted refresh lock owned by a Linux zombie", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-zombie-lock-");
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       const zombiePid = 4242;
       const database = openOpenClawAgentDatabase({ agentId });
@@ -83,7 +83,7 @@ describe("session cost usage SQLite cache", () => {
         return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\nThreads:\t1\n`;
       });
 
-      expect(isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
       expect(
         database.db
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
@@ -92,23 +92,23 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
-  it("returns empty values without creating a missing agent database", () => {
+  it("returns empty values without creating a missing agent database", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-missing-");
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "worker-1" });
 
       expect(readSessionCostUsageRollupRows("worker-1", databasePath)).toEqual([]);
-      expect(isSessionCostUsageRefreshRunning("worker-1", databasePath)).toBe(false);
+      expect(await isSessionCostUsageRefreshRunning("worker-1", databasePath)).toBe(false);
       expect(fs.existsSync(databasePath)).toBe(false);
       expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
     });
   });
 
-  it("does not register readonly cache reads while writes still register", () => {
+  it("does not register readonly cache reads while writes still register", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-registry-");
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       const database = openOpenClawAgentDatabase({ agentId });
       const databasePath = database.path;
@@ -119,11 +119,11 @@ describe("session cost usage SQLite cache", () => {
       expect(countRegisteredAgentDatabases()).toBe(0);
 
       expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);
-      expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
+      expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
       expect(countRegisteredAgentDatabases()).toBe(0);
 
       expect(
-        writeSessionCostUsageRollup({
+        await writeSessionCostUsageRollup({
           agentId,
           databasePath,
           rollupId: "session.jsonl",
@@ -139,57 +139,51 @@ describe("session cost usage SQLite cache", () => {
   it.each([
     { label: "changed totals", refreshedValue: '{"totalTokens":2}' },
     { label: "unchanged totals at a newer revision", refreshedValue: '{"totalTokens":1}' },
-  ])("preserves a refreshed usage rollup with $label during pruning", ({ refreshedValue }) => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-prune-race-");
+  ])(
+    "preserves a refreshed usage rollup with $label during pruning",
+    async ({ refreshedValue }) => {
+      const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-prune-race-");
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      const agentId = "worker-1";
-      const rollupId = "session.jsonl";
-      const staleValue = '{"totalTokens":1}';
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentId = "worker-1";
+        const rollupId = "session.jsonl";
+        const staleValue = '{"totalTokens":1}';
 
-      expect(
-        writeSessionCostUsageRollup({
+        expect(
+          await writeSessionCostUsageRollup({
+            agentId,
+            rollupId,
+            previousValueJson: null,
+            valueJson: staleValue,
+            updatedAt: 1,
+          }),
+        ).toBe(true);
+        const rows = readSessionCostUsageRollupRows(agentId);
+
+        const refreshed = writeSessionCostUsageRollup({
           agentId,
           rollupId,
-          previousValueJson: null,
-          valueJson: staleValue,
-          updatedAt: 1,
-        }),
-      ).toBe(true);
-      const rows = readSessionCostUsageRollupRows(agentId);
+          previousValueJson: staleValue,
+          valueJson: refreshedValue,
+          updatedAt: 2,
+        });
+        await deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows });
+        expect(await refreshed).toBe(true);
 
-      const liveKeys = new (class extends Set<string> {
-        override has(key: string): boolean {
-          if (key === rollupId) {
-            expect(
-              writeSessionCostUsageRollup({
-                agentId,
-                rollupId,
-                previousValueJson: staleValue,
-                valueJson: refreshedValue,
-                updatedAt: 2,
-              }),
-            ).toBe(true);
-          }
-          return false;
-        }
-      })();
+        expect(readSessionCostUsageRollupRows(agentId)).toEqual([
+          { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
+        ]);
+      });
+    },
+  );
 
-      deleteSessionCostUsageRollupsExcept({ agentId, liveKeys, rows });
-
-      expect(readSessionCostUsageRollupRows(agentId)).toEqual([
-        { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
-      ]);
-    });
-  });
-
-  it("reads only v2 rollups and prunes retired usage cache rows by scope", () => {
+  it("reads only v2 rollups and prunes retired usage cache rows by scope", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-retired-");
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       expect(
-        writeSessionCostUsageRollup({
+        await writeSessionCostUsageRollup({
           agentId,
           rollupId: "current.jsonl",
           previousValueJson: null,
@@ -209,7 +203,7 @@ describe("session cost usage SQLite cache", () => {
       const rows = readSessionCostUsageRollupRows(agentId);
       expect(rows).toEqual([{ key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}' }]);
 
-      deleteSessionCostUsageRollupsExcept({
+      await deleteSessionCostUsageRollupsExcept({
         agentId,
         liveKeys: new Set(["current.jsonl"]),
         rows,

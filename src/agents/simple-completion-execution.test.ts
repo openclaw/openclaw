@@ -58,6 +58,95 @@ describe("prepared completion import boundary", () => {
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {
+  it.each([
+    "openai-completions",
+    "openai-responses",
+    "anthropic-messages",
+    "google-generative-ai",
+  ] as const)(
+    "gives standalone OpenCode %s completions distinct routing identities",
+    async (api) => {
+      for (let index = 0; index < 2; index++) {
+        await completeWithPreparedSimpleCompletionModel({
+          model: {
+            ...baseModel,
+            api,
+            provider: "opencode-go",
+            baseUrl: "https://opencode.ai/zen/go/v1",
+          },
+          auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+          context,
+        });
+      }
+      const [first, second] = completionRequests();
+      const firstId = first?.options.headers?.["x-opencode-session"];
+      const secondId = second?.options.headers?.["x-opencode-session"];
+      expect(firstId).toEqual(expect.any(String));
+      expect(firstId.length).toBeGreaterThan(0);
+      expect(secondId).toEqual(expect.any(String));
+      expect(secondId).not.toBe(firstId);
+      expect(first?.options.sessionId).toBeUndefined();
+    },
+  );
+
+  it.each<{
+    options: { headers: Record<string, string>; sessionId?: string };
+    expected: Record<string, string>;
+  }>([
+    {
+      options: { headers: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" } },
+      expected: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" },
+    },
+    {
+      options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
+      expected: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
+    },
+  ])("preserves caller routing options $options", async ({ options, expected }) => {
+    const original = structuredClone(options);
+    for (let index = 0; index < 2; index++) {
+      await completeWithPreparedSimpleCompletionModel({
+        model: { ...baseModel, provider: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" },
+        auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+        context,
+        options,
+      });
+    }
+    expect(completionRequests().map((request) => request.options.headers)).toEqual([
+      expected,
+      expected,
+    ]);
+    expect(options).toEqual(original);
+  });
+
+  it("preserves an explicit model routing header", async () => {
+    const model = {
+      ...baseModel,
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      headers: { "X-OpenCode-Session": "caller-owned" },
+    };
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+      context,
+    });
+    const [request] = completionRequests();
+    expect(request?.model.headers).toEqual({ "X-OpenCode-Session": "caller-owned" });
+    expect(request?.options.headers).toBeUndefined();
+  });
+
+  it.each(["https://proxy.example/v1", "http://opencode.ai/zen/go/v1"])(
+    "does not add routing identity to %s",
+    async (baseUrl) => {
+      await completeWithPreparedSimpleCompletionModel({
+        model: { ...baseModel, provider: "opencode-go", baseUrl },
+        auth: { apiKey: "test-key", source: "test", mode: "api-key" },
+        context,
+      });
+      expect(completionRequests()[0]?.options).toEqual({ apiKey: "test-key" });
+    },
+  );
+
   it("prepares provider-owned stream APIs before running a completion", async () => {
     const model = {
       ...baseModel,

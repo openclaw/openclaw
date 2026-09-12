@@ -11,6 +11,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import type { UserTranscriptContext } from "./attempt-history.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -70,6 +71,7 @@ type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
   session?: AgentSession;
+  getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   sessionManager?: ReturnType<typeof guardSessionManager>;
   removeToolResultContextGuard?: () => void;
   trajectoryRecorder: TrajectoryRecorder | null;

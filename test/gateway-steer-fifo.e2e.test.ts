@@ -21,6 +21,7 @@ type ModelRequest = { body: Record<string, unknown> };
 type MockModelServer = {
   baseUrl: string;
   releaseFirst: (kind: FirstResponseKind) => void;
+  releaseSecond: () => void;
   requests: ModelRequest[];
   stop: () => Promise<void>;
 };
@@ -228,9 +229,10 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
   ]);
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(holdSecondResponse = false): Promise<MockModelServer> {
   const requests: ModelRequest[] = [];
   const firstResponse = createDeferred();
+  const secondResponse = createDeferred();
   let firstResponseKind: FirstResponseKind = "final";
   const server = createServer((req, res) => {
     void (async () => {
@@ -260,6 +262,12 @@ async function startMockModelServer(): Promise<MockModelServer> {
           return;
         }
       }
+      if (requestIndex === 2 && holdSecondResponse) {
+        await secondResponse.promise;
+        if (res.destroyed) {
+          return;
+        }
+      }
       writeTextResponse(res, requestIndex);
     })().catch((error: unknown) => {
       if (!res.destroyed) {
@@ -284,12 +292,14 @@ async function startMockModelServer(): Promise<MockModelServer> {
       firstResponseKind = kind;
       firstResponse.resolve();
     },
+    releaseSecond: () => secondResponse.resolve(),
     stop: async () => {
       if (stopped) {
         return;
       }
       stopped = true;
       firstResponse.resolve();
+      secondResponse.resolve();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();
@@ -458,7 +468,11 @@ function createConfig(params: {
   };
 }
 
-async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise<GatewayClient> {
+async function connectDiagnosticsClient(
+  instance: OpenClawTestInstance,
+  cliMode = false,
+  onEvent?: GatewayClientOptions["onEvent"],
+): Promise<GatewayClient> {
   let resolveHello!: () => void;
   let rejectHello!: (error: Error) => void;
   const hello = new Promise<void>((resolve, reject) => {
@@ -467,14 +481,16 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
   });
   const gatewayUrl = new URL(instance.url);
   gatewayUrl.protocol = gatewayUrl.protocol === "wss:" ? "https:" : "http:";
-  // Both clients share a device identity; use the same canonical runtime metadata.
+  // UI diagnostics share the TUI identity; CLI requests own a separate connection.
   const options: GatewayClientOptions = {
     url: instance.url,
-    origin: gatewayUrl.origin,
+    origin: cliMode ? undefined : gatewayUrl.origin,
     token: "steer-fifo-token",
-    clientName: GATEWAY_CLIENT_NAMES.TUI,
+    clientName: cliMode ? GATEWAY_CLIENT_NAMES.CLI : GATEWAY_CLIENT_NAMES.TUI,
     clientDisplayName: "steer-fifo-e2e-diagnostics",
-    mode: GATEWAY_CLIENT_MODES.UI,
+    mode: cliMode ? GATEWAY_CLIENT_MODES.CLI : GATEWAY_CLIENT_MODES.UI,
+    deviceIdentity: cliMode ? null : undefined,
+    sharedStateMode: cliMode ? "read-only" : undefined,
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write"],
     caps: [
@@ -487,6 +503,7 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
     onHelloOk: resolveHello,
     onConnectError: rejectHello,
     onClose: (code, reason) => rejectHello(new Error(`Gateway closed ${code}: ${reason}`)),
+    onEvent,
   };
   const client = new GatewayClient(options);
   diagnosticsClients.push(client);
@@ -497,14 +514,19 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
 
 async function createGatewayFixture(
   name: string,
-  options: { withSteeringTools?: boolean; steeringGateMode?: SteeringGateMode } = {},
+  options: {
+    withSteeringTools?: boolean;
+    steeringGateMode?: SteeringGateMode;
+    cliMode?: boolean;
+    holdSecondResponse?: boolean;
+  } = {},
 ): Promise<GatewayFixture> {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
   cleanupDirs.push(fixtureDir);
   const steeringTools = options.withSteeringTools
     ? await writeSteeringToolsPlugin(fixtureDir, options.steeringGateMode ?? "preflight")
     : undefined;
-  const modelServer = await startMockModelServer();
+  const modelServer = await startMockModelServer(options.holdSecondResponse);
   modelServers.push(modelServer);
   const instance = await createOpenClawTestInstance({
     name,
@@ -526,7 +548,7 @@ async function createGatewayFixture(
     token: "steer-fifo-token",
   });
   clients.push(client);
-  client.onEvent = ({ event, payload }) => {
+  const onEvent: GatewayChatClient["onEvent"] = ({ event, payload }) => {
     if (event === "agent" && payload && typeof payload === "object") {
       const agentEvent = payload as AgentEvent;
       events.push(agentEvent);
@@ -546,10 +568,18 @@ async function createGatewayFixture(
       }
     }
   };
+  client.onEvent = options.cliMode ? undefined : onEvent;
   client.start();
   await client.waitForReady();
   await client.subscribeSessionEvents();
-  const diagnosticsClient = await connectDiagnosticsClient(instance);
+  const diagnosticsClient = await connectDiagnosticsClient(
+    instance,
+    options.cliMode,
+    options.cliMode ? onEvent : undefined,
+  );
+  if (options.cliMode) {
+    await diagnosticsClient.request("sessions.subscribe", {});
+  }
   return {
     client,
     diagnosticsClient,
@@ -678,6 +708,27 @@ async function waitForRunTerminal(fixture: GatewayFixture, runId: string): Promi
   );
 }
 
+async function waitForSessionIdle(fixture: GatewayFixture, sinceSeq: number): Promise<void> {
+  await vi.waitFor(async () => {
+    const snapshot = await fixture.diagnosticsClient.request<{
+      events?: Array<{ outcome?: string; queueDepth?: number; type?: string }>;
+    }>("diagnostics.stability", {
+      type: "session.state",
+      sinceSeq,
+      limit: 20,
+    });
+    expect(
+      (snapshot.events ?? []).some(
+        (event) =>
+          event.type === "session.state" && event.outcome === "idle" && event.queueDepth === 0,
+      ),
+    ).toBe(true);
+  }, WAIT_OPTS);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 function contentText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -760,24 +811,7 @@ describe("Gateway steer FIFO", () => {
 
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(3), WAIT_OPTS);
       await waitForRunTerminal(fixture, first.runId);
-      await vi.waitFor(async () => {
-        const snapshot = await fixture.diagnosticsClient.request<{
-          events?: Array<{ outcome?: string; queueDepth?: number; type?: string }>;
-        }>("diagnostics.stability", {
-          type: "session.state",
-          sinceSeq: idleBaseline.lastSeq ?? 0,
-          limit: 20,
-        });
-        expect(
-          (snapshot.events ?? []).some(
-            (event) =>
-              event.type === "session.state" && event.outcome === "idle" && event.queueDepth === 0,
-          ),
-        ).toBe(true);
-      }, WAIT_OPTS);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
 
       const currentA = currentUserInput(fixture.modelServer.requests[1]);
       const currentB = currentUserInput(fixture.modelServer.requests[2]);
@@ -966,25 +1000,118 @@ describe("Gateway steer FIFO", () => {
         "function_call_output",
       );
       await waitForRunTerminal(fixture, first.runId);
-      await vi.waitFor(async () => {
-        const snapshot = await fixture.diagnosticsClient.request<{
-          events?: Array<{ outcome?: string; queueDepth?: number; type?: string }>;
-        }>("diagnostics.stability", {
+      await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
+      expect(fixture.modelServer.requests).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "withdraws a canceled CLI steer before the active run consumes it",
+    async () => {
+      const fixture = await createGatewayFixture("steer-cancellation", {
+        cliMode: true,
+        holdSecondResponse: true,
+      });
+      const { diagnosticsClient: client, modelServer, sessionKey } = fixture;
+      const firstRunId = "initial-held-turn";
+      const steerRunId = "canceled-steer";
+      const steerMarker = "CANCELED_STEER_SENTINEL";
+      const steerParams = {
+        sessionKey,
+        message: steerMarker,
+        deliver: false,
+        queueMode: "steer",
+        idempotencyKey: steerRunId,
+      };
+      const historyWithoutSteer = async () => {
+        const history = await client.request<{
+          messages: Array<{ role: string; content?: unknown }>;
+          sessionInfo: { hasActiveRun: boolean; status?: string };
+        }>("chat.history", { sessionKey, limit: 100 });
+        expect(
+          history.messages.filter(
+            (message) =>
+              message.role === "user" && contentText(message.content).includes(steerMarker),
+          ),
+        ).toEqual([]);
+        return history;
+      };
+
+      try {
+        expect(
+          await client.request("chat.send", {
+            sessionKey,
+            message: "INITIAL_HELD_TURN",
+            deliver: false,
+            idempotencyKey: firstRunId,
+          }),
+        ).toMatchObject({ runId: firstRunId, status: "started" });
+        await vi.waitFor(() => expect(modelServer.requests).toHaveLength(1), WAIT_OPTS);
+        expect(await client.request("chat.send", steerParams)).toMatchObject({
+          runId: steerRunId,
+          status: "started",
+        });
+        await historyWithoutSteer();
+
+        expect(await client.request("chat.abort", { sessionKey, runId: steerRunId })).toEqual({
+          ok: true,
+          aborted: true,
+          runIds: [steerRunId],
+        });
+        expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
+          hasActiveRun: true,
+          status: "running",
+        });
+        expect(modelServer.requests).toHaveLength(1);
+        const idleBaseline = await client.request<{ lastSeq?: number }>("diagnostics.stability", {
           type: "session.state",
-          sinceSeq: idleBaseline.lastSeq ?? 0,
-          limit: 20,
+          limit: 1,
+        });
+
+        // No response bytes are released until the steer cancellation is acknowledged.
+        modelServer.releaseFirst("tool");
+        await vi.waitFor(() => expect(modelServer.requests).toHaveLength(2), WAIT_OPTS);
+        const continuation = modelServer.requests[1];
+        expect(userInputs(continuation).join("\n")).not.toContain(steerMarker);
+        const statusResult = responseInputItems(continuation).find(
+          (item) =>
+            item.type === "function_call_output" && item.call_id === "call_steer_fifo_status",
+        );
+        expect(statusResult).toBeDefined();
+        expect(contentText(statusResult?.output)).not.toContain(
+          "Skipped due to queued user message.",
+        );
+        expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
+          hasActiveRun: true,
+          status: "running",
         });
         expect(
-          (snapshot.events ?? []).some(
+          fixture.events.filter(
             (event) =>
-              event.type === "session.state" && event.outcome === "idle" && event.queueDepth === 0,
+              event.runId === firstRunId &&
+              event.stream === "lifecycle" &&
+              (event.data?.phase === "end" || event.data?.phase === "error"),
           ),
-        ).toBe(true);
-      }, WAIT_OPTS);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(fixture.modelServer.requests).toHaveLength(2);
+        ).toEqual([]);
+
+        expect(await client.request("chat.send", steerParams)).toMatchObject({
+          runId: steerRunId,
+          status: "timeout",
+          summary: "aborted",
+        });
+        modelServer.releaseSecond();
+        await waitForRunTerminal(fixture, firstRunId);
+        await vi.waitFor(() => expect(fixture.chatFinalRunIds).toContain(firstRunId), WAIT_OPTS);
+        await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
+        expect((await historyWithoutSteer()).sessionInfo.hasActiveRun).toBe(false);
+        expect(modelServer.requests).toHaveLength(2);
+        expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
+        expect(fixture.chatErrors).toEqual([]);
+      } finally {
+        modelServer.releaseFirst("tool");
+        modelServer.releaseSecond();
+      }
     },
     TEST_TIMEOUT_MS,
   );

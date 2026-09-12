@@ -85,11 +85,13 @@ describe("Codex app-server user input bridge", () => {
   it("registers, presents, claims, and returns gateway answers", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
+    const onOrdinaryResponse = vi.fn();
     const bridge = createCodexUserInputBridge({
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
       gatewayCall: gateway.call,
+      onOrdinaryResponse,
     });
 
     const response = bridge.handleRequest({ id: "input-1", params: requestParams() });
@@ -124,25 +126,42 @@ describe("Codex app-server user input bridge", () => {
     await expect(
       claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "2" }),
     ).resolves.toBe(true);
-    await expect(response).resolves.toEqual({ answers: { choice: { answers: ["Deep"] } } });
+    const returned = await response;
+    expect(returned).toEqual({ answers: { choice: { answers: ["Deep"] } } });
+    expect(onOrdinaryResponse).toHaveBeenCalledOnce();
+    expect(onOrdinaryResponse.mock.calls[0]?.[0]).toMatchObject({
+      itemId: "tool-1",
+      questions: [expect.objectContaining({ id: "choice", isSecret: false })],
+    });
+    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
   });
 
   it("cancels the gateway record on run abort", async () => {
     const controller = new AbortController();
     const params = createParams(controller.signal);
     const gateway = createGatewayStub();
+    const onOrdinaryResponse = vi.fn();
     const bridge = createCodexUserInputBridge({
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
       signal: controller.signal,
       gatewayCall: gateway.call,
+      onOrdinaryResponse,
     });
     const response = bridge.handleRequest({ id: "input-abort", params: requestParams() });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const lateAnswer = gateway.call(
+      "question.resolve",
+      {},
+      { answers: { answers: { choice: ["Late answer"] } } },
+    );
     controller.abort();
-
-    await expect(response).resolves.toEqual({ answers: {} });
+    await lateAnswer;
+    const returned = await response;
+    expect(returned).toEqual({ answers: {} });
+    expect(onOrdinaryResponse).toHaveBeenCalledOnce();
+    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
     expect(gateway.calls).toContainEqual(
       expect.objectContaining({
         method: "question.resolve",
@@ -174,11 +193,13 @@ describe("Codex app-server user input bridge", () => {
   it("keeps secret questions on the warned text-only path", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
+    const onOrdinaryResponse = vi.fn();
     const bridge = createCodexUserInputBridge({
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
       gatewayCall: gateway.call,
+      onOrdinaryResponse,
     });
     const response = bridge.handleRequest({
       id: "input-secret",
@@ -194,6 +215,7 @@ describe("Codex app-server user input bridge", () => {
       claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "private" }),
     ).resolves.toBe(true);
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
+    expect(onOrdinaryResponse).not.toHaveBeenCalled();
   });
 
   it("requires isSecret to be an own input property", async () => {

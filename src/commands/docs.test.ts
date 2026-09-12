@@ -1,7 +1,7 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -25,18 +25,6 @@ vi.mock("../cli/command-format.js", () => ({
 
 const { docsSearchCommand } = await import("./docs.js");
 
-function makeRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv & {
-    log: ReturnType<typeof vi.fn>;
-    error: ReturnType<typeof vi.fn>;
-    exit: ReturnType<typeof vi.fn>;
-  };
-}
-
 describe("docsSearchCommand", () => {
   beforeEach(() => {
     fetchMock.mockReset();
@@ -49,7 +37,7 @@ describe("docsSearchCommand", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
@@ -79,7 +67,7 @@ describe("docsSearchCommand", () => {
         }),
       ),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await docsSearchCommand(["cli"], runtime, { json: true });
 
@@ -108,7 +96,7 @@ describe("docsSearchCommand", () => {
         }),
       ),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await docsSearchCommand(["openclaw"], runtime, { json: true, limit: 1 });
 
@@ -119,7 +107,7 @@ describe("docsSearchCommand", () => {
   });
 
   it("emits one JSON object for the docs homepage", async () => {
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await docsSearchCommand([], runtime, { json: true });
 
@@ -145,7 +133,7 @@ describe("docsSearchCommand", () => {
       { status: 503 },
     );
     fetchMock.mockResolvedValueOnce(response);
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["browser", "existing-session"], runtime)).rejects.toThrow(
       "Docs search failed: HTTP 503",
@@ -160,11 +148,40 @@ describe("docsSearchCommand", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
+  });
+
+  it.each([
+    { name: "missing results", payload: {} },
+    { name: "null results", payload: { results: null } },
+    { name: "object results", payload: { results: {} } },
+    { name: "string results", payload: { results: "unavailable" } },
+  ])("rejects $name instead of reporting a successful empty search", async ({ payload }) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload)));
+    const runtime = createTestRuntime();
+
+    await expect(docsSearchCommand(["gateway"], runtime, { json: true })).rejects.toThrow(
+      "Docs search failed: Docs search response is malformed: expected results array",
+    );
+
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("keeps a successful empty search distinct from a malformed response", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })));
+    const runtime = createTestRuntime();
+
+    await docsSearchCommand(["no-matches"], runtime, { json: true });
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "no-matches",
+      results: [],
+    });
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
@@ -176,7 +193,7 @@ describe("docsSearchCommand", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(body, { headers: { "Content-Type": "application/json" } }),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["plugin"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
@@ -198,7 +215,7 @@ describe("docsSearchCommand", () => {
         { headers: { "Content-Type": "application/json" } },
       ),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
@@ -225,7 +242,7 @@ describe("docsSearchCommand", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const runtime = makeRuntime();
+    const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["oversized"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response exceeds 8388608 bytes",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -16,6 +17,7 @@ export type LeaseScenario = {
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
   writerRecords?: Record<string, PluginInstallRecord>;
+  runtimeRoot?: string;
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
@@ -42,6 +44,23 @@ export async function runUpdateLeaseChild(): Promise<void> {
     await record("writer-committed");
   };
   const command = process.argv[2];
+  if (scenario.runtimeRoot && (command === "doctor" || command === "runtime-proof")) {
+    const runtimeRoot = path.join(scenario.runtimeRoot, "dist-runtime", "extensions", "demo");
+    const runtime = await import(pathToFileURL(path.join(runtimeRoot, "index.js")).href);
+    const metadata = JSON.parse(await fs.readFile(path.join(runtimeRoot, "package.json"), "utf8"));
+    const sdk = await import(
+      pathToFileURL(
+        path.join(scenario.runtimeRoot, "dist/extensions/node_modules/openclaw/plugin-sdk/demo.js"),
+      ).href
+    );
+    assert.equal(runtime.generation, "candidate");
+    assert.equal(metadata.generation, "candidate");
+    assert.equal(sdk.generation, "candidate");
+    await record(`runtime-proof:${command}`);
+    if (command === "runtime-proof") {
+      return;
+    }
+  }
   if (command === "config") {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");

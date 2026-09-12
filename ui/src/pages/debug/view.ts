@@ -1,5 +1,7 @@
 // Control UI view renders debug screen content.
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
+import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
@@ -50,7 +52,7 @@ function renderJsonRow(title: unknown, value: unknown) {
     title,
     stacked: true,
     control: html`<pre class="code-block">
-${unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2)))}</pre>`,
+${guard([value], () => unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2))))}</pre>`,
   });
 }
 
@@ -122,7 +124,7 @@ function renderEventRow(evt: EventLogEntry) {
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
     control: html`<pre class="code-block">
-${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
+${guard([evt.payload], () => unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload))))}</pre>`,
   });
 }
 
@@ -240,7 +242,8 @@ export function renderDebug(props: DebugProps) {
           ? html`
               <div class="settings-row settings-row--stacked">
                 ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-                <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
+                <pre class="code-block">
+${guard([props.callResult], () => unsafeHTML(highlightJsonHtml(props.callResult!)))}</pre>
               </div>
             `
           : nothing
@@ -253,7 +256,7 @@ export function renderDebug(props: DebugProps) {
     html`
       <div class="settings-row settings-row--stacked">
         <pre class="code-block">
-${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</pre>
+${guard([props.models], () => unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2))))}</pre>
       </div>
     `,
   );
@@ -262,7 +265,9 @@ ${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</p
     { title: t("debug.eventLogTitle"), description: t("debug.eventLogSubtitle") },
     props.eventLog.length === 0
       ? renderSettingsEmpty(t("debug.noEvents"))
-      : props.eventLog.map((evt) => renderEventRow(evt)),
+      : // Entries retain their identity as the log prepends and evicts. Keep their
+        // highlighted DOM and selection attached to the event, not its list index.
+        repeat(props.eventLog, (evt) => evt, renderEventRow),
   );
 
   return renderSettingsPage(

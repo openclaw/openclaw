@@ -1,4 +1,7 @@
-import type { CronRunLogEntry as CronRunLogWireEntry } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import type {
+  CronJob as CronJobWire,
+  CronRunLogEntry as CronRunLogWireEntry,
+} from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -24,41 +27,12 @@ export type {
 export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
-export type CronSchedule =
-  | { kind: "at"; at: string }
-  | { kind: "every"; everyMs: number; anchorMs?: number }
-  | {
-      kind: "cron";
-      expr: string;
-      tz?: string;
-      /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
-      staggerMs?: number;
-    }
-  | {
-      /**
-       * Event-driven (non-time) trigger: the job fires once when a gateway-owned
-       * watcher process running `command` exits. The watcher lives under the
-       * gateway ProcessSupervisor, NOT inside any agent turn's process tree, so
-       * it survives the per-turn spawn-and-kill teardown that CLI backends apply
-       * (#71662). On exit the job runs through the normal cron run pipeline, so
-       * delivery to the bound session works exactly like a scheduled main job.
-       * `computeNextRunAtMs` returns undefined for this kind (never time-due).
-       */
-      kind: "on-exit";
-      command: string;
-      cwd?: string;
-    }
-  | {
-      /** Event-driven source whose supervised argv emits payload-triggering lines. */
-      kind: "stream";
-      command: string[];
-      cwd?: string;
-      mode?: "line" | "match";
-      /** JavaScript regular-expression source, required when mode is "match". */
-      match?: string;
-      batchMs?: number;
-      maxBatchBytes?: number;
-    };
+// on-exit watchers belong to the Gateway ProcessSupervisor, outside agent-turn
+// teardown; events use the normal cron pipeline and bound-session delivery.
+// computeNextRunAtMs returns undefined for on-exit and stream schedules.
+// Cron staggerMs=0 keeps exact timing; stream command argv emits trigger lines,
+// with match carrying the required JavaScript regex source when mode is "match".
+export type CronSchedule = CronJobWire["schedule"];
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
@@ -354,15 +328,14 @@ type CronScriptPayloadPatch = {
   kind: "script";
 } & Partial<CronScriptPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
-export type CronJobState = {
-  nextRunAtMs?: number;
-  /**
-   * When the current scheduling inputs took effect. Restart catch-up replays a
-   * missed slot only when the slot is newer than this, because slots computed
-   * from a freshly edited schedule never existed under the old one. Absent on
-   * jobs whose schedule has not changed, where every computed slot is real.
-   */
-  scheduleActivatedAtMs?: number;
+// scheduleActivatedAtMs fences catch-up to slots belonging to the active schedule;
+// edits must not invent missed work. Without activation, every computed slot is real.
+// streamSourceIdentity survives child restarts but rotates atomically on
+// disable/remove/replace, fencing same-schedule ABA admission.
+export type CronJobState = Omit<
+  CronJobWire["state"],
+  "deliverySuppressionReason" | "lastStatus"
+> & {
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
@@ -371,67 +344,16 @@ export type CronJobState = {
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
-  runningAtMs?: number;
-  lastRunAtMs?: number;
-  /** Preferred execution outcome field. */
-  lastRunStatus?: CronRunStatus;
-  /** @deprecated Use lastRunStatus. */
-  lastStatus?: "ok" | "error" | "skipped";
-  lastError?: string;
-  lastDiagnostics?: CronRunDiagnostics;
-  lastDiagnosticSummary?: string;
-  /** Classified reason for the last error (when available). */
-  lastErrorReason?: FailoverReason;
-  lastDurationMs?: number;
-  /** Number of consecutive execution errors (reset on success). Used for backoff. */
-  consecutiveErrors?: number;
-  /** Durable explanation for a scheduler-owned automatic disable transition. */
-  autoDisabled?: {
-    reason: "consecutive-failures" | "schedule-errors";
-    atMs: number;
-    consecutiveErrors: number;
-  };
-  /** Number of consecutive skipped executions (reset on success or error). */
-  consecutiveSkipped?: number;
-  /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
-  lastFailureAlertAtMs?: number;
+  /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
+  runningReceiptId?: string;
+  /** Nonce for a committed schedule edit during the pending run. */
+  runningScheduleChangeId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
-  /** Timestamp of the last trigger script evaluation. */
-  lastTriggerEvalAtMs?: number;
-  /** Number of completed trigger script evaluations. */
-  triggerEvalCount?: number;
-  /** Timestamp of the last trigger evaluation that fired. */
-  lastTriggerFireAtMs?: number;
-  /** JSON state returned by the last trigger script evaluation. */
-  triggerState?: unknown;
-  /** Current gateway-owned stream source lifecycle state. */
-  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
-  streamError?: string;
-  streamConsecutiveFailures?: number;
-  streamRestartExhausted?: boolean;
-  // Identity of the logical stream source that owns this job's batches. It is
-  // stable across child-process restarts and rotates atomically when the source
-  // is disabled, removed, or replaced, closing same-schedule ABA admission.
-  streamSourceIdentity?: string;
-  streamDroppedBatches?: number;
-  streamCoalescedBatches?: number;
-  streamLastStartedAtMs?: number;
-  streamLastExitAtMs?: number;
-  /** Explicit delivery outcome, separate from execution outcome. */
-  lastDeliveryStatus?: CronDeliveryStatus;
-  /** Delivery-specific error text when available. */
-  lastDeliveryError?: string;
+  /** @deprecated Use lastRunStatus. */
+  lastStatus?: "ok" | "error" | "skipped";
   /** Intentional non-delivery reason for the last run, when recorded by the dispatcher. */
   deliverySuppressionReason?: NormalizeReplySkipReason;
-  /** Whether the last run's output was delivered to the target channel. */
-  lastDelivered?: boolean;
-  /** Whether the last failed run's failure notification was delivered to the target channel. */
-  lastFailureNotificationDelivered?: boolean;
-  /** Delivery outcome for the last failed run's failure notification. */
-  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
-  /** Delivery-specific error for the last failed run's failure notification. */
-  lastFailureNotificationDeliveryError?: string;
 };
 
 type CronTrigger = {
@@ -515,7 +437,14 @@ export type CronStoreFile = {
 };
 
 type CronJobStateInput = Partial<
-  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
+  Omit<
+    CronJobState,
+    | "autoDisabled"
+    | "scheduleActivatedAtMs"
+    | "streamSourceIdentity"
+    | "runningReceiptId"
+    | "runningScheduleChangeId"
+  >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */

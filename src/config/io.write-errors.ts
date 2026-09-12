@@ -1,8 +1,36 @@
 // Formats stable user-facing config write failures.
+import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 const CONFIG_VALIDATION_FAILED_CODE = "CONFIG_VALIDATION_FAILED";
 const CONFIG_INCLUDE_OWNERSHIP_CODE = "CONFIG_INCLUDE_OWNERSHIP";
+
+export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
+
+/** A completed file write must not be handled as a retryable pre-write refusal. */
+export class ConfigWritePostCommitError extends Error {
+  readonly configPath: string;
+  readonly rollbackStatus: ConfigWriteRollbackStatus;
+
+  constructor(params: {
+    configPath: string;
+    rollbackStatus: ConfigWriteRollbackStatus;
+    cause: unknown;
+  }) {
+    const recovery = {
+      restored: "The config write was rolled back.",
+      "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
+      unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
+    }[params.rollbackStatus];
+    super(
+      `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
+      { cause: params.cause },
+    );
+    this.name = "ConfigWritePostCommitError";
+    this.configPath = params.configPath;
+    this.rollbackStatus = params.rollbackStatus;
+  }
+}
 
 function hasConfigWriteErrorCode(error: unknown, code: string): error is Error {
   return (

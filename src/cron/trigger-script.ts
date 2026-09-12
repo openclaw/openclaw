@@ -38,7 +38,6 @@ import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import type { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
@@ -128,11 +127,17 @@ type PrepareTriggerRuntime = (params: {
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
+type LoadTriggerPluginRegistry = (input: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  allowGatewaySubagentBinding: boolean;
+}) => PluginRegistry;
+
 type CronTriggerEvaluatorDeps = {
   config: OpenClawConfig;
   runHeadless?: typeof runCodeModeScriptHeadless;
   prepareRuntime?: PrepareTriggerRuntime;
-  loadPluginRegistry?: typeof loadPreparedInboundPluginRegistry;
+  loadPluginRegistry?: LoadTriggerPluginRegistry;
   resolveGatewayContext?: GatewayContextResolver;
 };
 
@@ -149,7 +154,7 @@ function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string
 
 async function prepareTriggerRuntime(
   params: Parameters<PrepareTriggerRuntime>[0],
-  loadPluginRegistry: typeof loadPreparedInboundPluginRegistry = loadAgentRuntimePluginRegistryHandle,
+  loadPluginRegistry: LoadTriggerPluginRegistry = loadAgentRuntimePluginRegistryHandle,
 ): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);

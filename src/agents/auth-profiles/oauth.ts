@@ -47,6 +47,7 @@ import {
   hasRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { isSetupCredentialAccessible } from "./setup-access.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
   findPersistedAuthProfileCredential,
@@ -186,6 +187,8 @@ type ResolveApiKeyForProfileParams = {
   agentDir?: string;
   forceRefresh?: boolean;
   allowProfileFallback?: boolean;
+  /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
+  validateOAuthCredential?: (credential: OAuthCredential) => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -281,7 +284,11 @@ async function tryResolveOAuthProfile(
     return null;
   }
   const cred = store.profiles[profileId];
-  if (!cred || cred.type !== "oauth") {
+  if (
+    !cred ||
+    cred.type !== "oauth" ||
+    !isSetupCredentialAccessible({ profileId, credential: cred, agentDir: params.agentDir })
+  ) {
     return null;
   }
   if (
@@ -302,6 +309,7 @@ async function tryResolveOAuthProfile(
     agentDir: params.agentDir,
     cfg,
     forceRefresh: params.forceRefresh,
+    validateCredential: params.validateOAuthCredential,
   });
   if (!resolved) {
     return null;
@@ -408,7 +416,14 @@ export async function resolveApiKeyForProfile(
   const storedProfile = isUserModelAuthProfileId(profileId)
     ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
     : store.profiles[profileId];
-  if (!storedProfile) {
+  if (
+    !storedProfile ||
+    !isSetupCredentialAccessible({
+      profileId,
+      credential: storedProfile,
+      agentDir: params.agentDir,
+    })
+  ) {
     return null;
   }
   // Claude owns this native login slot. Legacy persisted copies must never
@@ -516,6 +531,7 @@ export async function resolveApiKeyForProfile(
       credential: cred,
       cfg,
       forceRefresh: params.forceRefresh,
+      validateCredential: params.validateOAuthCredential,
     });
     if (!resolved) {
       return null;
@@ -589,6 +605,7 @@ export async function resolveApiKeyForProfile(
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
+          validateOAuthCredential: params.validateOAuthCredential,
         });
         if (fallbackResolved) {
           return fallbackResolved;

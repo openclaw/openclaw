@@ -1,13 +1,8 @@
-// Demand-driven catalog discovery for the Models settings page.
-//
-// The initial page load uses the fast prepared catalog (configured models only)
-// so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; this controller explicitly refreshes the Gateway-owned catalog
-// and merges it in without disturbing the saved selection. Pending opens share
-// this page's request; the Gateway owns concurrent provider acquisition.
+// Picker reads consume the Gateway publication; only an explicit retry starts discovery.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import type { ModelProvidersData } from "./load.ts";
 
 type DiscoveryGateway = {
@@ -18,15 +13,15 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
+  /** Latest explicit Retry, including one that has already settled. */
+  readonly generation: number;
   /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
-  /** Fired when a default-model picker opens. */
-  openPicker: () => void;
   /** Retries a failed discovery. */
   retry: () => void;
-  /** Resets in-flight/error state (e.g. on agent switch). */
+  /** Retires pending results and errors when core data or its owner changes. */
   reset: () => void;
 };
 
@@ -37,6 +32,7 @@ type CreateOptions = {
   getData: () => ModelProvidersData | null;
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
+  onSettled: () => void;
 };
 
 export function createCatalogDiscoveryController(
@@ -44,16 +40,17 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
+  let generation = 0;
 
   const controller: CatalogDiscoveryController = {
+    get generation() {
+      return generation;
+    },
     get discovering() {
       return pending !== null;
     },
     get error() {
       return error;
-    },
-    openPicker() {
-      void discover();
     },
     retry() {
       void discover();
@@ -86,21 +83,26 @@ export function createCatalogDiscoveryController(
       options.getAgentId() === agentId &&
       options.getAgentEpoch() === agentEpoch;
     pending = request;
+    generation += 1;
     error = null;
     options.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
+        includeDefaultModels: true,
         refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {
+        error = modelCatalogRefreshError(result, t("modelProviders.defaults.discoverFailed"));
         const data = options.getData();
         if (data) {
           options.setData({
             ...data,
             models: result.models,
+            automaticUtilityModel: result.defaultModels?.automaticUtilityModel,
             providerOutcomes: result.providerOutcomes ?? [],
+            pendingProviders: result.pendingProviders,
             catalogError: null,
           });
         }
@@ -113,6 +115,7 @@ export function createCatalogDiscoveryController(
       if (pending === request) {
         pending = null;
         options.requestUpdate();
+        options.onSettled();
       }
     }
   }

@@ -118,8 +118,6 @@ function formatStatusTailscaleValue(params: {
   tailscaleMode: string;
   dnsName?: string | null;
   httpsUrl?: string | null;
-  backendState?: string | null;
-  includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
   includeDnsNameWhenOff?: boolean;
   decorateOff?: (value: string) => string;
@@ -128,21 +126,14 @@ function formatStatusTailscaleValue(params: {
   const decorateOff = params.decorateOff ?? ((value: string) => value);
   const decorateWarn = params.decorateWarn ?? ((value: string) => value);
   if (params.tailscaleMode === "off") {
-    // Off mode can still show daemon/DNS context when the caller wants diagnostic detail.
-    const suffix = [
-      params.includeBackendStateWhenOff && params.backendState
-        ? `daemon ${params.backendState}`
-        : null,
-      params.includeDnsNameWhenOff && params.dnsName ? params.dnsName : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    // Off mode can still show DNS context when the caller wants diagnostic detail.
+    const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
     return decorateOff(suffix ? `off · ${suffix}` : "off");
   }
   if (params.dnsName && params.httpsUrl) {
     const parts = [
       params.tailscaleMode,
-      params.includeBackendStateWhenOn ? (params.backendState ?? "unknown") : null,
+      params.includeBackendStateWhenOn ? "unknown" : null,
       params.dnsName,
       params.httpsUrl,
     ].filter(Boolean);
@@ -150,7 +141,7 @@ function formatStatusTailscaleValue(params: {
   }
   const parts = [
     params.tailscaleMode,
-    params.includeBackendStateWhenOn ? (params.backendState ?? "unknown") : null,
+    params.includeBackendStateWhenOn ? "unknown" : null,
     "magicdns unknown",
   ].filter(Boolean);
   return decorateWarn(parts.join(" · "));
@@ -258,8 +249,6 @@ export function buildStatusOverviewSurfaceRows(params: {
   tailscaleDns?: string | null;
   tailscaleHttpsUrl?: string | null;
   advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
-  tailscaleBackendState?: string | null;
-  includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
   includeDnsNameWhenOff?: boolean;
   decorateTailscaleOff?: (value: string) => string;
@@ -317,8 +306,6 @@ export function buildStatusOverviewSurfaceRows(params: {
       tailscaleMode: params.tailscaleMode,
       dnsName: params.tailscaleDns,
       httpsUrl: params.tailscaleHttpsUrl,
-      backendState: params.tailscaleBackendState,
-      includeBackendStateWhenOff: params.includeBackendStateWhenOff,
       includeBackendStateWhenOn: params.includeBackendStateWhenOn,
       includeDnsNameWhenOff: params.includeDnsNameWhenOff,
       decorateOff: params.decorateTailscaleOff,

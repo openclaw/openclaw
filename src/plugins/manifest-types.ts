@@ -1,6 +1,8 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
@@ -380,6 +382,8 @@ export type PluginManifestBackupResource = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Ordered browse categories; the first category is the plugin's primary category. */
+  categories?: PluginCategorySlug[];
   /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
   backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */
@@ -392,6 +396,8 @@ export type PluginManifest = {
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
   channels?: string[];
+  /** Account-key selection rules available before channel runtime loads. */
+  channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
   /**
    * Optional lightweight module that exports provider plugin metadata for
@@ -442,7 +448,7 @@ export type PluginManifest = {
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
-  providerAuthAliases?: Record<string, string>;
+  providerAuthAliases?: Record<string, string | { provider: string; baseUrls: string[] }>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
@@ -635,6 +641,10 @@ export type PluginManifestProviderAuthChoice = {
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */
   appGuidedAuth?: "oauth" | "device-code";
+  /** Auth can return credentials without discovering or selecting a starter model. */
+  credentialOnly?: boolean;
+  /** Fixed-input sign-in offered in private owner-only chat. */
+  channelLogin?: { aliases?: string[] };
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.

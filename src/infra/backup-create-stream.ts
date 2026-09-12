@@ -1,11 +1,34 @@
 import fsSync, { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
-import { Transform } from "node:stream";
+import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
+
+/** Seal the manifest from observed entries after the single payload traversal. */
+export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManifest: () => Buffer) {
+  return compose(
+    payload,
+    async function* (source: AsyncIterable<Buffer>) {
+      // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
+      // Replace only that terminator; the payload headers and bytes stay intact.
+      let tail = Buffer.alloc(0);
+      for await (const chunk of source) {
+        const bytes = Buffer.concat([tail, chunk]);
+        const length = Math.max(0, bytes.length - 1024);
+        if (length) {
+          yield bytes.subarray(0, length);
+        }
+        tail = bytes.subarray(length);
+      }
+      yield createManifest();
+    },
+    createGzip(),
+  );
+}
 
 type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Array>) & {
   destroy(error?: Error): unknown;

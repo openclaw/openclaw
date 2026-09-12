@@ -10,6 +10,40 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
+  it("does not borrow a provider for an ambiguous draft target", async () => {
+    const { context } = contextWith([
+      {
+        id: "model",
+        name: "First model",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [{ id: "high", label: "High" }],
+        thinkingDefault: "high",
+      },
+      { id: "model", name: "Second model", provider: "alternate-fixture", reasoning: true },
+    ]);
+    Object.assign(context.sessions.state.result!.defaults, {
+      model: "other",
+      modelProvider: "openai",
+    });
+    const agent = { id: "main", model: { primary: "model" } } satisfies GatewayAgentRow;
+    const onSelectionChange = vi.fn();
+    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
+    control.load(context, "main", true, { agent });
+    await waitForFast(() =>
+      expect(
+        renderControl(control, context, "main", agent).querySelector(
+          '[data-chat-model-option="openai/model"]',
+        ),
+      ).not.toBeNull(),
+    );
+    const container = renderControl(control, context, "main", agent);
+    expect(container.querySelector('[data-chat-thinking-option="high"]')).toBeNull();
+    expect(container.querySelector('[data-chat-thinking-slider="true"]')).toBeNull();
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    control.reset();
+  });
+
   it("keeps a draft model local without exposing its internal selection target", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -246,7 +280,15 @@ describe("new-session model runtime", () => {
   it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
     const { context } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+      {
+        id: "llama-4",
+        name: "Llama 4",
+        provider: "ollama",
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+      },
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
@@ -287,7 +329,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("renders initial metadata loading without synthesizing the configured default", async () => {
+  it("shows the known default immediately without inventing catalog choices", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
@@ -304,16 +346,17 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      true,
+      false,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).not.toBeNull();
-    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingSkeleton).toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(control.modelForSubmission()).toBe("");
+    expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
     pending.resolve({ models: [] });
   });
 
@@ -360,6 +403,10 @@ describe("new-session model runtime", () => {
     container = renderControl(control, context, "main", {
       id: "main",
       model: { primary: "openai/gpt-5.6-sol" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "high", label: "High" },
+      ],
       thinkingDefault: "high",
     });
     expect(
@@ -382,7 +429,43 @@ describe("new-session model runtime", () => {
     expect(control.thinkingLevel).toBe("");
   });
 
-  it("shows Medium for a hydrated agent without a projected thinking default", async () => {
+  it("uses the draft model's published thinking profile instead of inventing Medium", async () => {
+    const { context } = contextWith([
+      {
+        id: "published",
+        name: "Published thinking",
+        provider: "thinking-fixture",
+        reasoning: true,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+        thinkingDefault: "high",
+      },
+    ]);
+    const agent = { id: "main", model: { primary: "thinking-fixture/published" } };
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true, { agent });
+    await waitForFast(() =>
+      expect(renderControl(control, context, "main", agent).textContent).toContain(
+        "Published thinking",
+      ),
+    );
+
+    const container = renderControl(control, context, "main", agent);
+    const picker = container.querySelector('[data-chat-thinking-select="true"]');
+    expect(picker).not.toBeNull();
+    expect(picker?.textContent).toContain("High");
+    expect(picker?.textContent).not.toContain("Medium");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-slider="true"]')
+        ?.getAttribute("data-chat-thinking-values"),
+    ).toBe("low,high");
+    expect(control.thinkingLevel).toBe("");
+  });
+
+  it("does not invent Medium for a hydrated agent without a thinking profile", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
@@ -402,9 +485,8 @@ describe("new-session model runtime", () => {
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Sol",
     );
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "Medium",
-    );
+    expect(container.textContent).not.toContain("Medium");
+    expect(container.querySelector('[data-chat-thinking-slider="true"]')).toBeNull();
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
   });
@@ -413,6 +495,10 @@ describe("new-session model runtime", () => {
     const agent = {
       id: "main",
       model: { primary: "openai/gpt-5.6-sol" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "high", label: "High" },
+      ],
       thinkingDefault: "high",
     } satisfies GatewayAgentRow;
     const { context } = contextWith([

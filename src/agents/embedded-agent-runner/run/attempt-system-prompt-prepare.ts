@@ -116,6 +116,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     userDate,
   } = await resolveAgentRuntimePrompt({
     config: attempt.config,
+    preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
     agentId: params.setup.sessionAgentId,
     workspaceDir: params.setup.effectiveWorkspace,
     cwd: params.setup.effectiveCwd,

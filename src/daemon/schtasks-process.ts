@@ -17,6 +17,7 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type WindowsProcessSnapshotEntry = {
@@ -239,18 +240,22 @@ export async function resolveListenerBackedScheduledTaskRuntime(
     : null;
 }
 
-export async function terminateScheduledTaskNodeHost(env: GatewayServiceEnv): Promise<number[]> {
+export async function terminateScheduledTaskNodeHost(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<number[]> {
   const matched = await resolveScheduledTaskNodeHostProcess(env);
   if (!matched) {
     return [];
   }
-  await terminateGatewayProcessTree(matched.pid, 300);
+  await terminateGatewayProcessTree(matched.pid, 300, assertCurrent);
   return [matched.pid];
 }
 
 export async function terminateScheduledTaskGatewayListeners(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts: readonly string[] },
+  assertCurrent?: () => void,
 ): Promise<number[]> {
   if (!shouldManageGatewayListenerPort(env)) {
     return [];
@@ -262,7 +267,7 @@ export async function terminateScheduledTaskGatewayListeners(
   }
   const pids = await resolveScheduledTaskOwnedGatewayPids(env, resolvedContext);
   for (const pid of pids) {
-    await terminateGatewayProcessTree(pid, 300);
+    await terminateGatewayProcessTree(pid, 300, assertCurrent);
   }
   return pids;
 }
@@ -304,7 +309,13 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return probeProcessState(pid) === "missing";
 }
 
-export async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
+export async function terminateGatewayProcessTree(
+  pid: number,
+  graceMs: number,
+  assertCurrent?: () => void,
+): Promise<void> {
+  assertGatewayServiceUpdateCurrent();
+  assertCurrent?.();
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
     killProcessTree(pid, { graceMs });
@@ -321,6 +332,8 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
+  assertGatewayServiceUpdateCurrent();
+  assertCurrent?.();
   const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
     env: resolveServiceManagerEnv(),
     stdio: "ignore",

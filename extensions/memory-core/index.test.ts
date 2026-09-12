@@ -143,7 +143,7 @@ describe("buildPromptSection", () => {
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("then use memory_get");
+    expect(result[1]).toContain("for memory-file hits, use memory_get");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -166,6 +166,31 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
     expect(result[1]).not.toContain("run memory_search");
+  });
+
+  it.each([
+    [[], [], ["sessions_search", "sessions_history"]],
+    [["sessions_search"], ["sessions_search"], ["sessions_history"]],
+    [["sessions_history"], ["sessions_history"], ["sessions_search"]],
+    [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
+  ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
+    const prompt = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
+    }).join("\n");
+    for (const name of included) {
+      expect(prompt).toContain(name);
+    }
+    for (const name of excluded) {
+      expect(prompt).not.toContain(name);
+    }
+    expect(prompt).toContain("Session search line numbers are not history offsets");
+    expect(prompt).toContain("Never read raw transcript files");
+    if (sessionTools.length === 0) {
+      expect(prompt).toContain("exact session history is unavailable");
+    }
+    if (sessionTools.length === 2) {
+      expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
+    }
   });
 
   it("includes citations-off instruction when citationsMode is off", () => {

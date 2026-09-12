@@ -14,36 +14,22 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  buildChunkKey,
   buildVoiceCallLegacyJsonlEventKey,
+  encodeCallRecordEvent,
+  type CallRecordEventChunk,
+  type CallRecordEventMeta,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
   CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
   CALL_RECORD_EVENT_META_MAX_ENTRIES,
   CALL_RECORD_EVENTS_NAMESPACE,
   MAX_CALL_RECORD_EVENTS,
-  MAX_CHUNKS_PER_CALL_RECORD_EVENT,
-  prepareVoiceCallRecordForStorage,
   parseVoiceCallRecordLine,
-  RAW_CALL_RECORD_CHUNK_BYTES,
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
 import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
-import type { CallRecord } from "./src/types.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
-
-/** Plugin state metadata row for one migrated call record event. */
-type CallRecordEventMeta = {
-  chunkCount: number;
-  byteLength: number;
-  persistedAt?: number;
-  sequence?: number;
-};
-
-/** Plugin state chunk row for one migrated call record event. */
-type CallRecordEventChunk = {
-  index: number;
-  dataBase64: string;
-};
 
 /** Prepared legacy JSONL call record ready for plugin state import. */
 type PreparedLegacyCallRecord = {
@@ -158,6 +144,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "conversation bindings -> exact target keys without agent/session projections";
     case "skill-workshop-directory-ownership-v16":
       return "Skill Workshop proposals -> per-agent Workshop directory ownership";
+    case "prepared-worker-ownership-v17":
+      return "prepared workers -> one-use capacity and fixed workspace ownership";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":
@@ -168,41 +156,6 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "tables -> SQLite STRICT typing";
   }
   return migration.kind satisfies never;
-}
-
-/** Build the plugin state key for one migrated event chunk. */
-function buildChunkKey(eventKey: string, index: number): string {
-  return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
-}
-
-/** Chunk a prepared call record into bounded plugin state rows. */
-function prepareChunks(call: CallRecord): {
-  chunks: CallRecordEventChunk[];
-  meta: CallRecordEventMeta;
-} {
-  const serialized = JSON.stringify(prepareVoiceCallRecordForStorage(call));
-  const buffer = Buffer.from(serialized, "utf8");
-  const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CALL_RECORD_CHUNK_BYTES));
-  if (chunkCount > MAX_CHUNKS_PER_CALL_RECORD_EVENT) {
-    throw new Error(
-      `voice-call record exceeds SQLite chunk limit (${chunkCount}/${MAX_CHUNKS_PER_CALL_RECORD_EVENT})`,
-    );
-  }
-  const chunks: CallRecordEventChunk[] = [];
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunk = buffer.subarray(
-      index * RAW_CALL_RECORD_CHUNK_BYTES,
-      (index + 1) * RAW_CALL_RECORD_CHUNK_BYTES,
-    );
-    chunks.push({ index, dataBase64: chunk.toString("base64") });
-  }
-  return {
-    chunks,
-    meta: {
-      chunkCount,
-      byteLength: buffer.byteLength,
-    },
-  };
 }
 
 /** Read and prepare legacy JSONL call records, collecting line-level warnings. */
@@ -229,11 +182,14 @@ async function readLegacyCallRecords(filePath: string): Promise<{
       continue;
     }
     try {
-      const prepared = prepareChunks(parsed.call);
+      const prepared = encodeCallRecordEvent(parsed.call);
+      const chunks = Array.from({ length: prepared.meta.chunkCount }, (_, chunkIndex) =>
+        prepared.chunk(chunkIndex),
+      );
       entries.push({
         eventKey: buildVoiceCallLegacyJsonlEventKey(line, index),
         lineNumber: index + 1,
-        chunks: prepared.chunks,
+        chunks,
         meta: {
           ...prepared.meta,
           persistedAt: parsed.persistedAt,

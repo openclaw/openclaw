@@ -39,9 +39,12 @@ async function select(params: {
   sessionEntry: SessionEntry;
   configuredProfileId?: string;
   modelId?: string;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 }) {
   return await resolveSessionAuthSelection({
-    cfg: {} as OpenClawConfig,
+    cfg: params.cfg ?? {},
+    agentId: params.agentId,
     provider: "openai",
     modelId: params.modelId ?? "gpt-5.6-sol",
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
@@ -54,6 +57,43 @@ async function select(params: {
 }
 
 describe("session auth selection prepared facts", () => {
+  it.each([
+    { source: "auto", selectedModel: "gpt-4.1", expected: TEST_SECONDARY_PROFILE_ID },
+    { source: "user", selectedModel: "gpt-4.1", expected: TEST_PRIMARY_PROFILE_ID },
+    { source: "auto", selectedModel: "gpt-4.1-mini", expected: TEST_PRIMARY_PROFILE_ID },
+  ] as const)(
+    "selects $expected for $source sessions using $selectedModel after activation",
+    async ({ source, selectedModel, expected }) => {
+      await withAuthState(async (state) => {
+        configureProfiles();
+        const sessionEntry: SessionEntry = {
+          sessionId: "existing-session",
+          updatedAt: 1,
+          compactionCount: 0,
+          authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+          authProfileOverrideSource: source,
+          authProfileOverrideCompactionCount: 0,
+        };
+        await expect(
+          select({
+            agentDir: state.agentDir(),
+            agentId: "main",
+            cfg: {
+              agents: {
+                entries: { main: { model: `openai/gpt-4.1@${TEST_SECONDARY_PROFILE_ID}` } },
+              },
+            },
+            modelId: selectedModel,
+            sessionEntry,
+          }),
+        ).resolves.toMatchObject({
+          profileId: expected,
+          source: source === "user" || expected === TEST_SECONDARY_PROFILE_ID ? "user" : "auto",
+        });
+      });
+    },
+  );
+
   it("returns prepared facts for a user pin", async () => {
     await withAuthState(async (state) => {
       configureProfiles();

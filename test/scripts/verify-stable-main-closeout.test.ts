@@ -96,6 +96,18 @@ describe("verify-stable-main-closeout", () => {
       releasePublishRecovery: { npmDockerVerified: true },
     });
     writeFileSync(originalPath, initialBytes);
+    mkdirSync(path.join(dir, "main", "CHANGELOG"));
+    writeFileSync(
+      path.join(dir, "main", "CHANGELOG.md"),
+      "# Changelog\n\n<!-- openclaw:split-changelog -->\n",
+    );
+    writeFileSync(
+      path.join(dir, "main", "CHANGELOG", "2026.6.8.md"),
+      "## 2026.6.8\n\n- Released.\n",
+    );
+    const splitReplay = runCli(...args, "--existing-manifest", originalPath);
+    expect(splitReplay.status, splitReplay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
     release.assets.push(
       ...[
         "OpenClaw-2026.6.8.zip",
@@ -559,8 +571,10 @@ describe("verified npm provenance", () => {
   });
 });
 
-describe("bounded historical publication runner headers", () => {
-  const historicalSha = "01403169248346f2a6d6dd02955fc956fa9e1fe9";
+describe.each([
+  "01403169248346f2a6d6dd02955fc956fa9e1fe9",
+  "458f9980c2bfdcc4f15279d20db400815406f2e8",
+])("bounded historical publication runner headers at %s", (historicalSha) => {
   const scenarios = [
     { name: "Publish", number: 20, file: "npm-publish-body.txt", job: "publish_openclaw_npm" },
     {

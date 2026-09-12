@@ -133,7 +133,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     kind: "pnpm",
     pnpmArgs: ["plugins:assets:copy"],
   },
-  nodeStep("runtime-postbuild", ["scripts/runtime-postbuild.mjs"]),
+  tsxStep("runtime-postbuild", "scripts/runtime-postbuild.mts"),
   tsxStep("build-stamp", "scripts/build-stamp.mts"),
   tsxStep("runtime-postbuild-stamp", "scripts/runtime-postbuild-stamp.mts"),
   {
@@ -385,6 +385,9 @@ export function resolveBuildAllEnvironment(
   // Updates need runtime artifacts; explicit declaration/package builds still win.
   if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
     buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+    // Published updaters can still pass the serving checkout's source root.
+    // Rebind before plugin asset hooks resolve SDK aliases in this candidate.
+    buildEnv.OPENCLAW_DEV_SOURCE_ROOT = process.cwd();
   }
   return buildEnv;
 }
@@ -546,7 +549,8 @@ export async function runBuildAllSteps(
           args:
             script === "scripts/tsdown-build.mts" ||
             script === "scripts/write-unified-entry-dts.ts" ||
-            script === "scripts/write-plugin-sdk-entry-dts.ts"
+            script === "scripts/write-plugin-sdk-entry-dts.ts" ||
+            script === "scripts/runtime-postbuild.mts"
               ? distArtifactEntryArgs(script, invocation.args.slice(3))
               : invocation.args,
           ...invocation.options,

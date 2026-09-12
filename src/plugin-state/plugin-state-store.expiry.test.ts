@@ -39,6 +39,34 @@ afterAll(async () => {
 });
 
 describe("plugin state expiry cleanup", () => {
+  it("rechecks expiry time and newly written rows after an empty namespace cleanup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const scope = { pluginId: "discord", namespace: "fresh-expiry" };
+    const store = createPluginStateKeyedStore(scope.pluginId, {
+      namespace: scope.namespace,
+      maxEntries: 10,
+    });
+    seedPluginStateEntriesForTests([{ ...scope, key: "future", value: 1, expiresAt: 1_200 }]);
+    await store.register("permanent", 2);
+    expect(sweepExpiredPluginStateEntries()).toBe(0);
+
+    vi.setSystemTime(1_200);
+    await store.register("permanent", 3);
+    expect(sweepExpiredPluginStateEntries()).toBe(0);
+    await expect(store.lookup("future")).resolves.toBeUndefined();
+
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "new-expired", value: 4, expiresAt: 1_100 },
+      { ...scope, namespace: "sibling", key: "expired", value: 5, expiresAt: 1_100 },
+    ]);
+    await store.register("permanent", 6);
+    expect(sweepExpiredPluginStateEntries()).toBe(1);
+    await expect(store.entries()).resolves.toEqual([
+      { key: "permanent", value: 6, createdAt: 1_200 },
+    ]);
+  });
+
   it("registerIfAbsent replaces an expired target beyond the namespace cleanup batch", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_200);

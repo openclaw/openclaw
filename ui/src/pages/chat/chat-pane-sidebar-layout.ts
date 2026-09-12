@@ -16,8 +16,10 @@ import type {
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   activatePanel,
+  toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
   isSidebarRegionCollapsed,
@@ -118,6 +120,10 @@ export function sidebarRegionCallbacks(params: {
       state.updateSidebarLayout(activatePanel(layout, panelId));
       state.updateSidebarActivePanel(panelId);
     },
+    togglePanelExpanded: (panelId) => {
+      state.updateSidebarLayout(toggleSidebarPanelExpanded(layout, panelId));
+      state.updateSidebarActivePanel(panelId);
+    },
     closeSlot: (slot) => {
       if (slot === "conversation") {
         params.setPanelOpen(false);
@@ -137,6 +143,7 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
   availableSlots: SidebarSlotId[];
@@ -178,7 +185,7 @@ export function renderSidebarRegion(params: {
   return html`<div
     class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
-    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
     style=${styleMap({
       "--side-panel-width": `${column?.width ?? 480}px`,
       "--side-panel-height": `${column?.height ?? 360}px`,
@@ -192,6 +199,7 @@ export function renderSidebarRegion(params: {
           : null
         : html`<openclaw-chat-sidebar-region
             .layout=${params.layout}
+            .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
             .panelTemplates=${panelTemplates ?? params.panelTemplates}
             .panelActions=${params.panelActions}

@@ -168,9 +168,7 @@ describe("renderMemoryImport", () => {
     >('openclaw-agent-select[name="memory-import-agent"]');
     await picker?.updateComplete;
     expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
-    expect(picker?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
-      "🔎",
-    );
+    expect(picker?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🔎");
 
     picker?.onSelect("writer");
     expect(onSelectAgent).toHaveBeenCalledWith("writer");

@@ -4,6 +4,7 @@ import WebKit
 
 struct DashboardBrowserTabState: Codable, Equatable, Sendable {
     let id: String
+    let sessionKey: String?
     let url: String
     let title: String
     let loading: Bool
@@ -11,6 +12,7 @@ struct DashboardBrowserTabState: Codable, Equatable, Sendable {
     let canGoForward: Bool
     let openedBy: String
     let openerTabId: String?
+    let favicon: String?
 }
 
 struct DashboardBrowserState: Codable, Equatable, Sendable {
@@ -18,11 +20,13 @@ struct DashboardBrowserState: Codable, Equatable, Sendable {
     let tabs: [DashboardBrowserTabState]
 }
 
-/// Tabs belong to the window. A panel scope owns only its current presentation.
+/// The window retains tabs; a nil sessionKey marks legacy window-owned tabs.
+/// A panel scope owns only its current presentation.
 @MainActor
 final class DashboardNativeBrowserHost {
     private struct Tab {
         let id: String
+        let sessionKey: String?
         let browser: DashboardBrowserTab
         let openedBy: String
         let openerTabId: String?
@@ -48,6 +52,7 @@ final class DashboardNativeBrowserHost {
     private let websiteDataStore: WKWebsiteDataStore
     private let onStateChange: (DashboardBrowserState) -> Void
     private var tabs: [Tab] = []
+    private var downloads: [String: DashboardBrowserDownload] = [:]
     private var presentations: [String: Presentation] = [:]
     private var presentationOrder: UInt64 = 0
     private var revision = 0
@@ -74,6 +79,7 @@ final class DashboardNativeBrowserHost {
 
     isolated deinit {
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        self.downloads.values.forEach { $0.cancel() }
         self.tabs.forEach { $0.browser.dispose() }
     }
 
@@ -86,13 +92,15 @@ final class DashboardNativeBrowserHost {
             let browser = tab.browser
             return DashboardBrowserTabState(
                 id: tab.id,
+                sessionKey: tab.sessionKey,
                 url: browser.representedURL?.absoluteString ?? browser.requestedURL.absoluteString,
                 title: browser.title ?? "",
                 loading: browser.webView.isLoading,
                 canGoBack: browser.webView.canGoBack,
                 canGoForward: browser.webView.canGoForward,
                 openedBy: tab.openedBy,
-                openerTabId: tab.openerTabId)
+                openerTabId: tab.openerTabId,
+                favicon: browser.favicon)
         })
     }
 
@@ -108,24 +116,34 @@ final class DashboardNativeBrowserHost {
         self.tabs.first { $0.id == tabId }?.browser.webView
     }
 
+    func presentationScope(for webView: WKWebView) -> String? {
+        guard !webView.isHiddenOrHasHiddenAncestor,
+              let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return nil }
+        return self.presentation(for: tab.id)?.key
+    }
+
     @discardableResult
-    func open(tabId: String, url: URL) throws -> String {
+    func open(tabId: String, url: URL, sessionKey: String?) throws -> String {
         let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
         // Prefer the page currently at this URL over another tab's initial redirect alias.
         // An explicit blank new tab must never collapse onto an existing blank tab.
         if requestedURL.absoluteString != "about:blank",
-           let existing = self.tabs.first(where: { $0.browser.representedURL == requestedURL }) ??
-           self.tabs.first(where: { $0.browser.requestedURLAlias == requestedURL })
+           let existing = self.tabs
+               .first(where: { $0.sessionKey == sessionKey && $0.browser.representedURL == requestedURL }) ??
+               self.tabs.first(where: { $0.sessionKey == sessionKey && $0.browser.requestedURLAlias == requestedURL })
         {
             self.onOpen?()
             self.scheduleStatePush()
             return existing.id
         }
-        try self.createTab(tabId: tabId, url: requestedURL, openedBy: "web", openerTabId: nil)
+        try self.createTab(
+            tabId: tabId, url: requestedURL, sessionKey: sessionKey, openedBy: "web", openerTabId: nil)
         return tabId
     }
 
-    private func createTab(tabId: String, url: URL, openedBy: String, openerTabId: String?) throws {
+    private func createTab(
+        tabId: String, url: URL, sessionKey: String?, openedBy: String, openerTabId: String?) throws
+    {
         guard self.webView(for: tabId) == nil else { throw DashboardBrowserError.duplicateTab }
         guard let container, let dashboardWebView else { throw DashboardBrowserError.unavailable }
         let browser = DashboardBrowserTab(websiteDataStore: self.websiteDataStore, requestedURL: url)
@@ -133,7 +151,8 @@ final class DashboardNativeBrowserHost {
         browser.webView.uiDelegate = self.uiDelegate
         browser.webView.isHidden = true
         container.addSubview(browser.webView, positioned: .above, relativeTo: dashboardWebView)
-        self.tabs.append(Tab(id: tabId, browser: browser, openedBy: openedBy, openerTabId: openerTabId))
+        self.tabs.append(Tab(
+            id: tabId, sessionKey: sessionKey, browser: browser, openedBy: openedBy, openerTabId: openerTabId))
         browser.observeNavigationState { [weak self, weak browser] in
             guard let self, let browser, self.owns(browser.webView) else { return }
             self.scheduleStatePush()
@@ -157,7 +176,7 @@ final class DashboardNativeBrowserHost {
         case .reload: webView.reload()
         case .stop: webView.stopLoading()
         case .close: try self.close(tabId: tabId)
-        case .snapshot: throw DashboardBrowserError.invalidRequest
+        case .snapshot, .download: throw DashboardBrowserError.invalidRequest
         }
         self.scheduleStatePush()
     }
@@ -166,6 +185,7 @@ final class DashboardNativeBrowserHost {
         guard let index = self.tabs.firstIndex(where: { $0.id == tabId }) else {
             throw DashboardBrowserError.unknownTab
         }
+        self.downloads.removeValue(forKey: tabId)?.cancel()
         self.tabs.remove(at: index).browser.dispose()
         self.presentations = self.presentations.filter { $0.value.tabId != tabId }
         self.updatePresentations()
@@ -198,11 +218,18 @@ final class DashboardNativeBrowserHost {
               let requestedURL = try? DashboardBrowserMessageHandler.url(url.absoluteString)
         else { return }
         try? self.createTab(
-            tabId: "mac-" + UUID().uuidString, url: requestedURL, openedBy: "native", openerTabId: tab.id)
+            tabId: "mac-" + UUID().uuidString,
+            url: requestedURL,
+            sessionKey: tab.sessionKey,
+            openedBy: "native",
+            openerTabId: tab.id)
     }
 
     func navigationWillStart(_ url: URL, in webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.updateRepresentedURL(url)
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.updateRepresentedURL(url)
+        browser.favicon = nil
+        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 
@@ -214,9 +241,24 @@ final class DashboardNativeBrowserHost {
     }
 
     func navigationDidFinish(_ navigation: WKNavigation?, for webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.finishNavigation(
-            navigation, at: webView.url, title: webView.title)
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.finishNavigation(navigation, at: webView.url, title: webView.title)
         self.scheduleStatePush()
+        let generation = browser.faviconGeneration
+        Task { @MainActor [weak self, weak browser] in
+            guard let self, let browser, self.browserTab(for: webView) === browser,
+                  browser.faviconGeneration == generation else { return }
+            let value = try? await webView.callAsyncJavaScript(
+                "return (\(BrowserFaviconScript.source))(65536, 10000)",
+                arguments: [:],
+                in: nil,
+                contentWorld: .defaultClient)
+            guard self.browserTab(for: webView) === browser,
+                  browser.faviconGeneration == generation,
+                  let favicon = Self.acceptedFavicon(value) else { return }
+            browser.favicon = favicon
+            self.scheduleStatePush()
+        }
     }
 
     func navigationDidFail(for webView: WKWebView) {
@@ -225,6 +267,8 @@ final class DashboardNativeBrowserHost {
     }
 
     func dispose() {
+        self.downloads.values.forEach { $0.cancel() }
+        self.downloads.removeAll()
         self.releaseAllScopes()
         self.tabs.forEach { $0.browser.dispose() }
         self.tabs.removeAll()
@@ -253,12 +297,23 @@ final class DashboardNativeBrowserHost {
         return frame.isNull || frame.isEmpty ? .zero : frame
     }
 
+    nonisolated static func acceptedFavicon(_ value: Any?) -> String? {
+        // ICU case folding accepts Unicode lookalikes that the bridge's ASCII pattern rejects.
+        guard let favicon = value as? String,
+              favicon.utf8.count <= 98304,
+              favicon.unicodeScalars.allSatisfy(\.isASCII),
+              favicon.range(
+                  of: #"^data:image/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$"#,
+                  options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        return favicon
+    }
+
     private func updatePresentations() {
         guard let dashboardWebView else { return }
         for tab in self.tabs {
             // One WKWebView cannot be in two scopes: the newest presenter wins.
             // Releasing it restores the older scope if that scope is still visible.
-            let presentation = self.presentations.values.filter { $0.tabId == tab.id }.max { $0.order < $1.order }
+            let presentation = self.presentation(for: tab.id)?.value
             guard let presentation else {
                 tab.browser.webView.isHidden = true
                 continue
@@ -269,6 +324,10 @@ final class DashboardNativeBrowserHost {
         }
     }
 
+    private func presentation(for tabId: String) -> (key: String, value: Presentation)? {
+        self.presentations.filter { $0.value.tabId == tabId }.max { $0.value.order < $1.value.order }
+    }
+
     private func requireWebView(_ tabId: String) throws -> WKWebView {
         guard let webView = self.webView(for: tabId) else { throw DashboardBrowserError.unknownTab }
         return webView
@@ -276,6 +335,23 @@ final class DashboardNativeBrowserHost {
 }
 
 extension DashboardNativeBrowserHost {
+    func download(tabId: String, isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
+        let webView = try self.requireWebView(tabId)
+        guard self.downloads[tabId] == nil else { throw DashboardBrowserError.downloadInProgress }
+        guard let url = self.browserTab(for: webView)?.representedURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let window = self.dashboardWebView?.window,
+              isCurrent()
+        else { throw DashboardBrowserError.downloadFailed }
+        let transfer = DashboardBrowserDownload(window: window) { [weak self, weak webView] in
+            guard let self, let webView else { return false }
+            return self.webView(for: tabId) === webView && isCurrent()
+        }
+        self.downloads[tabId] = transfer
+        defer { self.downloads.removeValue(forKey: tabId) }
+        return try await transfer.start(using: webView, url: url)
+    }
+
     func snapshot(tabId: String) async throws -> [String: Any] {
         let webView = try self.requireWebView(tabId)
         let size = webView.bounds.size

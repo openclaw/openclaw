@@ -18,6 +18,7 @@ plugins](/plugins/sdk-provider-plugins) guide.
 <Tabs>
   <Tab title="Embeddings">
     ```typescript
+    // fetchAcmeEmbedding is your plugin's own vendor API call, not an SDK export.
     api.registerEmbeddingProvider({
       id: "acme-ai",
       defaultModel: "acme-embed",

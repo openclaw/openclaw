@@ -12,6 +12,7 @@ fi
 
 SOURCE_PACKAGE=/tmp/openclaw-update-first-hop-source.tgz
 CANDIDATE_PACKAGE=/tmp/openclaw-update-first-hop-candidate.tgz
+ORIGINAL_CANDIDATE_PACKAGE=/tmp/openclaw-update-first-hop-original.tgz
 NEGATIVE_PACKAGE=/tmp/openclaw-update-first-hop-negative.tgz
 FUTURE_PACKAGE=/tmp/openclaw-update-first-hop-future.tgz
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-/tmp/openclaw-update-first-hop-artifacts}"
@@ -30,7 +31,7 @@ export npm_config_audit=false
 export npm_config_fund=false
 export npm_config_loglevel=error
 
-for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$FUTURE_PACKAGE" "$ARTIFACT_DIR/source.json"; do
+for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$ORIGINAL_CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$FUTURE_PACKAGE" "$ARTIFACT_DIR/source.json"; do
   if [ ! -f "$package_path" ]; then
     echo "missing package input: $package_path" >&2
     exit 2
@@ -38,7 +39,7 @@ for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "
 done
 mkdir -p "$ARTIFACT_DIR"
 source_version="$(tar -xOf "$SOURCE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
-candidate_version="$(tar -xOf "$CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+candidate_source_version="$(tar -xOf "$ORIGINAL_CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
 
 package_root() {
   printf '%s/lib/node_modules/openclaw\n' "$npm_config_prefix"
@@ -196,7 +197,7 @@ run_positive_hops() {
 
   run_update "$lane-first" "$CANDIDATE_PACKAGE"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
-  if [ "$candidate_version" = "2026.9.3" ]; then
+  if [ "$candidate_source_version" = "2026.9.3" ]; then
     node scripts/e2e/lib/external-package-transition.mjs schema 16 \
       >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
   fi

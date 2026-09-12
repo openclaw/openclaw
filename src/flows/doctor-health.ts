@@ -5,14 +5,22 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
+import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   captureUpdateDoctorConfigWrites,
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
+  type UpdateDoctorWriteAuthority,
+  type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import {
+  createUpdateFailureFact,
+  normalizeUpdateFailureFacts,
+} from "../infra/update-failure-facts.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -48,6 +56,7 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
       cfg,
       { env: process.env },
     ),
+    agentAdmissionConfig: cfg,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
       agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -79,11 +88,17 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 }
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+export async function runDoctorHealthFlow(
+  runtime?: RuntimeEnv,
+  options: DoctorOptions = {},
+  writeAuthority?: UpdateDoctorWriteAuthority,
+) {
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   return resultPath
-    ? captureUpdateDoctorConfigWrites(resolveConfigPath(), (capture) =>
-        runDoctorHealthFlowWithResult(runtime, options, { resultPath, capture }),
+    ? captureUpdateDoctorConfigWrites(
+        resolveConfigPath(),
+        (capture) => runDoctorHealthFlowWithResult(runtime, options, { resultPath, capture }),
+        writeAuthority,
       )
     : runDoctorHealthFlowWithResult(runtime, options);
 }
@@ -91,7 +106,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
 async function runDoctorHealthFlowWithResult(
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
-  updateResult?: { resultPath: string; capture: { hash: string; inputHash?: string } },
+  updateResult?: { resultPath: string; capture: DoctorConfigCapture },
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
@@ -108,7 +123,7 @@ async function runDoctorHealthFlowWithResult(
 
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } =
-      await import("../config/nix-mode-write-guard.js");
+      await import("../config/config-write-guard.js");
     assertConfigWriteAllowedInCurrentMode();
   }
   let maintenance: Awaited<
@@ -138,6 +153,12 @@ async function runDoctorHealthFlowWithResult(
       }
     }
     const schemas = await assertDoctorDatabaseSchemasCompatible();
+    const { evaluateAgentDatabaseAdmissions, recordAgentDatabaseAdmissions } =
+      await import("../state/agent-database-admission.js");
+    // Repair owns fresh file decisions until its migration graph finishes.
+    if (options.repair !== true && options.yes !== true) {
+      recordAgentDatabaseAdmissions(schemas.agentRefusals ?? []);
+    }
     const { guardUpdateDoctorSchemaUpgrade } =
       await import("../commands/doctor-update-schema-guard.js");
     await guardUpdateDoctorSchemaUpgrade({
@@ -164,6 +185,8 @@ async function runDoctorHealthFlowWithResult(
       runtime: effectiveRuntime,
       prompter,
     });
+    // Explicit Doctor recovery may have moved a byte-identical misplaced copy aside.
+    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(configResult.cfg));
     const { CONFIG_PATH } = await loadConfigModule();
     const ctx: DoctorHealthFlowContext = {
       runtime: effectiveRuntime,
@@ -191,6 +214,16 @@ async function runDoctorHealthFlowWithResult(
           : "Doctor finished, but config fixes were not applied.",
       );
       exitCode = 1;
+      doctorResult = {
+        status: "error",
+        failureFacts: [
+          createUpdateFailureFact({
+            check: "config-write",
+            code: ctx.configWriteRefusal,
+            message: "Doctor config fixes were not applied.",
+          }),
+        ],
+      };
       return;
     }
     if (options.repair === true || options.yes === true) {
@@ -205,6 +238,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../config/sessions/targets.js");
       await assertOpenClawDatabasesReady({
         env: process.env,
+        config: ctx.cfg,
         operation: "doctor",
         onDeferredSchemaPublication: (publication) => effectiveRuntime.log(publication.message),
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
@@ -213,7 +247,7 @@ async function runDoctorHealthFlowWithResult(
       });
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
-      assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
+      await assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
       const { assertNoPendingLegacyExecApprovals } =
         await import("../infra/exec-approvals-migration-gate.js");
       assertNoPendingLegacyExecApprovals({ operation: "doctor" });
@@ -223,6 +257,9 @@ async function runDoctorHealthFlowWithResult(
     }
     await maintenance?.finish(ctx.cfg);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
+        receipt.outcome === "warning" || receipt.outcome === "skipped" ? receipt.warnings : [],
+      ),
       ...(ctx.postInstallDoctorResult?.warnings ?? []),
       ...(ctx.updateWarnings ?? []),
     ]);
@@ -235,9 +272,34 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
+    const { DoctorStateMigrationRefusalError } =
+      await import("../infra/state-migrations.messages.js");
+    doctorResult = {
+      status: "error",
+      failureFacts:
+        error instanceof DoctorStateMigrationRefusalError
+          ? normalizeUpdateFailureFacts(
+              error.stepReceipts.flatMap((receipt) =>
+                receipt.outcome === "refused" && receipt.refusal
+                  ? [
+                      {
+                        check: receipt.id,
+                        code: receipt.refusal.code,
+                        message: receipt.refusal.message,
+                      },
+                    ]
+                  : [],
+              ),
+            )
+          : [
+              createUpdateFailureFact({
+                check: "doctor",
+                code: "doctor-failed",
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            ],
+    };
     if (maintenance) {
-      const { DoctorStateMigrationRefusalError } =
-        await import("../infra/state-migrations.messages.js");
       if (!(error instanceof DoctorStateMigrationRefusalError)) {
         effectiveRuntime.error(
           "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
@@ -250,10 +312,19 @@ async function runDoctorHealthFlowWithResult(
       await maintenance?.release();
     } finally {
       if (updateResult) {
+        for (const change of updateResult.capture.configChanges) {
+          createSubsystemLogger("update").warn(formatUpdateDoctorConfigChange(change));
+        }
         await writeUpdatePostInstallDoctorResult({
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            ...(updateResult.capture.configChanges.length
+              ? { configChanges: updateResult.capture.configChanges }
+              : {}),
+            ...(updateResult.capture.configWriteRefusal
+              ? { configWriteRefusal: updateResult.capture.configWriteRefusal }
+              : {}),
             configHash: updateResult.capture.hash,
             ...(updateResult.capture.inputHash === undefined
               ? {}

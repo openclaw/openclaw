@@ -144,7 +144,18 @@
       "core-unit-src-security-2": 116,
       "core-unit-src-security-3": 158,
       "core-unit-src-security-support": 24,
-      "core-unit-support": 52
+      "core-unit-support": 52,
+      "runtime-placement#2b1c0b8d48d8b50414fd067c349b2f47d081f400": 13,
+      "runtime-placement#2c4f0f682816a7ffb3ee8014fa8e16aa03a06ab4": 14,
+      "runtime-placement#5356616168e63778076bc126ea579625afa09dc8": 201,
+      "runtime-placement#75f68d733e4d254c846ecc193d2b1d729b44511b": 41,
+      "runtime-placement#7cc54c89f2c576111cfe9f8937c1e9f3c8876a7d": 12,
+      "runtime-placement#8096f17bd1f37f16ce0520c79b25fd55adb24bb4": 10,
+      "runtime-placement#964c8a634d056041fe627995ffe302457739a77d": 54,
+      "runtime-placement#9dc07ef8e9c6e5f9b68095a12c495d8ff00d7fd0": 265,
+      "runtime-placement#ac5a9db3ba50321154aeb563325047ee1fc5e62c": 79,
+      "runtime-placement#d8077c092e8ae6a94b867b0a5aec3ffe38662939": 43,
+      "runtime-placement#dedf4dae6cad3774bfcc936841002adf0fa2e5aa": 12
     },
     "github": {}
   },
@@ -360,7 +371,7 @@
     "test/skills-proposal-manual-target.e2e.test.ts": 2,
     "test/status-shared-state-readonly.e2e.test.ts": 83
   },
-  "source": "median of 3 successful CI and release-check runs: 33537556582, 33537739443, 33543106647",
+  "source": "median of 3 successful CI and release-check runs: 33537556582, 33537739443, 33543106647; runtime placement medians from successful compact jobs in runs 34668723570 and 34678360461 (the former workflow failed elsewhere)",
   "uiE2e": {
     "fileSeconds": {
       "ui/src/e2e/about.e2e.test.ts": 1,
@@ -708,6 +719,6 @@
     },
     "perFileOverheadSeconds": 0.8
   },
-  "updatedAt": "2026-09-01",
+  "updatedAt": "2026-09-12",
   "version": 1
 }

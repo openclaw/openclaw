@@ -14,6 +14,7 @@ import {
   renderForwardedAvatar,
 } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
@@ -46,35 +47,68 @@ afterEach(() => {
 });
 
 describe("renderChatAvatar", () => {
-  it("renders assistant fallback, blob image, and text avatars", () => {
-    const defaultAvatar = renderAvatar(["assistant"]);
-    expect(defaultAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
-    expect(defaultAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
+  it("shares one agent face across welcome, transcript, forwarded messages, and typed author markers", async () => {
+    const container = document.createElement("div");
+    const sender = {
+      id: "display-id",
+      name: "Scout",
+      identity: { type: "agent", id: "scout" },
+    } as const;
+    render(
+      html`
+        ${renderWelcomeState({ currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
+        ${renderChatAvatar("assistant", { agentId: "scout", name: "Scout", avatar: null })}
+        ${renderForwardedAvatar("scout", { agentId: "main", agents: [{ id: "scout" }] })}
+        ${renderChatAuthorAvatar(sender)} ${renderChatAvatar("user", undefined, undefined, sender)}
+      `,
+      container,
+    );
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(5),
+    );
+    const faces = [...container.querySelectorAll(".identity-avatar__agent-face")].map(
+      (face) => face.outerHTML,
+    );
+    expect(new Set(faces).size).toBe(1);
+    expect(container.querySelector(".chat-author-avatar__initials")).toBeNull();
+  });
 
+  it("renders the same generated face for an agent, with explicit image and text precedence", async () => {
+    const defaultAvatar = renderAvatar([
+      "assistant",
+      { agentId: "scout", name: "Scout", avatar: null },
+    ]);
     const remoteAvatar = renderAvatar([
       "assistant",
-      { avatar: "https://example.com/avatar.png", name: "Val" },
+      { agentId: "scout", avatar: "https://example.com/avatar.png", name: "Renamed Scout" },
     ]);
-    expect(remoteAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
-    expect(remoteAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
+    await vi.waitFor(() => expect(defaultAvatar?.querySelector("svg")).not.toBeNull());
+    await vi.waitFor(() => expect(remoteAvatar?.querySelector("svg")).not.toBeNull());
+    expect(remoteAvatar?.querySelector("svg")?.outerHTML).toBe(
+      defaultAvatar?.querySelector("svg")?.outerHTML,
+    );
 
-    const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
-    expect(blobAvatar?.tagName).toBe("IMG");
-    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
-    expect(blobAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
+    for (const avatar of ["blob:managed-image", "/avatar/main", "data:image/png;base64,YQ=="]) {
+      const image = renderAvatar(["assistant", { avatar, name: "Val", textAvatar: "🦉" }]);
+      expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
+      expect(image?.getAttribute("src")).toBe(avatar);
+      expect(image?.getAttribute("alt")).toBe("Val");
+    }
 
-    const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent?.trim()).toBe("VC");
+    const textAvatar = renderAvatar(["assistant", { avatar: "🦉", name: "Val" }]);
+    expect(textAvatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
-    // aria-label on a role-less div is ignored by AT; role="img" makes the
-    // name win over the raw initials text.
     expect(textAvatar?.getAttribute("role")).toBe("img");
-    expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
+  });
 
-    const localAvatar = renderAvatar(["assistant", { avatar: "/avatar/main", name: "OpenClaw" }]);
-    expect(localAvatar?.getAttribute("src")).toBe("/avatar/main");
-    expect(localAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
+  it.each(["openclaw", "crestodian"])("keeps the product mark for system agent %s", (agentId) => {
+    const image = renderAvatar([
+      "assistant",
+      { agentId, name: "System", avatar: "blob:configured-image", textAvatar: "🦉" },
+    ]);
+    expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
+    expect(image?.getAttribute("src")).toBe("/favicon.svg");
+    expect(image?.getAttribute("alt")).toBe("System");
   });
 
   it("shares authenticated welcome and transcript avatars without an explicit token", async () => {
@@ -122,12 +156,10 @@ describe("renderChatAvatar", () => {
     const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
     expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
     expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
-    expect(imageAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
-    expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
     for (const avatar of ["data:image/png;base64,YQ==", "/custom.svg"]) {
       const container = document.createElement("div");
@@ -176,7 +208,7 @@ describe("renderChatAvatar", () => {
     renderUser();
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
     const image = slot?.querySelector("img");
-    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(slot?.classList.contains("is-pending")).toBe(true);
     expect(image?.hasAttribute("src")).toBe(false);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
     await expect(resolveAvatarImageUrl(avatarUrl)).resolves.toBeNull();
@@ -526,9 +558,10 @@ describe("refreshSenderAgentAvatars", () => {
         );
       renderSender();
       expect(container.querySelector("img")).toBeNull();
-      expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe(
-        "R",
+      await vi.waitFor(() =>
+        expect(container.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
       );
+      const face = container.querySelector(".identity-avatar__agent-face")?.outerHTML;
       expect(fetchAvatar).toHaveBeenCalledWith(
         "https://gateway.example.test/avatar/research?v=1",
         expect.objectContaining({ headers: { Authorization: "Bearer test-token" } }),
@@ -545,8 +578,8 @@ describe("refreshSenderAgentAvatars", () => {
         expect(container.querySelector(".chat-avatar--sender-initials")).toBeNull();
       } else {
         expect(container.querySelector("img")).toBeNull();
-        expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe(
-          "R",
+        await vi.waitFor(() =>
+          expect(container.querySelector(".identity-avatar__agent-face")?.outerHTML).toBe(face),
         );
       }
       render(nothing, container);
@@ -711,7 +744,7 @@ describe("refreshSenderAgentAvatars", () => {
     },
   );
 
-  it("bounds sender loads without revoking the current agent's blob", async () => {
+  it("bounds first-seen eligible sender loads without revoking the current agent's blob", async () => {
     const host = senderHost();
     const agents = Array.from({ length: 30 }, (_, i) => ({ id: `sender-${i}` }));
     host.agentsList.agents.push(...agents);
@@ -727,9 +760,30 @@ describe("refreshSenderAgentAvatars", () => {
     await refreshChatAvatar(host);
     const current = host.chatAvatarUrl;
     expect(current).toBe("blob:avatar-0");
-    host.chatMessages = forwardedMessages(...agents.map((agent) => agent.id));
+    const agentIds = agents.map((agent) => agent.id).toReversed();
+    const expectedIds = agentIds.slice(0, 23);
+    host.chatMessages = [
+      null,
+      ...forwardedMessages("main", "unknown"),
+      { role: "user", senderSession: { agentId: "sender-0" } },
+      { role: "Assistant", senderSession: { agentId: "sender-1" } },
+      { role: "assistant", toolName: "read", senderSession: { agentId: "sender-2" } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read" }],
+        senderSession: { agentId: "sender-3" },
+      },
+      { role: "assistant", senderSession: { sessionKey: "agent:sender-4:source" } },
+      { role: "assistant", senderSession: { agentId: 42 } },
+      { role: "assistant", senderSession: { agentId: " " } },
+      ...agentIds.flatMap((id) => forwardedMessages(` ${id} `, ` ${id} `, "main", "unknown")),
+    ];
     await refreshSenderAgentAvatars(host);
-    expect(host.senderAgentAvatars?.size).toBe(23);
+    expect([...(host.senderAgentAvatars?.keys() ?? [])]).toEqual(expectedIds);
+    expect(host.request.mock.calls).toEqual([
+      ["agent.identity.get", { agentId: "main" }],
+      ...expectedIds.map((agentId) => ["agent.identity.get", { agentId }]),
+    ]);
     expect(
       [...host.senderAgentAvatars!.values()].every((url) => url?.startsWith("blob:avatar-")),
     ).toBe(true);
@@ -759,7 +813,7 @@ describe("attributed sender avatars", () => {
       profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
     };
 
-    render(renderChatAvatar("user", undefined, undefined, "", firstSender), container);
+    render(renderChatAvatar("user", undefined, undefined, firstSender), container);
     const firstImage = await vi.waitFor(() => {
       const image = container.querySelector<HTMLImageElement>(".chat-avatar-slot img");
       expect(image?.getAttribute("src")).toBe("blob:first-sender");
@@ -771,13 +825,13 @@ describe("attributed sender avatars", () => {
     );
 
     render(
-      renderChatAvatar("user", undefined, undefined, "", {
+      renderChatAvatar("user", undefined, undefined, {
         ...firstSender,
         profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
       }),
       container,
     );
-    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-pending")).toBe(
       true,
     );
     const secondImage = await vi.waitFor(() => {
@@ -797,7 +851,6 @@ describe("attributed sender avatars", () => {
       "user",
       undefined,
       { name: "Viewer", avatar: null },
-      "",
       {
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
         identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
@@ -818,7 +871,6 @@ describe("attributed sender avatars", () => {
         "user",
         undefined,
         { name: "Viewer", avatar: null },
-        "",
         { id, name: "Alice Lovelace" },
       ]);
       expect(avatar?.tagName).toBe("DIV");
@@ -828,14 +880,14 @@ describe("attributed sender avatars", () => {
   );
 
   it("keeps the local viewer identity when no sender is attributed", () => {
-    const avatar = renderAvatar(["user", undefined, { name: "Viewer", avatar: null }, "", null]);
+    const avatar = renderAvatar(["user", undefined, { name: "Viewer", avatar: null }, null]);
     expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(false);
   });
 
   it("swaps to identity initials when the derived avatar route errors", () => {
     const container = document.createElement("div");
     render(
-      renderChatAvatar("user", undefined, undefined, "", {
+      renderChatAvatar("user", undefined, undefined, {
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
         identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
         name: "steipete",
@@ -869,16 +921,19 @@ describe("attributed sender avatars", () => {
       name: "hrudolph",
     };
     const renderSender = () =>
-      render(renderChatAvatar("user", undefined, undefined, "", sender), container);
+      render(renderChatAvatar("user", undefined, undefined, sender), container);
 
     renderSender();
-    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-pending")).toBe(
       true,
     );
     expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
     await vi.waitFor(() => {
       expect(fetchAvatar).toHaveBeenCalledOnce();
       expect(container.querySelector(".chat-avatar-slot img")?.hasAttribute("src")).toBe(false);
+      expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+        true,
+      );
     });
     expect(fetchAvatar).toHaveBeenCalledWith(
       `${gatewayOrigin}/api/users/${sender.id}/avatar`,

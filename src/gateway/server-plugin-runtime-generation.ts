@@ -9,7 +9,6 @@ export type GatewayPluginRuntimeClaim = Readonly<{
 
 type GatewayPluginRuntimeReservation = Readonly<{
   claim: GatewayPluginRuntimeClaim;
-  retirePrevious: () => void;
   commit: () => void;
   reject: () => void;
 }>;
@@ -20,7 +19,6 @@ export function createGatewayPluginRuntimeGeneration(params: {
   setServices: (services: PluginServicesHandle | null) => void;
 }) {
   let current: GatewayPluginRuntimeClaim;
-  let retired = false;
   let pending:
     | {
         claim: GatewayPluginRuntimeClaim;
@@ -30,7 +28,7 @@ export function createGatewayPluginRuntimeGeneration(params: {
 
   const createClaim = (): GatewayPluginRuntimeClaim => {
     const claim: GatewayPluginRuntimeClaim = Object.freeze({
-      isCurrent: () => current === claim && pending === undefined && !retired,
+      isCurrent: () => current === claim && pending === undefined,
       waitForUnblocked: async () => {
         for (;;) {
           const reservation = pending;
@@ -69,19 +67,12 @@ export function createGatewayPluginRuntimeGeneration(params: {
         }
         if (accepted) {
           current = reservation.claim;
-          retired = false;
         }
         pending = undefined;
         reservation.settled.resolve();
       };
       return Object.freeze({
         claim: reservation.claim,
-        retirePrevious: () => {
-          // Service teardown is irreversible even when the replacement is rejected.
-          if (pending === reservation) {
-            retired = true;
-          }
-        },
         commit: () => settle(true),
         reject: () => settle(false),
       });

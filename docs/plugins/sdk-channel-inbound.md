@@ -36,7 +36,8 @@ import {
   from this subpath for channel-specific fields. This public standalone builder
   is non-authoritative and cannot mint participant evidence. Bundled production
   receive paths use the host-injected registered
-  `runtime.channel.inbound.buildContext` and pass the exact resolver result as
+  `runtime.channel.inbound.buildContext` and pass the exact
+  [channel ingress](/plugins/sdk-channel-ingress) resolver result as
   `channelIngress`. Resolve that result with `contextBinding` after final route
   selection. Core accepts it once only when the same active plugin record,
   lifecycle epoch, agent, session, message, event, and admission scope still
@@ -74,19 +75,28 @@ Normalize plugin-owned attachment records with `toInboundMediaFacts(...)`, then
 pass the resulting ordered array through the context's `media` field:
 
 ```ts
+// saved, nativeUrl, messageId, and caption are plugin-supplied values from the
+// platform event you just normalized.
 const media = toInboundMediaFacts([
   { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
 ]);
 
-const ctx = finalizeInboundContext({ Body: caption, media });
+const ctx = runtime.channel.reply.finalizeInboundContext({ Body: caption, media });
 ```
+
+`toInboundMediaFacts` is exported from this subpath. `finalizeInboundContext` is
+not: it is reached through the injected plugin runtime as
+`runtime.channel.reply.finalizeInboundContext`.
 
 Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
 `workspaceDir` replace the legacy parallel index/workspace fields. The
 `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, `MediaTypes`,
 `MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` context fields,
 plus `buildChannelInboundMediaPayload(...)`, remain available only as deprecated
-compatibility. New plugins should not construct or read them.
+compatibility. The compatibility registry deprecated them on 2026-07-24 with a
+`removeAfter` date of 2026-10-01; see the
+[removal timeline](/plugins/sdk-migration/removal-timeline). New plugins should
+not construct or read them.
 
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
@@ -108,6 +118,30 @@ Assemble `dispatchChannelInboundReply(...)` inputs for compatibility
 dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
+
+## Agent group dispatch
+
+The shared inbound dispatcher coordinates qualified `broadcast` entries before
+the ordinary single-agent call. Pass the real channel, account, conversation,
+thread, and root message identity through the inbound context. Core owns
+participant selection, agent/session rebinding, bounded sibling-final digests,
+continuation identities, and synchronous `maxTurns` reservations. Channel
+plugins own admission facts and platform encoding; do not implement another
+participant loop in a plugin.
+
+`MsgContext.GroupThread` carries prepared participant mention facts as a data-only
+contract. Shared context types do not depend on mention matching or channel
+registries; the admission resolver owns mention matching before dispatch.
+
+A turn is one participant run started by the coordinator. Its previews,
+chunks, and message-tool sends can produce multiple physical messages. Do not
+buffer or count deliveries to enforce `maxTurns`. The group budget is
+process-local and non-resumable. Configured ACP bindings retain exclusive
+ownership of their route.
+
+See [Broadcast groups](/channels/broadcast-groups) for the operator config and
+[Inbound mention policy](/plugins/sdk-channel-plugins#inbound-mention-policy)
+for participant-aware admission.
 
 ## Internal turn sources
 
@@ -237,6 +271,10 @@ throw createChannelPartialDeliveryError(cause, {
 });
 ```
 
+Errors created by this helper retain the original failure in `cause`. After
+`isChannelPartialDeliveryError(error)`, `error.cause` is `unknown`; structural
+envelopes may omit it.
+
 Core emits a failed terminal observation with that provider-visible content and
 identity, then keeps the delivery failed so callers do not mistake partial
 success for a clean send. Do not report `visibleReplySent: false` after any
@@ -253,7 +291,7 @@ registered. Use the finalizable live-preview helpers from
 
 ## Migration
 
-`runtime.channel.turn.*` runtime aliases were removed. Use:
+`runtime.channel.turn.*` runtime aliases were removed in 2026.5.27. Use:
 
 - `runtime.channel.inbound.run(...)` for raw inbound events.
 - `runtime.channel.inbound.dispatchReply(...)` for assembled reply contexts.
@@ -262,6 +300,17 @@ registered. Use the finalizable live-preview helpers from
   channel-owned prepared dispatch paths that already assemble their own
   dispatch closure.
 
+`runPreparedReply` is carried by the `plugin-runtime-api-compat-aliases`
+compatibility record, whose earliest removal review date is 2026-10-01. That
+date is a review date and not a scheduled removal: the alias stays until every
+enumerated surface is proven to have no bundled or published reader.
+
 New plugin code should not introduce `turn`-named channel APIs. Keep model or
 agent turn vocabulary inside agent/provider code; channel plugins use inbound,
 message, delivery, and reply terms.
+
+## Related
+
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver whose result this page consumes as `channelIngress`
+- [Channel outbound API](/plugins/sdk-channel-outbound) — the send side of the same channel plugin
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough

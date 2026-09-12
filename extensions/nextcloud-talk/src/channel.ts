@@ -76,7 +76,7 @@ const collectNextcloudTalkSecurityWarnings =
 const collectNextcloudTalkOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectNextcloudTalkSecurityWarnings,
   checkId: "channels.nextcloud-talk.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Nextcloud Talk security warning",
 });
 

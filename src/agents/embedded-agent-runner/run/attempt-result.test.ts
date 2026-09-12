@@ -1,8 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { buildPayloads } from "./payloads.test-helpers.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -11,6 +16,7 @@ const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
 function createResultFixture(params?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
   currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  heartbeatToolResponse?: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   replyOptional?: boolean;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
@@ -76,7 +82,7 @@ function createResultFixture(params?: {
     getAcceptedSessionSpawns: () => [],
     getAssistantTurnCount: () => 0,
     getCompactionCount: () => 0,
-    getHeartbeatToolResponse: () => undefined,
+    getHeartbeatToolResponse: () => params?.heartbeatToolResponse,
     getItemLifecycle: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
@@ -543,6 +549,85 @@ describe("attempt result projection", () => {
     expect(retry).toEqual(first);
     expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
     expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
+  });
+
+  it.each([
+    { label: "notifying", notify: true, expectedText: "The monitored task is complete." },
+    { label: "quiet", notify: false, expectedText: HEARTBEAT_TOKEN },
+  ])(
+    "carries a $label heartbeat response and private scratch across empty retry attempts",
+    ({ notify, expectedText }) => {
+      const carryover = createAttemptCarryover();
+      const publicResponse = {
+        outcome: "done" as const,
+        notify,
+        summary: "The task reached its completion condition.",
+        notificationText: "The monitored task is complete.",
+      };
+      const scratch = "Private monitor notes: completion checked; no follow-up needed.";
+      const providerFailure = {
+        kind: "failed" as const,
+        source: "prompt" as const,
+        error: Object.assign(new Error("529 overloaded"), { status: 529 }),
+      };
+      const accepted = completeResult({
+        heartbeatToolResponse: { ...publicResponse, scratch },
+        terminal: providerFailure,
+      });
+      const retry = completeResult({ terminal: providerFailure });
+      const completed = completeResult({ assistantTexts: ["Internal retry fallback."] });
+
+      carryover.apply(accepted);
+      carryover.apply(retry);
+      carryover.apply(completed);
+      const payloads = buildPayloads({
+        isHeartbeatTrigger: true,
+        assistantTexts: completed.assistantTexts,
+        heartbeatToolResponse: completed.heartbeatToolResponse,
+      });
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.text).toBe(expectedText);
+      const selected = expectDefined(
+        selectHeartbeatToolResponse(payloads),
+        "expected the carried heartbeat response",
+      );
+      expect(selected.response).toEqual(publicResponse);
+      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
+      expect(JSON.stringify(payloads)).not.toContain(scratch);
+      expect(JSON.stringify(payloads)).not.toContain("Internal retry fallback.");
+    },
+  );
+
+  it("starts a fresh run without the previous heartbeat response or scratch", () => {
+    const previousRun = createAttemptCarryover();
+    previousRun.apply(
+      completeResult({
+        heartbeatToolResponse: {
+          outcome: "done",
+          notify: true,
+          summary: "Previous task complete.",
+          scratch: "Private notes from the previous run.",
+        },
+      }),
+    );
+    const freshRun = createAttemptCarryover();
+    const completed = completeResult({ assistantTexts: ["The new task is still running."] });
+
+    freshRun.apply(completed);
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      assistantTexts: completed.assistantTexts,
+      heartbeatToolResponse: completed.heartbeatToolResponse,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The new task is still running.");
+    expect(selectHeartbeatToolResponse(payloads)).toBeUndefined();
+    expect(
+      getReplyPayloadMetadata(expectDefined(payloads[0], "expected the fresh-run payload"))
+        ?.heartbeatScratchProposal,
+    ).toBeUndefined();
   });
 
   it("keeps completed client tool calls in reserved source order", () => {

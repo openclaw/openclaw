@@ -107,7 +107,7 @@ export interface ShellViewHost extends DevicePairSetupHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi: () => Promise<boolean>;
-  replaceChatWithCurrentSession(): boolean;
+  recoverNotFoundRoute(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
@@ -121,7 +121,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   if (!context || !runtime) {
     return nothing;
   }
-  if (host.routeState.routeId === undefined) {
+  if (host.routeState.routeId === undefined && !host.routeState.routeFailed) {
     return renderConnectingSplash();
   }
   const gatewaySnapshot = context.gateway.snapshot;
@@ -151,7 +151,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   // Session routes have an offline outbox, New Session keeps a local draft, and
-  // Appearance persists local preference intent for replay. Their server actions
+  // Appearance persists local preference intent for replay. Connection settings
+  // must remain usable to replace an unreachable Gateway. Their server actions
   // are independently gated; other pages cannot submit useful disconnected work.
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
   const pageActionsBlocked =
@@ -159,11 +160,16 @@ export function renderApplicationShell(host: ShellViewHost) {
     !gatewayConnected &&
     !sessionRoute &&
     activeRoute !== "new-session" &&
-    activeRoute !== "appearance";
-  // Plugin tabs share one route; the search picks the active item.
+    activeRoute !== "appearance" &&
+    activeRoute !== "connection";
+  // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
-      ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
+      ? pluginTabRefFromSearch(
+          host.routeState.location?.search ?? "",
+          host.routeState.location?.pathname,
+          context.basePath,
+        )
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
   // Onboarding renders without any navigation chrome, so the settings takeover
@@ -272,6 +278,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
       preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
+      navigationVisible: !navigationSurfaceHidden,
+      sidebarAgentsMode: uiSettings.sidebarAgentsMode ?? "chip",
       sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
       pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
       themeMode: context.theme.mode,
@@ -594,7 +602,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           .router=${runtime.router}
           .retryContext=${context}
           .retentionScope=${gatewayPresentationScope(context.gateway)}
-          .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .onNotFound=${() => host.recoverNotFoundRoute()}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>

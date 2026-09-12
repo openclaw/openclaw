@@ -18,12 +18,12 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -164,6 +164,7 @@ function requireAppendableWorkerMessage(
 describe("worker transcript commit application", () => {
   let root: string;
   let sessionsDir: string;
+  let stateDatabasePath: string;
   let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   let cfg: OpenClawConfig;
@@ -173,6 +174,7 @@ describe("worker transcript commit application", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     sessionsDir = path.join(root, "agents", "main", "sessions");
     storePath = path.join(sessionsDir, "sessions.json");
     cfg = {
@@ -196,9 +198,8 @@ describe("worker transcript commit application", () => {
       sessionKey: SESSION_KEY,
       storePath,
     });
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
-    });
+    const database = openOpenClawStateDatabase();
+    stateDatabasePath = database.path;
     ledgerStore = createWorkerTranscriptCommitStore({ database });
     committer = createWorkerTranscriptCommitter({
       getConfig: () => cfg,
@@ -209,8 +210,14 @@ describe("worker transcript commit application", () => {
   afterEach(async () => {
     unsubscribe?.();
     clearRuntimeConfigSnapshot();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+      await fs.rm(root, { recursive: true, force: true });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("persists and reopens image-bearing worker results above the control-frame budget", async () => {

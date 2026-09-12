@@ -8,6 +8,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -35,6 +36,8 @@ export async function prepareChatMetadataModelProjection(params: {
   requesterProfileId?: string;
   preferredProfileId?: string;
   pinnedProfileId?: string;
+  profileProvider?: string;
+  runtimeOverride?: string;
   assertCurrent?: () => void;
 }): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
@@ -61,6 +64,8 @@ export async function prepareChatMetadataModelProjection(params: {
     observationConfig: params.facts.owner.observationConfig,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
+    ...(params.profileProvider ? { profileProvider: params.profileProvider } : {}),
+    ...(params.runtimeOverride ? { runtimeOverride: params.runtimeOverride } : {}),
   });
   const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),
@@ -84,19 +89,62 @@ export async function prepareChatMetadataModelProjection(params: {
   };
 }
 
-export function resolveSessionCatalogProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
+export function resolveSessionCatalogProfiles(
+  sessionEntry: ChatMetadataSessionEntry | undefined,
+  config: OpenClawConfig,
+  agentId: string,
+): {
   preferredProfileId?: string;
   pinnedProfileId?: string;
+  profileProvider?: string;
+  runtimeOverride?: string;
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
+  const runtime = sessionEntry?.agentRuntimeOverride?.trim();
+  const provider =
+    sessionEntry?.providerOverride ??
+    (runtime
+      ? resolveSessionModelRef(config, sessionEntry, agentId, {
+          allowPluginNormalization: false,
+        }).provider
+      : undefined);
+  const context = {
+    ...(provider ? { profileProvider: provider } : {}),
+    ...(runtime ? { runtimeOverride: runtime } : {}),
+  };
   if (!profileId) {
-    return {};
+    return context;
   }
   const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
+    ...context,
     ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
+}
+
+export function sessionProjectionKey(
+  agentId: string,
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+): string {
+  return [
+    normalizeAgentId(agentId),
+    profiles.preferredProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
+    profiles.profileProvider ?? "",
+    profiles.runtimeOverride ?? "",
+  ].join("\0");
+}
+
+export function hasSessionCatalogContext(
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+) {
+  return (
+    profiles.preferredProfileId !== undefined ||
+    profiles.pinnedProfileId !== undefined ||
+    profiles.profileProvider !== undefined ||
+    profiles.runtimeOverride !== undefined
+  );
 }
 
 // Read native ownership after profile projection; never cache this session overlay.

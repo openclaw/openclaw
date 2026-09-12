@@ -37,6 +37,8 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 
     Restart recovery matches finalized results to the run identity, never just a coincident start time. A verified live process keeps its run receipt. If a foreign process exists but its start identity cannot be verified, its receipt becomes recoverable after more than two hours from the queued or running start. Recovery revokes that receipt before admitting another run; it cannot undo external side effects already in flight. On Gateway startup, an enabled one-shot interrupted before a terminal task result recovers through normal missed-job catch-up, regardless of how overdue it is. Reclaiming a dead running owner during normal operation records the interruption without replaying the consumed one-shot; a separately rescheduled occurrence remains eligible. Catch-up limits and delays pace recovery; they do not expire it. Pending recovery survives another restart, including during agent-turn deferral. A terminal result is restored without replaying that run, and `deleteAfterRun` deletes the job only when completion is `succeeded`.
 
+    If a completed run's history was saved but its job update failed, a later acknowledged schedule or pacing edit keeps its next check through recovery. Recovery retains the completed history and settles the old run without executing its payload again. Saving an unchanged schedule does not change how that completed run is recovered.
+
   </Accordion>
 </AccordionGroup>
 

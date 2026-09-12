@@ -61,8 +61,17 @@ afterEach(() => {
 });
 
 describe("meeting transcript library", () => {
-  it("keeps large saved notes readable and exportable when a transcript page exceeds its budget", async () => {
-    const markdown = `# Design review\n\nPreviously saved large notes.\n\n${"x".repeat(1024 * 1024)}`;
+  it("renders complete large saved Markdown notes and exports them when a transcript page exceeds its budget", async () => {
+    const markdown = [
+      "# Design review",
+      "## Overview",
+      "Previously saved large notes.",
+      "x".repeat(1024 * 1024),
+      "## Action items",
+      "- **Avery** will follow up.",
+      "![Meeting diagram](https://example.com/meeting.png)",
+      "<aside>Imported source markup</aside>",
+    ].join("\n\n");
     const request = vi.fn(async (method: string, params: { limit?: number }) => {
       if (method === "transcripts.list") {
         return { sessions: [], nextCursor: null };
@@ -101,6 +110,17 @@ describe("meeting transcript library", () => {
         "Previously saved large notes.",
       ),
     );
+    const notes = page.querySelector(".meetings-notes")!;
+    expect([...notes.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
+      "Overview",
+      "Action items",
+    ]);
+    expect(notes.querySelector("li strong")?.textContent).toBe("Avery");
+    expect(notes.textContent).not.toContain("truncated");
+    expect(notes.querySelector("img")).toBeNull();
+    expect(notes.querySelector('a[href="https://example.com/meeting.png"]')).not.toBeNull();
+    expect(notes.querySelector("aside")).toBeNull();
+    expect(notes.textContent).toContain("<aside>Imported source markup</aside>");
     expect(page.textContent).not.toContain("Transcript page exceeds its byte limit");
     page
       .querySelector<HTMLElement>("#transcript-reader-tab-text")!

@@ -11,6 +11,7 @@ import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import "../../../styles/chat/reply-preview.css";
+import "../../../styles/chat/mention-menu.css";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
@@ -61,6 +62,12 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   return { start, end, query };
 }
 
+function canFilterMentionText(value: string): boolean {
+  // Browser and Gateway locales are independent. ASCII without capital I has
+  // invariant lowercase; leave locale-sensitive and Unicode matching to the server.
+  return /^[\x20-\x7e]*$/u.test(value) && !value.includes("I");
+}
+
 /** One bounded suggestion lifecycle shared by existing- and new-session composers. */
 export class HumanMentionMenu {
   private directory?: HumanMentionDirectory;
@@ -69,6 +76,7 @@ export class HumanMentionMenu {
   private target: MentionTarget | null = null;
   private search: MentionSearch | null = null;
   private index = 0;
+  private results = new Map<string, UsersMentionableResult>();
 
   get open(): boolean {
     return this.target !== null;
@@ -88,18 +96,57 @@ export class HumanMentionMenu {
     this.directory = directory;
   }
 
-  close() {
+  private cancelSearch() {
     this.generation += 1;
     clearTimeout(this.timer);
     this.timer = undefined;
+    this.index = 0;
+  }
+
+  close() {
+    this.cancelSearch();
+    this.results.clear();
     this.target = null;
     this.search = null;
-    this.index = 0;
   }
 
   dispose() {
     this.close();
     this.directory = undefined;
+  }
+
+  private cachedResult(query: string): UsersMentionableResult | undefined {
+    const exact = this.results.get(query);
+    if (exact) {
+      return exact;
+    }
+    if (!canFilterMentionText(query)) {
+      return undefined;
+    }
+    const normalizedQuery = query.toLowerCase();
+    for (const [prefix, result] of this.results) {
+      // Gateway matches names before adding duplicate-name ID suffixes. Opaque matches
+      // (for example a server-only ID lookup) and ambiguous labels must refetch;
+      // exact queries keep the server response unchanged, including truncated results.
+      if (
+        !result.truncated &&
+        query.startsWith(prefix) &&
+        result.users.every(
+          (person) =>
+            canFilterMentionText(person.displayName) &&
+            person.displayName.toLowerCase().includes(prefix.toLowerCase()) &&
+            !person.displayName.endsWith(` (${person.profileId.slice(0, 8)})`),
+        )
+      ) {
+        return {
+          users: result.users.filter((person) =>
+            person.displayName.toLowerCase().includes(normalizedQuery),
+          ),
+          truncated: false,
+        };
+      }
+    }
+    return undefined;
   }
 
   update(value: string, caret: number, requestUpdate: () => void, typedAtSign = false) {
@@ -114,8 +161,18 @@ export class HumanMentionMenu {
     if (this.target?.start === target.start && this.target.query === target.query) {
       return;
     }
-    this.close();
+    if (this.target?.start !== target.start) {
+      this.results.clear();
+    }
+    this.cancelSearch();
     this.target = target;
+    const query = target.query;
+    const cached = this.cachedResult(query);
+    if (cached) {
+      this.search = { kind: "ready", result: cached };
+      requestUpdate();
+      return;
+    }
     this.search = { kind: "loading" };
     const directory = this.directory;
     if (!directory) {
@@ -132,6 +189,10 @@ export class HumanMentionMenu {
         .then(
           (result) => {
             if (generation === this.generation) {
+              if (this.results.size === 16) {
+                this.results.delete(this.results.keys().next().value!);
+              }
+              this.results.set(query, result);
               this.search = { kind: "ready", result };
               requestUpdate();
             }
@@ -223,47 +284,53 @@ export class HumanMentionMenu {
     }
     const result = this.search?.kind === "ready" ? this.search.result : undefined;
     const limited = host.getMentions().length >= MAX_HUMAN_MENTIONS;
+    const loading = this.search?.kind === "loading";
     const message = limited
       ? t("chat.mentions.limit")
       : this.search?.kind === "error"
         ? t("chat.mentions.unavailable")
-        : this.search?.kind === "loading"
-          ? t("chat.mentions.loading")
-          : !result?.users.length
-            ? t("chat.mentions.empty")
-            : null;
+        : !loading && !result?.users.length
+          ? t("chat.mentions.empty")
+          : null;
     return renderComposerMenu({
       id: paneDomId(host.paneId, "mention-menu-listbox"),
       className: "mention-menu",
       label: t("chat.mentions.menu"),
       trackScroll: false,
-      content: html` <div class="slash-menu-group">
+      content: html` <div class="slash-menu-group" aria-busy=${loading}>
         <div class="slash-menu-group__label" role="status">
           ${message ?? t("chat.mentions.menu")}
         </div>
         ${
           message
             ? nothing
-            : result?.users.map((person, index) =>
-                renderComposerMenuOption({
-                  id: paneDomId(host.paneId, `mention-option-${index}`),
-                  active: index === this.index,
-                  select: () => this.select(person, host, requestUpdate),
-                  hover: () => {
-                    this.index = index;
-                    requestUpdate();
-                  },
-                  icon: renderChatAuthorAvatar({
-                    id: person.profileId,
+            : loading
+              ? html`<div class="slash-menu-item mention-menu__loading" aria-hidden="true">
+                  <span class="slash-menu-icon"
+                    ><span class="skeleton mention-menu__avatar"></span
+                  ></span>
+                  <span class="skeleton skeleton-line skeleton-line--medium"></span>
+                </div>`
+              : result?.users.map((person, index) =>
+                  renderComposerMenuOption({
+                    id: paneDomId(host.paneId, `mention-option-${index}`),
+                    active: index === this.index,
+                    select: () => this.select(person, host, requestUpdate),
+                    hover: () => {
+                      this.index = index;
+                      requestUpdate();
+                    },
+                    icon: renderChatAuthorAvatar({
+                      id: person.profileId,
+                      name: person.displayName,
+                      identity: { type: "profile", id: person.profileId },
+                      profileAvatarUrl: person.avatarUrl,
+                    }),
+                    iconHidden: true,
                     name: person.displayName,
-                    identity: { type: "profile", id: person.profileId },
-                    profileAvatarUrl: person.avatarUrl,
+                    description: person.online ? t("chat.mentions.online") : nothing,
                   }),
-                  iconHidden: true,
-                  name: person.displayName,
-                  description: person.online ? t("chat.mentions.online") : nothing,
-                }),
-              )
+                )
         }
         ${
           result?.truncated

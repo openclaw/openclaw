@@ -7,11 +7,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   createFailClosedExecApprovalsFallback,
@@ -64,9 +66,10 @@ function warnFailClosed(message: string, error?: unknown): void {
 
 function snapshotFromExecApprovalsDatabase(
   db: ReturnType<typeof openOpenClawStateDatabase>["db"],
+  displayPath = resolveExecApprovalsDisplayPath(),
 ): ExecApprovalsSnapshot {
   return snapshotFromExecApprovalsRow({
-    path: resolveExecApprovalsDisplayPath(),
+    path: displayPath,
     row: readExecApprovalsConfigRow(db),
     onMalformed: () =>
       warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
@@ -80,14 +83,16 @@ function readExecApprovalsSnapshotFromDatabase(
   return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
 }
 
-function readExecApprovalsSnapshotFromDatabaseReadOnly(): ExecApprovalsSnapshot {
-  assertNoPendingLegacyExecApprovals();
+function readExecApprovalsSnapshotFromDatabaseReadOnly(
+  options: OpenClawStateDatabaseOptions,
+): ExecApprovalsSnapshot {
+  assertNoPendingLegacyExecApprovals({ env: options.env });
+  const displayPath = resolveExecApprovalsDisplayPath(options.env);
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => snapshotFromExecApprovalsDatabase(db)) ??
-    snapshotFromExecApprovalsRow({
-      path: resolveExecApprovalsDisplayPath(),
-      row: undefined,
-    })
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => snapshotFromExecApprovalsDatabase(db, displayPath),
+      options,
+    ) ?? snapshotFromExecApprovalsRow({ path: displayPath, row: undefined })
   );
 }
 
@@ -121,10 +126,11 @@ export function loadExecApprovals(): ExecApprovalsFile {
   }
 }
 
-/** Loads exec approvals without creating or migrating shared state. */
-export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
+function loadExecApprovalsReadOnlyWithOptions(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
+): ExecApprovalsFile {
   try {
-    return readExecApprovalsSnapshotFromDatabaseReadOnly().file;
+    return readExecApprovalsSnapshotFromDatabaseReadOnly(options).file;
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -132,6 +138,24 @@ export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
     warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
     return createFailClosedExecApprovalsFallback();
   }
+}
+
+/** Loads exec approvals without creating or migrating shared state. */
+export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
+  return loadExecApprovalsReadOnlyWithOptions({});
+}
+
+/** Capture the policy owner before yielding; reads never initialize or migrate state. */
+export async function loadExecApprovalsReadOnlyAsync(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<ExecApprovalsFile> {
+  const stateDbPath = resolveDatabasePath(options);
+  const owner = {
+    path: stateDbPath,
+    env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(stateDbPath) },
+  };
+  await Promise.resolve();
+  return loadExecApprovalsReadOnlyWithOptions(owner);
 }
 
 export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {

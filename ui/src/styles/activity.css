@@ -75,7 +75,6 @@ openclaw-activity-page {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-current-work__row + .activity-current-work__row {
@@ -377,11 +376,85 @@ a.activity-current-work__row:hover {
   min-height: 54px;
   padding: var(--space-3) var(--space-4);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session-row {
   position: relative;
+}
+
+.activity-feed__git {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__pr,
+.activity-feed__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg-elevated);
+  line-height: 1.4;
+}
+
+.activity-feed__pr:hover,
+.activity-feed__pr:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.activity-feed__git-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__git-icon,
+.activity-feed__git-stale {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.activity-feed__git-icon svg,
+.activity-feed__git-stale svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-feed__pr[data-state="open"] .activity-feed__git-icon,
+.activity-feed__additions {
+  color: var(--ok);
+}
+
+.activity-feed__pr[data-state="merged"] .activity-feed__git-icon {
+  color: var(--pr-merged);
+}
+
+.activity-feed__pr[data-state="closed"] .activity-feed__git-icon,
+.activity-feed__deletions {
+  color: var(--danger);
+}
+
+.activity-feed__additions,
+.activity-feed__deletions {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-feed__git-stale {
+  color: var(--warn);
 }
 
 .activity-feed__session-row + .activity-feed__session-row,
@@ -432,7 +505,6 @@ a.activity-current-work__row:hover {
 .activity-feed__session-row:hover .activity-feed__session,
 .activity-feed__session-row:focus-within .activity-feed__session {
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -452,7 +524,6 @@ a.activity-current-work__row:hover {
   background: var(--bg-elevated);
   font-size: var(--control-ui-text-xs);
   line-height: 1;
-  text-decoration: none;
   pointer-events: none;
   translate: 0 -50%;
   transition: opacity var(--duration-fast) ease;
@@ -468,7 +539,6 @@ a.activity-current-work__row:hover {
 .activity-feed__inspect-run:focus-visible {
   border-color: var(--border-strong);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session .viewer-avatar {
@@ -641,7 +711,6 @@ a.activity-current-work__row:hover {
   height: 16px;
   flex: 0 0 auto;
   color: var(--muted);
-  text-decoration: none;
 }
 
 .activity-feed__device-attribution svg {
@@ -863,13 +932,11 @@ a.activity-current-work__row:hover {
   margin-bottom: var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back:hover,
 .activity-run-inspector-back:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back svg {

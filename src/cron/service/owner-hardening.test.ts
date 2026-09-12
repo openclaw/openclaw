@@ -28,11 +28,11 @@ import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";

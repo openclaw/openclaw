@@ -103,6 +103,10 @@ describe("release-check", () => {
         join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
         "stale target fixture",
       );
+      writeFileSync(
+        join(root, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
+        "stale target setup consumer",
+      );
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
       const runtimeArgs = process.versions.bun
         ? []
@@ -116,7 +120,10 @@ describe("release-check", () => {
           `import { readFileSync } from "node:fs";\n` +
             `const { createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
             `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
-            `console.log(JSON.stringify({ fixture: readFileSync("consumer/src/index.ts", "utf8") }));`,
+            `console.log(JSON.stringify({\n` +
+            `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
+            `}));`,
         ],
         {
           cwd: root,
@@ -127,6 +134,10 @@ describe("release-check", () => {
       expect(JSON.parse(output)).toEqual({
         fixture: readFileSync(
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
+          "utf8",
+        ),
+        setupConsumer: readFileSync(
+          join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
       });

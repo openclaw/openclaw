@@ -1,10 +1,9 @@
 // Capability approvals follow the paired-device lifecycle, not the device-auth request TTL.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
@@ -27,8 +26,13 @@ import {
 } from "./device-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-lifecycle-" });
+const databasePaths = new Set<string>();
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
+  const baseDir = await tempDirs.make("case");
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return await run(baseDir);
 }
 
 describe("node surface approval lifetime", () => {
@@ -36,6 +40,9 @@ describe("node surface approval lifetime", () => {
     await tempDirs.setup();
   });
   afterAll(async () => {
+    for (const databasePath of databasePaths) {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
     await tempDirs.cleanup();
   });
 

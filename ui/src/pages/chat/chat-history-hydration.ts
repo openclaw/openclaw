@@ -13,7 +13,7 @@ import {
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import {
-  type ChatHistoryResult,
+  type ObservedChatHistoryResult,
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
@@ -37,7 +37,7 @@ import {
 } from "./chat-history-stream.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -50,7 +50,6 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
-import { consumeChatRouteStartup } from "./route-startup.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
@@ -89,17 +88,19 @@ function recordChatHistoryTiming(
 }
 
 export async function hydrateChatHistory(
-  state: ChatState,
+  state: ChatHistoryHost,
   client: NonNullable<ChatState["client"]>,
   connectionEpoch: number,
+  sessions: ChatHistorySessions,
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
   deltaCursor: string | undefined,
   inputRunIds: string[],
   requestKeyPrefix: string,
-): Promise<ChatHistoryResult | undefined> {
+): Promise<ObservedChatHistoryResult | undefined> {
   const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
+  const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
@@ -120,23 +121,19 @@ export async function hydrateChatHistory(
   try {
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
     const requestKey = `${requestKeyPrefix}${requestModeKey}`;
-    const startup =
-      method === "chat.startup" ? consumeChatRouteStartup(client, sessionKey) : undefined;
-    let response =
-      (inputRunIds.length === 0 ? startup : undefined) ??
-      (await requestSharedHistory(
-        client,
-        requestKey,
-        method,
-        sessionKey,
-        requestAgentId,
-        state,
-        () => acceptsHistoryResult(state, ownership),
-        deltaCursor,
-        state.sessions?.canonicalListRevision,
-        inputRunIds,
-      ));
-    if (!acceptsHistoryResult(state, ownership)) {
+    let response = await requestSharedHistory(
+      sessions,
+      client,
+      requestKey,
+      method,
+      sessionKey,
+      requestAgentId,
+      state,
+      isCurrent,
+      deltaCursor,
+      inputRunIds,
+    );
+    if (!isCurrent()) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -149,18 +146,18 @@ export async function hydrateChatHistory(
       clearHistoryCursor(state, sessionKey, requestAgentId);
       const pageRequestKey = `${requestKeyPrefix}page`;
       response = await requestSharedHistory(
+        sessions,
         client,
         pageRequestKey,
         method,
         sessionKey,
         requestAgentId,
         state,
-        () => acceptsHistoryResult(state, ownership),
+        isCurrent,
         undefined,
-        state.sessions?.canonicalListRevision,
         inputRunIds,
       );
-      if (!acceptsHistoryResult(state, ownership)) {
+      if (!isCurrent()) {
         recordChatHistoryTiming(state, "stale", startedAtMs, {
           requestSessionKey: sessionKey,
           requestAgentId,
@@ -224,7 +221,7 @@ export async function hydrateChatHistory(
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
-        sourceCanonicalListRevision: response.sourceCanonicalListRevision,
+        observation: response.observation,
       };
     }
     if (isHistoryCursor(response)) {
@@ -406,7 +403,7 @@ export async function hydrateChatHistory(
     });
     return res;
   } catch (err) {
-    if (!acceptsHistoryResult(state, ownership)) {
+    if (!isCurrent()) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,

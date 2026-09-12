@@ -50,7 +50,7 @@ plugin_update_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_PLU
 node "$probe" snapshot > /tmp/plugin-update-before.json
 
 set +e
-openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
+openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update lossless-claw > /tmp/plugin-update-output.log 2>&1
 plugin_update_status=$?
 set -e
 if [ "$plugin_update_status" -ne 0 ]; then

@@ -50,11 +50,26 @@ export async function connectMcpClient(params: {
   });
   try {
     await Promise.race([
-      params.client.connect(params.transport, {
-        signal,
-        timeout: params.timeoutMs,
-        maxTotalTimeout: params.timeoutMs,
-      }),
+      (async () => {
+        const { client } = params;
+        const close = client.close;
+        client.close = () => {
+          const closing = close.call(client);
+          // SDK initialization discards this promise; preserve rejection for awaited callers.
+          void closing.catch(() => recordAgentCleanupFailure());
+          return closing;
+        };
+        try {
+          await client.connect(params.transport, {
+            signal,
+            timeout: params.timeoutMs,
+            maxTotalTimeout: params.timeoutMs,
+          });
+        } finally {
+          // A deadline can win the outer race before SDK initialization actually settles.
+          client.close = close;
+        }
+      })(),
       aborted,
     ]);
   } catch (error) {

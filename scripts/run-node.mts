@@ -16,6 +16,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -26,6 +27,7 @@ import { sleep } from "./lib/sleep.mjs";
 import {
   discoverStaticExtensionAssets,
   listStaticExtensionAssetSources,
+  shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
 import {
   extensionRestartMetadataFiles,
@@ -123,6 +125,7 @@ type SpawnedProcessResult = {
   exitSignal: NodeJS.Signals | null;
   forwardedSignal: NodeJS.Signals | null;
 };
+type RunNodeExit = number | NodeJS.Signals;
 
 function asRunNodeChild(value: unknown): RunNodeChild {
   if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
@@ -475,20 +478,6 @@ const listBuiltBundledPluginEntries = (deps: RunNodeRequirementDeps) => {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 };
 
-const listBuiltBundledPluginRuntimeOverlayDirs = (deps: RunNodeRequirementDeps) => {
-  const distExtensionsRoot = path.join(deps.distRoot, "extensions");
-  let entries;
-  try {
-    entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
-    .map((entry) => entry.name)
-    .toSorted((left, right) => left.localeCompare(right));
-};
-
 const listRequiredBundledPluginMetadataOutputs = (
   pluginEntries: BundledPluginBuildEntry[],
   deps: RunNodeRequirementDeps,
@@ -505,9 +494,10 @@ const listRequiredBundledPluginMetadataOutputs = (
     return requiredPaths;
   });
 
-const listRuntimeOverlaySourcePaths = (sourceDir: string, deps: RunNodeRequirementDeps) => {
-  const paths: string[] = [];
-  const queue = [sourceDir];
+const hasMissingBundledPluginRuntimeOverlayOutput = (deps: RunNodeRequirementDeps) => {
+  const distExtensionsRoot = path.join(deps.distRoot, "extensions");
+  const runtimeExtensionsRoot = path.join(deps.cwd, "dist-runtime", "extensions");
+  const queue = [distExtensionsRoot];
   while (queue.length > 0) {
     const current = queue.pop();
     if (!current) {
@@ -528,26 +518,18 @@ const listRuntimeOverlaySourcePaths = (sourceDir: string, deps: RunNodeRequireme
         queue.push(entryPath);
         continue;
       }
-      if (entry.isFile() || entry.isSymbolicLink()) {
-        paths.push(entryPath);
+      if (current !== distExtensionsRoot && (entry.isFile() || entry.isSymbolicLink())) {
+        const runtimePath = path.join(
+          runtimeExtensionsRoot,
+          path.relative(distExtensionsRoot, entryPath),
+        );
+        if (statMtime(runtimePath, deps.fs) == null) {
+          return true;
+        }
       }
     }
   }
-  return paths.toSorted((left, right) => left.localeCompare(right));
-};
-
-const listRequiredBundledPluginRuntimeOverlayOutputs = (deps: RunNodeRequirementDeps) => {
-  const distRoot = deps.distRoot;
-  const runtimeRoot = path.join(deps.cwd, "dist-runtime");
-  const runtimePaths: string[] = [];
-  for (const pluginId of listBuiltBundledPluginRuntimeOverlayDirs(deps)) {
-    const distPluginDir = path.join(distRoot, "extensions", pluginId);
-    const runtimePluginDir = path.join(runtimeRoot, "extensions", pluginId);
-    for (const sourcePath of listRuntimeOverlaySourcePaths(distPluginDir, deps)) {
-      runtimePaths.push(path.join(runtimePluginDir, path.relative(distPluginDir, sourcePath)));
-    }
-  }
-  return [...new Set(runtimePaths)].toSorted((left, right) => left.localeCompare(right));
+  return false;
 };
 
 const isSafePluginSdkSubpathSegment = (subpath: string) =>
@@ -606,7 +588,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps: RunNodeRequirementDeps)
 };
 
 const listRequiredStaticExtensionAssetOutputs = (deps: RunNodeRequirementDeps) => {
-  if (deps.env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS === "0") {
+  if (!shouldCopyStaticExtensionAssets({ env: deps.env })) {
     return [];
   }
   const distRoot = deps.distRoot;
@@ -631,22 +613,21 @@ const listRequiredCoreRuntimePostBuildOutputs = (deps: RunNodeRequirementDeps) =
     path.join(deps.cwd, normalizePath(relativePath)),
   );
 
-/** Lists runtime postbuild outputs that must exist before the dev CLI starts. */
-const listRequiredRuntimePostBuildOutputs = (deps: RunNodeRequirementDeps) => {
+const hasMissingRequiredRuntimePostBuildOutput = (deps: RunNodeRequirementDeps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
-  return [
-    ...listRequiredCoreRuntimePostBuildOutputs(deps),
-    ...listRequiredOpenClawExtensionAliasOutputs(deps),
-    ...listRequiredStaticExtensionAssetOutputs(deps),
-    ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
-    ...listRequiredBundledPluginRuntimeOverlayOutputs(deps),
+  // Keep discovery failures ahead of missing-output checks.
+  const requiredOutputGroups = [
+    listRequiredCoreRuntimePostBuildOutputs(deps),
+    listRequiredOpenClawExtensionAliasOutputs(deps),
+    listRequiredStaticExtensionAssetOutputs(deps),
+    listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
   ];
-};
-
-const hasMissingRequiredRuntimePostBuildOutput = (deps: RunNodeRequirementDeps) =>
-  listRequiredRuntimePostBuildOutputs(deps).some(
-    (filePath) => statMtime(filePath, deps.fs) == null,
+  return (
+    requiredOutputGroups.some((outputs) =>
+      outputs.some((filePath) => statMtime(filePath, deps.fs) == null),
+    ) || hasMissingBundledPluginRuntimeOverlayOutput(deps)
   );
+};
 
 /** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequirement => {
@@ -1174,28 +1155,28 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
-        if (forwardedSignal && !cleanedForwardedSignalGroup) {
+        if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
         settle({ exitCode, exitSignal, forwardedSignal });
       };
-      if ("once" in childProcess) {
-        childProcess.on("error", handleError);
-        childProcess.on("exit", handleExit);
-      } else {
-        childProcess.on("error", handleError);
-        childProcess.on("exit", handleExit);
-      }
+      childProcess.on("error", handleError);
+      childProcess.on("exit", handleExit);
     });
   } finally {
     cleanupSignals();
   }
 };
 
-const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
+const getInterruptedSpawnOutcome = (
+  res: SpawnedProcessResult,
+  platform: NodeJS.Platform,
+): RunNodeExit | null => {
   if (res.exitSignal) {
-    return getSignalExitCode(res.exitSignal);
+    // The child did not acknowledge completion. A numeric exit could let the
+    // watch parent retry after the owner of detached workers has disappeared.
+    return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
@@ -1215,9 +1196,9 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   );
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps);
-  const interruptedExitCode = getInterruptedSpawnExitCode(res);
-  if (interruptedExitCode !== null) {
-    return interruptedExitCode;
+  const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
+  if (interrupted !== null) {
+    return interrupted;
   }
   return res.exitCode ?? 1;
 };
@@ -1313,7 +1294,7 @@ const createSyncIoTraceStderrFilter = (deps: RunNodeDeps) => {
   };
 };
 
-const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: number) => {
+const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: RunNodeExit) => {
   if (!deps.outputTee) {
     return exitCode;
   }
@@ -1482,13 +1463,17 @@ const writeRuntimePostBuildStamp = (deps: RunNodeDeps) => {
   }
 };
 
-const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) => {
-  const synced = await syncRuntimeArtifacts(deps);
-  if (synced) {
-    writeRuntimePostBuildStamp(deps);
-  }
-  return synced;
-};
+const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
+  withDistArtifactOwnership(deps.cwd, async () => {
+    if (!resolveRuntimePostBuildRequirement(deps).shouldSync) {
+      return true;
+    }
+    const synced = await syncRuntimeArtifacts(deps);
+    if (synced) {
+      writeRuntimePostBuildStamp(deps);
+    }
+    return synced;
+  });
 
 const shouldSkipWatchRuntimeSync = (deps: RunNodeDeps, requirement: RuntimePostBuildRequirement) =>
   deps.env.OPENCLAW_WATCH_MODE === "1" &&
@@ -1599,7 +1584,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
-export async function runNodeMain(params: RunNodeMainParams = {}): Promise<number> {
+export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
@@ -1609,7 +1594,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
   deps.outputTee = createRunNodeOutputTee(deps);
 
   try {
-    let exitCode = 1;
+    let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDistForGatewayClient(deps)) {
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
@@ -1700,7 +1685,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnExitCode(result) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
@@ -1716,7 +1701,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
-    .then((code) => process.exit(code))
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
     .catch((err: unknown) => {
       console.error(err);
       process.exit(1);

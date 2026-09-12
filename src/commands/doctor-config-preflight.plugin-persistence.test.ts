@@ -19,6 +19,7 @@ import {
   createPluginCache,
   getPluginCache,
   getPluginMetadataSnapshotCache,
+  runOutsidePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -128,12 +129,14 @@ describe("Doctor plugin persistence", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
   it.each([
-    { scope: "process", replaceBeforeLease: false },
-    { scope: "operation", replaceBeforeLease: false },
-    { scope: "operation", replaceBeforeLease: true },
+    { scope: "process", replaceBeforeLease: false, independentWriter: false },
+    { scope: "operation", replaceBeforeLease: false, independentWriter: false },
+    { scope: "operation", replaceBeforeLease: true, independentWriter: false },
+    { scope: "operation", replaceBeforeLease: false, independentWriter: true },
+    { scope: "operation", replaceBeforeLease: true, independentWriter: true },
   ])(
-    "verifies a persisted registry in the $scope scope (replacement before lease: $replaceBeforeLease)",
-    async ({ scope, replaceBeforeLease }) => {
+    "verifies a persisted registry in the $scope scope (replacement before lease: $replaceBeforeLease, independent writer: $independentWriter)",
+    async ({ scope, replaceBeforeLease, independentWriter }) => {
       await withPreflightPluginFixture(async (writeVersion) => {
         const checkpointStatus = vi.spyOn(migrationCheckpoint, "readMigrationCheckpointStatus");
         onTestFinished(() => checkpointStatus.mockRestore());
@@ -150,38 +153,44 @@ describe("Doctor plugin persistence", () => {
             : undefined;
           let replaced = false;
           try {
-            const result = await runDoctorConfigPreflight({
-              migrateState: false,
-              migrateLegacyConfig: false,
-              requireStateMigrationCheckpoint: true,
-              preparePluginMetadataSnapshot: true,
-              observe: false,
-              measure: async (name, operation) => {
-                const measured = await operation();
-                if (
-                  name === "doctor.config-preflight.config-snapshot" &&
-                  siblingLease &&
-                  !replaced
-                ) {
-                  // Another owner commits after the initial read, before preflight acquires its lease.
-                  replaced = true;
-                  await writeVersion("2.0.0");
-                  await withPluginCache(createPluginCache(), async () => {
-                    const latest = await read();
-                    expect(latest.pluginMetadataSnapshot).toBeDefined();
-                    writePersistedInstalledPluginIndexWithLeaseSync(
-                      latest.pluginMetadataSnapshot!.index,
-                      {
-                        env: process.env,
-                        lease: siblingLease,
-                      },
-                    );
-                  });
-                  siblingLease.release();
-                }
-                return measured;
-              },
-            });
+            const preflight = () =>
+              runDoctorConfigPreflight({
+                migrateState: false,
+                migrateLegacyConfig: false,
+                requireStateMigrationCheckpoint: true,
+                preparePluginMetadataSnapshot: true,
+                observe: false,
+                measure: async (name, operation) => {
+                  const measured = await operation();
+                  if (
+                    name === "doctor.config-preflight.config-snapshot" &&
+                    siblingLease &&
+                    !replaced
+                  ) {
+                    // Commit after the initial read, before preflight acquires its lease.
+                    replaced = true;
+                    await writeVersion("2.0.0");
+                    const replace = () =>
+                      withPluginCache(createPluginCache(), async () => {
+                        const latest = await read();
+                        expect(latest.pluginMetadataSnapshot).toBeDefined();
+                        writePersistedInstalledPluginIndexWithLeaseSync(
+                          latest.pluginMetadataSnapshot!.index,
+                          {
+                            env: process.env,
+                            lease: siblingLease,
+                          },
+                        );
+                      });
+                    await (independentWriter ? runOutsidePluginCache(replace) : replace());
+                    siblingLease.release();
+                  }
+                  return measured;
+                },
+              });
+            const result = await (independentWriter
+              ? runOutsidePluginCache(() => withPluginCache(createPluginCache(), preflight))
+              : preflight());
             expect(result.pluginMetadataSnapshot?.registrySource).toBe("persisted");
             expect(
               result.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
@@ -192,11 +201,11 @@ describe("Doctor plugin persistence", () => {
               expect(getPluginCache()).toBe(owner);
               const retained = (await read()).pluginMetadataSnapshot!;
               expect(getPluginMetadataSnapshotCache(retained)).toBe(owner);
-              expect(retained.registrySource).toBe("derived");
+              expect(retained.registrySource).toBe(independentWriter ? "derived" : "persisted");
               expect(
                 retained.manifestRegistry.plugins.find((p) => p.id === "preflight-fixture")
                   ?.version,
-              ).toBe("1.0.0");
+              ).toBe(!independentWriter && replaceBeforeLease ? "2.0.0" : "1.0.0");
             }
           } finally {
             siblingLease?.release();
@@ -326,14 +335,18 @@ describe("Doctor plugin persistence", () => {
             );
           });
           const preflight = () =>
-            runDoctorConfigPreflight({
-              migrateState: false,
-              migrateLegacyConfig: false,
-              requireStateMigrationCheckpoint: true,
-              preparePluginMetadataSnapshot: true,
-              observe: false,
-              invalidConfigNote: false,
-            });
+            runOutsidePluginCache(() =>
+              withPluginCache(createPluginCache(), () =>
+                runDoctorConfigPreflight({
+                  migrateState: false,
+                  migrateLegacyConfig: false,
+                  requireStateMigrationCheckpoint: true,
+                  preparePluginMetadataSnapshot: true,
+                  observe: false,
+                  invalidConfigNote: false,
+                }),
+              ),
+            );
           // The invoking generation remains old; the post-lease read must own the written leaf.
           await writeVersion("2.0.0");
           const result = await preflight().catch((error: unknown) => error);
@@ -377,10 +390,14 @@ describe("Doctor plugin persistence", () => {
           );
           const lease = migrationCheckpoint.acquireStartupMigrationLease();
           try {
-            writePersistedInstalledPluginIndexWithLeaseSync(leaf.index, {
-              env: process.env,
-              lease,
-            });
+            runOutsidePluginCache(() =>
+              withPluginCache(createPluginCache(), () =>
+                writePersistedInstalledPluginIndexWithLeaseSync(leaf.index, {
+                  env: process.env,
+                  lease,
+                }),
+              ),
+            );
           } finally {
             lease.release();
           }

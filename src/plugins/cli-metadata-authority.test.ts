@@ -10,7 +10,7 @@ import {
   loadPluginCliRegistrationEntriesWithDefaults,
 } from "./cli-registry-loader.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -51,10 +51,13 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
     if (kind === "install-state") {
       for (const id of ["alpha", "beta"]) {
         const installPath = path.join(root, id, ".openclaw", "extensions", id);
-        writePersistedInstalledPluginIndexInstallRecordsSync(
-          { [id]: { source: "path", installPath, sourcePath: installPath } },
-          { config: cfg, env, stateDir: path.join(root, id, "state") },
-        );
+        refreshPersistedInstalledPluginIndex({
+          config: cfg,
+          env,
+          stateDir: path.join(root, id, "state"),
+          reason: "source-changed",
+          installRecords: { [id]: { source: "path", installPath, sourcePath: installPath } },
+        });
       }
     }
     const serialized = JSON.stringify([cfg, env]);

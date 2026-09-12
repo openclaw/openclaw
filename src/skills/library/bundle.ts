@@ -361,7 +361,9 @@ function describeSkillTreeFailure(error: unknown): string {
 export async function readSkillBundleTree(
   directory: string,
   includePath?: (filePath: string) => boolean,
+  options?: { symlinks?: "reject" | "follow-within-root" },
 ): Promise<SkillLibraryFile[]> {
+  const symlinks = options?.symlinks ?? "reject";
   const include = includePath ? (entry: { path: string }) => includePath(entry.path) : undefined;
   const walked = await walkDirectory(directory, {
     // Inspect one extra level: walkDirectory otherwise silently skips deeper content.
@@ -384,13 +386,16 @@ export async function readSkillBundleTree(
   const safeRoot = await root(directory).catch((error: unknown) => {
     throw new SkillTreeDirectoryError(directory, directory, error);
   });
+  const includedFiles = new Set(
+    walked.entries.filter((entry) => entry.kind === "file").map((entry) => entry.relativePath),
+  );
   const files: SkillLibraryFile[] = [];
   let total = 0;
   for (const entry of walked.entries) {
     if (entry.kind === "directory") {
       continue;
     }
-    if (entry.kind !== "file") {
+    if (entry.kind !== "file" && !(entry.kind === "symlink" && symlinks === "follow-within-root")) {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
         `Skill trees cannot contain links or special files: root=${JSON.stringify(directory)} ` +
@@ -402,7 +407,7 @@ export async function readSkillBundleTree(
     const read = await safeRoot
       .read(entry.relativePath, {
         hardlinks: "reject",
-        symlinks: "reject",
+        symlinks,
         maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
       })
       .catch((error: unknown) => {
@@ -414,6 +419,18 @@ export async function readSkillBundleTree(
           { cause: error },
         );
       });
+    // Use the verified opened target so aliases cannot include ignored trees or
+    // content outside the bounded walk, including after a concurrent retarget.
+    if (
+      symlinks === "follow-within-root" &&
+      !includedFiles.has(path.relative(safeRoot.rootReal, read.realPath))
+    ) {
+      throw new SkillLibraryError(
+        "INVALID_BUNDLE",
+        `Skill tree link target is not an included regular file: root=${JSON.stringify(directory)} ` +
+          `path=${JSON.stringify(entry.path)}.`,
+      );
+    }
     const { buffer, stat } = read;
     total += buffer.length;
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES || files.length >= SKILL_LIBRARY_MAX_FILES) {

@@ -17,6 +17,7 @@ import { SessionPersonSchema } from "./session-participant.js";
 /** One gateway-visible presence record for a node/client/runtime. */
 export const PresenceEntrySchema = closedObject({
   host: Type.Optional(NonEmptyString),
+  clientId: Type.Optional(NonEmptyString),
   ip: Type.Optional(NonEmptyString),
   version: Type.Optional(NonEmptyString),
   platform: Type.Optional(NonEmptyString),

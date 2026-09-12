@@ -31,6 +31,7 @@ import {
   readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionRowAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
@@ -60,35 +61,48 @@ export function resolveSidebarHomeAttention(
   );
 }
 
-export function compareSidebarSessionRowsByMode(input: {
-  a: SessionRow;
-  b: SessionRow;
+type SidebarSessionSortOptions = {
   sortMode: SidebarSessionSortMode;
   owners: SessionsListResult["owners"];
   createdOrder: ReadonlyMap<string, number>;
-}): number {
-  const { a, b } = input;
-  if (input.sortMode !== "people") {
-    return input.sortMode === "updated"
-      ? compareSessionRowsByUpdatedAt(a, b)
-      : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
-  }
-  const owners = input.owners ?? [];
-  const ownerA = a.owner?.actor;
-  const ownerB = b.owner?.actor;
-  const idA = ownerA?.id?.trim() ?? "";
-  const idB = ownerB?.id?.trim() ?? "";
-  if (idA !== idB) {
-    const facetOwnerA = owners.find((candidate) => candidate.id === idA);
-    const facetOwnerB = owners.find((candidate) => candidate.id === idB);
-    const labelA = facetOwnerA?.label?.trim() || ownerA?.label?.trim() || idA;
-    const labelB = facetOwnerB?.label?.trim() || ownerB?.label?.trim() || idB;
-    const byOwner = labelA.localeCompare(labelB) || idA.localeCompare(idB);
-    if (byOwner !== 0) {
-      return byOwner;
+};
+
+export function createSidebarSessionRowsComparator(
+  readOptions: () => SidebarSessionSortOptions,
+): (a: SessionRow, b: SessionRow) => number {
+  let options: SidebarSessionSortOptions | undefined;
+  let ownerLabels: Map<string, string | undefined> | undefined;
+  return (a, b) => {
+    // An unset agent selection can resolve through navigation itself. Empty
+    // and single-row projections must not ask for sort facts before sorting.
+    const input = (options ??= readOptions());
+    if (input.sortMode !== "people") {
+      return input.sortMode === "updated"
+        ? compareSessionRowsByUpdatedAt(a, b)
+        : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
     }
-  }
-  return compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
+    const ownerA = a.owner?.actor;
+    const ownerB = b.owner?.actor;
+    const idA = ownerA?.id?.trim() ?? "";
+    const idB = ownerB?.id?.trim() ?? "";
+    if (idA !== idB) {
+      if (!ownerLabels) {
+        ownerLabels = new Map();
+        for (const owner of input.owners ?? []) {
+          if (!ownerLabels.has(owner.id)) {
+            ownerLabels.set(owner.id, owner.label?.trim());
+          }
+        }
+      }
+      const labelA = ownerLabels.get(idA) || ownerA?.label?.trim() || idA;
+      const labelB = ownerLabels.get(idB) || ownerB?.label?.trim() || idB;
+      const byOwner = labelA.localeCompare(labelB) || idA.localeCompare(idB);
+      if (byOwner !== 0) {
+        return byOwner;
+      }
+    }
+    return compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
+  };
 }
 
 function compareSidebarSessionRowsByCreatedAt(
@@ -159,6 +173,10 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
+  const defaultAgentId = resolveUiDefaultAgentId({
+    agentsList: context?.agents.state.agentsList,
+    hello: context?.gateway.snapshot.hello,
+  });
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -184,6 +202,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
       incognito: row.incognito === true,
@@ -231,6 +250,8 @@ export function buildSidebarSessionNavigationState(input: {
         row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
       placementProfileId:
         row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
+      placementMachine:
+        row.placement && "machine" in row.placement ? row.placement.machine : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:

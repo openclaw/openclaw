@@ -6,13 +6,14 @@ import * as assistantIdentity from "../../app/assistant-identity.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -57,20 +58,27 @@ describe("canonical session message recovery", () => {
       thinkingLevel: null,
     });
     const requestUpdate = overrides.requestUpdate ?? vi.fn();
-    const state = {
-      ...makeChatHost(),
-      client: { request } as unknown as GatewayBrowserClient,
+    const host = makeChatHost({
+      client: createTestGatewayClient(request),
       connectionEpoch: 1,
       sessionKey: "agent:main:main",
+      ...overrides,
+    });
+    if (!overrides.sessions) {
+      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
+        applied: false,
+        result: host.sessions.state.result,
+      }));
+      vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
+      vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
+    }
+    const state = {
+      ...host,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
       chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatStreamStartedAt: null,
-      sessions: {
-        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      },
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
       ...overrides,
@@ -100,6 +108,99 @@ describe("canonical session message recovery", () => {
       return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
     });
   }
+
+  it.each(["before tool", "after tool", "after final delta"])(
+    "keeps overtaken commentary single with persistence %s",
+    (persistence) => {
+      const runId = "active-run";
+      const text = "I am checking the files and will report the result.";
+      const partial = text.slice(0, text.indexOf(" will report"));
+      const { state } = createSessionEventState({ chatRunId: runId });
+      const delta = (value: string) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            message: { role: "assistant", content: [{ type: "text", text: value }] },
+          },
+        });
+      const item = (seq: number) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq,
+            ts: seq,
+            stream: "item",
+            data: { kind: "preamble", phase: "end", itemId: "item-a", progressText: text },
+          },
+        });
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            sessionId: state.currentSessionId,
+            runId,
+            runActive: true,
+            messageId: "saved-commentary",
+            messageSeq: 1,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              openclawStreamFallback: { source: "segment", itemId: "item-a" },
+              __openclaw: { id: "saved-commentary", seq: 1, runId },
+            },
+          },
+        });
+      const visible = () => renderedTranscript(state).filter((entry) => entry.text);
+      const single = [{ role: "assistant", text }];
+      delta(partial);
+      expect(visible()).toEqual([{ role: "assistant", text: partial }]);
+      item(1);
+      expect(visible()).toEqual(single);
+      if (persistence === "before tool") {
+        persist();
+        expect(visible()).toEqual(single);
+      }
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 2,
+          ts: 2,
+          stream: "tool",
+          data: { phase: "result", toolCallId: "call-a", name: "list_files", result: {} },
+        },
+      });
+      expect(visible()).toEqual(single);
+      if (persistence === "after tool") {
+        persist();
+        expect(visible()).toEqual(single);
+      }
+      delta(`${partial} will report`);
+      expect(visible()).toEqual(single);
+      // The final chunk also brings a distinct, identically worded occurrence.
+      delta(`${text}\n\n${text}`);
+      expect(visible()).toEqual([...single, ...single]);
+      if (persistence === "after final delta") {
+        persist();
+        expect(visible()).toEqual([...single, ...single]);
+      }
+      item(3);
+      expect(visible()).toEqual([...single, ...single]);
+      expect(state.chatMessages).toHaveLength(1);
+      expect(extractText(state.chatMessages[0])).toBe(text);
+    },
+  );
 
   it("reconciles live approval events for the selected session", () => {
     const { state } = createSessionEventState();
@@ -503,7 +604,7 @@ describe("canonical session message recovery", () => {
         { role: "assistant", text },
       ]);
       expect(state.chatRunId).toBe(runId);
-      expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
 
       // Replayed cumulative deltas must not revive the retired projection.
       delta(text, text.slice(partial.length));
@@ -1174,6 +1275,92 @@ describe("canonical session message recovery", () => {
     ]);
   });
 
+  it("hydrates one final when an earlier same-run tool boundary overlaps terminal persistence", async () => {
+    const runId = "tool-heavy-run";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Inspect the repository." }],
+      __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "The repair is complete." }],
+      __openclaw: { id: "assistant-final", seq: 4, runId, runTerminal: true },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, toolBoundary, persistedFinal],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: runId,
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: createTestGatewayClient(request),
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The repair is complete." }],
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        message: prompt,
+        messageId: "prompt",
+        messageSeq: 1,
+        hasActiveRun: false,
+        activeRunIds: [],
+        session: {
+          key: state.sessionKey,
+          kind: "direct",
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+          updatedAt: 1,
+        },
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([prompt, toolBoundary, persistedFinal]);
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Inspect the repository." },
+      { role: "tool", text: "Checking the repository." },
+      { role: "assistant", text: "The repair is complete." },
+    ]);
+  });
+
   it("keeps the owned local prompt before an early durable reply after placement abandonment", () => {
     const runId = "local-placement-run-2";
     const promptText = "Resume locally 2.";
@@ -1357,11 +1544,15 @@ describe("canonical session message recovery", () => {
         { role: "user", text: "Finish the dashboard task" },
       ]);
       await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("chat.history", {
-          sessionKey: state.sessionKey,
-          limit: 80,
-          maxBytes: 256 * 1024,
-        }),
+        expect(request).toHaveBeenCalledWith(
+          "chat.history",
+          {
+            sessionKey: state.sessionKey,
+            limit: 80,
+            maxBytes: 256 * 1024,
+          },
+          { signal: expect.any(AbortSignal) },
+        ),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
@@ -1631,6 +1822,7 @@ describe("canonical session message recovery", () => {
       expect(request).toHaveBeenLastCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: "global", agentId: "main" }),
+        { signal: expect.any(AbortSignal) },
       );
       state.assistantAgentId = "work";
       state.agentsSelectedId = "work";
@@ -2655,11 +2847,15 @@ describe("canonical session message recovery", () => {
     });
 
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: state.sessionKey,
-        limit: 80,
-        maxBytes: 256 * 1024,
-      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.history",
+        {
+          sessionKey: state.sessionKey,
+          limit: 80,
+          maxBytes: 256 * 1024,
+        },
+        { signal: expect.any(AbortSignal) },
+      );
     });
     expect(state.chatRunId).toBe("active-run");
   });
@@ -4300,15 +4496,15 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
-    expect(state.chatModelCatalogError).toBe(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBe(true);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
     expect(state.chatModelCatalogError).toBe("catalog transport failed");
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBeUndefined();
   });
 
   it("keeps fallback slash commands when chat metadata omits commands", async () => {

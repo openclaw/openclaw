@@ -12,11 +12,13 @@ import {
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock,
-  notifyGatewayPluginMetadataChangedMock,
+  resolvePluginLifecycleGatewayMock,
+  pluginLifecycleGatewayMock,
   readConfigFileSnapshotForWriteMock,
   readPersistedInstalledPluginIndexMock,
   refreshPluginRegistryMock,
@@ -35,34 +37,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 import { registerPluginsCli } from "./plugins-cli.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
-const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-
-function setTty(value: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", {
-    value,
-    configurable: true,
-  });
-  Object.defineProperty(process.stdout, "isTTY", {
-    value,
-    configurable: true,
-  });
-}
-
-function restoreTty(): void {
-  if (ORIGINAL_STDIN_TTY) {
-    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
-  if (ORIGINAL_STDOUT_TTY) {
-    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
-  }
-}
+const { set: setTty, restore: restoreTty } = createCliTtyMock();
 
 function createTrackedPluginConfig(params: {
   pluginId: string;
@@ -113,10 +91,10 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
   };
 }
 
-function expectRestartNoticeLogged() {
+function expectOfflineNoticeLogged() {
   expect(
     pluginsCliRuntimeLogs.some((message) =>
-      message.includes("Restart the gateway to load plugins and hooks."),
+      message.includes("Updates saved; they will load on the next Gateway start."),
     ),
   ).toBe(true);
 }
@@ -378,26 +356,63 @@ describe("plugins cli update", () => {
   });
 
   it.each([
-    { id: "missing-plugin", args: [] },
-    { id: "missing-plugin", args: ["--dry-run"] },
-    { id: "constructor", args: [] },
-    { id: "@acme/missing-plugin@beta", args: [] },
-  ])("rejects untracked update target $id $args", async ({ id, args }) => {
-    const config = {} as OpenClawConfig;
-    primeUpdateConfigSnapshot({ config });
-    primePluginUpdate(config, [
-      { pluginId: id, status: "skipped", message: `No install record for "${id}".` },
-    ]);
+    ["missing", "missing-plugin", [], undefined, undefined, "openclaw"],
+    ["preview", "missing-plugin", ["--dry-run"], undefined, undefined, "openclaw"],
+    ["object-name", "constructor", [], undefined, undefined, "openclaw"],
+    ["npm-spec", "@acme/missing-plugin@beta", [], undefined, undefined, "openclaw"],
+    ["profile", "missing-plugin", [], "work", undefined, "openclaw --profile work"],
+    [
+      "profile preview",
+      "missing-plugin",
+      ["--dry-run"],
+      "work",
+      undefined,
+      "openclaw --profile work",
+    ],
+    ["container", "missing-plugin", [], undefined, "demo", "openclaw --container demo"],
+    [
+      "container preview",
+      "missing-plugin",
+      ["--dry-run"],
+      undefined,
+      "demo",
+      "openclaw --container demo",
+    ],
+    ["container before profile", "missing-plugin", [], "work", "demo", "openclaw --container demo"],
+    [
+      "container before profile preview",
+      "missing-plugin",
+      ["--dry-run"],
+      "work",
+      "demo",
+      "openclaw --container demo",
+    ],
+  ] as const)(
+    "rejects untracked update target with %s guidance",
+    async (_name, id, args, profile, container, prefix) => {
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: container },
+        async () => {
+          const config = {} as OpenClawConfig;
+          primeUpdateConfigSnapshot({ config });
+          primePluginUpdate(config, [
+            { pluginId: id, status: "skipped", message: `No install record for "${id}".` },
+          ]);
 
-    await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
-      "__exit__:1",
-    );
+          await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
+            "__exit__:1",
+          );
 
-    expect(runtimeErrors.at(-1)).toContain(`No tracked plugin or hook pack found for "${id}".`);
-    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
-  });
+          expect(runtimeErrors.at(-1)).toBe(
+            `No tracked plugin or hook pack found for "${id}". Run "${prefix} plugins list" or "${prefix} hooks list" to inspect installed packages.`,
+          );
+          expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+          expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
+          expect(configWriteMock).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("rejects an npm update target shared by multiple tracked plugins", async () => {
     const config = {
@@ -509,7 +524,7 @@ describe("plugins cli update", () => {
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(transaction.commit).toHaveBeenCalledOnce();
     expect(transaction.rollback).not.toHaveBeenCalled();
-    expectRestartNoticeLogged();
+    expectOfflineNoticeLogged();
   });
 
   it.each([
@@ -546,7 +561,7 @@ describe("plugins cli update", () => {
     const update = runPluginsCommand(["plugins", "update", "demo-hooks"]);
     if (settlement === "commit") {
       await update;
-      expectRestartNoticeLogged();
+      expectOfflineNoticeLogged();
     } else {
       await expect(update).rejects.toThrow(failure);
     }
@@ -777,6 +792,68 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes the online owner only after releasing the update lease", async () => {
+    const config = {};
+    primeUpdateConfigSnapshot({ config });
+    primeBravePluginRecordUpdate(config);
+    const lifecycle = await import("../plugins/plugin-lifecycle-lease.js");
+    const original = lifecycle.withPluginLifecycleLease;
+    let held = false;
+    const spy = vi
+      .spyOn(lifecycle, "withPluginLifecycleLease")
+      .mockImplementation(
+        async <T>(
+          options: Parameters<typeof original>[0],
+          run: (
+            lease: import("../plugins/plugin-lifecycle-lease.js").PluginLifecycleLeaseContext,
+          ) => Promise<T>,
+        ) =>
+          original(options, async (lease) => {
+            const wasHeld = held;
+            held = true;
+            try {
+              return await run(lease);
+            } finally {
+              held = wasHeld;
+            }
+          }),
+      );
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
+      const [method] = args;
+      expect(held).toBe(false);
+      return method === "plugins.refresh"
+        ? {
+            runtime: { generation: 7 },
+            warnings: ["Previous plugin service could not stop."],
+          }
+        : {};
+    });
+    try {
+      await runPluginsCommand(["plugins", "update", "brave"]);
+      expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
+        "plugins.list",
+        "plugins.refresh",
+      ]);
+      expect(pluginsCliRuntimeLogs).toContainEqual(
+        expect.stringContaining("Previous plugin service could not stop."),
+      );
+      expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not mutate packages when the known Gateway is unreachable", async () => {
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    pluginLifecycleGatewayMock.mockRejectedValue(new Error("owner unreachable"));
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "owner unreachable",
+    );
+    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("does not rewrite source config for persisted install record-only updates", async () => {
     const cfg = {
       gateway: {
@@ -820,8 +897,7 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(cfg);
-    expectRestartNoticeLogged();
+    expectOfflineNoticeLogged();
   });
 
   it("commits a moved managed npm load path with its replacement record", async () => {
@@ -876,7 +952,10 @@ describe("plugins cli update", () => {
       },
       baseHash: "update-config",
       writeOptions: expect.objectContaining({
-        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        afterWrite: {
+          mode: "none",
+          reason: "plugin update applies runtime after releasing its lease",
+        },
       }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
@@ -888,7 +967,6 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
   });
 
   it("rolls back persisted install records when source config changes during a records-only update", async () => {
@@ -974,7 +1052,6 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
-    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(commit).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Updated");
@@ -1797,11 +1874,10 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(runtimeConfig);
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin update committed");
     expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Restart is required");
-    expectRestartNoticeLogged();
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Run openclaw plugins doctor");
+    expectOfflineNoticeLogged();
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {

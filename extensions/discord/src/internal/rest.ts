@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { discordConversationReadAuthority } from "../conversation-read-authority.js";
+import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -39,6 +40,8 @@ type RequestSchedulerOptions = {
 export type RequestClientOptions = {
   tokenHeader?: "Bot" | "Bearer";
   baseUrl?: string;
+  /** Complete versioned REST base supplied by the Discord endpoint override. */
+  apiBaseUrl?: string;
   apiVersion?: number;
   userAgent?: string;
   signal?: AbortSignal;
@@ -51,6 +54,7 @@ export type RequestClientOptions = {
 };
 
 type NormalizedRequestClientOptions = RequestClientOptions & {
+  apiBaseUrl: string;
   apiVersion: number;
   maxQueueSize: number;
   timeout: number;
@@ -159,9 +163,17 @@ export class RequestClient {
   private scheduler: RestScheduler<RequestData>;
 
   constructor(token: string, options?: RequestClientOptions) {
+    const endpoint = getDiscordEndpointRuntime();
+    const resolvedOptions = endpoint
+      ? {
+          ...options,
+          apiBaseUrl: endpoint.descriptor.restApiBaseUrl,
+          fetch: endpoint.fetch,
+        }
+      : options;
     this.token = token.replace(/^Bot\s+/i, "");
-    this.customFetch = options?.fetch;
-    this.options = normalizeRequestClientOptions(options);
+    this.customFetch = resolvedOptions?.fetch;
+    this.options = normalizeRequestClientOptions(resolvedOptions);
     this.scheduler = new RestScheduler<RequestData>(
       {
         lanes: normalizeSchedulerLanes(this.options.maxQueueSize, this.options.scheduler?.lanes),
@@ -246,7 +258,7 @@ export class RequestClient {
     },
     routeKey = createRouteKey(method, path),
   ): Promise<unknown> {
-    const url = `${this.options.baseUrl}/v${this.options.apiVersion}${appendQuery(path, params.query)}`;
+    const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
       "User-Agent": this.options.userAgent ?? defaultOptions.userAgent,
     });
@@ -328,9 +340,14 @@ function normalizeRequestClientOptions(
   options?: RequestClientOptions,
 ): NormalizedRequestClientOptions {
   const merged = { ...defaultOptions, ...options };
+  const apiVersion = normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, {
+    min: 1,
+  });
   return {
     ...merged,
-    apiVersion: normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, { min: 1 }),
+    apiBaseUrl:
+      options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v${apiVersion}`,
+    apiVersion,
     timeout:
       clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
     maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {

@@ -3,6 +3,7 @@ import {
   runAgentHarnessBeforeCompactionHook,
   projectProgressCardChannelUpdate,
   type AgentMessage,
+  type AgentHarnessUserInputQuestion,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -14,7 +15,11 @@ import {
 } from "./event-projector-items.js";
 import { CodexTurnProjection } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
-import { readCodexErrorNotificationMessage, readItem } from "./event-projector-values.js";
+import {
+  extractRawAssistantText,
+  readCodexErrorNotificationMessage,
+  readItem,
+} from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
   isCodexNotificationForTurn,
@@ -154,6 +159,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
     switch (notification.method) {
       case "item/agentMessage/delta":
+        if (readString(params, "delta")) {
+          this.eventProjection.markSafetyBufferingAssistantStarted();
+        }
         await this.assistantProjection.handleAssistantDelta(params);
         break;
       case "item/reasoning/summaryTextDelta":
@@ -219,6 +227,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       case "model/rerouted":
         this.eventProjection.handleModelRerouted(params);
         break;
+      case "model/safetyBuffering/updated":
+        this.eventProjection.handleSafetyBuffering(params);
+        break;
       case "error": {
         this.usageProjection.invalidateContext();
         if (params.willRetry === true) {
@@ -226,6 +237,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
           break;
         }
         const codexErrorInfo = isJsonObject(params.error) ? params.error.codexErrorInfo : undefined;
+        this.eventProjection.handleCyberPolicyError(codexErrorInfo, this.params.modelId);
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
@@ -248,7 +260,6 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       case "item/mcpToolCall/progress":
       case "model/verification":
       case "turn/moderationMetadata":
-      case "model/safetyBuffering/updated":
         break;
       default:
         this.diagnostics.warnUnknownEvent(notification, params);
@@ -262,6 +273,29 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         this.transcriptCheckpoint.flush(),
       );
     }
+  }
+
+  recordUserInputResponse(params: {
+    itemId: string;
+    questions: readonly AgentHarnessUserInputQuestion[];
+    response: JsonValue;
+  }): void {
+    if (this.projectionClosed) {
+      return;
+    }
+    // The bridge supplies the validated native request and the exact response it returns.
+    this.toolTranscriptProjection.recordToolCall({
+      id: params.itemId,
+      name: "request_user_input",
+      arguments: { questions: params.questions },
+    });
+    this.toolTranscriptProjection.recordToolResult({
+      id: params.itemId,
+      name: "request_user_input",
+      // Continuation elides call arguments; retain ordinary question context with its response.
+      text: JSON.stringify({ response: params.response, request: { questions: params.questions } }),
+      isError: false,
+    });
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
@@ -318,6 +352,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    if (item?.type === "agentMessage" && item.text) {
+      this.eventProjection.markSafetyBufferingAssistantStarted();
+    }
     const itemId = item?.id ?? readString(params, "itemId");
     this.assistantProjection.recordItemStarted(item, itemId);
     if (itemId) {
@@ -370,6 +407,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    if (item?.type === "agentMessage" && item.text) {
+      this.eventProjection.markSafetyBufferingAssistantStarted();
+    }
     this.diagnostics.warnUnknownItemStatus(item);
     this.recordNativeToolOutcome(item);
     this.nativeToolLifecycleProjector.clearTerminalPresentationForNativeItem(item);
@@ -466,6 +506,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       return;
     }
     this.completedTurn = turn;
+    this.eventProjection.endSafetyBuffering();
     const compactionFailure =
       turn.status === "failed" &&
       (this.terminalFailure.promptErrorSource === "compaction" ||
@@ -478,6 +519,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     }
     if (turn.status === "failed") {
       const codexErrorInfo = turn.error?.codexErrorInfo as JsonValue | null | undefined;
+      this.eventProjection.handleCyberPolicyError(codexErrorInfo, this.params.modelId);
       this.terminalFailure.record({
         message: turn.error?.message,
         codexErrorInfo,
@@ -569,6 +611,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     const item = isJsonObject(params.item) ? params.item : undefined;
     if (!item) {
       return;
+    }
+    if (item.role === "assistant" && extractRawAssistantText(item)) {
+      this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,

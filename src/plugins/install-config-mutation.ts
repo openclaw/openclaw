@@ -219,13 +219,20 @@ export function resolveCombinedPluginAndHookConfigMutationPreflight(params: {
 
 export function selectInstallMutationWriteOptions(
   writeOptions: ConfigWriteOptions,
+  beforePersistentApply?: () => void,
 ): ConfigSnapshotForInstallPersist["writeOptions"] {
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
+  const assertConfigPathForWrite = beforePersistentApply
+    ? () => {
+        writeOptions.assertConfigPathForWrite?.();
+        beforePersistentApply();
+      }
+    : writeOptions.assertConfigPathForWrite;
   return {
     inputBase: "source",
     auditOrigin: "plugin-install",
-    assertConfigPathForWrite: writeOptions.assertConfigPathForWrite,
+    assertConfigPathForWrite,
     expectedConfigPath: writeOptions.expectedConfigPath,
     ownedConfigPathForWrite: writeOptions.ownedConfigPathForWrite,
     envSnapshotForRestore: writeOptions.envSnapshotForRestore,

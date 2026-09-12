@@ -56,7 +56,7 @@ def resolve_commit(ref):
     return value
 
 
-def fetch_history(source, target, depth_argument):
+def fetch_history(depth_argument, *refspecs):
     for attempt in range(1, max_fetch_attempts + 1):
         try:
             run_git(
@@ -71,8 +71,7 @@ def fetch_history(source, target, depth_argument):
                 "--refmap=",
                 depth_argument,
                 "origin",
-                f"+{source}:{source_local_ref}",
-                target,
+                *refspecs,
                 timeout=operation_timeout(max_fetch_seconds),
                 reclaim_locks=True,
             )
@@ -189,7 +188,11 @@ def establish_ancestry():
     target_local_ref = f"refs/remotes/origin/{target_ref[len('refs/heads/') :]}"
     source_sha = resolve_commit("HEAD")
     source = source_ref or source_sha
-    fetch_history(source, f"+{target_ref}:{target_local_ref}", "--depth=64")
+    fetch_history(
+        "--depth=64",
+        f"+{source}:{source_local_ref}",
+        f"+{target_ref}:{target_local_ref}",
+    )
     # Freeze the branch after the first fetch. Later requests hydrate the live
     # branch into a separate ref: Git may not deepen a detached SHA want, while
     # every ancestry decision below remains bound to this immutable target.
@@ -205,14 +208,14 @@ def establish_ancestry():
     chunk_index = 0
     while True:
         chunk = deepen_chunks[min(chunk_index, len(deepen_chunks) - 1)]
-        fetch_history(
-            source,
+        for refspec in (
+            f"+{source}:{source_local_ref}",
             f"+{target_ref}:{target_hydration_local_ref}",
-            f"--deepen={chunk}",
-        )
-        result, current_boundaries = relation_result(mode, source_sha, target_sha)
-        if result is not None:
-            return result
+        ):
+            fetch_history(f"--deepen={chunk}", refspec)
+            result, current_boundaries = relation_result(mode, source_sha, target_sha)
+            if result is not None:
+                return result
         current_count = reachable_commit_count(source_sha, target_sha)
         if current_count < previous_count or (
             current_count == previous_count and current_boundaries == previous_boundaries

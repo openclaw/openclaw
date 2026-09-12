@@ -92,9 +92,9 @@ function managedRepairSpawnPreload(root: string): string {
     const spawn = childProcess.spawn;
     const snapshotWorkerArgs = ${JSON.stringify(snapshotWorkerArgs)};
     childProcess.spawn = function(command, args, options) {
-      // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned supervisor workers.
+      // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned repair and supervisor workers.
       if (command === process.execPath && Array.isArray(args) && args.length === 1 &&
-          ${JSON.stringify([runtimeProcessEntrypoints.serviceChildRelay, runtimeProcessEntrypoints.serviceChildGroupAnchor].map((entry) => path.resolve("dist", entry.distWorkerPath)))}.includes(args[0])) {
+          ${JSON.stringify([...[runtimeProcessEntrypoints.serviceChildRelay, runtimeProcessEntrypoints.serviceChildGroupAnchor].map((entry) => path.resolve("dist", entry.distWorkerPath)), path.join(root, "candidate", "dist", runtimeProcessEntrypoints.updateRepair.distWorkerPath)])}.includes(args[0])) {
         args = ["--require", __filename, ...args];
       }
       // Source orchestration consumes the packaged SQLite worker from the completed build.
@@ -133,31 +133,12 @@ export async function managedRepairUpdaterScript(params: {
   const repairModule = new URL("../cli/update-cli/update-command-repair.ts", import.meta.url).href;
   const admissionModule = new URL("../cli/update-cli/update-command-run.ts", import.meta.url).href;
   const sentinelModule = new URL("./update-control-plane-sentinel.ts", import.meta.url).href;
-  const sourceRuntimePaths = ["js", "ts"].map(
-    (extension) => new URL(`./update-repair-agent.runtime.${extension}`, import.meta.url).pathname,
-  );
-  const builtRuntime = new URL("../../dist/update-repair-agent.runtime.js", import.meta.url).href;
   const installRoot = params.phase === "verifying" ? candidate : params.root;
   return `void (async () => {
     // Source workers resolve the checkout's toolchain from the driver cwd.
     process.chdir(${JSON.stringify(path.resolve("."))});
     ${params.sourceRuntimeImport}
     const fs = require("node:fs");
-    // Match the repair E2E's compiled host execution without replacing source admission or orchestration.
-    const sourceRuntimePaths = new Set(${JSON.stringify(sourceRuntimePaths)});
-    const { registerHooks } = require("node:module");
-    registerHooks({
-      resolve(specifier, context, nextResolve) {
-        if ((specifier.startsWith(".") || specifier.startsWith("file:")) && context.parentURL &&
-            sourceRuntimePaths.has(new URL(specifier, context.parentURL).pathname)) {
-          return { url: ${JSON.stringify(builtRuntime)}, shortCircuit: true };
-        }
-        const resolved = nextResolve(specifier, context);
-        return sourceRuntimePaths.has(new URL(resolved.url).pathname)
-          ? { url: ${JSON.stringify(builtRuntime)}, shortCircuit: true }
-          : resolved;
-      },
-    });
     process.stderr.write("repair-boundary: loading admission\\n");
     const { runUpdateCommandRepair } = await import(${JSON.stringify(repairModule)});
     const { admitUpdateCommandRun } = await import(${JSON.stringify(admissionModule)});

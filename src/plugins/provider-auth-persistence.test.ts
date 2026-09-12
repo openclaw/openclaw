@@ -22,7 +22,6 @@ import {
   persistProviderAuthProfileBatch,
   persistProviderAuthProfilesAfterLogin,
   stageProviderAuthProfileBatch,
-  stageProviderAuthProfilesForPersistence,
 } from "./provider-auth-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,6 +61,36 @@ describe("provider auth protected persistence", () => {
     }
     return { profile, token: resolved.value };
   }
+
+  it.each([1, 2])("rejects revoked login authority at write boundary %s", async (revokeAt) => {
+    const rootDir = tempDirs.make("openclaw-login-revocation-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    let writes = 0;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await expect(
+        persistProviderAuthProfileBatch({
+          profiles: [protectedTokenProfile("openai:revoked", "synthetic-revoked-token")],
+          config: {},
+          env,
+          stateDir,
+          agentDir,
+          beforeWrite: () => {
+            if (++writes === revokeAt) {
+              throw new Error("Login owner revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Login owner revoked");
+      expect(
+        ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles[
+          "openai:revoked"
+        ],
+      ).toBeUndefined();
+      expect(listSecretStoreEntries({ scope: { kind: "team" }, database: { env } })).toEqual([]);
+    });
+  });
 
   it("stores a provider-minted token behind a resolvable ref without an audit finding", async () => {
     const rootDir = tempDirs.make("openclaw-provider-auth-store-");
@@ -303,11 +332,12 @@ describe("provider auth protected persistence", () => {
         stateDir,
         agentDir,
       });
-      const staged = await stageProviderAuthProfilesForPersistence({
+      const staged = await stageProviderAuthProfileBatch({
         profiles: [protectedTokenProfile(profileId, "candidate-a")],
         config: {},
         env,
         stateDir,
+        agentDir,
       });
       const credential = staged.profiles[0]?.credential;
       if (credential?.type !== "token" || !credential.tokenRef) {
@@ -343,11 +373,12 @@ describe("provider auth protected persistence", () => {
         allowedHosts: ["api.example.test"],
       });
 
-      const successor = await stageProviderAuthProfilesForPersistence({
+      const successor = await stageProviderAuthProfileBatch({
         profiles: [protectedTokenProfile(profileId, "candidate-b")],
         config: {},
         env,
         stateDir,
+        agentDir,
       });
       await successor.commit();
       expect(
@@ -420,7 +451,7 @@ describe("provider auth protected persistence", () => {
 
     let failure: unknown;
     try {
-      await stageProviderAuthProfilesForPersistence({
+      await stageProviderAuthProfileBatch({
         profiles: [
           protectedTokenProfile("openai:first", "candidate-a"),
           protectedTokenProfile("openai:second", "candidate-b"),

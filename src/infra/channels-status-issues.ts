@@ -97,7 +97,7 @@ function collectGenericRuntimeStatusIssues(
 /** Collects generic and plugin-specific issues from a channels status payload. */
 export function collectChannelStatusIssues(
   payload: Record<string, unknown>,
-  plugins?: readonly ChannelPlugin[],
+  plugins?: readonly Pick<ChannelPlugin, "id" | "status">[],
 ): ChannelStatusIssue[] {
   // The Gateway owns live diagnostics, including reload state unavailable to CLI readers.
   if (

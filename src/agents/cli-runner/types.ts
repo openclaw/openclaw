@@ -389,6 +389,7 @@ export type PreparedCliRunContext = {
   hadSessionFile: boolean;
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;
+  deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
   promptContext?: CliBackendPromptContext;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */

@@ -1,26 +1,36 @@
 // Prepares consistent private SQLite read-only snapshots.
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import { readSqliteSchemaHeader, type SqliteSchemaHeader } from "./sqlite-schema-header.js";
+import {
+  withSqliteSourceHandle,
+  withSqliteSourceHandleAsync,
+  withSqliteSourceReadDatabase,
+} from "./sqlite-source-handle.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const SQLITE_HEADER_BYTES = 20;
+const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
-const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
+export const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -38,7 +48,7 @@ type SourceSidecars = {
 
 type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
 
-type PreparedSqliteReadOnlyLocation = {
+export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   location: string;
 };
@@ -293,7 +303,7 @@ function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
   }
 }
 
-function removeTempDirectory(tempDir: string): boolean {
+export function removeTempDirectory(tempDir: string): boolean {
   try {
     fs.rmSync(tempDir, { force: true, maxRetries: 3, recursive: true, retryDelay: 20 });
     pendingTempDirectoryCleanup.delete(tempDir);
@@ -316,7 +326,7 @@ function removeTempDirectory(tempDir: string): boolean {
   }
 }
 
-function adoptPreparedLocation(
+export function adoptPreparedLocation(
   location: string,
   ownedRoot?: string,
   requireCleanup = false,
@@ -426,7 +436,7 @@ function createStableReadOnlyCopyInTempDirectory(
   }
 }
 
-async function createSqliteSnapshotStagingDirectory(
+export async function createSqliteSnapshotStagingDirectory(
   stagingRoot = resolvePrivateSqliteSnapshotStagingRoot(),
 ): Promise<string> {
   try {
@@ -458,7 +468,9 @@ async function createOnlineReadOnlyBackup(
     }
     const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+      source.exec(
+        `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
+      );
       source.prepare("PRAGMA schema_version;").get();
       await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
       source.exec("ROLLBACK;");
@@ -490,10 +502,10 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
- * The InProcess exports are child-only: POSIX close() can release every lock
- * the calling process holds on the same source inode.
+ * In-process reads require drained source handles or a separate child: source
+ * close() must not release another live SQLite owner's POSIX locks.
  */
-export async function prepareSqliteReadOnlyLocationInProcess(
+async function prepareReadOnlySourceInProcess(
   pathname: string,
   stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
@@ -574,7 +586,7 @@ export async function prepareSqliteReadOnlyLocationInProcess(
   });
 }
 
-export function prepareSqliteReadOnlyLocationSyncInProcess(
+function prepareReadOnlySourceSyncInProcess(
   pathname: string,
   stagingRoot?: string,
 ): PreparedSqliteReadOnlyLocation {
@@ -612,95 +624,107 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   });
 }
 
-export async function prepareSqliteReadOnlyLocation(
-  pathname: string,
-  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
-): Promise<PreparedSqliteReadOnlyLocation> {
-  let stagingRoot: string | undefined;
-  try {
-    options.signal?.throwIfAborted();
-    // A stopped worker may never publish its random snapshot path. Allocate its
-    // private parent first so cancellation can join the child and remove all copies.
-    stagingRoot = await createSqliteSnapshotStagingDirectory();
-    options.signal?.throwIfAborted();
-    const location = await runSqliteReadOnlyWorker(pathname, {
-      mode: options.preserveSourceArtifacts ? "sync" : "async",
-      signal: options.signal,
-      stagingRoot,
-    });
-    options.signal?.throwIfAborted();
-    // Cancellable maintenance must retain its fence on cleanup failure; ordinary
-    // read-only handles report false so their owner can retry close.
-    return adoptPreparedLocation(location, stagingRoot, options.signal !== undefined);
-  } catch (error) {
-    if (stagingRoot && !removeTempDirectory(stagingRoot)) {
-      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
-        cause: error,
-      });
-    }
-    options.signal?.throwIfAborted();
-    throw error;
-  }
-}
-
-export function prepareSqliteReadOnlyLocationSync(
-  pathname: string,
-): PreparedSqliteReadOnlyLocation {
-  const stagingRoot = createPrivateSqliteTempDirectorySync(
-    resolvePrivateSqliteSnapshotStagingRoot(),
-    SQLITE_SNAPSHOT_STAGING_PREFIX,
+/** Consume a private snapshot and retain both read and cleanup failures. */
+export function readSqliteSchemaHeaderFromSnapshot(
+  prepared: PreparedSqliteReadOnlyLocation,
+  signal?: AbortSignal,
+): SqliteSchemaHeader {
+  return runWithSqliteCoordinator(
+    {
+      release: () => {
+        if (!prepared.cleanup()) {
+          throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
+        }
+      },
+    },
+    "SQLite schema header snapshot",
+    () => {
+      signal?.throwIfAborted();
+      const database = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      try {
+        setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        return readSqliteSchemaHeader(database);
+      } finally {
+        database.close();
+      }
+    },
   );
-  try {
-    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
-  } catch (error) {
-    if (!removeTempDirectory(stagingRoot)) {
-      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
-async function prepareSqliteSnapshotSource(
-  pathname: string,
-): Promise<PreparedSqliteReadOnlyLocation | undefined> {
-  const canonicalPath = fs.realpathSync.native(pathname);
-  const journalPath = `${canonicalPath}-journal`;
-  let journal: BigIntStats;
-  try {
-    journal = fs.lstatSync(journalPath, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
+/** Fixed metadata inspection in the read-only child; no payload scan or backup
+ * unless source journal state requires private recovery/artifact preservation. */
+export function inspectSqliteSchemaHeaderInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandleAsync(pathname, async () => {
+    const canonicalPath = fs.realpathSync.native(pathname);
+    const mode = readSourceJournalMode(canonicalPath);
+    const sidecars = readSourceSidecars(canonicalPath);
+    if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
+      let readError: unknown;
+      try {
+        return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+          try {
+            setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
+            return readSqliteSchemaHeader(database);
+          } catch (error) {
+            readError = error;
+            throw error;
+          }
+        });
+      } catch (error) {
+        // Only SQLite's recovery-required refusal permits private recovery.
+        // Ordinary I/O, admission, and native close errors must stay failures.
+        if (
+          error !== readError ||
+          !isSqliteReadOnlyError(error) ||
+          !statIfPresent(`${canonicalPath}-journal`) ||
+          readSourceJournalMode(canonicalPath) !== "rollback"
+        ) {
+          throw error;
+        }
+      }
     }
-    throw error;
-  }
-  if (!journal.isFile()) {
-    throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
-  }
-  return await prepareSqliteReadOnlyLocation(canonicalPath);
+    // An incomplete WAL family would create source sidecars on native open.
+    // The existing snapshot owner also handles hot rollback recovery privately.
+    const prepared = await prepareReadOnlySourceInProcess(canonicalPath, stagingRoot);
+    return readSqliteSchemaHeaderFromSnapshot(prepared);
+  });
 }
 
-export async function withSqliteSnapshotSource<T>(
-  pathname: string,
-  operation: (sourcePath: string) => Promise<T>,
-): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
+export function prepareSqliteReadOnlyLocationInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandleAsync(pathname, () =>
+    prepareReadOnlySourceInProcess(pathname, stagingRoot),
+  );
+}
+
+export function prepareSqliteReadOnlyLocationSyncInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandle(pathname, () =>
+    prepareReadOnlySourceSyncInProcess(pathname, stagingRoot),
+  );
+}
+
+/** Snapshot the lifecycle owner's already-open native connection. Opening or
+ * closing another source descriptor could release its process-wide POSIX locks.
+ * Only the private destination is opened/closed here; the source owner retains it. */
+export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
+  database: DatabaseSync,
+  assertCurrent: () => void,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  assertCurrent();
+  if (!database.isOpen || database.isTransaction) {
+    throw new Error("SQLite inspection requires an open owner outside a transaction");
+  }
+  const directory = await createSqliteSnapshotStagingDirectory();
   try {
-    try {
-      return await operation(prepared?.location ?? pathname);
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
+    assertCurrent();
+    if (!database.isOpen || database.isTransaction) {
+      throw new Error("SQLite inspection requires an open owner outside a transaction");
     }
-  } finally {
-    prepared?.cleanup();
+    const location = path.join(directory, "database.sqlite");
+    await requireNodeSqlite().backup(database, resolveSqliteFilesystemPath(location));
+    assertCurrent();
+    return adoptPreparedLocation(location, directory);
+  } catch (error) {
+    removeTempDirectory(directory);
+    throw error;
   }
 }

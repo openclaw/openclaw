@@ -5,13 +5,13 @@ import {
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
 import {
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
+  selectHeartbeatToolResponse,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -170,7 +170,8 @@ async function prepareHeartbeatDispatchReply(
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
   const selected = resolveHeartbeatReplyPayload(replyResult);
   const execution = resolveReplyOperationAgentTurn(runState);
-  const response = resolveHeartbeatToolResponseFromReplyResult(replyResult);
+  const heartbeatResponse = selectHeartbeatToolResponse(replyResult);
+  const response = heartbeatResponse?.response;
   // Admission can lose to foreground work after preflight. An empty rejected
   // turn must leave its events queued, unlike a completed quiet turn.
   const admissionBusy =
@@ -220,9 +221,9 @@ async function prepareHeartbeatDispatchReply(
     ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   });
   const scratch =
-    outcome.kind === "failure"
+    outcome.kind === "failure" || !heartbeatResponse
       ? undefined
-      : resolveHeartbeatScratchProposalFromReplyResult(replyResult);
+      : getReplyPayloadMetadata(heartbeatResponse.payload)?.heartbeatScratchProposal;
   if (scratch !== undefined && response) {
     if (!preflight.scratchJobId) {
       log.warn("heartbeat: scratch update ignored because no monitor job exists");
@@ -294,12 +295,12 @@ async function prepareHeartbeatDispatchReply(
       wakeReason: opts.reason,
       occurredAt: startedAt,
     });
-  const unconfirmed = (reason: string) => {
+  const unconfirmed = async (reason: string) => {
     if (outcome.kind !== "delivery" || !outcome.response) {
       return;
     }
     const value = outcome.response;
-    record({
+    await record({
       ...value,
       outcome: "blocked",
       notify: false,
@@ -312,7 +313,7 @@ async function prepareHeartbeatDispatchReply(
   const suppressSelected = () => suppressPendingFinalDelivery(selected, { preserveActivity: true });
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
-      record(outcome.response);
+      await record(outcome.response);
     }
     await restoreActivity();
     await suppressSelected();
@@ -419,7 +420,9 @@ async function prepareHeartbeatDispatchReply(
   }
   if (!channel || !delivery.to || !visibility.showAlerts || (failed && outcome.shouldSkipMain)) {
     if (!failed) {
-      unconfirmed(!channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled");
+      await unconfirmed(
+        !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
+      );
       if (!visibility.showAlerts) {
         await restoreActivity();
       }
@@ -446,7 +449,7 @@ async function prepareHeartbeatDispatchReply(
     ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
     .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }));
   if (readiness && !readiness.ok) {
-    unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
+    await unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
     await restoreActivity();
     finish(
       {
@@ -484,7 +487,7 @@ async function prepareHeartbeatDispatchReply(
     settle: async (result) => {
       const sent = result === "delivered";
       if (!sent) {
-        unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
+        await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
       if (sent && !failed && deliveryText.trim()) {
         await patchSessionEntryCore(

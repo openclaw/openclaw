@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -60,8 +61,6 @@ export interface CreateAgentSessionOptions {
   model?: Model;
   /** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
   thinkingLevel?: ThinkingLevel;
-  /** Models available for cycling (Ctrl+P in interactive mode) */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
   /**
    * Optional default tool suppression mode when no explicit allowlist is provided.
@@ -280,7 +279,7 @@ async function createAgentSessionImpl(
 
   // Use provided or create AuthStorage and ModelRegistry
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, getRuntimeConfig());
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
@@ -530,7 +529,6 @@ async function createAgentSessionImpl(
     sessionManager,
     settingsManager,
     cwd,
-    scopedModels: options.scopedModels,
     resourceLoader,
     customTools: options.customTools,
     modelRegistry,

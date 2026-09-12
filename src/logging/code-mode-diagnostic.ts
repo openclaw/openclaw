@@ -23,16 +23,14 @@ export function logCodeModeDiagnostic(
     return;
   }
   const bounded = Object.fromEntries(
-    Object.entries(fields).map(([key, value]) => [
-      key,
-      Array.isArray(value)
-        ? [...new Set(value.map((name) => name.slice(0, MAX_NAME_LENGTH)))]
-            .toSorted((left, right) => left.localeCompare(right))
-            .slice(0, MAX_NAMES)
-        : typeof value === "string"
-          ? value.slice(0, MAX_NAME_LENGTH)
-          : value,
-    ]),
+    Object.entries(fields).map(([key, value]) => {
+      if (Array.isArray(value)) {
+        const names = [...new Set(value.map((name) => name.slice(0, MAX_NAME_LENGTH)))];
+        names.sort((left, right) => left.localeCompare(right));
+        return [key, names.slice(0, MAX_NAMES)];
+      }
+      return [key, typeof value === "string" ? value.slice(0, MAX_NAME_LENGTH) : value];
+    }),
   );
   log.info(
     redactToolPayloadText(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`),

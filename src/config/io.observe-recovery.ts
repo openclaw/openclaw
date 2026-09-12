@@ -10,9 +10,11 @@ import {
 } from "./io.clobber-snapshot.js";
 import {
   readConfigHealthStateFromStore,
+  readConfigHealthStateFromStoreAsync,
   writeConfigHealthStateToStore,
   type ConfigHealthEntry,
   type ConfigHealthFingerprint,
+  type ConfigHealthState,
 } from "./io.health-state.js";
 import {
   createConfigHealthFingerprint,
@@ -23,7 +25,7 @@ import {
   updateConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import { hashConfigRaw, resolveConfigSnapshotHash } from "./io.read-helpers.js";
+import { hashConfigRaw } from "./io.read-helpers.js";
 import type {
   ConfigRecoveryCandidatePreparation,
   NormalizedConfigIoDeps,
@@ -32,6 +34,7 @@ import type {
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -198,13 +201,6 @@ function createBackupRestoreAuditAppendParams(params: {
   });
 }
 
-function resolveSuspiciousSignature(
-  current: ConfigHealthFingerprint,
-  suspicious: string[],
-): string {
-  return `${current.hash}:${suspicious.join(",")}`;
-}
-
 function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
   return (
     reason === "missing-meta-vs-last-good" ||
@@ -230,7 +226,7 @@ function resolveConfigReadRecoveryContext(params: {
   if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
     return null;
   }
-  const suspiciousSignature = resolveSuspiciousSignature(params.current, suspicious);
+  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
   if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return null;
   }
@@ -405,6 +401,10 @@ function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
+  // External owners also own recovery; do not substitute backup bytes or create sidecars.
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return null;
+  }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -413,7 +413,10 @@ function* planSuspiciousConfigRead(
     stat,
     observedAt: now,
   });
-  const healthState = readConfigHealthStateFromStore(deps);
+  const healthState = (yield {
+    sync: () => readConfigHealthStateFromStore(deps),
+    async: () => readConfigHealthStateFromStoreAsync(deps),
+  }) as ConfigHealthState; // SAFETY: Both runners resume with the selected effect's result.
   const entry = readConfigHealthEntry(healthState, configPath);
   const backupPath = `${configPath}.bak`;
   const backupBaseline =
@@ -570,6 +573,9 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   logger?: Pick<typeof console, "warn">;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
     return false;
   }
@@ -583,7 +589,6 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     raw: snapshot.raw,
     parsed: snapshot.parsed,
     resolved: snapshot.resolved,
@@ -621,6 +626,9 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   prepareCandidate: PrepareConfigRecoveryCandidate;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
+  if (resolveIsConfigReadOnly(deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return false;
   }
@@ -668,7 +676,6 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   const now = new Date().toISOString();
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     raw: snapshot.raw,
     parsed: snapshot.parsed,
     resolved: snapshot.resolved,

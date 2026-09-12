@@ -4,11 +4,20 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelPlugin,
+  ChannelStatusIssue,
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -18,7 +27,7 @@ type ChannelTestPlugin = {
     listAccountIds: () => string[];
     resolveAccount: () => Record<string, never>;
     isEnabled: () => boolean;
-    isConfigured: (_account: unknown, cfg: { autoEnabled?: boolean }) => boolean | Promise<boolean>;
+    isConfigured: () => boolean;
   };
   status?: {
     probeAccount?: (params?: unknown) => unknown;
@@ -29,7 +38,6 @@ type ChannelTestPlugin = {
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
   normalizeChannelId: vi.fn<(value: string) => string | null>((value) => value),
   listReadOnlyChannelPluginsForConfig: vi.fn(),
@@ -45,10 +53,6 @@ vi.mock("../../config/config.js", () => ({
     path: "openclaw.config.json",
     raw: "{}",
   })),
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -111,7 +115,7 @@ function createChannelPlugin(
       listAccountIds: () => ["default"],
       resolveAccount: () => ({}),
       isEnabled: () => true,
-      isConfigured: async (_account, cfg) => Boolean(cfg.autoEnabled),
+      isConfigured: () => true,
     },
     ...(params.probeAccount || params.buildChannelSummary || params.collectStatusIssues
       ? {
@@ -127,12 +131,6 @@ function createChannelPlugin(
         }
       : {}),
   };
-}
-
-function configureAutoEnabledChannels(plugins: ChannelTestPlugin[]): void {
-  const autoEnabledConfig = { autoEnabled: true };
-  mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-  mocks.listChannelPlugins.mockReturnValue(plugins);
 }
 
 async function runChannelsStatus(
@@ -197,7 +195,6 @@ describe("channelsHandlers channels.status", () => {
     mocks.normalizeChannelId.mockImplementation((value: string) => value);
     mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() => mocks.listChannelPlugins());
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
       order: ["whatsapp"],
       labels: { whatsapp: "WhatsApp" },
@@ -216,25 +213,188 @@ describe("channelsHandlers channels.status", () => {
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin()]);
   });
 
-  it("uses the auto-enabled config snapshot for channel account state", async () => {
-    const autoEnabledConfig = { autoEnabled: true };
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+  it.each([undefined, true, false])(
+    "channels.status preserves published plugin defaults at the plugin consumer (enabled=%s)",
+    async (enabled) => {
+      const activation = enabled === undefined ? {} : { enabled };
+      const runtimeConfig: OpenClawConfig = {
+        plugins: {
+          entries: {
+            browser: { ...activation, config: {} },
+            "google-meet": { ...activation, config: { defaultMode: "agent" } },
+            "teams-meetings": { ...activation, config: { defaultMode: "agent" } },
+            "zoom-meetings": { ...activation, config: { defaultMode: "agent" } },
+          },
+        },
+      };
+      const publishedConfig = structuredClone(runtimeConfig);
+      const probeAccount = vi.fn(async (_params: { cfg: OpenClawConfig }) => ({ ok: true }));
+      mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          ...createChannelTestPluginBase({ id: "whatsapp" }),
+          status: { probeAccount },
+        },
+      ]);
 
-    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+      const payload = await runChannelsStatus({ probe: true, timeoutMs: 2000 });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-    });
-    const snapshotArgs = requireGatewayRecord(
-      requireFirstCallArg(mocks.buildChannelAccountSnapshotFromAccount),
-      "snapshot args",
-    );
-    expect(snapshotArgs.cfg).toBe(autoEnabledConfig);
-    expect(snapshotArgs.accountId).toBe("default");
-    const channels = requireGatewayRecord(payload.channels, "channels payload");
-    const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
-    expect(whatsapp.configured).toBe(true);
-  });
+      expect(payload.partial).toBeUndefined();
+      expect(probeAccount).toHaveBeenCalledOnce();
+      expect(probeAccount.mock.calls[0]?.[0].cfg).toStrictEqual(publishedConfig);
+      expect(probeAccount.mock.calls[0]?.[0].cfg).toBe(runtimeConfig);
+      const snapshotArgs = requireGatewayRecord(
+        requireFirstCallArg(mocks.buildChannelAccountSnapshotFromAccount),
+        "snapshot args",
+      );
+      expect(snapshotArgs.cfg).toBe(runtimeConfig);
+      expect(firstChannelAccount(payload, "whatsapp").configured).toBe(true);
+    },
+  );
+
+  it.each([
+    { listed: false, probe: false },
+    { listed: false, probe: true },
+    { listed: true, probe: false },
+    { listed: true, probe: true },
+  ])(
+    "reports admitted accounts safely without resolving removed configuration (listed=$listed, probe=$probe)",
+    async ({ listed, probe }) => {
+      const configured = { accountId: "primary", enabled: true, configured: true };
+      const resolveAccount = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
+        if (accountId !== "primary") {
+          throw new Error("admitted account has no current operational configuration");
+        }
+        return configured;
+      });
+      const probeAccount = vi.fn(async () => ({ ok: true, identity: "configured-provider" }));
+      const auditAccount = vi.fn(async () => ({ ok: true }));
+      const buildChannelSummary = vi.fn(() => ({ configured: true, name: "Configured summary" }));
+      const plugin: ChannelPlugin<typeof configured> = {
+        ...createChannelTestPluginBase({ id: "whatsapp" }),
+        config: {
+          listAccountIds: () => (listed ? ["primary"] : []),
+          resolveAccount,
+          inspectAccount: resolveAccount,
+          isEnabled: (account) => account.enabled,
+          isConfigured: (account) => account.configured,
+        },
+        status: { probeAccount, auditAccount, buildChannelSummary },
+      };
+      mocks.listChannelPlugins.mockReturnValue([plugin]);
+      const status = await vi.importActual<typeof import("../../channels/plugins/status.js")>(
+        "../../channels/plugins/status.js",
+      );
+      mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
+        status.buildChannelAccountSnapshotFromAccount,
+      );
+      const baseUrl = new URL("https://chat.example.test/?token=runtime-token");
+      baseUrl.username = "runtime-user";
+      baseUrl.password = "runtime-password";
+      const recovered: ChannelAccountSnapshot = {
+        accountId: "recovered",
+        enabled: true,
+        configured: true,
+        running: true,
+        lifecycle: "starting",
+        tokenSource: "config",
+        tokenStatus: "available",
+        stateReason: "admitted before configuration changed",
+        lastStartAt: 1200,
+        lastError: null,
+        baseUrl: baseUrl.href,
+        channelSecret: "private-channel-secret",
+        channelAccessToken: "private-channel-token",
+        webhookUrl: "https://private-webhook.example.test/secret",
+        publicKey: "private-provider-key",
+        probe: { credential: "private-probe" },
+        audit: { credential: "private-audit" },
+        application: { credential: "private-application" },
+        bot: { credential: "private-bot" },
+        profile: { credential: "private-profile" },
+      };
+      const retrying: ChannelAccountSnapshot = {
+        accountId: "retrying",
+        enabled: true,
+        configured: true,
+        running: false,
+        connected: false,
+        lifecycle: "recovering",
+        restartPending: true,
+        reconnectAttempts: 3,
+        terminalDisconnect: false,
+        lastStopAt: 2300,
+        lastDisconnect: { at: 2200, error: "transport closed" },
+        lastError: "waiting for restart",
+      };
+      const options = createOptions({});
+      options.context.getRuntimeSnapshot = () => ({
+        channels: { whatsapp: { accountId: listed ? "primary" : "default" } },
+        channelAccounts: { whatsapp: { recovered, retrying } },
+      });
+
+      const payload = await runChannelsStatus({ probe }, { context: options.context });
+
+      expect(payload.partial).toBeUndefined();
+      expect(payload.channelDefaultAccountId).toEqual({ whatsapp: listed ? "primary" : "default" });
+      const accounts = channelAccounts(payload, "whatsapp");
+      expect(accounts.map((account) => account.accountId)).toEqual(
+        listed ? ["primary", "recovered", "retrying"] : ["recovered", "retrying"],
+      );
+      const admitted = expectDefined(
+        accounts.find((account) => account.accountId === "recovered"),
+        "admitted account status",
+      );
+      expect(admitted).toMatchObject({
+        accountId: "recovered",
+        enabled: true,
+        configured: true,
+        running: true,
+        lifecycle: "starting",
+        tokenSource: "config",
+        tokenStatus: "available",
+        stateReason: "admitted before configuration changed",
+        lastStartAt: 1200,
+        baseUrl: "https://chat.example.test/?token=***",
+      });
+      expect(admitted.connected).toBeUndefined();
+      for (const field of [
+        "channelSecret",
+        "channelAccessToken",
+        "webhookUrl",
+        "publicKey",
+        "probe",
+        "audit",
+        "application",
+        "bot",
+        "profile",
+      ]) {
+        expect(admitted[field], field).toBeUndefined();
+      }
+      expect(accounts.find((account) => account.accountId === "retrying")).toMatchObject({
+        running: false,
+        connected: false,
+        lifecycle: "recovering",
+        restartPending: true,
+        reconnectAttempts: 3,
+        terminalDisconnect: false,
+        lastStopAt: 2300,
+        lastDisconnect: { at: 2200, error: "transport closed" },
+        lastError: "waiting for restart",
+      });
+      expect(resolveAccount.mock.calls.map((call) => call[1])).not.toContain("recovered");
+      expect(resolveAccount.mock.calls.map((call) => call[1])).not.toContain("retrying");
+      expect(probeAccount).toHaveBeenCalledTimes(listed && probe ? 1 : 0);
+      expect(auditAccount).toHaveBeenCalledTimes(listed && probe ? 1 : 0);
+      expect(buildChannelSummary).toHaveBeenCalledTimes(listed ? 1 : 0);
+      if (listed) {
+        expect(accounts[0]).toMatchObject({ accountId: "primary", configured: true });
+        expect(requireGatewayRecord(payload.channels, "channel summaries").whatsapp).toMatchObject({
+          name: "Configured summary",
+        });
+      }
+    },
+  );
 
   it("reports policy and deferred publication without changing healthy transport status", async () => {
     const policyIssue: ChannelStatusIssue = {
@@ -244,7 +404,7 @@ describe("channelsHandlers channels.status", () => {
       message: "No groups are allowed.",
       fix: "Add an allowed group.",
     };
-    configureAutoEnabledChannels([
+    mocks.listChannelPlugins.mockReturnValue([
       createChannelPlugin({ id: "guildchat", collectStatusIssues: () => [policyIssue] }),
       createChannelPlugin({ id: "sibling" }),
     ]);
@@ -298,7 +458,7 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("retains account status when a plugin diagnostic collector fails", async () => {
-    configureAutoEnabledChannels([
+    mocks.listChannelPlugins.mockReturnValue([
       createChannelPlugin({
         collectStatusIssues: () => {
           throw new Error("diagnostic unavailable");
@@ -313,8 +473,46 @@ describe("channelsHandlers channels.status", () => {
     );
   });
 
+  it("reports recorded account state while reload has paused plugin callbacks", async () => {
+    const refuse = vi.fn(() => {
+      throw new Error("plugin is quiesced");
+    });
+    const plugin = createChannelPlugin({
+      probeAccount: refuse,
+      buildChannelSummary: refuse,
+      collectStatusIssues: refuse,
+    });
+    plugin.config.listAccountIds = refuse;
+    plugin.config.resolveAccount = refuse;
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    const account = { accountId: "recorded", configured: true, running: false };
+    const options = createOptions({});
+    options.context.getRuntimeSnapshot = () => ({
+      channels: { whatsapp: account },
+      channelAccounts: { whatsapp: { recorded: account } },
+      reloadingChannels: new Map([["whatsapp", "recorded"]]),
+    });
+    const payload = await runChannelsStatus({ probe: true }, { context: options.context });
+    expect(firstChannelAccount(payload, "whatsapp")).toEqual(account);
+    expect(payload.channelDefaultAccountId).toEqual({ whatsapp: "recorded" });
+    expect(payload.partial).toBe(true);
+    expect(payload.warnings).toEqual([
+      "whatsapp: plugin runtime is paused for reload; reporting recorded account state",
+    ]);
+    expect(payload.statusIssues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "recorded",
+        kind: "runtime",
+        message: "Channel is enabled and configured, but its runtime is not running.",
+      }),
+    ]);
+    expect(refuse).not.toHaveBeenCalled();
+    expect(mocks.buildChannelAccountSnapshotFromAccount).not.toHaveBeenCalled();
+  });
+
   it("redacts base URL credentials returned by channel summary hooks", async () => {
-    configureAutoEnabledChannels([
+    mocks.listChannelPlugins.mockReturnValue([
       createChannelPlugin({
         buildChannelSummary: () => ({
           configured: true,
@@ -349,7 +547,7 @@ describe("channelsHandlers channels.status", () => {
       });
       degraded.config.resolveAccount = resolveAccount;
       const healthyProbe = vi.fn(async () => ({ ok: true }));
-      configureAutoEnabledChannels([
+      mocks.listChannelPlugins.mockReturnValue([
         degraded,
         createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
       ]);
@@ -403,15 +601,11 @@ describe("channelsHandlers channels.status", () => {
       const failed = createChannelPlugin({ id: "broken-channel", probeAccount: failedProbe });
       const healthyProbe = vi.fn(async () => ({ ok: true }));
       const healthy = createChannelPlugin({ id: "healthy", probeAccount: healthyProbe });
-      configureAutoEnabledChannels([healthy]);
+      mocks.listChannelPlugins.mockReturnValue([healthy]);
       failed.config.listAccountIds = () => ["default", "disabled"];
-      mocks.applyPluginAutoEnable.mockReturnValue({
-        config: {
-          autoEnabled: true,
-          logging: { redactSensitive: "off", redactPatterns: ["never-match-custom"] },
-          channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
-        },
-        changes: [],
+      mocks.getRuntimeConfig.mockReturnValue({
+        logging: { redactSensitive: "off", redactPatterns: ["never-match-custom"] },
+        channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
       });
       mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([failed, healthy]);
       setActivePluginRegistry({
@@ -466,19 +660,16 @@ describe("channelsHandlers channels.status", () => {
   );
 
   it("caps probe timeout before passing it to channel plugins", async () => {
-    const autoEnabledConfig = { autoEnabled: true };
+    const runtimeConfig = { channels: { whatsapp: { enabled: true } } };
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     const probeAccount = vi.fn(async () => ({ ok: true }));
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin({ probeAccount })]);
 
-    await expectDefined(
-      channelsHandlers["channels.status"],
-      'channelsHandlers["channels.status"] test invariant',
-    )(createOptions({ probe: true, timeoutMs: 999_999 }));
+    await runChannelsStatus({ probe: true, timeoutMs: 999_999 });
 
     const probeArgs = requireGatewayRecord(requireFirstCallArg(probeAccount), "probe args");
     expect(probeArgs.timeoutMs).toBe(30_000);
-    expect(probeArgs.cfg).toBe(autoEnabledConfig);
+    expect(probeArgs.cfg).toBe(runtimeConfig);
   });
 
   it("runs channel probes concurrently and preserves deterministic status-map order", async () => {
@@ -492,7 +683,7 @@ describe("channelsHandlers channels.status", () => {
         });
         return { ok: true };
       };
-      configureAutoEnabledChannels([
+      mocks.listChannelPlugins.mockReturnValue([
         createChannelPlugin({ id: "zeta", probeAccount: createDelayedProbe("zeta") }),
         createChannelPlugin({ id: "alpha", probeAccount: createDelayedProbe("alpha") }),
       ]);
@@ -525,7 +716,7 @@ describe("channelsHandlers channels.status", () => {
   it("filters channel status to a requested channel", async () => {
     const whatsappProbe = vi.fn(async () => ({ ok: true }));
     const imessageProbe = vi.fn(async () => ({ ok: true }));
-    configureAutoEnabledChannels([
+    mocks.listChannelPlugins.mockReturnValue([
       createChannelPlugin({ id: "whatsapp", probeAccount: whatsappProbe }),
       createChannelPlugin({ id: "imessage", probeAccount: imessageProbe }),
     ]);
@@ -564,11 +755,9 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("preserves channel account rows when a live probe throws", async () => {
-    const autoEnabledConfig = { autoEnabled: true };
     const probeAccount = vi.fn(async () => {
       throw new Error("probe failed");
     });
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
       async ({ accountId, probe }) => ({
         accountId,
@@ -605,7 +794,7 @@ describe("channelsHandlers channels.status", () => {
     broken.config.listAccountIds = () => {
       throw new Error("channel failed");
     };
-    configureAutoEnabledChannels([broken, createChannelPlugin({ id: "healthy" })]);
+    mocks.listChannelPlugins.mockReturnValue([broken, createChannelPlugin({ id: "healthy" })]);
     mocks.buildChannelUiCatalog.mockImplementation((plugins: Array<{ id: string }>) => ({
       order: plugins.map((plugin) => plugin.id),
       labels: {},
@@ -626,10 +815,8 @@ describe("channelsHandlers channels.status", () => {
   it("isolates a timed-out channel probe while another channel succeeds", async () => {
     vi.useFakeTimers();
     try {
-      const autoEnabledConfig = { autoEnabled: true };
       const hangingProbe = vi.fn(() => new Promise(() => {}));
       const healthyProbe = vi.fn(async () => ({ ok: true, identity: "healthy" }));
-      mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
       mocks.listChannelPlugins.mockReturnValue([
         createChannelPlugin({ id: "hanging", probeAccount: hangingProbe }),
         createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
@@ -641,16 +828,11 @@ describe("channelsHandlers channels.status", () => {
           probe,
         }),
       );
-      const respond = vi.fn();
-      const run = expectDefined(
-        channelsHandlers["channels.status"],
-        'channelsHandlers["channels.status"] test invariant',
-      )(createOptions({ probe: true, timeoutMs: 1000 }, { respond }));
+      const run = runChannelsStatus({ probe: true, timeoutMs: 1000 });
 
       await vi.advanceTimersByTimeAsync(1000);
-      await run;
+      const payload = await run;
 
-      const payload = requireRespondPayload(respond);
       expect(
         requireGatewayRecord(firstChannelAccount(payload, "hanging").probe, "hanging probe")
           .timedOut,
@@ -669,8 +851,6 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("falls back to account-derived channel summaries when summary building fails", async () => {
-    const autoEnabledConfig = { autoEnabled: true };
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       configured: true,
@@ -695,7 +875,6 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("annotates terminal-disconnect accounts with terminal-disconnect health state", async () => {
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
@@ -703,31 +882,16 @@ describe("channelsHandlers channels.status", () => {
       running: false,
       terminalDisconnect: true,
     });
-    const respond = vi.fn();
 
-    await expectDefined(
-      channelsHandlers["channels.status"],
-      'channelsHandlers["channels.status"] test invariant',
-    )(createOptions({ probe: false, timeoutMs: 2000 }, { respond }));
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        channelAccounts: {
-          whatsapp: [
-            expect.objectContaining({
-              healthState: "terminal-disconnect",
-            }),
-          ],
-        },
-      }),
-      undefined,
-    );
+    expect(payload.channelAccounts).toEqual({
+      whatsapp: [expect.objectContaining({ healthState: "terminal-disconnect" })],
+    });
   });
 
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
     const now = Date.now();
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
@@ -738,7 +902,7 @@ describe("channelsHandlers channels.status", () => {
       lastStartAt: now - 60 * 60_000,
       lastTransportActivityAt: now - 40 * 60_000,
     });
-    const eventLoop = {
+    const eventLoop: GatewayEventLoopHealth = {
       degraded: true,
       degradedSinceMs: 61_000,
       reasons: ["event_loop_delay"],
@@ -748,35 +912,19 @@ describe("channelsHandlers channels.status", () => {
       utilization: 1,
       cpuCoreRatio: 1,
     };
-    const respond = vi.fn();
+    const options = createOptions({});
+    options.context.getEventLoopHealth = () => eventLoop;
 
-    await expectDefined(
-      channelsHandlers["channels.status"],
-      'channelsHandlers["channels.status"] test invariant',
-    )(
-      createOptions(
-        { probe: false, timeoutMs: 2000 },
-        {
-          respond,
-          context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
-            getRuntimeSnapshot: () => ({
-              channels: {},
-              channelAccounts: {},
-            }),
-            getEventLoopHealth: () => eventLoop,
-          } as never,
-        },
-      ),
+    const payload = await runChannelsStatus(
+      { probe: false, timeoutMs: 2000 },
+      { context: options.context },
     );
 
-    const payload = requireRespondPayload(respond);
     expect(payload.eventLoop).toBe(eventLoop);
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("stale-socket");
   });
 
   it("preserves channel-authored health state when shared health is healthy", async () => {
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
@@ -792,7 +940,6 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("preserves channel-authored conflict when recorded blocked lifecycle is unhealthy", async () => {
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
@@ -816,7 +963,6 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("derives blocked health from recorded lifecycle", async () => {
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,

@@ -1,14 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../../extensions/discord/channel-plugin-api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { revokePluginRecordLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
+import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+
+const { discordPlugin } = loadBundledPluginPublicArtifactModuleSync<{
+  discordPlugin: ChannelPlugin;
+}>({
+  dirName: "discord",
+  artifactBasename: "channel-plugin-api.js",
+});
 
 const channelId = "123456789012345678";
 const currentChannelId = "223456789012345678";
@@ -18,6 +26,7 @@ const channelPath = `/channels/${channelId}`;
 const messagesPath = `${channelPath}/messages`;
 const channel = { id: channelId, type: 0, guild_id: guildId, name: "synthetic-target" };
 const fetchMock = vi.fn<typeof fetch>();
+const instances = new Set<PluginInstance>();
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -62,11 +71,15 @@ function registerDiscord() {
     trustedOfficialInstall: true,
   });
   owner.registry.plugins.push(record);
-  owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
-    plugin: discordPlugin,
+  const instance = new PluginInstance(record.id, { record, registry: owner.registry });
+  instances.add(instance);
+  instance.run(() => {
+    owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
+      plugin: discordPlugin,
+    });
   });
   setActivePluginRegistry(owner.registry);
-  return () => revokePluginRecordLifecycleEpoch(owner.registry, record);
+  return { registry: owner.registry, revoke: () => revokePluginRecord(owner.registry, record) };
 }
 
 function invoke(
@@ -113,10 +126,15 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetPluginRuntimeStateForTest();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
+  try {
+    await Promise.all([...instances].map((instance) => instance.dispose()));
+  } finally {
+    instances.clear();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
 });
 
 describe("registered official Discord read authority through HTTP", () => {
@@ -144,7 +162,7 @@ describe("registered official Discord read authority through HTTP", () => {
   });
 
   it("stops the next provider request when the registrar revokes during metadata lookup", async () => {
-    const revoke = registerDiscord();
+    const { revoke } = registerDiscord();
     const started = createDeferred<void>();
     const response = createDeferred<Response>();
     fetchMock.mockImplementationOnce(async () => {
@@ -163,11 +181,42 @@ describe("registered official Discord read authority through HTTP", () => {
     expect(fetchMock.mock.calls.map(([input]) => requestPath(input))).toEqual([channelPath]);
   });
 
+  it("rejects an old read across adoption while allowing a fresh read of the retained instance", async () => {
+    const { registry } = registerDiscord();
+    const started = createDeferred<void>();
+    const response = createDeferred<Response>();
+    fetchMock.mockImplementationOnce(async () => {
+      started.resolve();
+      return await response.promise;
+    });
+    const outcome = Promise.allSettled([invoke()]);
+    try {
+      await started.promise;
+      setActivePluginRegistry({ ...registry, plugins: [...registry.plugins] });
+      response.resolve(jsonResponse(channel));
+      const [result] = await outcome;
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(String(result.reason)).toContain("read authority is no longer active");
+      }
+      expect(fetchMock.mock.calls.map(([input]) => requestPath(input))).toEqual([channelPath]);
+      fetchMock.mockClear();
+      await expect(invoke()).resolves.toMatchObject({ details: { ok: true } });
+      expect(fetchMock.mock.calls.map(([input]) => requestPath(input))).toEqual([
+        channelPath,
+        messagesPath,
+      ]);
+    } finally {
+      response.resolve(jsonResponse(channel));
+      await outcome;
+    }
+  });
+
   it.each([false, true])(
     "checks registrar authority on provider retry (revoked=%s)",
     async (revoked) => {
       vi.useFakeTimers();
-      const revoke = registerDiscord();
+      const { revoke } = registerDiscord();
       const limited = createDeferred<void>();
       let attempts = 0;
       fetchMock.mockImplementation(async (input, init) => {

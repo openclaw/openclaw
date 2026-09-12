@@ -3022,28 +3022,6 @@ describe("collectCodexRouteWarnings", () => {
     });
   });
 
-  it("clears mixed legacy and canonical fallback notices atomically", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "codex/gpt-5.6-sol",
-          activeModel: "openai/gpt-5.6-sol",
-          reason: "rate-limit",
-        },
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
-
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNotice).toBeUndefined();
-  });
-
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
     const store: Record<string, SessionEntry> = {
       main: {

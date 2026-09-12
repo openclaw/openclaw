@@ -222,6 +222,7 @@ export class DraftRepositoryController {
                 branches: result.branches,
                 ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
                 ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+                ...(result.branchesUnavailable ? { branchesUnavailable: true } : {}),
               }
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );

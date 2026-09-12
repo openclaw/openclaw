@@ -1,5 +1,6 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type HeartbeatToolResponse,
   type MessagingToolSend,
@@ -117,6 +118,7 @@ export abstract class CodexTurnProjection {
       },
     );
     this.eventProjection = new CodexEventProjection(
+      params.provider,
       threadId,
       turnId,
       (event) => this.emitAgentEvent(event),
@@ -144,7 +146,7 @@ export abstract class CodexTurnProjection {
 
   buildResult(
     toolTelemetry: CodexAppServerToolTelemetry,
-    options?: { yieldDetected?: boolean },
+    options?: { yieldDetected?: boolean; steeringMessages?: readonly AgentMessage[] },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
     this.eventProjection.flushPendingGuardianWarning();
     // Finalizing native tools may invoke callbacks; retain this result's terminal snapshot.
@@ -243,6 +245,7 @@ export abstract class CodexTurnProjection {
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      steeringMessages: options?.steeringMessages,
       lastAssistant,
       turnTainted,
     });

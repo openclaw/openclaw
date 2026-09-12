@@ -14,6 +14,8 @@ import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
 type PluginRuntimeGatewayRequestScope = {
+  /** Recheck the admitted HTTP device grant before effects; rejection sends HTTP 401 and throws. */
+  revalidate?: () => Promise<void>;
   /** Exact placement owner captured before the local harness begins. */
   assertNodeExecutionCurrent?: (request: {
     runId: string;
@@ -81,6 +83,21 @@ const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayCo
   () => new WeakMap(),
 );
 
+// A closed resolver stays closed even if a late scoped loader borrows it again.
+const gatewayContextLifetimes = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayContextLifetimes"),
+  () => new WeakMap<GatewayContextResolver, AbortController>(),
+);
+
+export function getGatewayContextLifetime(resolver: GatewayContextResolver): AbortController {
+  let lifetime = gatewayContextLifetimes.get(resolver);
+  if (!lifetime) {
+    lifetime = new AbortController();
+    gatewayContextLifetimes.set(resolver, lifetime);
+  }
+  return lifetime;
+}
+
 export function bindGatewayContextResolver(
   owner: object,
   resolver: GatewayContextResolver | undefined,
@@ -91,6 +108,23 @@ export function bindGatewayContextResolver(
 }
 
 export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
+
+/** Follows explicit wrapper ownership without invoking any execution resolver. */
+export function getCanonicalGatewayContextResolver(
+  resolver: GatewayContextResolver,
+): GatewayContextResolver | undefined {
+  const seen = new Set<GatewayContextResolver>();
+  let current = resolver;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = gatewayContextResolvers.get(current);
+    if (!parent) {
+      return current;
+    }
+    current = parent;
+  }
+  return undefined;
+}
 
 /** Match the host owner without invoking a possibly retired execution resolver. */
 export function hasGatewayContextOwner(
@@ -124,7 +158,7 @@ export function getSharedGatewayContextResolver(
   }
   // Separate caller wrappers may own one instance. Recheck every captured fence;
   // never replace it with a current global resolver or permit mixed ambient routing.
-  return () => {
+  const shared = () => {
     const contexts = resolvers.map((resolve) => {
       try {
         return resolve?.();
@@ -143,6 +177,14 @@ export function getSharedGatewayContextResolver(
     }
     return contexts[0];
   };
+  const canonical = resolvers.map((resolve) =>
+    resolve ? getCanonicalGatewayContextResolver(resolve) : undefined,
+  );
+  const owner = canonical[0];
+  if (owner && canonical.every((candidate) => candidate === owner)) {
+    bindGatewayContextResolver(shared, owner);
+  }
+  return shared;
 }
 
 /**
@@ -187,29 +229,33 @@ export function withPluginRuntimeRegistryScope<T>(
   }
   const current = pluginRuntimeGatewayRequestScope.getStore();
   return pluginRuntimeGatewayRequestScope.run(
-    {
-      isWebchatConnect: () => false,
-      ...current,
-      pluginRegistry: registry,
-      declaredProviderOwners:
-        declaredProviderOwners ??
-        getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
-    },
+    createRegistryScope(registry, current, declaredProviderOwners),
     run,
   );
 }
 
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope, run: () => T): T {
-  const current = pluginRuntimeGatewayRequestScope.getStore();
-  const scoped: PluginRuntimeGatewayRequestScope = current
-    ? { ...current, pluginId: scope.pluginId }
-    : {
-        pluginId: scope.pluginId,
-        isWebchatConnect: () => false,
-      };
+function createRegistryScope(
+  registry: PluginRegistry,
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
+): PluginRuntimeGatewayRequestScope {
+  return {
+    isWebchatConnect: () => false,
+    ...current,
+    pluginRegistry: registry,
+    declaredProviderOwners:
+      declaredProviderOwners ??
+      // Nested calls keep this prepared registry's facts, never a different registry's index.
+      (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
+      getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
+  };
+}
+
+function applyPluginScope(
+  scoped: PluginRuntimeGatewayRequestScope,
+  scope: PluginRuntimePluginScope,
+): void {
+  scoped.pluginId = scope.pluginId;
   if (scope.pluginSource !== undefined) {
     scoped.pluginSource = scope.pluginSource;
   } else {
@@ -225,14 +271,38 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
   } else {
     delete scoped.pluginTrustedOfficialInstall;
   }
-  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
 /**
  * Runs work under the current gateway request scope while attaching plugin identity.
  */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
-  return withPluginRuntimePluginScope({ pluginId }, run);
+export function withPluginRuntimePluginScope<T>(
+  scope: PluginRuntimePluginScope,
+  run: () => T,
+  registry?: PluginRegistry,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  // Instance calls combine registry and identity without adding a second async frame.
+  const scoped: PluginRuntimeGatewayRequestScope = registry
+    ? createRegistryScope(registry, current)
+    : current
+      ? { ...current }
+      : { isWebchatConnect: () => false };
+  applyPluginScope(scoped, scope);
+  return pluginRuntimeGatewayRequestScope.run(scoped, run);
+}
+
+/** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
+export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  if (!current) {
+    return run();
+  }
+  // Registry selection and its declared provider index belong to the same generation.
+  return pluginRuntimeGatewayRequestScope.run(
+    { ...current, pluginRegistry: undefined, declaredProviderOwners: undefined },
+    run,
+  );
 }
 
 /**

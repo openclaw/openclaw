@@ -103,46 +103,62 @@ describe("sessions.reclaim", () => {
     expect(readSessionsMutationVersion(context)).toBe(0);
   });
 
-  it("delegates a failed placement to the reclaim owner", async () => {
-    const failed = {
-      ...makeReclaimedPlacement(),
-      state: "failed",
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-      workerBundleHash: null,
-      recoveryError: "device worker is offline",
-      terminalReason: "device worker is offline",
-    } as WorkerSessionPlacementRecord;
-    const local = {
-      ...failed,
-      state: "local",
-      generation: failed.generation + 1,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-    } as WorkerSessionPlacementRecord;
-    const reclaim = vi.fn().mockResolvedValue(local);
-    const respond = await invokeSessionReclaim(
-      makeDispatchTestContext({
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[dispatchTestSessionId, failed]]),
-        },
-      }),
-    );
+  it.each([false, true])(
+    "delegates a failed placement to the reclaim owner (recover=%s)",
+    async (recover) => {
+      const failed = {
+        ...makeReclaimedPlacement(),
+        state: "failed",
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        recoveryError: "device worker is offline",
+        terminalReason: "device worker is offline",
+      } as WorkerSessionPlacementRecord;
+      const local = {
+        ...failed,
+        state: "local",
+        generation: failed.generation + 1,
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+      } as WorkerSessionPlacementRecord;
+      const reclaim = vi.fn().mockResolvedValue(local);
+      const recovery = recover
+        ? { recoverToGateway: { expectedGeneration: failed.generation } }
+        : {};
+      const respond = await invokeSessionReclaim(
+        makeDispatchTestContext({
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+          workerSessionPlacementService: {
+            getMany: () => new Map([[dispatchTestSessionId, failed]]),
+          },
+        }),
+        undefined,
+        recovery,
+      );
 
-    expect(reclaim).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        placement: expect.objectContaining({ state: "local" }),
-      }),
-      undefined,
-    );
-  });
+      expect(reclaim).toHaveBeenCalledExactlyOnceWith(
+        {
+          sessionId: dispatchTestSessionId,
+          sessionKey: dispatchTestSessionKey,
+          agentId: "main",
+          ...recovery,
+        },
+        undefined,
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          placement: expect.objectContaining({ state: "local" }),
+        }),
+        undefined,
+      );
+    },
+  );
 
   it("delegates placement visibility races to the reclaim owner", async () => {
     const reclaim = vi.fn().mockResolvedValue(makeReclaimedPlacement());

@@ -91,11 +91,30 @@ function isGatewayExplicitAuthCliError(error: unknown): error is Error {
   return error instanceof Error && error.name === "GatewayExplicitAuthRequiredError";
 }
 
+function isAgentSelectionCliError(error: unknown): error is Error {
+  // Multi-agent selection refusals (src/agents/agent-scope-config.ts) already name
+  // the surface and its --agent remedy; crash framing would send operators to a
+  // stack trace and `openclaw doctor` for a missing flag.
+  return error instanceof Error && error.name === "AgentSelectionRequiredError";
+}
+
+function isImmutableConfigCliError(error: unknown): error is Error {
+  // Config write-guard refusals (src/config/config-write-guard.ts) already carry the
+  // redeploy remedy; crash framing would point operators at a stack trace and
+  // `openclaw doctor`, which cannot lift an externally managed config.
+  return (
+    error instanceof Error &&
+    (error.name === "ConfigReadOnlyError" || error.name === "NixModeConfigMutationError")
+  );
+}
+
 export function isExpectedCliError(error: unknown): error is Error {
   return (
     error instanceof ExpectedCliError ||
     isGatewayCredentialsCliError(error) ||
     isGatewayExplicitAuthCliError(error) ||
+    isImmutableConfigCliError(error) ||
+    isAgentSelectionCliError(error) ||
     isGatewayTransportError(error)
   );
 }

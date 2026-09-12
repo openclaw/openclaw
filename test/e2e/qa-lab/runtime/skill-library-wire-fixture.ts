@@ -1,6 +1,7 @@
 // Real child Gateway and real WebSocket authentication; no handler/client authority injection.
 import { randomUUID } from "node:crypto";
-import { WebSocket } from "ws";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { WebSocket, type RawData } from "ws";
 import type { HelloOk, ResponseFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibraryFile } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
@@ -44,7 +45,7 @@ export class SkillLibraryWireClient {
 
   private constructor(private readonly socket: WebSocket) {
     socket.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as ResponseFrame;
+      const frame = JSON.parse(rawDataToString(data)) as ResponseFrame;
       if (frame.type !== "res") {
         return;
       }
@@ -76,7 +77,7 @@ export class SkillLibraryWireClient {
   }
 
   static async connect(
-    instance: OpenClawTestInstance,
+    instance: Pick<OpenClawTestInstance, "port" | "url" | "gatewayToken">,
     options: {
       email?: string;
       scopes?: string[];
@@ -104,8 +105,8 @@ export class SkillLibraryWireClient {
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("Gateway challenge timed out")), 30_000);
-        const onMessage = (data: { toString(): string }) => {
-          const frame = JSON.parse(data.toString()) as { event?: string };
+        const onMessage = (data: RawData) => {
+          const frame = JSON.parse(rawDataToString(data)) as { event?: string };
           if (frame.event === "connect.challenge") {
             clearTimeout(timer);
             socket.off("message", onMessage);

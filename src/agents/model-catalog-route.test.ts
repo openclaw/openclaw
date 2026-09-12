@@ -11,7 +11,7 @@ import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-t
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 
@@ -267,7 +267,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const overrides = resolveConfiguredModelCatalogOverrides({ cfg, entry: platformEntry });
+    const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
 
     expect(
       projectModelCatalogEntryForRoute({
@@ -318,7 +318,7 @@ describe("projectModelCatalogEntryForRoute", () => {
     };
 
     expect(
-      resolveConfiguredModelCatalogOverrides({ cfg, entry: { ...platformEntry, id } }),
+      createConfiguredModelCatalogOverridesResolver({ cfg })({ ...platformEntry, id }),
     ).toEqual({
       name: id,
       contextWindow: 32_000,
@@ -328,34 +328,118 @@ describe("projectModelCatalogEntryForRoute", () => {
     });
   });
 
-  it("merges logical overrides from canonical duplicate model rows", () => {
-    const cfg = {
+  it.each([
+    { label: "legacy first", legacyFirst: true, exact: true, duplicate: false },
+    { label: "exact first", legacyFirst: false, exact: true, duplicate: false },
+    {
+      label: "legacy first with exact duplicates",
+      legacyFirst: true,
+      exact: true,
+      duplicate: true,
+    },
+    { label: "exact duplicates first", legacyFirst: false, exact: true, duplicate: true },
+    { label: "legacy fallback", legacyFirst: true, exact: false, duplicate: false },
+  ])(
+    "selects logical overrides without cross-spelling merges: $label",
+    ({ legacyFirst, exact, duplicate }) => {
+      const logical: ModelDefinitionConfig = {
+        id: "gpt-5.5",
+        name: "Logical row",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 4096,
+      };
+      const legacy: ModelDefinitionConfig = {
+        ...logical,
+        id: "openai/gpt-5.5",
+        name: "Legacy row",
+        contextWindow: 900_000,
+        contextTokens: 500_000,
+        reasoning: true,
+        input: ["image"],
+      };
+      const exactRows = exact ? [logical] : [];
+      if (duplicate) {
+        exactRows.push({ ...logical, name: "Ignored duplicate name", contextTokens: 160_000 });
+      }
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: platformRoute.baseUrl,
+              models: legacyFirst ? [legacy, ...exactRows] : [...exactRows, legacy],
+            },
+          },
+        },
+      };
+      const canonicalPolicy: ModelCatalogRoutePolicy = {
+        ...routePolicy,
+        resolveIdentity: (entry) => {
+          const id = entry.id.replace(/^openai\//u, "");
+          return { id, key: `${entry.provider}/${id}` };
+        },
+      };
+
+      const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
+        cfg,
+        policy: canonicalPolicy,
+      });
+      for (const id of ["gpt-5.5", "openai/gpt-5.5", "gpt-5.5"]) {
+        expect(resolveOverrides({ ...platformEntry, id })).toEqual(
+          exact
+            ? {
+                name: "Logical row",
+                reasoning: false,
+                configuredReasoning: false,
+                input: ["text"],
+                ...(duplicate ? { contextTokens: 160_000 } : {}),
+              }
+            : {
+                name: "Legacy row",
+                reasoning: true,
+                configuredReasoning: true,
+                input: ["image"],
+                contextWindow: 900_000,
+                contextTokens: 500_000,
+              },
+        );
+      }
+    },
+  );
+
+  it("keeps reused lookups scoped to raw provider spelling without retaining query entries", () => {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
-          openai: {
-            models: [
-              { id: "openai/gpt-5.5", name: "Configured GPT-5.5" },
-              { id: "gpt-5.5", name: "Ignored duplicate name", contextTokens: 160_000 },
-            ],
+          custom: {
+            baseUrl: "",
+            models: ["first", "second"].map((id) => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 4096,
+            })),
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    const canonicalPolicy: ModelCatalogRoutePolicy = {
-      ...routePolicy,
-      resolveIdentity: (entry) => {
-        const id = entry.id.replace(/^openai\//u, "");
-        return { id, key: `${entry.provider}/${id}` };
-      },
     };
-
-    expect(
-      resolveConfiguredModelCatalogOverrides({
-        cfg,
-        entry: platformEntry,
-        policy: canonicalPolicy,
+    const policy: ModelCatalogRoutePolicy = {
+      ...routePolicy,
+      resolveIdentity: ({ provider, id }) => ({
+        id: id === "alias" ? (provider === "CUSTOM" ? "second" : "first") : id,
+        key: JSON.stringify([provider, id]),
       }),
-    ).toEqual({ name: "Configured GPT-5.5", contextTokens: 160_000 });
+    };
+    const resolveOverrides = createConfiguredModelCatalogOverridesResolver({ cfg, policy });
+    const query = { provider: "custom", id: "first" };
+    expect(resolveOverrides(query)?.name).toBe("first");
+    query.provider = "CUSTOM";
+    query.id = "alias";
+    expect(resolveOverrides(query)?.name).toBe("second");
+    expect(resolveOverrides({ provider: "custom", id: "alias" })?.name).toBe("first");
   });
 
   it("preserves literal provider-scoped model ids", () => {
@@ -371,11 +455,7 @@ describe("projectModelCatalogEntryForRoute", () => {
     const literalEntry = { ...platformEntry, id: "openai/acme-model" };
 
     expect(
-      resolveConfiguredModelCatalogOverrides({
-        cfg,
-        entry: literalEntry,
-        policy: routePolicy,
-      }),
+      createConfiguredModelCatalogOverridesResolver({ cfg, policy: routePolicy })(literalEntry),
     ).toEqual({ name: "Configured Acme" });
   });
 });

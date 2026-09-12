@@ -11,6 +11,7 @@ const buildCommit = "1234567890abcdef1234567890abcdef12345678";
 
 type LauncherVersionFixtureOptions = {
   buildCommit?: string;
+  buildVersion?: string;
   checkout?: "directory" | "linked";
   packageCommit?: string;
   pendingLifecycle?: "complete" | "fail";
@@ -28,6 +29,18 @@ async function makeLauncherVersionFixture(
   await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-sqlite.mjs"),
+    path.join(fixtureRoot, "node-sqlite.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-update.mjs"),
+    path.join(fixtureRoot, "node-runtime-update.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
+    path.join(fixtureRoot, "node-runtime-recovery.mjs"),
   );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   await fs.writeFile(
@@ -56,7 +69,10 @@ async function makeLauncherVersionFixture(
   if (options.buildCommit) {
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "build-info.json"),
-      JSON.stringify({ version: packageVersion, commit: options.buildCommit }),
+      JSON.stringify({
+        version: options.buildVersion ?? packageVersion,
+        commit: options.buildCommit,
+      }),
     );
   }
 
@@ -131,6 +147,21 @@ describe("openclaw launcher version provenance", () => {
       expect(result.stderr).toBe("");
     },
   );
+
+  it("reports the built version when the source package version moved ahead", async () => {
+    const fixtureRoot = await makeLauncherVersionFixture(fixtureRoots, {
+      buildCommit,
+      buildVersion: "2026.8.1",
+    });
+
+    // The launcher answers bare --version before the runtime entry loads, so a
+    // checkout that pulled without rebuilding must not report the unbuilt version.
+    const result = runLauncherVersion(fixtureRoot);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`OpenClaw 2026.8.1 (${buildCommit.slice(0, 7)})\n`);
+    expect(result.stderr).toBe("");
+  });
 
   it.each(["--version", "-V", "-v"])(
     "reports the packaged build for the %s fast path without importing the runtime",

@@ -9,14 +9,25 @@ import {
 } from "../config/sessions/archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
+  loadSessionEntry,
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import type { AssistantMessage } from "../llm/types.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   readUsageCostRollups,
   refreshCostUsageCacheForAgent,
@@ -137,6 +148,108 @@ describe("usage archive identity", () => {
     await state.cleanup();
   });
 
+  it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cold-usage",
+      sessionKey: "agent:main:cold-usage",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const coldConfig = {
+      ...config,
+      agents: { list: [{ id: scope.agentId }] },
+      session: {
+        store: scope.storePath,
+        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      },
+    };
+    const ageTranscript = async (target: typeof scope) => {
+      await replaceSessionEntry(target, {
+        ...expectDefined(loadSessionEntry(target), "usage fixture session"),
+        updatedAt: 1,
+        lastActivityAt: 1,
+        lastInteractionAt: 1,
+      });
+      runOpenClawAgentWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db)
+              .updateTable("session_windows")
+              .set({ updated_at: 1, transcript_updated_at: 1 })
+              .where("session_id", "=", target.sessionId),
+          );
+        },
+        { agentId: "main", env: state.env },
+      );
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: assistant(17) }],
+      touchSessionEntry: false,
+    });
+    await replaceSessionEntry(scope, { sessionId: "current-usage", updatedAt: Date.now() });
+    await ageTranscript(scope);
+    const before = (await listUsageCountedTranscriptStats("main")).find(
+      (file) => file.sessionId === scope.sessionId,
+    )!;
+    expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
+      archivedTranscripts: 1,
+      externalizedTranscripts: 0,
+    });
+    expect(
+      (await listUsageCountedTranscriptStats("main")).find(
+        (file) => file.sessionId === scope.sessionId,
+      ),
+    ).toEqual(before);
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    expect(
+      await loadCostUsageSummary({
+        agentId: "main",
+        config,
+        startMs: 0,
+        endMs: Date.now() + 86_400_000,
+      }),
+    ).toMatchObject({ totals: { totalTokens: 17 } });
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+    const rollups = readSessionCostUsageRollupRows("main");
+    const missingScope = {
+      ...scope,
+      sessionKey: "agent:main:missing-usage",
+      sessionId: "missing-usage",
+    };
+    await upsertSessionEntryCore(missingScope, {
+      sessionId: missingScope.sessionId,
+      updatedAt: archiveTime,
+    });
+    await persistSessionTranscriptTurn(missingScope, {
+      messages: [{ message: assistant(19) }],
+      touchSessionEntry: false,
+    });
+    await ageTranscript(missingScope);
+    const missingFile = expectDefined(
+      (await listUsageCountedTranscriptStats("main")).find(
+        (file) => file.sessionId === missingScope.sessionId,
+      ),
+      "missing archive inventory",
+    );
+    expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
+      archivedTranscripts: 1,
+      externalizedTranscripts: 0,
+    });
+    const archive = expectDefined(
+      readSessionColdTranscript(database.db, missingScope.sessionId),
+      "cold archive",
+    );
+    await fs.unlink(resolveSessionColdArchivePath(database.path, archive.archive_name));
+    await expect(
+      loadSessionLogs({ agentId: "main", sessionFile: missingFile.filePath }),
+    ).rejects.toThrow(/missing|unreadable/);
+    expect(readSessionCostUsageRollupRows("main")).toEqual(rollups);
+    expect(readSessionColdTranscript(database.db, missingScope.sessionId)).toBeDefined();
+  });
+
   for (const encoding of encodings) {
     for (const reason of ["reset", "deleted"] as const) {
       it.each(["main", "worker"])(
@@ -159,7 +272,6 @@ describe("usage archive identity", () => {
               sessionId,
               sessionFile,
               mtime: sourceStats.mtimeMs,
-              firstUserMessage: "retained archive prompt",
             },
           ]);
 

@@ -80,18 +80,6 @@ function replaceProviderAuthState<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function updateSuccessfulUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  lastUsed?: number,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetAuthProfileFailureState(
-    store.usageStats[profileId] ?? {},
-    lastUsed === undefined ? undefined : { lastUsed },
-  );
-}
-
 /** Sets or clears explicit auth profile order for a provider. */
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -201,14 +189,8 @@ export function upsertAuthProfile(params: {
   });
 }
 
-/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
-export async function removeProviderAuthProfilesWithLock(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  agentDir?: string;
-  profileIds?: readonly string[];
-}): Promise<AuthProfileStore | null> {
-  const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+function providerAuthStoreOwners(requestedAgentDir?: string): Array<string | undefined> {
+  const agentDir = resolveRuntimeAuthProfileAgentDir(requestedAgentDir);
   const owners: Array<string | undefined> = [agentDir];
   if (
     agentDir &&
@@ -220,6 +202,17 @@ export async function removeProviderAuthProfilesWithLock(params: {
     // Other agents must not erase credentials inherited from the shared store.
     owners.unshift(undefined);
   }
+  return owners;
+}
+
+/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
+export async function removeProviderAuthProfilesWithLock(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  agentDir?: string;
+  profileIds?: readonly string[];
+}): Promise<AuthProfileStore | null> {
+  const owners = providerAuthStoreOwners(params.agentDir);
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const targets = owners.map((owner) =>
       createAuthProfileRemovalTarget({
@@ -271,8 +264,10 @@ function createAuthProfileRemovalTarget(params: {
   profileIds?: ReadonlySet<string>;
   provider?: string;
 }): AuthProfileRemovalTarget {
+  // Removal compares the physical write target, without inherited credentials.
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
     allowKeychainPrompt: false,
+    inheritedAuthDir: params.agentDir,
   });
   const profileIds =
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
@@ -309,6 +304,25 @@ type AuthProfileRemovalResult =
   | { kind: "contention" }
   | { kind: "updated"; stores: AuthProfileStore[] };
 
+function readSurvivingRemovalProfiles(
+  targets: readonly AuthProfileRemovalTarget[],
+): ReadonlyMap<string, AuthProfileCredential> {
+  const surviving = new Map<string, AuthProfileCredential>();
+  for (const target of targets) {
+    const store = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+      allowKeychainPrompt: false,
+      inheritedAuthDir: target.agentDir,
+    });
+    for (const profileId of target.profileIds) {
+      const credential = store.profiles[profileId];
+      if (credential) {
+        surviving.set(profileId, credential);
+      }
+    }
+  }
+  return surviving;
+}
+
 async function removeAuthProfileTargetsWithLocks(
   targets: readonly AuthProfileRemovalTarget[],
   cfg: OpenClawConfig,
@@ -322,6 +336,7 @@ async function removeAuthProfileTargetsWithLocks(
     for (const target of targets) {
       const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
         allowKeychainPrompt: false,
+        inheritedAuthDir: target.agentDir,
       });
       if (!authProfileRemovalTargetMatches(target, current)) {
         return { kind: "retry" };
@@ -376,8 +391,11 @@ async function removeAuthProfileTargetsWithLocks(
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
   cfg?: OpenClawConfig;
+  provider?: string;
   agentDir?: string;
   profileIds: readonly string[];
+  beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
+  onIncomplete?: (survivingProfiles: ReadonlyMap<string, AuthProfileCredential>) => Promise<void>;
 }): Promise<boolean> {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
@@ -386,9 +404,9 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
     );
   }
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
-    const profilesByOwner = new Map<string | undefined, Set<string>>([
-      [params.agentDir, profileIds],
-    ]);
+    const owners =
+      params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
+    const profilesByOwner = new Map(owners.map((owner) => [owner, new Set(profileIds)]));
     for (const profileId of profileIds) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -398,16 +416,30 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       ownerProfiles.add(profileId);
       profilesByOwner.set(ownerAgentDir, ownerProfiles);
     }
-    const result = await removeAuthProfileTargetsWithLocks(
-      [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
-        createAuthProfileRemovalTarget({ agentDir, profileIds: ownerProfileIds }),
-      ),
-      params.cfg ?? {},
+    const targets = [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
+      createAuthProfileRemovalTarget({
+        agentDir,
+        ...(params.provider !== undefined
+          ? { provider: params.provider }
+          : { profileIds: ownerProfileIds }),
+      }),
     );
+    // Config cleanup must not make a later credential generation eligible for this removal.
+    let result: AuthProfileRemovalResult;
+    try {
+      await params.beforeRemove?.([
+        ...new Set(targets.flatMap((target) => [...target.profileIds])),
+      ]);
+      result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    } catch (error) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      throw error;
+    }
     if (result.kind === "updated") {
       return true;
     }
-    if (result.kind === "contention") {
+    if (result.kind === "contention" || params.beforeRemove) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
       return false;
     }
   }
@@ -445,7 +477,11 @@ export async function markAuthProfileSuccess(params: {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
   const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    resolveProviderIdForAuth(profile.provider) !== providerKey
+  ) {
     return;
   }
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
@@ -460,7 +496,11 @@ export async function markAuthProfileSuccess(params: {
     profileId,
     updater: (freshStore) => {
       const freshProfile = freshStore.profiles[profileId];
-      if (!freshProfile || resolveProviderIdForAuth(freshProfile.provider) !== providerKey) {
+      if (
+        !freshProfile ||
+        freshProfile.setup?.replacement ||
+        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
+      ) {
         return false;
       }
       // Inherited selection ownership is not defined. Clear shared health in
@@ -468,7 +508,11 @@ export async function markAuthProfileSuccess(params: {
       if (updatesSelection) {
         freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
       }
-      updateSuccessfulUsageStatsEntry(freshStore, profileId, inherited ? undefined : lastUsed);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+        freshStore.usageStats[profileId] ?? {},
+        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+      );
       applied = true;
       return true;
     },

@@ -36,6 +36,14 @@ describe("update failure triage diagnostics", () => {
           exitCode: index === 0 ? 0 : 1,
           stdoutTail: `${"Earlier build output\n".repeat(100)}The compiler reported the actual failure on stdout`,
           stderrTail: `token=${secret}\n${"🦞".repeat(8_000)} ${stateDir}/npm.log terminal failure token=${secret}`,
+          failureFacts: [
+            {
+              check: "core/doctor/runtime-tool-schemas",
+              code: "doctor-failed",
+              affectedKey: "mcp.servers",
+              message: `Cannot expose runtime tools: token=${secret}`,
+            },
+          ],
           advisory:
             index === 4 ? { kind: advisoryKind, message: "Non-failure update advice" } : undefined,
         })),
@@ -50,6 +58,8 @@ describe("update failure triage diagnostics", () => {
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain(home);
       expect(raw).not.toContain("unredacted-command");
+      expect(raw).toContain("core/doctor/runtime-tool-schemas");
+      expect(raw).toContain("mcp.servers");
       expect(raw).not.toContain("\uFFFD");
       expect(failure).toMatchObject({
         result: {
@@ -284,5 +294,41 @@ describe("update failure triage diagnostics", () => {
     await fs.writeFile(inputPath, input);
 
     await expect(readTriageUpdateFailure(inputPath, { env: {}, stateDir })).rejects.toThrow(error);
+  });
+
+  it("keeps the leading diagnostic of a failed step beside the outcome tail", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      root: "openclaw",
+      reason: "Package install failed",
+      before: { version: "2026.9.3" },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      durationMs: 10,
+      steps: [
+        {
+          name: "global install swap",
+          command: "swap staged package",
+          cwd: ".",
+          durationMs: 1,
+          exitCode: 1,
+          stdoutTail: null,
+          stderrTail: [
+            "PackageUpdateSwapError: retained package tree changed after a copy fallback",
+            ...Array.from({ length: 30 }, (_, index) => `rollback detail line ${index}`),
+            "Installation recovery is unverified.",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const outputPath = await writeTriageUpdateFailure({ result }, { env });
+    const raw = await fs.readFile(outputPath, "utf8");
+
+    expect(raw).toContain("PackageUpdateSwapError");
+    expect(raw).toContain("recovery is unverified");
+    expect(raw).toContain("...");
   });
 });

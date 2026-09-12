@@ -36,6 +36,7 @@ import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
@@ -385,6 +386,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         query: (params as { query?: string }).query,
         limit: (params as { limit?: number }).limit,
       });
+      registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
@@ -416,6 +418,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: requested.slug,
         ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
+      registerClawHubCatalogIconUrls([
+        detail.skill?.icon ?? undefined,
+        detail.owner?.image ?? undefined,
+      ]);
       respond(true, detail, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));

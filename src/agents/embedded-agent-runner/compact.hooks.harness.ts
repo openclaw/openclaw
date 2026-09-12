@@ -20,10 +20,12 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import type { SessionManager } from "../sessions/session-manager.js";
+import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 type MockResolvedModel = {
+  logicalRef: { provider: string; model: string };
   model: {
     provider: string;
     api: string;
@@ -66,6 +68,7 @@ export const resolveContextEngineMock = vi.fn(async () => ({
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
 > = vi.fn((provider?: string, modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
+  logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
   model: {
     provider: provider ?? "openai",
     api: "openai-responses",
@@ -78,8 +81,13 @@ export const resolveModelMock: Mock<
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown, _options?: unknown) =>
-    resolveModelMock(provider, modelId, agentDir, cfg),
+  async (
+    provider: string,
+    modelId: string,
+    agentDir?: string,
+    cfg?: unknown,
+    _options?: Parameters<typeof resolveModelAsync>[4],
+  ) => resolveModelMock(provider, modelId, agentDir, cfg),
 );
 export const sessionCompactImpl = vi.fn(async () => ({
   summary: "summary",
@@ -95,6 +103,15 @@ export const limitHistoryTurnsMock = vi.fn<typeof import("./history.js").limitHi
 );
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
+// Bootstrap context for prepared compaction. Returns the production
+// BootstrapContext shape so the budget chain runs; tests override with
+// mockResolvedValueOnce to inject aggregate-exhaustion scenarios.
+export const resolveBootstrapContextForRunMock = vi.fn<
+  typeof import("../bootstrap-files.js").resolveBootstrapContextForRun
+>(async () => ({
+  bootstrapFiles: [],
+  contextFiles: [],
+}));
 export const attemptServerEndpointCompactionMock: Mock<
   (params: Parameters<typeof attemptServerEndpointCompaction>[0]) => Promise<unknown>
 > = vi.fn(async () => undefined);
@@ -470,7 +487,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
       inlineProviderModels: [],
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     },
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   }),
 );
 const getCurrentPluginMetadataSnapshotMock: Mock<
@@ -516,6 +533,11 @@ export function resetCompactSessionStateMocks(): void {
   sessionAbortCompactionMock.mockReset();
   sessionManualCompactionMock.mockReset();
   sessionAutomaticCompactionMock.mockReset();
+  resolveBootstrapContextForRunMock.mockReset();
+  resolveBootstrapContextForRunMock.mockResolvedValue({
+    bootstrapFiles: [],
+    contextFiles: [],
+  });
   attemptServerEndpointCompactionMock.mockReset();
   attemptServerEndpointCompactionMock.mockResolvedValue(undefined);
   resolveEffectiveCompactionModeMock.mockReset();
@@ -627,6 +649,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
 
   resolveModelMock.mockReset();
   resolveModelMock.mockImplementation((provider?: string, modelId?: string) => ({
+    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
     model: {
       provider: provider ?? "openai",
       api: "openai-responses",
@@ -645,7 +668,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string): void {
       modelId: string,
       agentDir?: string,
       cfg?: unknown,
-      _options?: unknown,
+      _options?: Parameters<typeof resolveModelAsync>[4],
     ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
   resolveAgentHarnessPolicyMock.mockReset();
@@ -910,7 +933,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
     resolveContextInjectionMode: vi.fn(() => "always"),
-    resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
+    resolveBootstrapContextForRun: resolveBootstrapContextForRunMock,
   }));
 
   vi.doMock("../agent-bundle-mcp-tools.js", () => ({
@@ -1063,12 +1086,16 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     getActiveMemorySearchManagerCore: getMemorySearchManagerMock,
   }));
 
-  vi.doMock("../date-time.js", () => ({
-    formatDateStamp: vi.fn(() => "2026-01-01"),
-    formatUserTime: vi.fn(() => ""),
-    resolveUserTimeFormat: vi.fn(() => ""),
-    resolveUserTimezone: vi.fn(() => ""),
-  }));
+  vi.doMock("../date-time.js", async () => {
+    const actual = await vi.importActual<typeof import("../date-time.js")>("../date-time.js");
+    return {
+      ...actual,
+      formatDateStamp: vi.fn(() => "2026-01-01"),
+      formatUserTime: vi.fn(() => ""),
+      resolveUserTimeFormat: vi.fn(() => ""),
+      resolveUserTimezone: vi.fn(() => ""),
+    };
+  });
 
   vi.doMock("../defaults.js", () => ({
     DEFAULT_MODEL: "fake-model",

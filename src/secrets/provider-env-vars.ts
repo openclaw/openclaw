@@ -386,9 +386,11 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
   ]);
 }
 
-/** Lists env vars that may contain provider secrets for broad scrubbing. */
+/** Lists secret env vars for auditing and cleanup, independently of provider activation. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings([
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
     ...Object.values(withSetupEnvOverrides(resolveProviderAuthEnvVarCandidates(params))).flat(),
     ...resolveManifestProviderUsageAuthEnvVarNames(params),
   ]);

@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
@@ -65,8 +66,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
-  const pendingMessagingTexts = state.pendingMessagingTexts;
-  const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
@@ -79,42 +78,30 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     releaseDeferredReplies,
   } = replyDelivery;
 
-  // ── Messaging tool duplicate detection ──────────────────────────────────────
-  // Track texts sent via messaging tools to suppress duplicate block replies.
-  // Only committed (successful) texts are checked - pending texts are tracked
-  // to support commit logic but not used for suppression (avoiding lost messages on tool failure).
-  // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
-  const MAX_MESSAGING_SENT_TEXTS = 200;
-  const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
-  const MAX_MESSAGING_SENT_TARGETS = 200;
-  const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
-  const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
+  // Suppress duplicate block replies only after confirmed messaging-tool delivery.
   const trimMessagingToolSent = () => {
-    if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
-      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
+    if (messagingToolSentTexts.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
     }
     if (
-      state.currentSourceMessagingToolSentTextsNormalized.length >
-      MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS
+      state.currentSourceMessagingToolSentTextsNormalized.length > MAX_MESSAGING_HISTORY_ENTRIES
     ) {
       const overflow =
-        state.currentSourceMessagingToolSentTextsNormalized.length -
-        MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS;
+        state.currentSourceMessagingToolSentTextsNormalized.length - MAX_MESSAGING_HISTORY_ENTRIES;
       state.currentSourceMessagingToolSentTextsNormalized.splice(0, overflow);
     }
-    if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
-      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
+    if (messagingToolSentTargets.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentTargets.splice(0, overflow);
     }
-    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
-      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
+    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentMediaUrls.splice(0, overflow);
     }
-    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_SOURCE_REPLY_PAYLOADS) {
-      const overflow =
-        messagingToolSourceReplyPayloads.length - MAX_MESSAGING_SOURCE_REPLY_PAYLOADS;
+    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSourceReplyPayloads.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSourceReplyPayloads.splice(0, overflow);
     }
   };
@@ -316,10 +303,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.currentSourceMessagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
-    pendingMessagingTexts.clear();
-    pendingMessagingTargets.clear();
-    state.heartbeatToolResponse = undefined;
-    state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();

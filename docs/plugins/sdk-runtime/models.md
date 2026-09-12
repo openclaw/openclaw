@@ -10,6 +10,36 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Prepared simple completions
+
+The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
+model once and completing with it repeatedly. Successful preparation retains the
+provider resources used by its `model`, `auth`, and `selection` fields. The host
+owns those resources, so callers can reuse the result without a disposer:
+
+```typescript
+const result = await prepareSimpleCompletionModelForAgent({ cfg, agentId });
+if ("error" in result) {
+  throw new Error(result.error);
+}
+const prepared = result;
+const response = await completeWithPreparedSimpleCompletionModel({
+  model: prepared.model,
+  auth: prepared.auth,
+  cfg,
+  context: { messages },
+});
+```
+
+Preparation accepts an optional `signal`; cancellation prevents late setup from
+returning a usable model. Resource cleanup can continue after the logical error;
+host shutdown joins admitted setup and cleanup work. Retained results stay owned
+until their host closes, which waits for accepted completion work before releasing
+provider resources. Repeated
+compatible preparations share the existing generation's resources. A result from
+a closed host cannot start another completion; prepare again under the current
+host.
+
 ## Model namespaces
 
 <AccordionGroup>
@@ -39,7 +69,7 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       execution: {
         mode: "isolated-agent-runtime",
         authProfileId: "openai:work",
@@ -98,6 +128,13 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    Direct completions can set `responseFormat` for provider-native constrained
+    output. When the provider exposes them, the result also includes the concrete
+    `responseModel` and terminal `stopReason`. Security-sensitive callers can set
+    `requiredAuthMode: "oauth"`; the host then rejects a selected non-OAuth
+    credential before dispatch. Isolated agent-runtime completions reject these
+    direct-provider controls before dispatch.
+
     Set `reasoning` to request a reasoning effort for the selected model. The
     host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
@@ -113,6 +150,8 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     Synchronous model-selection policy, without preparing a model or starting a session.
 
     `resolveDefaultModelForAgent({ cfg, agentId })` resolves the agent's configured default. `resolveAllowedModelRef({ cfg, catalog, raw, defaultProvider, defaultModel, agentId })` resolves a model name or alias against the supplied catalog and agent allowlist, returning `{ ref, key }` or `{ error }`. It does not select or validate an agent runtime; callers that require a particular harness must apply that separate policy.
+
+    `resolveModelRuntimePolicy({ config, provider, modelId, agentId?, sessionKey? })` reads the configured runtime policy. It honors exact agent/default model entries, provider-model entries, provider-wildcard entries, and provider policy in that order. The result includes `policy` and its `source` (`"model"` or `"provider"`) when configured, or an empty object when no policy matches. This lookup does not select an implicit runtime default or check harness availability.
 
     Use these host operations instead of importing model-selection implementation modules into a plugin's registration entry.
 
@@ -138,3 +177,29 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
 
   </Accordion>
 </AccordionGroup>
+
+## Prepared completion SDK compatibility
+
+Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of
+`openclaw/plugin-sdk/simple-completion-runtime` can continue to prepare a model
+with `prepareSimpleCompletionModelForAgent` and execute it with
+`completeWithPreparedSimpleCompletionModel`.
+
+The executor accepts optional `options.headers` and `options.sessionId` fields.
+Calls that omit them keep the same call shape. For HTTPS OpenCode endpoints,
+a standalone completion gets a fresh opaque `x-opencode-session` routing header
+for each invocation. An explicit model or caller routing header suppresses
+generation, regardless of header name casing. Caller headers take precedence
+over model headers.
+
+A supplied `sessionId` retains its existing provider session and cache behavior.
+It also supplies the OpenCode routing header unless an explicit header overrides
+it. A generated routing value stays in the header only: it does not create
+conversation, transcript, prompt-cache, or WebSocket session ownership. Existing
+transport retries reuse the invocation's header; the executor adds no retry policy.
+
+These prepared results have no release method. Their original Gateway or CLI
+host retains the model resources until shutdown; standalone callers retain them
+for the process lifetime. A closed host rejects new preparation and execution.
+Shutdown waits for accepted provider callbacks and cancellation work before
+releasing the prepared resources, even when the completion has already returned.

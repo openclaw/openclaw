@@ -3,7 +3,11 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { normalizeReleaseCoveragePolicy } from "./full-release-validation-policy.mjs";
+import {
+  normalizeReleaseCoveragePolicy,
+  isSplitChangelogEvidenceDelta,
+  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
+} from "./full-release-validation-policy.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
@@ -289,11 +293,18 @@ export function validateFullReleaseValidationEvidence({
       Array.isArray(reuse.changedPaths) &&
       reuse.changedPaths.length === 1 &&
       reuse.changedPaths[0] === "CHANGELOG.md";
+    const splitChangelog =
+      reuse?.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY &&
+      reuse.evidenceSha !== expectedTargetSha &&
+      isSplitChangelogEvidenceDelta(
+        reuse.changedPaths,
+        manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
+      );
     if (
       !reuse ||
       typeof reuse !== "object" ||
       Array.isArray(reuse) ||
-      (!exactTarget && !changelogOnly) ||
+      (!exactTarget && !changelogOnly && !splitChangelog) ||
       !/^[1-9][0-9]*$/u.test(scalarString(reuse.runId)) ||
       !/^[1-9][0-9]*$/u.test(scalarString(reuse.selectedRunId))
     ) {

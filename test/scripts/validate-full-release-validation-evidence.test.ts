@@ -431,39 +431,54 @@ describe("full release validation evidence", () => {
     );
   });
 
-  it.each([3, 4])("accepts v%s changelog-only evidence reuse on the SHA-pinned path", (version) => {
-    const codeSha = "c".repeat(40);
-    const reuse = {
-      changedPaths: ["CHANGELOG.md"],
-      evidenceSha: codeSha,
-      policy: "changelog-only-release-v1",
-      runId: "122",
-      selectedRunId: "122",
-    };
-    const result = validateFullReleaseValidationEvidence({
-      run: releaseRun(),
-      manifest: releaseManifest({ version, evidenceReuse: reuse }),
-      expectedRepository: "openclaw/openclaw",
-      expectedRunId: "123",
-      expectedTargetSha: targetSha,
-      expectedWorkflowBranch: "release/2026.7.1",
-      isTrustedMainAncestor: () => true,
-      validateEvidenceReuseStrictly: () => ({
-        ...strictEvidenceReuse(version),
-        current: { runId: "123", targetSha },
-        root: { runId: "122", targetSha: codeSha },
-        evidenceReuse: {
-          changedPaths: ["CHANGELOG.md"],
-          evidenceSha: codeSha,
-          policy: "changelog-only-release-v1",
-          rootRunId: "122",
-          selectedRunId: "122",
-        },
-      }),
-    });
+  it.each([
+    { version: 3, policy: "changelog-only-release-v1", changedPaths: ["CHANGELOG.md"] },
+    { version: 4, policy: "changelog-only-release-v1", changedPaths: ["CHANGELOG.md"] },
+    {
+      version: 4,
+      policy: "split-changelog-release-v1",
+      changedPaths: ["CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"],
+    },
+  ])(
+    "accepts v$version $policy evidence reuse on the SHA-pinned path",
+    ({ version, policy, changedPaths }) => {
+      const codeSha = "c".repeat(40);
+      const reuse = {
+        changedPaths,
+        evidenceSha: codeSha,
+        policy,
+        runId: "122",
+        selectedRunId: "122",
+      };
+      const result = validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest({
+          version,
+          evidenceReuse: reuse,
+          validationInputs: { targetVersion: "2026.7.1" },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: "release/2026.7.1",
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly: () => ({
+          ...strictEvidenceReuse(version),
+          current: { runId: "123", targetSha },
+          root: { runId: "122", targetSha: codeSha },
+          evidenceReuse: {
+            changedPaths,
+            evidenceSha: codeSha,
+            policy,
+            rootRunId: "122",
+            selectedRunId: "122",
+          },
+        }),
+      });
 
-    expect(result.source).toBe("sha-pinned-main");
-  });
+      expect(result.source).toBe("sha-pinned-main");
+    },
+  );
 
   it("requires strict root and child validation for reused evidence", () => {
     expect(() =>

@@ -17,7 +17,7 @@ field is required. Use a square PNG that remains recognizable at 16 px; 512×512
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
 OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
-[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+Agent Plugins spec proposal [agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
 consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
 render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
@@ -34,6 +34,14 @@ migration window.
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
+
+When Doctor renames saved credentials, it updates exact `authProfileId` and
+`defaultAuthProfileId` references inside plugin config and channel config. This
+preserves the shipped `authProfileId` migration and also covers defaults such as
+LLM Task's `defaultAuthProfileId`, including older installed plugins. Reference
+lookup trims surrounding whitespace, as the credential reader does. Unmapped
+values and literal strings elsewhere remain unchanged. Plugins do not need to
+implement the host's credential rename in their compatibility callbacks.
 
 Bundled plugins declare each state migration in execution order so Doctor can
 plan its owner and receipt without loading plugin code:
@@ -56,6 +64,18 @@ copied-state and candidate content identity, including when they use the
 descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an
 installed manifest as write authority.
+
+A state migration returns `changes` and `warnings`, with optional `notices`. Warnings refuse later
+Doctor repairs by default. A migration may return `warningDisposition: "recoverable"` only when every
+warning is advisory and required state remains safe for later repairs. Doctor preserves those warnings
+in its receipts and continues. Detection errors, thrown failures, and unclassified warnings from another
+migration still refuse the combined step.
+
+For `definePluginDoctorMigrationFromPlans`, a `plugin-state-import` plan may set
+`cleanupWarningDisposition: "recoverable"` when its retired source is an unused,
+rebuildable artifact. This applies only to cleanup failures after import succeeds.
+Read, import, and verification failures still refuse the migration. Every plan
+consuming a shared source must opt in before its cleanup failures become advisory.
 
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
@@ -329,6 +349,39 @@ from implementations that do not declare support.
 
 The `adapterFactory` id must match `commandName`. Do not export registrations
 for commands absent from the manifest.
+
+## channelAccountKeyPolicies reference
+
+`channelAccountKeyPolicies` declares stored account-key selection rules for channels
+listed in the plugin's `channels` array. It is plugin metadata; operators keep their
+account config under `channels.<id>.accounts`.
+
+```json
+{
+  "channels": ["signal"],
+  "channelAccountKeyPolicies": {
+    "signal": { "canonicalAliasesRequireOwnField": "account" }
+  }
+}
+```
+
+`canonicalAliasesRequireOwnField` is the name of a string field in the account
+entry. An alias that matches only after account-id normalization is eligible when
+that entry has a nonempty value for this field. Root values do not satisfy it.
+Exact stored keys win; existing case-insensitive matches keep their behavior.
+Readers and writers use the same selected stored key.
+
+For Signal, `Work Phone` resolves as `work-phone` when it has its own `account`
+number. Its settings then apply even if the channel root also has a number.
+Without its own number, the previously ignored entry stays ignored and the route
+keeps its inherited settings. Doctor preserves that key and reports the required
+manual change. Doctor also reports normalized-key collisions and preserves both
+entries; an exact `work-phone` key wins at runtime.
+
+Rules for undeclared channels are ignored. Runtime reads use the selected plugin
+metadata snapshot; they do not load plugin code to find the rule. See
+[account lookup arguments](/plugins/sdk-channel-plugins/setup-and-config#stored-account-key-selection)
+for the SDK contract.
 
 ## channelConfigs reference
 

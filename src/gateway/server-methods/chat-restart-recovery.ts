@@ -316,7 +316,10 @@ export function resolveRestartSafeChatAdmission(params: {
   agentId: string;
   cfg: OpenClawConfig;
   clientRunId: string;
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns">;
+  context: Pick<
+    GatewayRequestContext,
+    "chatAbortControllers" | "chatQueuedTurns" | "workerSessionPlacementService"
+  >;
   entry?: SessionEntry;
   initialSessionEntry?: SessionEntry;
   now: number;
@@ -328,6 +331,14 @@ export function resolveRestartSafeChatAdmission(params: {
 }): RestartSafeChatAdmission | undefined {
   const request = params.request;
   const entry = params.entry ?? params.initialSessionEntry;
+  const placement = params.context.workerSessionPlacementService
+    ?.getMany([params.sessionId])
+    .get(params.sessionId);
+  // Only local input may be consumed before turn admission. Worker setup and
+  // reconciliation retain approved input in custody until their writer is ready.
+  if (placement && placement.state !== "local") {
+    return undefined;
+  }
   if (
     !request ||
     !entry ||

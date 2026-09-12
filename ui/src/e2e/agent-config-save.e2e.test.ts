@@ -239,7 +239,7 @@ suite.define(() => {
     });
   });
 
-  it("stages skill changes from the inherited allowlist", async () => {
+  it("config.set stages skill changes from the inherited allowlist", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
@@ -314,7 +314,10 @@ suite.define(() => {
         },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");
-      await gateway.resolveDeferred("config.set", { hash: "agent-config-hash-2" });
+      await gateway.resolveDeferred("config.set", {
+        config: JSON.parse(String(params.raw)),
+        hash: "agent-config-hash-2",
+      });
     });
   });
 });

@@ -2,11 +2,16 @@
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
+
+vi.mock("./git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,6 +37,10 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 }
 
 describe("buildSystemPromptParams", () => {
+  beforeEach(() => {
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+  });
+
   afterEach(() => {
     setActiveNodeContext(null);
     vi.useRealTimers();
@@ -50,6 +59,48 @@ describe("buildSystemPromptParams", () => {
 
     expect(utc.userDate).toBe("2026-01-05");
     expect(tokyo.userDate).toBe("2026-01-06");
+  });
+
+  describe("session Git co-author prompt", () => {
+    const prompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    const params = {
+      config: {},
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+        sessionKey: "agent:main:main",
+      },
+    };
+
+    it("resolves credit only when no prepared value was supplied", () => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(prompt);
+      const { runtimeInfo } = buildSystemPromptParams(params);
+
+      expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      });
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(prompt);
+    });
+
+    it.each([
+      { name: "prepared credit", preparedGitCoauthorPrompt: prompt },
+      { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
+      { name: "explicit null", preparedGitCoauthorPrompt: null },
+    ])("preserves $name without repeating the lookup", ({ preparedGitCoauthorPrompt }) => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue("unexpected second lookup");
+      const { runtimeInfo } = buildSystemPromptParams({ ...params, preparedGitCoauthorPrompt });
+
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
+      expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
+    });
   });
 
   it("projects only the stable active-node identity", () => {

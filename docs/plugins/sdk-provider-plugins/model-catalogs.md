@@ -260,6 +260,27 @@ earlier matching entry. Cache rates absent from the base default to zero.
 Invalid effective token rates return `undefined`. Entries with time-based or
 unknown conditions are skipped; other known charge dimensions are ignored.
 
+## Selecting catalog augmentation hooks
+
+`augmentModelCatalogWithProviderPlugins` is exported from
+`openclaw/plugin-sdk/provider-catalog-runtime`. Its optional top-level
+`providerIds` selects which registered `augmentModelCatalog` hooks run:
+
+- Omit `providerIds` to keep the unscoped behavior.
+- Pass `[]` to run no augmentation hooks.
+- Pass provider IDs or registered aliases to select matching hooks. Matching
+  normalizes IDs and aliases, including hook aliases used by provider families.
+
+This selector does **not** filter the rows returned by a selected hook. A family
+hook may return rows for several providers; the caller owns any row filtering.
+The helper returns supplemental rows, not the input `context.entries`.
+
+The shipped v2026.9.4 export has no `providerIds` selector and may ignore that
+option at runtime. Plugins that depend on scoped hook selection must require a
+host release containing the selector in `openclaw.compat.pluginApi`. Omitting
+the option retains the existing behavior on both older and newer hosts.
+
+This top-level selector is separate from the `catalog.run` callback context.
 When `ctx.providerIds` is present, it contains the normalized provider
 identities selected for that catalog owner. Return `null` before resolving
 credentials or making network requests when the hook serves none of them;

@@ -18,14 +18,65 @@ permissions:
   security-events: write
 
 jobs:
-  macos:
-    name: Critical Security (macOS)
-    runs-on: macos-26
-    timeout-minutes: 45
+  prepare-mermaid:
+    name: Prepare Mermaid assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install Mermaid renderer dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Upload Mermaid assets
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-macos-mermaid-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: Critical Security (macOS)
+    needs: prepare-mermaid
+    runs-on: macos-26-intel
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
           submodules: false
 
       - name: Select Xcode
@@ -40,14 +91,11 @@ jobs:
           fi
           swift --version
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Download Mermaid assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          cache-mode: restore
-          install-bun: "false"
-
-      - name: Prepare Apple Mermaid assets
-        run: node scripts/prepare-apple-mermaid.mjs
+          artifact-ids: ${{ needs.prepare-mermaid.outputs.artifact-id }}
+          path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
@@ -57,7 +105,8 @@ jobs:
           config-file: ./.github/codeql/codeql-macos-critical-security.yml
 
       - name: Build macOS for CodeQL
-        run: swift build --package-path apps/macos --product OpenClaw
+        # Preserve ARM-only application paths in CodeQL coverage on the Intel host.
+        run: swift build --package-path apps/macos --product OpenClaw --arch arm64 --disable-index-store -debug-info-format none
 
       - name: Analyze
         id: analyze

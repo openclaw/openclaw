@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import {
   presenceViewerLabel,
   projectPresenceViewers,
@@ -14,6 +15,7 @@ import {
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   identityAvatarClass,
+  renderAgentIdentityAvatar,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
@@ -68,6 +70,25 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       ${renderViewerAvatar(view)}
     </span>`;
   }
+}
+
+function renderFacepileAgentAvatar(
+  user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">,
+  identity: Extract<SessionParticipantIdentity, { type: "agent" }>,
+  markAsViewer: boolean,
+) {
+  const avatar = resolveAvatar({
+    identity,
+    id: user.id,
+    name: user.name,
+    profileAvatarUrl: user.avatarUrl,
+  });
+  return html`<span
+    class="viewer-avatar viewer-avatar--session"
+    aria-label=${presenceViewerLabel(user)}
+    data-viewer-id=${markAsViewer ? user.id : nothing}
+    >${renderAgentIdentityAvatar({ id: identity.id, avatar: avatar.kind === "profile" ? avatar.url : null })}</span
+  >`;
 }
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
@@ -125,12 +146,14 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         (user) => html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
           <span class="viewer-facepile__tooltip-anchor">
             ${renderStandalonePersonLink(
-              html`<openclaw-viewer-avatar
-                .user=${user}
-                .identity=${user.identity}
-                .markAsViewer=${!this.staticParticipants}
-                variant="session"
-              ></openclaw-viewer-avatar>`,
+              user.identity?.type === "agent"
+                ? renderFacepileAgentAvatar(user, user.identity, !this.staticParticipants)
+                : html`<openclaw-viewer-avatar
+                    .user=${user}
+                    .identity=${user.identity}
+                    .markAsViewer=${!this.staticParticipants}
+                    variant="session"
+                  ></openclaw-viewer-avatar>`,
               user.identity?.type === "profile"
                 ? personActivityLink(
                     user.identity.id,

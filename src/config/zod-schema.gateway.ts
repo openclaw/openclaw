@@ -12,12 +12,12 @@ import {
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
-import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
   validateHttpOrigin,
 } from "./zod-schema.root-support.js";
+import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const OperatorScopeSchema = z.enum([

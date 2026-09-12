@@ -7,6 +7,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
@@ -1395,40 +1396,62 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("does not treat diagnostic compaction metadata as a context-refresh trigger", async () => {
-    const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
-    await fs.writeFile(
-      path.join(workspaceDir, "AGENTS.md"),
-      [
-        "## Session Startup",
-        "Read the queued workspace startup file.",
-        "",
-        "## Red Lines",
-        "Never use the process cwd for this refresh.",
-      ].join("\n"),
-      "utf-8",
-    );
+  it.each([0, 1])(
+    "honors queued post-compaction sections with %i reported compactions",
+    async (compactionCount) => {
+      const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        [
+          "## Session Startup",
+          "Read the queued workspace startup file.",
+          "",
+          "## Red Lines",
+          "Never use the process cwd for this refresh.",
+        ].join("\n"),
+        "utf-8",
+      );
 
-    const { sessionKey } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-post-compaction-workspace-root-",
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+      const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-post-compaction-workspace-root-",
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
           },
         },
-      },
-      agentMeta: {
-        compactionCount: 1,
-        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-      },
-    });
+        agentMeta: {
+          compactionCount,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+        },
+      });
 
-    // agentMeta.compactionCount is diagnostic metadata from the harness result;
-    // post-compaction context refresh belongs to runner-owned compaction paths.
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-  });
+      // The session seed pins an unrelated source-less snapshot. It must not erase
+      // the queued turn's explicit compaction configuration.
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(firstMockCallArg(runEmbeddedAgentMock, "embedded run params")).toMatchObject({
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
+      });
+      const events = peekSystemEvents(sessionKey);
+      expect(events).toHaveLength(compactionCount);
+      if (compactionCount > 0) {
+        expect(events[0]).toContain("Post-compaction context refresh");
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+        expect(events[0]).toContain("Never use the process cwd for this refresh.");
+      }
+      // Result metadata can report presentation-only compaction, not durable writer custody.
+      expect(stored).toHaveProperty([sessionKey, "sessionId"], "session");
+      expect(stored).not.toHaveProperty([sessionKey, "compactionCount"]);
+    },
+  );
 });
 
 describe("runReplyAgent block streaming", () => {
@@ -2801,14 +2824,51 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it.each([
+    {
+      name: "split token counts",
+      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
+      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
+    },
+    {
+      name: "input-only counts",
+      usage: { input_tokens: 12, total_tokens: 15 },
+      expected: "Usage: 12 in / ? out",
+    },
+    {
+      name: "output-only counts",
+      usage: { output_tokens: 3, total_tokens: 15 },
+      expected: "Usage: ? in / 3 out",
+    },
+    {
+      name: "total-only counts",
+      usage: { total_tokens: 1250 },
+      expected: "Usage: 1.3k total",
+    },
+    {
+      name: "cache-only counts",
+      usage: { cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
+    },
+    {
+      name: "total and cache counts without a split",
+      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
+      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
+    },
+  ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
+    const output = parseCliOutput({
+      raw: JSON.stringify({ result: "ok", usage }),
+      backend: { command: "fixture-cli" },
+      providerId: "fixture-cli",
+      outputMode: "json",
+    });
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
+      payloads: [{ text: output.text }],
       meta: {
         agentMeta: {
           provider: "amazon-bedrock",
           model: "us.anthropic.claude-sonnet-4-6",
-          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
+          usage: output.usage,
         },
       },
     });
@@ -2837,8 +2897,7 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).toBe(`ok\n${expected}`);
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
   });

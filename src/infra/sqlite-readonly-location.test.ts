@@ -11,11 +11,14 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "./sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -492,7 +495,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       database.close();
       const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
       const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
-      const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
+      const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
       const script = `
         const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
         try {
@@ -556,7 +559,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
     const missingPath = path.join(tempDir, "missing.db");
 
-    await withEnvAsync({ NODE_OPTIONS: `--require=${preloadPath}` }, async () => {
+    await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
       let message = "";
       try {
         await prepareSqliteReadOnlyLocation(missingPath);

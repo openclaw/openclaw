@@ -7,7 +7,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { DevicesPageDataState, InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import type {
+  DevicesPageDataState,
+  InventoryRemovalRequest,
+} from "../../lib/nodes/page-operations.ts";
 import {
   rejectDevicePairing,
   rejectNodePairingRequest,
@@ -15,7 +18,7 @@ import {
   removeStaleInventoryEntries,
   renameDevice,
   revokeDeviceToken,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
 
 export type DeviceAliasTarget = {
   id: string;

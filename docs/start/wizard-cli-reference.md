@@ -25,9 +25,9 @@ leaves telemetry consent unset, and skips route confirmation, memory import,
 and app recommendations. **Ctrl+C** stops the Gateway without removing config;
 `openclaw gateway install` enables background operation later.
 
-Custom setup keeps the full guided prompts. If quick start finds no usable
+Custom setup keeps the full guided prompts. If Quick start finds no usable
 route, it continues with manual provider setup and the remaining guided steps,
-including Gateway service installation. The quick-start defaults for agent name
+including Gateway service installation. The Quick start defaults for agent name
 (`main`), access mode (full access), and telemetry (consent unset) stay.
 See [Guided default](/start/wizard#guided-default).
 
@@ -47,7 +47,7 @@ not install or modify anything on the remote host.
 
 ## Local flow details
 
-These steps describe the classic wizard. The guided quick-start lane is
+These steps describe the classic wizard. The guided Quick start lane is
 described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
 <Steps>
@@ -118,7 +118,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - For the generated secret, interactive setup offers:
       - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
-      - QuickStart reuses an existing `gateway.auth.token` SecretRef from an
+      - Classic QuickStart reuses an existing `gateway.auth.token` SecretRef from an
         `env`, `file`, `exec`, or `store` provider for its probe and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
@@ -240,6 +240,10 @@ If a provider setup step fails in interactive onboarding (for example a CLI reus
 without a local sign-in), the wizard shows the error and returns to the provider picker
 instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
 
+The model defaults and provider support statements below describe v2026.9.3. Model
+defaults move with the product baseline, so check [Models](/concepts/models) if you are
+on a different release.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
@@ -256,21 +260,21 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
     Browser flow; paste `code#state`.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to the same tier.
 
     Adding or reauthenticating OpenAI preserves an existing explicit primary
@@ -471,9 +475,9 @@ prompts to install the plugin (npm or local path) before channel configuration.
 
 ### Installed app recommendations
 
-After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Only recommended matches from official plugin catalogs are selected by default; optional matches and all ClawHub skills require an explicit selection.
 
-The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
+The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in Quick start, classic QuickStart, or non-macOS onboarding.
 
 ## Non-interactive setup
 

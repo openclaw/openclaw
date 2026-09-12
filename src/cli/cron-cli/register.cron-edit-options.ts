@@ -1,5 +1,11 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
@@ -32,7 +38,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
-  const scriptPath = normalizeOptionalString(opts.script);
+  const scriptPath = readNonBlankString(opts.script);
   const commandShell = normalizeOptionalString(opts.command);
   const commandArgv = parseCronCommandArgv(opts.commandArgv);
   if (commandShell && commandArgv) {
@@ -56,23 +62,10 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new CronCliError("Use --fallbacks or --clear-fallbacks, not both");
   }
   const toolsAllow = parseCronToolsAllow(opts.tools);
-  const timeoutSecondsValue = opts.timeoutSeconds;
-  const rawTimeoutSeconds =
-    timeoutSecondsValue === undefined
-      ? undefined
-      : typeof timeoutSecondsValue === "string" || typeof timeoutSecondsValue === "number"
-        ? String(timeoutSecondsValue).trim()
-        : "";
-  if (rawTimeoutSeconds !== undefined && !/^\d+$/u.test(rawTimeoutSeconds)) {
-    throw new CronCliError("Invalid --timeout-seconds (must be a positive integer).");
-  }
-  const timeoutSeconds = rawTimeoutSeconds === undefined ? undefined : Number(rawTimeoutSeconds);
-  const hasTimeoutSeconds =
-    typeof timeoutSeconds === "number" &&
-    Number.isSafeInteger(timeoutSeconds) &&
-    timeoutSeconds > 0;
-  if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
-    throw new CronCliError("Invalid --timeout-seconds (must be a positive integer).");
+  const timeoutSeconds = parseStrictNonNegativeInteger(opts.timeoutSeconds);
+  const hasTimeoutSeconds = timeoutSeconds !== undefined;
+  if (opts.timeoutSeconds !== undefined && !hasTimeoutSeconds) {
+    throw new CronCliError("Invalid --timeout-seconds (must be a non-negative integer).");
   }
   const rawNoOutputTimeoutSeconds =
     opts.noOutputTimeoutSeconds ??

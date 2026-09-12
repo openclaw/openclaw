@@ -212,8 +212,6 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional state environment for isolated Skill Workshop proposal persistence. */
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
-  /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
-  skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
@@ -276,6 +274,8 @@ export type RunEmbeddedAgentParams = {
   modelHasVision?: boolean;
   /** Session-selected context-window option id carried by the run owner. */
   contextWindow?: string;
+  /** Caller-owned upper bound for this run's effective context budget. */
+  contextTokenBudget?: number;
   /** Route-bound thinking capability resolved from the selected prepared catalog row. */
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
@@ -292,6 +292,8 @@ export type RunEmbeddedAgentParams = {
   expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  /** Disable fallback from the user-selected auth profile for a verification run. */
+  allowAuthProfileFallback?: boolean;
   thinkLevel?: ThinkLevel;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
@@ -411,6 +413,7 @@ export type RunEmbeddedAgentParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  gitCoauthorPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -535,6 +538,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceHeartbeatTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
   | "silentReplyPromptMode"

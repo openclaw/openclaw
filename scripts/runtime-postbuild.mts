@@ -10,6 +10,7 @@ import { buildSync } from "esbuild";
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -21,6 +22,8 @@ import {
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
+  discoverStaticExtensionAssets,
+  shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
 import {
   isUpdateCompatibilityChunk,
@@ -204,9 +207,9 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
 }));
 /** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // v2026.8.2 and the exact d413210 and 0229a108 builds load these after replacing dist/.
   // Remove only after the source artifacts fall outside the supported upgrade window.
-  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"].map((fileName) => ({
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-1Uyqkfns.js"].map((fileName) => ({
     dest: `dist/${fileName}`,
     contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
   })),
@@ -730,11 +733,6 @@ export function writeLegacyCliExitCompatChunks(
   }
 }
 
-function shouldCopyStaticExtensionAssets(params: RuntimePostBuildParams) {
-  const env = params.env ?? process.env;
-  return env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
-}
-
 /**
  * Runs every runtime postbuild phase after the main dist build.
  */
@@ -785,8 +783,12 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
     if (!shouldCopyStaticExtensionAssets(phaseParams)) {
       return;
     }
-    copyStaticExtensionAssets(phaseParams);
-    copyStaticExtensionAssetsToRuntimeOverlay(phaseParams);
+    const assetParams = {
+      ...phaseParams,
+      assets: discoverStaticExtensionAssets(phaseParams),
+    };
+    copyStaticExtensionAssets(assetParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(assetParams);
   });
   runPhase("stable root runtime imports", () =>
     rewriteRootRuntimeImportsToStableAliases(phaseParams),
@@ -813,5 +815,7 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runRuntimePostBuild();
+  await withDistArtifactOwnership(process.cwd(), async () => {
+    runRuntimePostBuild();
+  });
 }

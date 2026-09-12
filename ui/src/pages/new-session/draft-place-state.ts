@@ -21,8 +21,7 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
-import type { NewSessionRouteData } from "./location.ts";
-import { newSessionSearch } from "./location.ts";
+import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { resolveNewSessionWhere, type NewSessionWhere } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
@@ -147,6 +146,7 @@ export class DraftPlaceState {
   buildSessionCreateParams(params: DraftSessionCreateSelection): SessionCreateParams {
     return buildDraftSessionCreateParams({
       ...params,
+      deferInitialTurn: this.remotePlacement,
       agentId: this.agentId,
       model: this.modelControl.modelForSubmission(),
       contextWindow: this.modelControl.contextWindow,
@@ -656,7 +656,6 @@ export class DraftPlaceState {
       projectId: this.browser.projectId,
       worktree: true,
     });
-    this.browser.close();
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
@@ -738,11 +737,10 @@ export class DraftPlaceState {
       }
     }
 
-    if (!changed) {
-      return;
+    if (changed) {
+      this.repositoryState.synchronize();
+      this.callbacks.requestUpdate();
     }
-    this.repositoryState.synchronize();
-    this.callbacks.requestUpdate();
   }
 
   browseAvailable(): boolean {

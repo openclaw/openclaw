@@ -12,6 +12,7 @@ import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import {
   applyLegacyAuthStore,
+  buildPersistedAuthProfileSecretsStore,
   coerceLegacyAuthStore,
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
@@ -298,10 +299,16 @@ describe("persisted auth profile boundary", () => {
   });
 
   it("tracks persisted profile provenance with override precedence", () => {
+    const sharedSource = { databasePath: "synthetic-shared.sqlite", provider: "openai" };
+    const localSource = { databasePath: "synthetic-local.sqlite", provider: "openai" };
     const merged = mergeAuthProfileStores(
       {
         version: AUTH_STORE_VERSION,
         runtimePersistedProfileIds: ["openai:base", "openai:overridden"],
+        runtimeCredentialSources: {
+          "openai:base": sharedSource,
+          "openai:overridden": sharedSource,
+        },
         profiles: {
           "openai:base": createApiKeyCredential("openai", "base-key"),
           "openai:overridden": createApiKeyCredential("openai", "old-key"),
@@ -311,6 +318,7 @@ describe("persisted auth profile boundary", () => {
         version: AUTH_STORE_VERSION,
         runtimePersistedProfileIds: ["openai:added"],
         runtimeLocalProfileIds: ["openai:added"],
+        runtimeCredentialSources: { "openai:added": localSource },
         profiles: {
           "openai:overridden": createApiKeyCredential("openai", "scoped-key"),
           "openai:added": createApiKeyCredential("openai", "added-key"),
@@ -320,6 +328,14 @@ describe("persisted auth profile boundary", () => {
 
     expect(merged.runtimePersistedProfileIds).toEqual(["openai:added", "openai:base"]);
     expect(merged.runtimeLocalProfileIds).toEqual(["openai:added"]);
+    expect(merged.runtimeCredentialSources).toEqual({
+      "openai:base": sharedSource,
+      "openai:added": localSource,
+    });
+    expect(buildPersistedAuthProfileSecretsStore(merged)).toEqual({
+      version: AUTH_STORE_VERSION,
+      profiles: merged.profiles,
+    });
   });
 
   it.each([
