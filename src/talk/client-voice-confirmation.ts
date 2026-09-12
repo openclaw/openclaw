@@ -4,6 +4,18 @@ import { buildToolMutationState } from "../agents/tool-mutation.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 
 const CONFIRMATION_TTL_MS = 2 * 60_000;
+const AFFIRMATION_PHRASES: readonly string[] = [
+  "yes",
+  "yes do it",
+  "do it",
+  "confirm",
+  "confirmed",
+  "go ahead",
+  "proceed",
+  "send it",
+  "make the change",
+  "restart it",
+];
 
 type PendingVoiceConfirmation = {
   confirmationId: string;
@@ -301,7 +313,9 @@ function resolveClientVoiceToolConfirmationPolicy(
     reason:
       `VOICE_CONFIRMATION_REQUIRED:${confirmation.confirmationId} ` +
       `The high-impact voice action "${params.toolName}" was not executed. ` +
-      "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId.",
+      `Ask the user for explicit spoken confirmation, such as ${AFFIRMATION_PHRASES.slice(0, 2)
+        .map((phrase) => `"${phrase}"`)
+        .join(" or ")}, then call openclaw_agent_consult again with this confirmationId.`,
   };
 }
 
@@ -340,9 +354,7 @@ function isExplicitAffirmation(text: string): boolean {
     return false;
   }
   // English-only phrases are an accepted first version; localized matching is follow-up work.
-  return /^(yes|yes do it|do it|confirm|confirmed|go ahead|proceed|send it|make the change|restart it)$/.test(
-    normalized,
-  );
+  return AFFIRMATION_PHRASES.includes(normalized);
 }
 
 /** Bind a later affirmative utterance to one exact paused action. */
