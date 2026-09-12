@@ -24,7 +24,6 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
-  planClawAgentReferenceRemoval,
   planClawWorkspaceRemoval,
   readClawRemoveCronInventory,
   releaseClawRemoveRows,
@@ -32,6 +31,7 @@ import {
   workspaceContainsUntrackedEntries,
 } from "./lifecycle-delete-support.js";
 import { removeClawMcpServers } from "./lifecycle-mcp-removal.js";
+import { planClawAgentReferenceRemoval } from "./lifecycle-reference-removal.js";
 import {
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   CLAW_REMOVE_RESULT_SCHEMA_VERSION,
