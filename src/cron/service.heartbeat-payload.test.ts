@@ -101,6 +101,14 @@ describe("heartbeat payload execution", () => {
       expectedError: "heartbeat skipped: disabled",
       expectedConsecutiveErrors: 0,
     },
+    {
+      label: "empty heartbeat file skip",
+      child: { status: "skipped", reason: "empty-heartbeat-file" } as HeartbeatRunResult,
+      expectedStatus: "ok",
+      expectedCompletion: "succeeded",
+      expectedError: undefined,
+      expectedConsecutiveErrors: 0,
+    },
   ])("records the settled heartbeat child $label", async (testCase) => {
     const { storePath, cleanup } = await makeStorePath();
     const child = createDeferred<HeartbeatRunResult>();

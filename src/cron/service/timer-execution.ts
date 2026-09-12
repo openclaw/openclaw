@@ -1,6 +1,7 @@
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
@@ -36,6 +37,14 @@ import {
   normalizeQueuedSystemEventHandle,
   removeQueuedSystemEventHandle,
 } from "./timer-trigger.js";
+
+// Heartbeat preflight skips that mean "nothing to do by design"; settling them as
+// ok runs keeps failure accounting and alerts focused on real failures (gh-144959).
+// Operator-driven skips ("disabled") stay skipped for visibility.
+const DESIGNED_HEARTBEAT_NOOP_SKIPS = new Set([
+  "empty-heartbeat-file",
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+]);
 
 /** Executes a cron job without mutating persisted job state. */
 export async function executeJobCore(
@@ -213,7 +222,16 @@ export async function executeJobCore(
           }
         : heartbeatResult.status === "failed"
           ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
-          : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
+          : DESIGNED_HEARTBEAT_NOOP_SKIPS.has(heartbeatResult.reason)
+            ? // Designed no-op skips are successful runs; recording them as skipped
+              // failures inflated `tasks list --status failed` and failure alerts
+              // (gh-144959). The runner's own state keeps the skipped counters for
+              // `system heartbeat last`.
+              {
+                status: "ok" as const,
+                summary: `heartbeat skipped: ${heartbeatResult.reason}`,
+              }
+            : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {
@@ -317,8 +335,19 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text };
     }
     removeQueuedSystemEvent();
+    if (heartbeatResult.status === "skipped") {
+      if (DESIGNED_HEARTBEAT_NOOP_SKIPS.has(heartbeatResult.reason)) {
+        // Designed no-op skip; see the interval heartbeat path above (gh-144959).
+        return { status: "ok", summary: `heartbeat skipped: ${heartbeatResult.reason}` };
+      }
+      return {
+        status: "skipped",
+        error: heartbeatResult.reason,
+        summary: text,
+      };
+    }
     return {
-      status: heartbeatResult.status === "skipped" ? "skipped" : "error",
+      status: "error",
       error: heartbeatResult.reason,
       summary: text,
     };
