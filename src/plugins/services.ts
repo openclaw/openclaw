@@ -90,7 +90,7 @@ const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
 // Long-lived callbacks must not capture the startup-only predecessor and publication callback.
 export async function startPluginServices({
   registry,
-  config,
+  config: initialConfig,
   workspaceDir,
   startupTrace,
   broadcastPluginEvent,
@@ -202,8 +202,10 @@ export async function startPluginServices({
     try {
       const invokeStop = () => {
         const record = entry.registry.plugins.find((candidate) => candidate.id === entry.pluginId);
-        const registry = record ? getPluginRecordRegistry(entry.registry, record) : entry.registry;
-        return withPluginHttpRouteRegistry(registry, () => entry.stop?.(), entry.lease);
+        const stopRegistry = record
+          ? getPluginRecordRegistry(entry.registry, record)
+          : entry.registry;
+        return withPluginHttpRouteRegistry(stopRegistry, () => entry.stop?.(), entry.lease);
       };
       const cleanup = () => {
         if (!entry.stopping) {
@@ -644,7 +646,7 @@ export async function startPluginServices({
         }
       }
       const failures: unknown[] = [];
-      if (!(await startService(entry, config, failures, throwOnStartError === true))) {
+      if (!(await startService(entry, initialConfig, failures, throwOnStartError === true))) {
         failedCount += 1;
         if (throwOnStartError) {
           throw new AggregateError(failures, "plugin services failed to start");
