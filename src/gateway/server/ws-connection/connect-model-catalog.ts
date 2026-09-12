@@ -1,7 +1,13 @@
-import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type {
+  ModelCatalogScope,
   ModelsListResult,
   ModelsSnapshotEvent,
+  SessionsResolveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../../agents/agent-scope-config.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -15,22 +21,61 @@ export async function publishConnectModelCatalog(
   dispatcher: ReturnType<typeof createGatewayAuthenticatedRequestDispatcher>,
 ): Promise<void> {
   const client = handler.getClient();
-  if (client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
+  const requestedScope = client?.connect.modelCatalog;
+  if (
+    client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI ||
+    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT) ||
+    !requestedScope
+  ) {
     return;
   }
-  const cfg = handler.buildRequestContext().getRuntimeConfig();
-  const requestedAgentId = client.connect.modelCatalogAgentId
-    ? normalizeAgentId(client.connect.modelCatalogAgentId)
-    : undefined;
-  const agentId =
-    requestedAgentId && listAgentIds(cfg).includes(requestedAgentId)
-      ? requestedAgentId
-      : resolveGatewayAgentSelectionState(cfg).defaultId;
+  let scope: ModelCatalogScope;
+  if ("shortId" in requestedScope) {
+    const resolveRequest = {
+      type: "req" as const,
+      id: `catalog-session:${handler.connId}`,
+      method: "sessions.resolve",
+      params: requestedScope,
+    };
+    const resolution: { value?: SessionsResolveResult } = {};
+    await dispatcher.dispatch(
+      resolveRequest,
+      client,
+      Buffer.byteLength(JSON.stringify(resolveRequest)),
+      undefined,
+      (frame) => {
+        if (!frame.ok) {
+          return handler.send(frame);
+        }
+        // SAFETY: The registered sessions.resolve handler owns this response contract.
+        resolution.value = frame.payload as SessionsResolveResult;
+        return { kind: "sent" };
+      },
+    );
+    const resolved = resolution.value;
+    if (!resolved?.ok) {
+      return;
+    }
+    scope = { agentId: resolved.agentId, sessionKey: resolved.key };
+  } else if (requestedScope.sessionKey) {
+    scope = requestedScope;
+  } else {
+    const cfg = handler.buildRequestContext().getRuntimeConfig();
+    const requestedAgentId = requestedScope.agentId
+      ? normalizeAgentId(requestedScope.agentId)
+      : undefined;
+    scope = {
+      agentId:
+        requestedAgentId && listAgentIds(cfg).includes(requestedAgentId)
+          ? requestedAgentId
+          : resolveGatewayAgentSelectionState(cfg).defaultId,
+    };
+  }
   const request = {
     type: "req" as const,
-    id: `catalog:${handler.connId}:${agentId}`,
+    id: `catalog:${handler.connId}`,
     method: "models.list",
-    params: { agentId, view: "configured" },
+    params: { ...scope, view: "configured" },
   };
   return dispatcher.dispatch(
     request,
@@ -44,8 +89,8 @@ export async function publishConnectModelCatalog(
               type: "event",
               event: "models.snapshot",
               payload: {
-                agentId,
-                // The registered models.list handler owns this response contract.
+                scope,
+                // SAFETY: This response comes only from the registered models.list handler.
                 catalog: frame.payload as ModelsListResult,
               } satisfies ModelsSnapshotEvent,
             }

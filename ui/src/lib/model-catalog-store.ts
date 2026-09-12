@@ -176,10 +176,11 @@ export function subscribeModelCatalogChanges(
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       listener();
     } else if (event.event === "models.snapshot" && scope) {
+      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
       const publication = event.payload as ModelsSnapshotEvent;
       if (
         modelCatalogKey(modelCatalogParams(scope)) ===
-        modelCatalogKey(modelCatalogParams({ agentId: publication.agentId }))
+        modelCatalogKey(modelCatalogParams(publication.scope))
       ) {
         listener();
       }

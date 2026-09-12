@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsSnapshotEvent } from "../../../packages/gateway-protocol/src/index.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   connectGatewayClient,
@@ -12,7 +13,7 @@ import {
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 
-it("connect publishes the roster default or valid requested agent's catalog without an ambient owner or models.list request", async () => {
+it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
   const state = await createOpenClawTestState({
     label: "models-connect-publication",
     env: {
@@ -28,11 +29,25 @@ it("connect publishes the roster default or valid requested agent's catalog with
   const publications: ModelsSnapshotEvent[] = [];
   try {
     state.applyEnv();
+    await state.writeAuthProfiles(
+      {
+        version: 1,
+        profiles: {
+          "fixture:saved-account": {
+            type: "api_key",
+            provider: "fixture",
+            key: "synthetic-saved-account-key",
+          },
+        },
+      },
+      "alpha",
+    );
     const { client, server } = await startGatewayWithClient({
       port,
       configPath: state.configPath,
       token,
       clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      modelCatalog: {},
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       origin: `http://127.0.0.1:${port}`,
       scopes: ["operator.admin"],
@@ -84,7 +99,7 @@ it("connect publishes the roster default or valid requested agent's catalog with
         .poll(() => publications, { timeout: 15_000 })
         .toMatchObject([
           {
-            agentId: "alpha",
+            scope: { agentId: "alpha" },
             catalog: { models: [{ id: "first", provider: "fixture", available: true }] },
           },
         ]);
@@ -97,7 +112,7 @@ it("connect publishes the roster default or valid requested agent's catalog with
           url: `ws://127.0.0.1:${port}`,
           token,
           clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
-          modelCatalogAgentId: selection.hint,
+          modelCatalog: { agentId: selection.hint },
           mode: GATEWAY_CLIENT_MODES.WEBCHAT,
           origin: `http://127.0.0.1:${port}`,
           scopes: ["operator.admin"],
@@ -112,7 +127,7 @@ it("connect publishes the roster default or valid requested agent's catalog with
             .poll(() => otherPublications)
             .toMatchObject([
               {
-                agentId: selection.agentId,
+                scope: { agentId: selection.agentId },
                 catalog: {
                   models: [{ id: selection.modelId, provider: "fixture", available: true }],
                 },
@@ -121,6 +136,85 @@ it("connect publishes the roster default or valid requested agent's catalog with
           expect(publications).toHaveLength(1);
         } finally {
           await disconnectGatewayClient(other);
+        }
+      }
+      const sessionKey = "agent:alpha:dashboard:12345678-1234-4123-8123-123456789abc";
+      await upsertSessionEntryCore(
+        { agentId: "alpha", sessionKey },
+        {
+          sessionId: "saved-model-catalog-session",
+          updatedAt: Date.now(),
+          authProfileOverride: "fixture:saved-account",
+          authProfileOverrideSource: "user",
+        },
+      );
+      for (const modelCatalog of [
+        { agentId: "alpha", sessionKey },
+        { agentId: "alpha", shortId: "12345678", slugHint: "saved" },
+      ]) {
+        const savedPublications: ModelsSnapshotEvent[] = [];
+        const saved = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          modelCatalog,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          origin: `http://127.0.0.1:${port}`,
+          scopes: ["operator.admin"],
+          onEvent(event) {
+            if (event.event === "models.snapshot") {
+              savedPublications.push(event.payload as ModelsSnapshotEvent);
+            }
+          },
+        });
+        try {
+          await expect
+            .poll(() => savedPublications)
+            .toMatchObject([
+              {
+                scope: { agentId: "alpha", sessionKey },
+                catalog: {
+                  models: [{ id: "first", provider: "fixture", available: true }],
+                  accountSelection: {
+                    kind: "shared",
+                    authProfileId: "fixture:saved-account",
+                    source: "user",
+                  },
+                },
+              },
+            ]);
+          expect(publications).toHaveLength(1);
+        } finally {
+          await disconnectGatewayClient(saved);
+        }
+      }
+      for (const clientName of [
+        GATEWAY_CLIENT_IDS.CONTROL_UI,
+        GATEWAY_CLIENT_IDS.CLI,
+        GATEWAY_CLIENT_IDS.IOS_APP,
+        GATEWAY_CLIENT_IDS.ANDROID_APP,
+      ]) {
+        const oldPublications: unknown[] = [];
+        const old = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          clientName,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          origin: `http://127.0.0.1:${port}`,
+          scopes: ["operator.admin"],
+          onEvent(event) {
+            if (event.event === "models.snapshot") {
+              oldPublications.push(event.payload);
+            }
+          },
+        });
+        try {
+          await expect(old.request("models.list", { agentId: "alpha" })).resolves.toMatchObject({
+            models: [{ id: "first", provider: "fixture" }],
+          });
+          expect(oldPublications).toEqual([]);
+        } finally {
+          await disconnectGatewayClient(old);
         }
       }
     } finally {

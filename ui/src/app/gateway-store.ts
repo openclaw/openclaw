@@ -5,6 +5,10 @@ import {
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ModelCatalogTarget,
+  ModelsSnapshotEvent,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
@@ -28,7 +32,7 @@ import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
-import { readSessionDefaults } from "../lib/sessions/session-key.ts";
+import { readSessionDefaults, resolveUiConversationIdentity } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type {
@@ -80,7 +84,7 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
-    getModelCatalogAgentId?: (gatewayUrl: string) => string | undefined;
+    getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
@@ -453,8 +457,8 @@ export function createApplicationGateway(
       mode: options.clientOptions?.mode ?? "webchat",
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
-      get modelCatalogAgentId() {
-        return options.getModelCatalogAgentId?.(nextConnection.gatewayUrl);
+      get modelCatalog() {
+        return options.getModelCatalogTarget?.(nextConnection.gatewayUrl);
       },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
@@ -643,6 +647,23 @@ export function createApplicationGateway(
         // project presence or history into the current gateway connection.
         if (client !== nextClient) {
           return;
+        }
+        if (event.event === "models.snapshot") {
+          // SAFETY: The negotiated authenticated snapshot carries ModelsSnapshotEvent.
+          const publication = event.payload as ModelsSnapshotEvent;
+          if (publication.scope.sessionKey) {
+            event = {
+              ...event,
+              payload: {
+                ...publication,
+                scope: resolveUiConversationIdentity(
+                  { hello: snapshot.hello, assistantAgentId: snapshot.assistantAgentId },
+                  publication.scope.sessionKey,
+                  publication.scope.agentId,
+                ),
+              },
+            };
+          }
         }
         try {
           recordGatewayEvent(event);

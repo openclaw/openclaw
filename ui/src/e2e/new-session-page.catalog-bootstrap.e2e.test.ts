@@ -73,25 +73,21 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const connected = await gateway.waitForRequest("connect");
-        if (hint === undefined) {
-          expect(connected.params).not.toHaveProperty("modelCatalogAgentId");
-        } else {
-          expect(connected.params).toMatchObject({ modelCatalogAgentId: hint });
-        }
+        expect(connected.params).toMatchObject({ modelCatalog: hint ? { agentId: hint } : {} });
         await expect
           .poll(async () => (await gateway.getRequests("models.list", { agentId })).length)
           .toBe(1);
         await gateway.emitGatewayEvent("models.snapshot", {
-          agentId: agentId === "alpha" ? "bravo" : "alpha",
+          scope: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
           catalog: { models: [{ ...current, id: "foreign", name: "Other agent model" }] },
         });
         expect(await gateway.getRequests("models.list", { agentId })).toHaveLength(1);
         await gateway.emitGatewayEvent("models.snapshot", {
-          agentId,
+          scope: { agentId },
           catalog: { models: [current], pendingProviders: ["fixture"] },
         });
         await gateway.emitGatewayEvent("models.snapshot", {
-          agentId: agentId === "alpha" ? "bravo" : "alpha",
+          scope: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
           catalog: { models: [{ ...current, id: "foreign", name: "Other agent model" }] },
         });
         const trigger = page.locator("[data-chat-model-select]");

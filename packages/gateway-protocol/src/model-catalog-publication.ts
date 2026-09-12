@@ -1,7 +1,11 @@
-import type { ModelsListResult } from "./schema/agents-models-skills.js";
+import type { ModelsListParams, ModelsListResult } from "./schema/agents-models-skills.js";
+import type { ConnectParams } from "./schema/frames.js";
 
-/** Published configured draft projection for one authenticated connection's initial agent. */
+export type ModelCatalogScope = Pick<ModelsListParams, "agentId" | "sessionKey">;
+export type ModelCatalogTarget = NonNullable<ConnectParams["modelCatalog"]>;
+
+/** Published configured projection for one authenticated connection's initial scope. */
 export type ModelsSnapshotEvent = {
-  agentId: string;
+  scope: ModelCatalogScope;
   catalog: ModelsListResult;
 };

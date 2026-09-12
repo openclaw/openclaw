@@ -69,6 +69,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   buildConnectPlan: (params: {
     nonce: string | null;
     challengeTs: number | null | undefined;
+    serverCapabilities: readonly string[];
     generation: number;
   }) => TPlan | Promise<TPlan>;
   buildConnectParams: (plan: TPlan) => unknown;

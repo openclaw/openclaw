@@ -520,8 +520,9 @@ class OpenClawShell
       }
     }
     if (client && event.event === "models.snapshot") {
+      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
       const publication = event.payload as ModelsSnapshotEvent;
-      seedModelCatalogCache(client, publication.agentId, publication.catalog);
+      seedModelCatalogCache(client, publication.scope, publication.catalog);
     }
     this.shellGateway.handleGatewayEvent(event);
   };

@@ -66,13 +66,13 @@ export function publishModelCatalogResult(
 
 export function seedModelCatalogCache(
   client: ModelCatalogClient,
-  agentId: string,
+  scope: ModelCatalogReadScope,
   result: ModelCatalogResult,
 ): void {
   if (result.refreshFailed) {
     return;
   }
-  const params = modelCatalogParams({ agentId });
+  const params = modelCatalogParams(scope);
   const cache = modelCatalogCache.get(client) ?? new Map<string, ModelCatalogEntry>();
   const entry: ModelCatalogEntry = { scope: params, pending: new Map() };
   publishModelCatalogResult(entry, result);

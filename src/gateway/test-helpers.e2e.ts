@@ -7,7 +7,11 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
-import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import {
+  type HelloOk,
+  type ModelCatalogTarget,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import {
   acquireGatewayTestWebSocket,
@@ -47,7 +51,7 @@ export async function connectGatewayClient(params: {
   deviceToken?: string;
   origin?: string;
   clientName?: GatewayClientName;
-  modelCatalogAgentId?: string;
+  modelCatalog?: ModelCatalogTarget;
   clientDisplayName?: string;
   clientVersion?: string;
   mode?: GatewayClientMode;
@@ -103,7 +107,7 @@ export async function connectGatewayClient(params: {
       minProtocol: params.minProtocol,
       maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
-      modelCatalogAgentId: params.modelCatalogAgentId,
+      modelCatalog: params.modelCatalog,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
       platform,
@@ -279,7 +283,7 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientName?: GatewayClientName;
-  modelCatalogAgentId?: string;
+  modelCatalog?: ModelCatalogTarget;
   mode?: GatewayClientMode;
   origin?: string;
   clientDisplayName?: string;
@@ -311,7 +315,7 @@ export async function startGatewayWithClient(params: {
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
       clientName: params.clientName,
-      modelCatalogAgentId: params.modelCatalogAgentId,
+      modelCatalog: params.modelCatalog,
       mode: params.mode,
       origin: params.origin,
       clientDisplayName: params.clientDisplayName,
