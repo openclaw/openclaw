@@ -3,6 +3,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { cleanupManagedOutgoingMediaRecords } from "../gateway/managed-image-attachments.js";
 import {
   insertManagedImageRecord,
@@ -10,6 +14,7 @@ import {
   readManagedImageRecord,
 } from "../gateway/managed-image-record-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -98,6 +103,124 @@ describe("cleanOldMedia managed-subtree retention", () => {
 
     expect(cleanup.deletedFileCount).toBe(0);
     await expect(fs.stat(legacyOrphanPath)).resolves.toMatchObject({ size: 15 });
+  });
+
+  it("retains transcript-referenced inbound media while sweeping unreferenced inbound media", async () => {
+    const referenced = await store.saveMediaBuffer(Buffer.from("user photo"), "image/png");
+    const orphan = await store.saveMediaBuffer(Buffer.from("orphan"), "image/png");
+    const sessionKey = "agent:main:dm:user-1";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId: "session-inbound-1", updatedAt: 1 },
+    );
+    appendTranscriptMessageSync(
+      { agentId: "main", sessionId: "session-inbound-1", sessionKey },
+      {
+        message: buildPersistedUserTurnMessage({
+          text: "what is in this picture?",
+          timestamp: 1,
+          media: [
+            { url: `media://inbound/${referenced.id}`, contentType: "image/png", kind: "image" },
+          ],
+        }),
+      },
+    );
+    const stale = Date.now() - 25 * 60 * 60_000;
+    await Promise.all(
+      [referenced.path, orphan.path].map((filePath) =>
+        fs.utimes(filePath, stale / 1000, stale / 1000),
+      ),
+    );
+
+    await store.cleanOldMedia(60 * 60_000, { recursive: true, pruneEmptyDirs: true });
+
+    await expect(fs.stat(orphan.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(store.resolveMediaBufferPath(referenced.id, "inbound")).resolves.toBe(
+      referenced.path,
+    );
+  });
+
+  it("retains only expired candidates out of the historical inbound reference set", async () => {
+    const historical = await store.saveMediaBuffer(Buffer.from("historical"), "image/png");
+    const candidate = await store.saveMediaBuffer(Buffer.from("candidate"), "image/png");
+    const sessionKey = "agent:main:dm:user-2";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId: "session-inbound-2", updatedAt: 1 },
+    );
+    for (const media of [historical, candidate]) {
+      appendTranscriptMessageSync(
+        { agentId: "main", sessionId: "session-inbound-2", sessionKey },
+        {
+          message: buildPersistedUserTurnMessage({
+            text: "look at this",
+            timestamp: 1,
+            media: [
+              { url: `media://inbound/${media.id}`, contentType: "image/png", kind: "image" },
+            ],
+          }),
+        },
+      );
+    }
+
+    const { collectTranscriptReferencedInboundMediaIds } =
+      await import("./inbound-transcript-refs.js");
+
+    await expect(collectTranscriptReferencedInboundMediaIds(new Set())).resolves.toEqual(new Set());
+    const retained = await collectTranscriptReferencedInboundMediaIds(new Set([candidate.id]));
+    expect(retained).toEqual(new Set([candidate.id]));
+    expect(retained?.has(historical.id)).toBe(false);
+  });
+
+  it("sweeps an unreferenced expired candidate without blocking maintenance on a large history", async () => {
+    const orphan = await store.saveMediaBuffer(Buffer.from("unreferenced"), "image/png");
+    const sessionKey = "agent:main:dm:user-3";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId: "session-inbound-3", updatedAt: 1 },
+    );
+    for (let index = 0; index < 450; index += 1) {
+      appendTranscriptMessageSync(
+        { agentId: "main", sessionId: "session-inbound-3", sessionKey },
+        {
+          message: buildPersistedUserTurnMessage({
+            text: `history ${index}`,
+            timestamp: 1,
+            media: [
+              {
+                url: `media://inbound/history-${index}.png`,
+                contentType: "image/png",
+                kind: "image",
+              },
+            ],
+          }),
+        },
+      );
+    }
+
+    const { collectTranscriptReferencedInboundMediaIds } =
+      await import("./inbound-transcript-refs.js");
+
+    let eventLoopTurns = 0;
+    let counting = true;
+    const countTurn = () => {
+      if (!counting) {
+        return;
+      }
+      eventLoopTurns += 1;
+      setImmediate(countTurn);
+    };
+    setImmediate(countTurn);
+    const referenced = await collectTranscriptReferencedInboundMediaIds(new Set([orphan.id]));
+    counting = false;
+
+    expect(referenced).toEqual(new Set());
+    expect(eventLoopTurns).toBeGreaterThanOrEqual(2);
+
+    const stale = Date.now() - 25 * 60 * 60_000;
+    await fs.utimes(orphan.path, stale / 1000, stale / 1000);
+    await store.cleanOldMedia(60 * 60_000, { recursive: true, pruneEmptyDirs: true });
+    await expect(fs.stat(orphan.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("retires only stale outbound staging and its trusted HTML provenance", async () => {
