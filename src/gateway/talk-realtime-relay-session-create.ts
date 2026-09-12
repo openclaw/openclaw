@@ -9,6 +9,7 @@ import {
   type RealtimeVoiceCloseReason,
 } from "../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
+import { resolveRealtimeVoiceInterruptResponseOnInputAudio } from "../talk/realtime-session-policy.js";
 import type { TalkEventInput } from "../talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
@@ -219,7 +220,9 @@ export function createTalkRealtimeRelaySession(
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
-    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
+    interruptResponseOnInputAudio: resolveRealtimeVoiceInterruptResponseOnInputAudio(
+      params.providerConfig.interruptResponseOnInputAudio,
+    ),
     tools: params.tools,
     ...(runControl.handleDelegationInput
       ? {
