@@ -340,7 +340,7 @@ describe("oxlint config", () => {
     const project = spawnSync(
       process.execPath,
       [
-        path.resolve("node_modules/@typescript/native-preview/bin/tsgo"),
+        path.resolve("node_modules/typescript-native/bin/tsc"),
         "--showConfig",
         "--project",
         "extensions/tsconfig.json",

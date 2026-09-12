@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+  writeNativeFixtureFile,
+} from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
@@ -134,6 +138,7 @@ process.exitCode = result.status ?? 1;
     if (process.platform === "win32") {
       write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
     }
+    overrideNativeFixtureExecutable(root, launcher);
     const cwd = path.join(root, "src");
     const result = runTsgoEntry(root, ["-p", "tsconfig.json"], { cwd });
     expect(result.error).toBeUndefined();

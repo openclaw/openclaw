@@ -8,6 +8,16 @@ read_when:
 
 ## Shared test state and process helpers
 
+The `pnpm tsgo` lanes use stable TypeScript 7 through the `typescript-native`
+package alias. Their existing tool owner resolves that package's native executable
+directly, so a `tsc` bin link cannot accidentally select TypeScript 6. TypeScript 6
+remains the in-process compiler API dependency for Code Mode's filesystem-free
+preflight, plugin source transforms, and packaged declaration compilation with
+hermetic `Program` membership receipts. TypeScript 7's package root exports version
+metadata instead of that API. Remove the TypeScript 6 dependency only after its
+callers can preserve those contracts through a maintained replacement, including
+declaration input capture and failure handling.
+
 `build-all`, standalone tsdown builds, tsgo, SDK declaration preparation,
 package-boundary checks, and dependent lint use checkout-local ownership at
 `.artifacts/dist-artifacts.lock`. Ownership spans

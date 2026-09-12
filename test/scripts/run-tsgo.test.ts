@@ -1,6 +1,7 @@
 // Run Tsgo tests cover run tsgo script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
@@ -15,6 +16,7 @@ import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { overrideNativeFixtureExecutable } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -28,7 +30,9 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
 
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
-  expect(result.stdout).toMatch(/^Version \d/m);
+  const nativeManifest = createRequire(import.meta.url).resolve("typescript-native/package.json");
+  const nativePackage: { version: string } = JSON.parse(fs.readFileSync(nativeManifest, "utf8"));
+  expect(result.stdout.trim()).toBe(`Version ${nativePackage.version}`);
 }, 30_000);
 
 it.each([false, true])(
@@ -41,7 +45,22 @@ it.each([false, true])(
     fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
     fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
     fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-    fs.symlinkSync(path.resolve("node_modules"), path.join(primary, "node_modules"), "junction");
+    const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
+    const nativeRoot = path.join(sharedInstall, "node_modules/typescript-native");
+    const resolverExecuted = path.join(primary, "resolver-executed");
+    fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
+    fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
+    fs.writeFileSync(
+      path.join(nativeRoot, "lib/getExePath.js"),
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(resolverExecuted)}, "executed");
+export default () => process.execPath;\n`,
+    );
+    fs.symlinkSync(
+      path.join(sharedInstall, "node_modules"),
+      path.join(primary, "node_modules"),
+      "junction",
+    );
     const localModules = path.join(root, "node_modules");
     if (linked) {
       fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
@@ -60,6 +79,7 @@ it.each([false, true])(
     expect(result.stderr).toContain("Declaration input escapes checkout");
     expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
     expect(fs.existsSync(localModules)).toBe(linked);
+    expect(fs.existsSync(resolverExecuted)).toBe(false);
   },
 );
 
@@ -313,6 +333,7 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     const fakeTsgo = path.join(binDir, "tsgo");
     fs.writeFileSync(fakeTsgo, body, "utf8");
     fs.chmodSync(fakeTsgo, 0o755);
+    overrideNativeFixtureExecutable(cwd, fakeTsgo);
   }
 
   // The fake compiler is a grandchild in its own process group, so spawnSync's

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -41,10 +41,20 @@ function dynamicEdgeExpressions(sourceFile: ts.SourceFile) {
 /** Resolve the complete executable and non-module input graph for one declaration writer. */
 export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generatorEntry: string) {
   const root = fs.realpathSync(rootDir);
+  const nativeManifest = createRequire(path.join(root, "package.json")).resolve(
+    "typescript-native/package.json",
+  );
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
     [
       "scripts/lib/dist-artifact-ownership.mts",
       { expressions: ["script"], targets: [generatorEntry] },
+    ],
+    [
+      "scripts/lib/local-check-runtime.mts",
+      {
+        expressions: ['inputs.assert(path.join(nativeRoot, "lib/getExePath.js"))'],
+        targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
     ],
     [
       "scripts/lib/tsdown-declaration-inputs.mts",

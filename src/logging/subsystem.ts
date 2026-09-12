@@ -331,14 +331,10 @@ function logToFile(
   if (level === "silent") {
     return;
   }
-  const method = fileLogger[level];
-  if (typeof method !== "function") {
-    return;
-  }
   if (meta && Object.keys(meta).length > 0) {
-    method.call(fileLogger, meta, message);
+    fileLogger[level](meta, message);
   } else {
-    method.call(fileLogger, message);
+    fileLogger[level](message);
   }
 }
 

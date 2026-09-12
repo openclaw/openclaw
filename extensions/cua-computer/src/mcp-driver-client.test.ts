@@ -127,6 +127,7 @@ function sessionState(scope: "window" | "desktop") {
     session: "openclaw-test",
     capture_scope: scope,
     effective_scope: scope,
+    desktop_capture_authorized: scope === "desktop",
     desktop_unlocked: scope === "desktop",
     escalation_reason: null,
     escalation_detail: null,
@@ -302,7 +303,10 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
-    await driver.escalateScope(EscalationReason.Other);
+    await expect(driver.escalateScope(EscalationReason.Other)).resolves.toMatchObject({
+      desktopCaptureAuthorized: true,
+      desktopUnlocked: true,
+    });
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });

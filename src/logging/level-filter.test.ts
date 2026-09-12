@@ -174,7 +174,9 @@ describe("getChildLogger minLevel inheritance", () => {
     const base = logging.getLogger();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const records: unknown[] = [];
-    base.attachTransport((record) => records.push(record));
+    base.attachTransport((record) => {
+      records.push(record);
+    });
 
     const child = logging.toPinoLikeLogger(base, "info").child({ component: "test" });
     child.warn("filtered warning");

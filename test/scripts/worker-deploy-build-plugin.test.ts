@@ -51,7 +51,7 @@ describe("worker deploy build plugin", () => {
     const root = tempDirs.make("openclaw-worker-complete-graph-");
     const entrySource = path.resolve("src/worker/worker-deploy-entry.ts");
     const highlightSource = fs.realpathSync(path.resolve("node_modules/highlight.js/lib/index.js"));
-    const bundles = await build({
+    const { bundles } = await build({
       ...config,
       config: false,
       outDir: path.join(root, "dist"),
@@ -159,7 +159,7 @@ console.log("portable worker syntax highlighting passed");
         `export { runDesktopWebSocketRuntimeProbe } from ${JSON.stringify(path.resolve("src/gateway/desktop/websocket-runtime.test-support.ts"))};`,
       ].join("\n"),
     );
-    const bundles = await build({
+    const { bundles } = await build({
       ...workerConfig,
       config: false,
       entry: { "worker/worker": source },
@@ -391,7 +391,7 @@ export async function createAttachedBrowserToolRuntime(params) {
 
     const transformed = plugin.transform.call({ error: fail }, source, coreBundlePath);
 
-    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.62.1"};');
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.63.0"};');
     expect(transformed).not.toContain(
       'packageJSON = require(import_path9.default.join(packageRoot, "package.json"));',
     );
@@ -415,7 +415,7 @@ export async function createAttachedBrowserToolRuntime(params) {
 
     const transformed = plugin.transform.call({ error: fail }, source, resolvedId);
 
-    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.62.1"};');
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.63.0"};');
   });
 
   it("fails closed when the dependency-owned bootstrap shape changes", () => {

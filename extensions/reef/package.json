@@ -8,7 +8,7 @@
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "ws": "8.21.3",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "openclaw": {
     "extensions": [

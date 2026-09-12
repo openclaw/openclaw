@@ -1,5 +1,5 @@
 diff --git a/lib/client.d.ts b/lib/client.d.ts
-index 2cfc6b697f206c53d309c105915c1e7a04603a60..3b441441b89b5eab79af48115381cd7fee0934f0 100644
+index b13b4fa4b1317bb0432c40d477e00f925f7e8253..bcefcb4bb0c664cc6269d5821abc345c0f8c555c 100644
 --- a/lib/client.d.ts
 +++ b/lib/client.d.ts
 @@ -710,6 +710,7 @@ export declare enum ClientEvent {
@@ -20,7 +20,7 @@ index 2cfc6b697f206c53d309c105915c1e7a04603a60..3b441441b89b5eab79af48115381cd7f
      [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
      [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
 diff --git a/lib/client.js b/lib/client.js
-index eb0462b6d87934c7577299867786eb0f1790315b..14eafe15cc8448b140813f5319f34d648164a64a 100644
+index 5754a31e6180865428d302c32c50fa3abec931b5..e292728b58ec68d683df70e450281018ddde2b20 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -227,6 +227,7 @@ export let ClientEvent = /*#__PURE__*/function (ClientEvent) {
@@ -107,7 +107,7 @@ index eaf158f49414ef510577b8e9397aff51f0630df6..33c86a52a5fe7268d097c0aacc8391aa
      }));
  
 diff --git a/src/client.ts b/src/client.ts
-index e8cadfb3cb11a4ea01807adf275b376fe363e16c..46e1b9e44a6a6cb23de805199b6f69a41946bd13 100644
+index 24cd760dbda0eeec8947a6110f6489be8513156d..d1951dc5823b0f10c7cfd0d0fc67bf7b1b02878f 100644
 --- a/src/client.ts
 +++ b/src/client.ts
 @@ -1017,6 +1017,7 @@ export enum ClientEvent {

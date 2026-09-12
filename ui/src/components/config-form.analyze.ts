@@ -69,14 +69,8 @@ const SUPPORTED_FORM_SCHEMA_KEYS = new Set([
   "allOf",
   "not",
 ]);
-const RENDERABLE_UNION_TYPES = new Set([
-  "string",
-  "number",
-  "integer",
-  "boolean",
-  "object",
-  "array",
-]);
+const SCALAR_UNION_TYPES = new Set(["string", "number", "integer", "boolean"]);
+const RENDERABLE_UNION_TYPES = new Set([...SCALAR_UNION_TYPES, "object", "array"]);
 
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
@@ -251,12 +245,24 @@ export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
 }
 
 function normalizeSchemaNode(
-  schema: JsonSchema,
+  input: JsonSchema,
   path: Array<string | number>,
   compositionBranch = false,
   inheritedCompositionType?: string,
   inheritedCompositionAllowsNull?: boolean,
 ): ConfigSchemaAnalysis {
+  // Zod emits primitive unions as type arrays; keep their branch editor and
+  // sibling constraints on the same normalization path as anyOf schemas.
+  const schema =
+    !compositionBranch &&
+    !input.anyOf &&
+    !input.oneOf &&
+    !input.allOf &&
+    Array.isArray(input.type) &&
+    new Set(input.type.filter((type) => type !== "null")).size > 1 &&
+    input.type.every((type) => type === "null" || SCALAR_UNION_TYPES.has(type))
+      ? { ...input, type: undefined, anyOf: input.type.map((type) => ({ type })) }
+      : input;
   const unsupported = new Set<string>();
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";

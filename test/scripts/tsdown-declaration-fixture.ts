@@ -112,7 +112,6 @@ export function createFixture(
   for (const name of [
     ".bin",
     "@openclaw/fs-safe",
-    "@typescript/native-preview",
     "playwright-core",
     "tsx",
     ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),

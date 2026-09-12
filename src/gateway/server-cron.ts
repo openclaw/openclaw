@@ -83,7 +83,7 @@ import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
-import { getChildLogger } from "../logging.js";
+import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
   PluginHookCronChangedEvent,
@@ -433,6 +433,7 @@ export function buildGatewayCronService(params: {
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
+  const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
   // Fence the raw context reference behind its Gateway instance lifecycle so a
   // long-running scheduled turn cannot resolve a retired context after shutdown.
   const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
@@ -1045,12 +1046,15 @@ export function buildGatewayCronService(params: {
       await sendGatewayCronFailureAlert({
         ...alert,
         deps: params.deps,
-        logger: cronLogger,
+        logger: cronServiceLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       }),
-    log: getChildLogger({ module: "cron", storeKey: storePath }),
+    log: toPinoLikeLogger(
+      getChildLogger({ module: "cron", storeKey: storePath }),
+      getResolvedLoggerSettings().level,
+    ),
     onEvent: (evt) => {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
@@ -1153,7 +1157,7 @@ export function buildGatewayCronService(params: {
           evt,
           job,
           deps: params.deps,
-          logger: cronLogger,
+          logger: cronServiceLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           ssrfPolicy: webhookSsrfPolicy,
@@ -1228,7 +1232,7 @@ export function buildGatewayCronService(params: {
           return undefined;
         }
       }, "cron:watcher-state"),
-    logger: cronLogger,
+    logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
   exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
   const updateCron = cron.update.bind(cron);
@@ -1265,7 +1269,7 @@ export function buildGatewayCronService(params: {
           }),
         "cron:stream-batch",
       ),
-    logger: cronLogger,
+    logger: cronServiceLogger,
   });
   const routeCurrentStreamJob = async (
     jobId: string,
@@ -1549,7 +1553,7 @@ export function buildGatewayCronService(params: {
           const { ok } = await reconcile({
             cron,
             cfg,
-            logger: cronLogger,
+            logger: cronServiceLogger,
             commitGuard: assertCurrent,
           });
           assertCurrent();

@@ -79,21 +79,23 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
     expect(template).toBeDefined();
     const bundles = format
       ? []
-      : await build({
-          ...template,
-          config: false,
-          clean: false,
-          entry: {
-            [entryName]: entry,
-            ...(binding === "inventory"
-              ? { "extensions/openai/capability-catalog": companion }
-              : {}),
-          },
-          outDir,
-          dts: false,
-          logLevel: "silent",
-          plugins: [createPluginInventoryModuleRefsPlugin(root)],
-        });
+      : (
+          await build({
+            ...template,
+            config: false,
+            clean: false,
+            entry: {
+              [entryName]: entry,
+              ...(binding === "inventory"
+                ? { "extensions/openai/capability-catalog": companion }
+                : {}),
+            },
+            outDir,
+            dts: false,
+            logLevel: "silent",
+            plugins: [createPluginInventoryModuleRefsPlugin(root)],
+          })
+        ).bundles;
     if (format) {
       const plan = await buildPluginNpmRuntime({ packageDir: root, logLevel: "silent" });
       expect(plan?.runtimeBuildOutputs).toEqual([

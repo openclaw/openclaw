@@ -55,8 +55,8 @@ type ApplyGroupGatingParams = {
   selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: {
-    debug: (obj: unknown, msg: string) => void;
-    warn: (obj: unknown, msg: string) => void;
+    debug: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
   };
 };
 

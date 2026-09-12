@@ -11,7 +11,7 @@
     "@twurple/api-call": "8.1.4",
     "@twurple/auth": "8.1.4",
     "@twurple/chat": "8.1.4",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

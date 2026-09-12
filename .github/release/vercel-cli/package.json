@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.1.0",
-    "vercel": "59.5.0"
+    "sandbox": "4.2.1",
+    "vercel": "59.11.7"
   },
   "overrides": {
     "@tootallnate/once@2.0.0": "2.0.1",

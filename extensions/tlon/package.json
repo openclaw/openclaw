@@ -12,7 +12,7 @@
     "@aws-sdk/s3-request-presigner": "3.1127.0",
     "@tloncorp/tlon-skill": "0.5.0",
     "@urbit/aura": "3.0.0",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

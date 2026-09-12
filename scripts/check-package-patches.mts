@@ -15,7 +15,7 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["vitest@5.0.0", "patches/vitest@5.0.0.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
-  ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
+  ["matrix-js-sdk@42.3.0", "patches/matrix-js-sdk@42.3.0.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);

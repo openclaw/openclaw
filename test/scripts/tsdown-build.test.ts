@@ -2540,7 +2540,7 @@ describe("runTsdownBuildInvocation", () => {
           'import { build } from "tsdown";',
           ...(native
             ? [
-                'const nativePackage = import.meta.resolve("@typescript/native-preview/package.json");',
+                'const nativePackage = import.meta.resolve("typescript-native/package.json");',
                 'const { default: getExePath } = await import(new URL("lib/getExePath.js", nativePackage).href);',
               ]
             : []),

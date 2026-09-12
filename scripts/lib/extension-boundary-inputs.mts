@@ -59,7 +59,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const assertInput = (file: string) => boundary.assert(file);
     // Bind compact receipt lib names to this checkout's compiler, never ambient cwd.
     const require = createRequire(path.join(boundary.root, "package.json"));
-    const nativePackage = assertInput(require.resolve("@typescript/native-preview/package.json"));
+    const nativePackage = assertInput(require.resolve("typescript-native/package.json"));
     const nativeRoot = path.dirname(nativePackage);
     const executableResolver = assertInput(path.join(nativeRoot, "lib/getExePath.js"));
     // The native launcher prefixes long Windows executables with \\?\; normalize
@@ -67,22 +67,23 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const executable: string = require(executableResolver).default();
     const nativeBinary = assertInput(fileURLToPath(pathToFileURL(executable)));
     const platformPackage = createRequire(nativePackage).resolve(
-      `@typescript/native-preview-${process.platform}-${process.arch}/package.json`,
+      `@typescript/typescript-${process.platform}-${process.arch}/package.json`,
     );
+    const platformLibraryRoot = path.join(path.dirname(platformPackage), "lib");
     const toolchainFiles = [
       nativePackage,
       platformPackage,
       nativeBinary,
-      path.join(boundary.root, "node_modules/.bin/tsgo"),
-      path.join(nativeRoot, "bin/tsgo"),
-      path.join(nativeRoot, "lib/tsgo.js"),
+      path.join(platformLibraryRoot, process.platform === "win32" ? "tsc.exe" : "tsc"),
+      path.join(nativeRoot, "bin/tsc"),
+      path.join(nativeRoot, "lib/tsc.js"),
       executableResolver,
       require.resolve("typescript"),
       require.resolve("typescript/package.json"),
     ].map(assertInput);
     super(boundary.root, { toolchainFiles, generatorInputs: GENERATOR_INPUTS, assertInput });
     this.boundary = boundary;
-    this.libraryRoot = path.dirname(fs.realpathSync.native(nativeBinary));
+    this.libraryRoot = fs.realpathSync.native(platformLibraryRoot);
   }
 
   record(

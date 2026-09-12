@@ -14,7 +14,10 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+} from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
   it("covers the repository test roots exactly once with headroom below the hard cap", () => {
@@ -334,6 +337,7 @@ process.exit(result.status??1);
 `,
       );
       fs.chmodSync(compiler, 0o755);
+      overrideNativeFixtureExecutable(root, compiler);
       const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
       const check = async (paths = [leaf]) => {

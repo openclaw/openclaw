@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "ws": "8.21.3",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

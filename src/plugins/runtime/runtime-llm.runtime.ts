@@ -28,6 +28,7 @@ import {
   isIsolatedAgentRuntimeRequest,
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
+import { writeRuntimeLog } from "./runtime-logging.js";
 import type {
   LlmCompleteCaller,
   LlmCompleteParams,
@@ -72,10 +73,10 @@ const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
 function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
   return {
-    debug: (message, meta) => logger.debug?.(meta, message),
-    info: (message, meta) => logger.info(meta, message),
-    warn: (message, meta) => logger.warn(meta, message),
-    error: (message, meta) => logger.error(meta, message),
+    debug: (message, meta) => writeRuntimeLog(logger, "debug", message, meta),
+    info: (message, meta) => writeRuntimeLog(logger, "info", message, meta),
+    warn: (message, meta) => writeRuntimeLog(logger, "warn", message, meta),
+    error: (message, meta) => writeRuntimeLog(logger, "error", message, meta),
   };
 }
 

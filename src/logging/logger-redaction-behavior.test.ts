@@ -7,7 +7,13 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
+import {
+  getChildLogger,
+  getLogger,
+  resetLogger,
+  setLoggerOverride,
+  toPinoLikeLogger,
+} from "../logging.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
@@ -213,7 +219,7 @@ describe("file log redaction", () => {
     setLoggerOverride({ level: "info", file: logPath });
     const trace = { traceId: TRACE_ID, spanId: SPAN_ID };
 
-    getLogger().info(
+    toPinoLikeLogger(getLogger(), "info").info(
       { trace },
       {
         toJSON() {
@@ -262,7 +268,7 @@ describe("file log redaction", () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info(...args);
+    toPinoLikeLogger(getLogger(), "info").info(...args);
 
     const [line] = (await readLogFile(logPath)).trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
