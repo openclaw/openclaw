@@ -19,6 +19,7 @@ describe("early service capability routing", () => {
   it.each([
     ["gateway", "install"],
     ["gateway", "install", "--update-executor", "run"],
+    ["gateway", "install", "--update-executor", "--json", "check"],
     ["gateway", "install", "--update-executor", "check", "--update-executor", "run"],
     ["gateway", "install", "--token", "--update-executor", "check"],
     ["gateway", "install", "--", "--update-executor", "check"],

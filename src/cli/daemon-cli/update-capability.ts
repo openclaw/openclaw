@@ -15,7 +15,11 @@ export function tryRunGatewayServiceUpdateCapabilityProbe(argv: string[]): boole
   ) {
     return false;
   }
-  const probe = options.filter((option) => option !== "--json");
+  // A JSON flag between the executor option and its mode is an invalid value.
+  const probe = options.slice(
+    options[0] === "--json" ? 1 : 0,
+    options.at(-1) === "--json" ? -1 : undefined,
+  );
   if (
     !(
       (probe.length === 2 && probe[0] === "--update-executor" && probe[1] === "check") ||
