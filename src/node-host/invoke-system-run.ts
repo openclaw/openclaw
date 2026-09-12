@@ -108,6 +108,8 @@ type SystemRunDeniedReason =
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
+  | "timeout"
+  | "response-lost"
   | "cwd-unavailable"
   | "permission:screenRecording";
 
@@ -197,6 +199,8 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "allowlist-miss":
     case "execution-plan-miss":
     case "companion-unavailable":
+    case "timeout":
+    case "response-lost":
     case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;
@@ -314,9 +318,16 @@ async function sendSystemRunDenied(
   );
   await opts.sendInvokeResult({
     ok: false,
-    // A missing companion reply can follow execution; it is not a policy denial.
+    // A missing or late companion reply can follow execution; it is not a policy denial.
     error: {
-      code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
+      code:
+        params.reason === "companion-unavailable"
+          ? "UNAVAILABLE"
+          : params.reason === "timeout"
+            ? "TIMEOUT"
+            : params.reason === "response-lost"
+              ? "UNKNOWN"
+              : "SYSTEM_RUN_DENIED",
       message: params.message,
     },
   });
