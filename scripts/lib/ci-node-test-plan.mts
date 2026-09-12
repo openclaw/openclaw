@@ -874,6 +874,7 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-gateway-core-2",
   "agentic-gateway-core-3",
   "agentic-gateway-methods",
+  "agentic-gateway-server-isolated",
   "auto-reply-reply-dispatch",
   "auto-reply-reply-dispatch-core",
   "auto-reply-reply-dispatch-delivery",
@@ -2437,6 +2438,7 @@ function readCompleteSplitGenerationSeconds(
 // must enumerate exactly its config's include set so a stripe union stays a
 // complete, non-overlapping partition of the suite.
 const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
+  ["agentic-gateway-server-isolated", () => gatewayServerIsolatedTestFiles],
   ["agentic-cli-process", () => cliProcessTestFiles],
   ["agentic-agents-support", listAgentSupportTestFiles],
   [
