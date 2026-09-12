@@ -100,8 +100,10 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
   async function createPolicyDownloadPage() {
     const rootDir = tempDirs.make("openclaw-download-policy-");
     const payload = Buffer.from("policy download proof\n");
+    let downloadRequestCount = 0;
     const downloadServer = createServer((request, response) => {
       if (request.url === "/proof.txt") {
+        downloadRequestCount += 1;
         response.writeHead(200, {
           "content-disposition": 'attachment; filename="proof.txt"',
           "content-length": String(payload.byteLength),
@@ -143,7 +145,16 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       }
       return match[0];
     };
-    return { cdpUrl, controlled, page, payload, refFor, rootDir, targetId };
+    return {
+      cdpUrl,
+      controlled,
+      downloadRequestCount: () => downloadRequestCount,
+      page,
+      payload,
+      refFor,
+      rootDir,
+      targetId,
+    };
   }
 
   function observeLocatorAction(page: import("playwright-core").Page, method: "click" | "fill") {
@@ -390,6 +401,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
 
       const result = await pending;
       await expect(fs.readFile(result.path)).resolves.toEqual(fixture.payload);
+      expect(fixture.downloadRequestCount()).toBe(1);
     },
     20_000,
   );
@@ -424,6 +436,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
 
       await expect(pending).rejects.toThrow(/blocked|private/i);
       await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(fixture.downloadRequestCount()).toBe(0);
     },
     20_000,
   );

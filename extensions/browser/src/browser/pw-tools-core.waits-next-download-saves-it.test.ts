@@ -470,7 +470,7 @@ describe("pw-tools-core", () => {
         url: "http://169.254.169.254/latest/meta-data/",
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
         browserProxyMode: undefined,
-        signal: undefined,
+        signal: expect.any(AbortSignal),
       });
     });
   });

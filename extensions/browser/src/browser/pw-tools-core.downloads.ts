@@ -26,6 +26,7 @@ import {
   refLocator,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
+  withPageNavigationRequestGuard,
 } from "./pw-session.js";
 import {
   clickViaPlaywright,
@@ -34,6 +35,8 @@ import {
 import {
   awaitActionWithAbort,
   createAbortPromiseWithListener,
+  hasInteractionNavigationPolicy,
+  interactionNavigationPolicy,
   type NavigationTargetOptions,
   runCancellablePageInteraction,
 } from "./pw-tools-core.interactions.navigation.js";
@@ -296,18 +299,40 @@ export async function waitForDownloadViaPlaywright(
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
-
-  const capture = createExplicitDownloadCapture({
+  const navigationPolicy = interactionNavigationPolicy(opts);
+  const policyDenial = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, policyDenial.signal])
+    : policyDenial.signal;
+  const waitForCapture = async () => {
+    const capture = createExplicitDownloadCapture({
+      page,
+      state,
+      timeoutMs: timeout,
+      outPath: opts.path,
+      rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
+      signal,
+      ...navigationPolicy,
+    });
+    return await capture.promise;
+  };
+  if (!hasInteractionNavigationPolicy(navigationPolicy)) {
+    return await waitForCapture();
+  }
+  return await withPageNavigationRequestGuard({
     page,
-    state,
-    timeoutMs: timeout,
-    outPath: opts.path,
-    rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
-    signal: opts.signal,
-    ssrfPolicy: opts.ssrfPolicy,
-    browserProxyMode: opts.browserProxyMode,
+    ...navigationPolicy,
+    onPolicyDenied: (event) => {
+      if (event.state === "detected") {
+        policyDenial.abort(
+          event.error instanceof Error
+            ? event.error
+            : new Error("Browser navigation blocked by policy", { cause: event.error }),
+        );
+      }
+    },
+    action: waitForCapture,
   });
-  return await capture.promise;
 }
 
 /** Clicks an element ref and saves the download triggered by that click. */
