@@ -453,7 +453,7 @@ raw callback string. Actor and source-message checks remain channel-owned.
 
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler performs a mutation or starts other side effects,
-    finish reading and validating its body, then call
+    finish reading and validating its body and waiting for queued work, then call
     `await getPluginRuntimeGatewayRequestScope()?.revalidate?.()` from
     `openclaw/plugin-sdk/plugin-runtime`. The request-scoped capability rechecks
     an admitted device credential and its original scopes through the Gateway
@@ -464,7 +464,8 @@ raw callback string. Actor and source-message checks remain channel-owned.
 
     This check authorizes the work about to start. It does not cancel an
     external operation already in progress. Revalidate again before later
-    independent mutations, such as saving an imported profile after relay I/O.
+    independent mutations, such as saving a published or imported profile after
+    relay I/O.
 
   </Step>
 

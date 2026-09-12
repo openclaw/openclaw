@@ -425,8 +425,6 @@ async function handleUpdateProfile(
     }
   }
 
-  await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
-
   // Merge with existing profile to preserve unknown fields
   const existingProfile = ctx.getConfigProfile(accountId) ?? {};
   const mergedProfile: NostrProfile = {
@@ -437,11 +435,13 @@ async function handleUpdateProfile(
   // Publish with mutex to prevent concurrent publishes
   try {
     const result = await withPublishLock(accountId, async () => {
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       return await publishNostrProfile(accountId, mergedProfile);
     });
 
     // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       await ctx.updateConfigProfile(accountId, mergedProfile);
       ctx.log?.info(`[${accountId}] Profile published to ${result.successes.length} relay(s)`);
     } else {
@@ -457,6 +457,9 @@ async function handleUpdateProfile(
       persisted: result.successes.length > 0,
     });
   } catch (err) {
+    if (res.writableEnded) {
+      return true;
+    }
     ctx.log?.error(`[${accountId}] Profile publish error: ${String(err)}`);
     sendJson(res, 500, { ok: false, error: `Publish failed: ${String(err)}` });
   }
