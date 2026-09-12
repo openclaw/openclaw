@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
+import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
+import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import type { GatewayServer, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
@@ -173,6 +176,9 @@ const gatewayLog = {
   error: vi.fn(),
 };
 const flushLogger = vi.fn(async () => {});
+const writeDiagnosticStabilityBundleForFailureSync = vi.fn(() => ({
+  message: "stability bundle recorded",
+}));
 const hasManagedProviderLocalServices = vi.fn(() => false);
 const stopManagedProviderLocalServices = vi.fn(async () => {});
 const cancelShutdownHardExitWatchdog = vi.fn();
@@ -288,6 +294,10 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 vi.mock("../../logging/logger.js", () => ({
   flushLogger: () => flushLogger(),
+}));
+
+vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
+  writeDiagnosticStabilityBundleForFailureSync,
 }));
 
 vi.mock("../../agents/provider-runtime-lifecycle.js", () => ({
@@ -1533,6 +1543,104 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it.each<{
+    signal: "SIGTERM" | "SIGUSR1";
+    honorsAbort: boolean;
+    supervisor: "systemd" | "launchd";
+    waitMs?: number;
+  }>([
+    { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd" },
+    { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
+    { signal: "SIGUSR1", honorsAbort: false, supervisor: "systemd" },
+    { signal: "SIGTERM", honorsAbort: false, supervisor: "launchd" },
+    { signal: "SIGUSR1", honorsAbort: false, supervisor: "launchd" },
+    { signal: "SIGUSR1", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
+    { signal: "SIGUSR1", honorsAbort: false, supervisor: "systemd", waitMs: 600_000 },
+  ])(
+    "bounds $supervisor $signal cleanup when a long provider call honors abort=$honorsAbort (wait=$waitMs)",
+    async ({ signal, honorsAbort, supervisor, waitMs }) => {
+      vi.clearAllMocks();
+      const unit = buildSystemdUnit({ programArguments: ["openclaw", "gateway", "run"] });
+      const stopTimeoutMs =
+        supervisor === "launchd"
+          ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000
+          : Number(unit.match(/^TimeoutStopSec=(\d+)$/m)?.[1]) * 1_000;
+      const successStatuses = unit
+        .match(/^SuccessExitStatus=(.+)$/m)?.[1]
+        ?.split(" ")
+        .map(Number);
+      if (supervisor === "systemd") {
+        process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+        setPlatform("linux");
+      } else {
+        process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+        setPlatform("darwin");
+      }
+      if (waitMs !== undefined) {
+        consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({ waitMs });
+      }
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const provider = createDeferredCore();
+        const connectionWork = new GatewayConnectionWork();
+        void connectionWork.track(() => provider.promise);
+        connectionWork.signal.addEventListener("abort", () => {
+          if (honorsAbort) {
+            provider.resolve();
+          }
+        });
+        const close = vi.fn<GatewayCloseFn>(async () => {
+          await connectionWork.drain();
+        });
+        const { start, started } = createSignaledStart(close);
+        const { runtime } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime });
+        await waitForStart(started);
+        const active = createActiveWorkSnapshot({ embeddedRuns: 1 });
+        createGatewayActiveWorkSnapshot.mockReturnValue(active);
+        waitForGatewayActiveWork.mockImplementationOnce(async (timeoutMs, options) => {
+          options?.onSnapshot?.(active);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, timeoutMs);
+          });
+          return { drained: false, snapshot: active };
+        });
+        vi.useFakeTimers();
+        try {
+          setTimeout(() => provider.resolve(), 600_000);
+          captureSignal(signal)();
+          const deadlineMs =
+            signal === "SIGTERM" || waitMs !== undefined
+              ? stopTimeoutMs - 5_000
+              : Math.min(310_000, stopTimeoutMs - 5_000);
+          expect(deadlineMs).toBeLessThan(stopTimeoutMs);
+          await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+          expect(connectionWork.signal.aborted).toBe(true);
+          if (!honorsAbort) {
+            expect(runtime.exit).not.toHaveBeenCalled();
+          }
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(successStatuses).toContain(runtime.exit.mock.calls[0]?.[0]);
+          expect(start).toHaveBeenCalledOnce();
+          if (!honorsAbort) {
+            expect(gatewayLog.warn).toHaveBeenCalledWith(
+              expect.stringMatching(/abandoning.*embeddedRuns=1/),
+            );
+            expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+              signal === "SIGTERM"
+                ? "gateway.stop_shutdown_timeout"
+                : "gateway.restart_shutdown_timeout",
+              undefined,
+            );
+          }
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it("still closes and exits when the direct-shutdown active-work drain fails", async () => {
     vi.clearAllMocks();
 
@@ -1554,6 +1662,92 @@ describe("runGatewayLoop", () => {
         restartExpectedMs: null,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("bounds managed provider service cleanup after server close", async () => {
+    vi.clearAllMocks();
+    hasManagedProviderLocalServices.mockReturnValue(true);
+    stopManagedProviderLocalServices.mockReturnValue(new Promise<void>(() => {}));
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime } = await createSignaledLoopHarness();
+      vi.useFakeTimers();
+      try {
+        captureSignal("SIGTERM")();
+        await vi.advanceTimersByTimeAsync(324_999);
+        expect(close).toHaveBeenCalledOnce();
+        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+          "gateway.stop_shutdown_timeout",
+          undefined,
+        );
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("bounds abandoned cleanup after a managed update parks the native service", async () => {
+    vi.clearAllMocks();
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    setPlatform("linux");
+    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
+      force: true,
+      reason: "update.run",
+      successorOwner: managedUpdateSuccessorOwner,
+    });
+    cancelManagedServiceUpdateHandoff.mockResolvedValue("restart-after-exit");
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, runtime } = await createSignaledLoopHarness();
+      close.mockReturnValue(new Promise<void>(() => {}));
+      vi.useFakeTimers();
+      try {
+        captureSignal("SIGUSR1")();
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
+          managedUpdateSuccessorOwner,
+        );
+        expect(close).toHaveBeenCalledOnce();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(start).toHaveBeenCalledOnce();
+        expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
+          managedUpdateSuccessorOwner,
+          "restore",
+        );
+        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+          "gateway.restart_shutdown_timeout",
+          undefined,
+        );
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
+    vi.clearAllMocks();
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({ force: true });
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime } = await createSignaledLoopHarness();
+      close.mockReturnValue(new Promise<void>(() => {}));
+      vi.useFakeTimers();
+      try {
+        captureSignal("SIGUSR1")();
+        await vi.advanceTimersByTimeAsync(325_000);
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -1995,7 +2189,7 @@ describe("runGatewayLoop", () => {
       });
       expectRestartCloseCall(closeSecond, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
-      expect(abortActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledTimes(3);
       expect(waitForActiveCronTaskRuns).toHaveBeenCalledTimes(2);
       expect(waitForActiveCronJobs).toHaveBeenCalledTimes(2);
       expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(2);
@@ -2010,7 +2204,10 @@ describe("runGatewayLoop", () => {
         start.mock.invocationCallOrder[1] ?? Infinity,
       );
       expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
+        abortActiveCronTaskRuns.mock.invocationCallOrder[1] ?? Infinity,
+      );
+      expect(abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        closeFirst.mock.invocationCallOrder[0] ?? Infinity,
       );
       expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
         retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,

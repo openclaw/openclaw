@@ -26,6 +26,18 @@ openclaw gateway restart --wait 30s
 
 `--wait <duration>` overrides the drain budget for a plain (non-safe) restart. Accepts bare milliseconds or unit suffixes `ms`, `s`, `m`, `h`, `d` (e.g. `30s`, `5m`, `1h30m`); `--wait 0` waits indefinitely. Not compatible with `--force` or `--safe`.
 
+Native service stop deadlines still apply: the Gateway caps the drain at 315 seconds
+for systemd's 330-second limit, and 5 seconds for launchd's 20-second limit. Both
+leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Longer model or
+heartbeat timeouts do not extend it. When available, the drain log reports the
+largest observed model request timeout for context.
+
+If work still ignores cancellation at the shutdown deadline, the process logs
+the remaining work categories, writes a diagnostic stability bundle, and exits
+with status `0`. It does not reuse that unfinished runtime for an in-process
+restart. This lets a requested stop finish cleanly and lets the service manager
+start a fresh Gateway for a restart.
+
 `--force` skips the active-work drain and restarts immediately. Plain `restart` normally uses the service-manager restart path.
 
 During an upgrade, restart records its reason and drain options in the existing

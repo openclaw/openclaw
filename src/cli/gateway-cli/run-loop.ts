@@ -71,6 +71,14 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
+// Blocker descriptions can contain task identities and request origins.
+function formatDrainCounts(snapshot: GatewayActiveWorkSnapshot): string {
+  return Object.entries(snapshot.counts)
+    .filter(([name, count]) => name !== "totalActive" && count > 0)
+    .map(([name, count]) => `${name}=${count}`)
+    .join(" ");
+}
+
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ host, port });
@@ -369,7 +377,7 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
-  const forceExitAfterStabilityBundle = async (reason: string) => {
+  const forceExitAfterStabilityBundle = async (reason: string, exitCode = 1) => {
     void hostLifecycle?.retire();
     try {
       writeStabilityBundle(reason);
@@ -382,9 +390,9 @@ export async function runGatewayLoop(params: {
       if (restoration) {
         params.completeBoot?.({ outcome: "forced_stop", reason });
         if (restoration === "restart-after-exit") {
-          await exitProcessAfterLogFlush(1, owner, "restore");
+          await exitProcessAfterLogFlush(exitCode, owner, "restore");
         } else {
-          exitProcess(1);
+          exitProcess(exitCode);
         }
       }
     }
@@ -563,6 +571,11 @@ export async function runGatewayLoop(params: {
   // turn to settle before systemd resorts to SIGKILL.
   const SUPERVISOR_STOP_TIMEOUT_MS = 330_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+  const nativeStopBudget = supervisorMode === "systemd" || supervisorMode === "launchd";
+  const acceptedShutdownTimeoutMs =
+    supervisorMode === "launchd"
+      ? eagerLifecycleRuntime.LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000 - 5_000
+      : SHUTDOWN_TIMEOUT_MS;
   const clearPendingStartupForceExitTimer = () => {
     clearTimeout(pendingStartupForceExitTimer ?? undefined);
     pendingStartupForceExitTimer = null;
@@ -674,14 +687,20 @@ export async function runGatewayLoop(params: {
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
+    let lastDrainCounts = "not observed";
     const armForceExitTimer = (forceExitMs: number) => {
       if (forceExitTimer) {
         return;
       }
       forceExitTimer = setTimeout(() => {
-        gatewayLog.error("shutdown timed out; exiting without full cleanup");
+        // Other supervisors still need failure recovery when no restart handoff was committed.
+        const cleanExit = action !== "restart" || nativeStopBudget;
+        gatewayLog.warn(
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "for supervisor recovery"}`,
+        );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+          cleanExit ? 0 : 1,
         );
       }, forceExitMs);
       if (params.ownsProcessLifecycle === true) {
@@ -705,7 +724,7 @@ export async function runGatewayLoop(params: {
       forceActiveRestartExit = () => {
         clearForceExitTimer();
         if (!getManagedUpdateOwner()) {
-          armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+          armForceExitTimer(acceptedShutdownTimeoutMs);
         }
       };
     }
@@ -718,33 +737,39 @@ export async function runGatewayLoop(params: {
         | "restart-after-exit"
         | undefined;
       let shutdownFailed = false;
-      const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
+      const requestedRestartDrainTimeoutMs = isRestart
+        ? resolveRestartDrainTimeoutMs(restartIntent)
+        : 0;
+      const restartDrainTimeoutMs = nativeStopBudget
+        ? Math.min(
+            requestedRestartDrainTimeoutMs ?? Infinity,
+            acceptedShutdownTimeoutMs - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS,
+          )
+        : requestedRestartDrainTimeoutMs;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
           ? Date.now() + restartDrainTimeoutMs
           : undefined;
       // Managed helpers must reach native parking before either exit watchdog can arm.
       if (!isRestart) {
-        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+        armForceExitTimer(acceptedShutdownTimeoutMs);
       } else if (restartDrainTimeoutMs !== undefined && !getManagedUpdateOwner()) {
-        // Allow extra time for draining active turns on explicitly capped restarts.
-        armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
+        armForceExitTimer(
+          restartDrainTimeoutMs +
+            (nativeStopBudget
+              ? RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS
+              : SHUTDOWN_TIMEOUT_MS),
+        );
       }
 
       const drainTimeoutMs = isRestart
         ? restartDrainTimeoutMs
-        : Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS);
+        : Math.max(0, acceptedShutdownTimeoutMs - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS);
       const drainBudget =
         drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
-      // The canonical inventory owns these category counts. Blocker descriptions
-      // can contain task identities and request origins; never include them here.
-      const formatDrainCounts = (snapshot: GatewayActiveWorkSnapshot) =>
-        Object.entries(snapshot.counts)
-          .filter(([name, count]) => name !== "totalActive" && count > 0)
-          .map(([name, count]) => `${name}=${count}`)
-          .join(" ");
       let lastPendingWarningAt: number | undefined;
       const reportDrainSnapshot = (snapshot: GatewayActiveWorkSnapshot) => {
+        lastDrainCounts = formatDrainCounts(snapshot) || "no active work";
         const now = Date.now();
         if (lastPendingWarningAt === undefined) {
           lastPendingWarningAt = now;
@@ -752,6 +777,21 @@ export async function runGatewayLoop(params: {
             gatewayLog.info(
               `draining active work before ${action} ${drainBudget}: ${formatDrainCounts(snapshot)}`,
             );
+            const requestTimeoutMs = Math.max(
+              0,
+              ...eagerLifecycleRuntime
+                .listActiveEmbeddedRunSessionIds()
+                .map(
+                  (sessionId) =>
+                    eagerLifecycleRuntime.getDiagnosticSessionActivitySnapshot({ sessionId })
+                      ?.activeModelCallRequestTimeoutMs ?? 0,
+                ),
+            );
+            if (requestTimeoutMs > 0) {
+              gatewayLog.info(
+                `largest observed model request timeout is ${requestTimeoutMs}ms; shutdown drain budget remains ${drainBudget}`,
+              );
+            }
           }
         } else if (
           !snapshot.idle &&
@@ -813,6 +853,7 @@ export async function runGatewayLoop(params: {
                 return;
               }
               drainTimedOut = true;
+              eagerLifecycleRuntime.abortActiveCronTaskRuns("Gateway restarting.");
               gatewayLog.warn(
                 `active-work drain timeout reached; proceeding with restart: ${formatDrainCounts(drain.snapshot)}`,
               );
@@ -838,6 +879,8 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn(
                 `gateway active-work drain timeout reached; proceeding with shutdown: ${formatDrainCounts(activeWorkDrain.snapshot)}`,
               );
+              eagerLifecycleRuntime.abortEmbeddedAgentRun(undefined, { mode: "all" });
+              eagerLifecycleRuntime.abortActiveCronTaskRuns("Gateway stopping.");
             }
           } catch (err) {
             gatewayLog.warn(
@@ -877,12 +920,13 @@ export async function runGatewayLoop(params: {
           }
         }
 
-        if (
-          isRestart &&
-          !forceExitTimer &&
-          (!managedUpdateOwner || managedUpdateCancellation === "restored-in-process")
-        ) {
-          armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+        if (isRestart && !forceExitTimer) {
+          armForceExitTimer(
+            nativeStopBudget
+              ? Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()) +
+                  RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS
+              : SHUTDOWN_TIMEOUT_MS,
+          );
         }
         const closeDrainTimeoutMs = !isRestart
           ? null
@@ -929,7 +973,6 @@ export async function runGatewayLoop(params: {
           }
         } else {
           await hostLifecycle?.retire();
-          clearForceExitTimer();
           if (isRestart && shutdownFailed) {
             await forceExitAfterStabilityBundle("gateway.restart_close_failed");
           } else {
@@ -947,6 +990,7 @@ export async function runGatewayLoop(params: {
             await releaseLockIfHeld();
             await exitProcessAfterLogFlush(shutdownFailed ? 1 : 0);
           }
+          clearForceExitTimer();
         }
       }
     })();
