@@ -10,6 +10,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspace,
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
 
@@ -296,6 +297,10 @@ describe("memory dreaming host helpers", () => {
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       { workspaceDir, agentIds: ["alpha", "beta"] },
     ]);
+    expect(resolveMemoryDreamingWorkspace(cfg, workspaceAliasDir)).toEqual({
+      workspaceDir,
+      agentIds: ["alpha", "beta"],
+    });
   });
 
   it("includes the runtime primary workspace alongside configured subagent workspaces", () => {

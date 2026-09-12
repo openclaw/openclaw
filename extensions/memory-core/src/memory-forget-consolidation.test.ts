@@ -375,6 +375,7 @@ describe("memory forget", () => {
       candidates,
       nowMs,
       memoryFileMaxChars: 450,
+      maxPriorEntryLossFraction: 1,
       ...thresholds,
     });
     expect(promoted.appended).toBe(1);

@@ -685,3 +685,14 @@ export function resolveMemoryDreamingWorkspaces(
   }
   return [...byWorkspace.values()];
 }
+
+export function resolveMemoryDreamingWorkspace(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspace | undefined {
+  const workspacePath = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
+  return resolveMemoryDreamingWorkspaces(cfg, options).find(
+    (entry) => resolveWorkspaceStateIdentity(entry.workspaceDir).workspacePath === workspacePath,
+  );
+}

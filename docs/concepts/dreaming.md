@@ -87,7 +87,7 @@ source reference.
 
 The model returns operation decisions, not replacement memory prose. The memory
 writer applies those decisions to the existing file using each candidate's
-bounded, sourced entry. An accepted rewrite must:
+bounded, sourced entry. An accepted rewrite or append compaction must:
 
 - preserve prior entries within `phases.deep.maxPriorEntryLossFraction`
 - include every promoted candidate's `Source: path#Lx-Ly` reference
@@ -271,7 +271,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
   Enable or disable the dreaming sweep.
 </ParamField>
 <ParamField path="phases.deep.maxPriorEntryLossFraction" type="number" default="0.25">
-  Reject a consolidation rewrite when it removes more than this fraction of prior entries.
+  Reject a consolidation rewrite or append compaction when it removes more than this fraction of prior entries. Append compaction only removes whole machine-generated promotion sections.
 </ParamField>
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.

@@ -1864,6 +1864,61 @@ describe("short-term promotion", () => {
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
+  it("excludes a candidate downgraded during consolidation from the fallback write", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const firstSnippet = "Gateway binds loopback on the admin host.";
+    const secondSnippet = "Backups use the encrypted archive bucket.";
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [firstSnippet, secondSnippet]);
+    await recordMemoryRecalls(
+      workspaceDir,
+      "operations policy",
+      [firstSnippet, secondSnippet].map((snippet, index) => ({
+        path: relativePath,
+        startLine: index + 1,
+        endLine: index + 1,
+        score: 0.92,
+        snippet,
+        source: "memory" as const,
+        provenance: {
+          originClass: "agent" as const,
+          sessionKind: "interactive" as const,
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      })),
+    );
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked).toHaveLength(2);
+
+    const complete = vi.fn(async () => {
+      const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      const downgraded = expectDefined(
+        Object.values(store.entries).find((entry) => entry.startLine === 1),
+        "downgraded recall entry",
+      );
+      downgraded.provenance = {
+        originClass: "untrusted",
+        sessionKind: "interactive",
+        observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+      };
+      await testing.writeRawRecallStore(workspaceDir, store);
+      return { text: "invalid consolidation response" };
+    });
+    const applied = await applyAllCandidates(workspaceDir, ranked, {
+      agentId: "main",
+      consolidation: {
+        subagent: { complete },
+        logger: { info: vi.fn(), warn: vi.fn() },
+      },
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(applied.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
+    expect(applied.rejectedCandidates.map(({ candidate }) => candidate.startLine)).toEqual([1]);
+    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memory).not.toContain(firstSnippet);
+    expect(memory).toContain(secondSnippet);
+  });
+
   it("does not double-prefix promoted snippets that are already markdown bullets", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
       "alpha",
@@ -2921,6 +2976,7 @@ describe("short-term promotion", () => {
       return await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir), {
         nowMs,
         memoryFileMaxChars: 1_400,
+        maxPriorEntryLossFraction: 1,
       });
     }
 
@@ -3052,6 +3108,94 @@ describe("short-term promotion", () => {
         expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(0o750);
         expect((await fs.stat(memoryPath)).mode & 0o7777).toBe(0o640);
       }
+    });
+
+    it("defers promotion when preserved content leaves no room in the file budget", async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+      const ranked = await rankAllCandidates(workspaceDir);
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
+      await fs.writeFile(memoryPath, oversizedBase, "utf-8");
+      const consolidate = vi.fn(async () => ({ text: "unused" }));
+
+      const deferred = await applyAllCandidates(workspaceDir, ranked, {
+        agentId: "main",
+        memoryFileMaxChars: 9_000,
+        nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+        consolidation: {
+          subagent: { complete: consolidate },
+          logger: { info: vi.fn(), warn: vi.fn() },
+        },
+      });
+
+      expect(deferred).toMatchObject({ applied: 0, appended: 0, compactedSections: 0 });
+      expect(deferred.rejectedCandidates).toEqual([
+        expect.objectContaining({ reason: expect.stringContaining("MEMORY.md budget exceeded") }),
+      ]);
+      expect(consolidate).toHaveBeenCalledOnce();
+      await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(oversizedBase);
+
+      await fs.writeFile(memoryPath, "# Long-Term Memory\n\n", "utf-8");
+      const retried = await applyAllCandidates(workspaceDir, ranked, {
+        memoryFileMaxChars: 9_000,
+        nowMs: Date.parse("2026-04-29T10:05:00.000Z"),
+      });
+      expect(retried.applied).toBe(1);
+      expect((await fs.readFile(memoryPath, "utf-8")).length).toBeLessThanOrEqual(9_000);
+    });
+
+    it("leaves prior promotions intact when fitting would exceed the loss limit", async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
+        .map(
+          (date, index) =>
+            `## Promoted From Short-Term Memory (${date})\n<!-- openclaw-memory-promotion:legacy-${index} -->\n- ${"x".repeat(500)}`,
+        )
+        .join("\n");
+      await fs.writeFile(memoryPath, existing, "utf-8");
+
+      const result = await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir), {
+        memoryFileMaxChars: 1_600,
+        maxPriorEntryLossFraction: 0.25,
+        nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+      });
+
+      expect(result).toMatchObject({ applied: 0, compactedSections: 0 });
+      expect(result.rejectedCandidates[0]?.reason).toContain("MEMORY.md budget exceeded");
+      await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(existing);
     });
   });
 
@@ -3190,6 +3334,7 @@ describe("short-term promotion", () => {
           try {
             const applied = await applyAllCandidates(workspaceAlias, secondRanked, {
               memoryFileMaxChars: 400,
+              maxPriorEntryLossFraction: 1,
             });
             expect(applied.applied).toBe(1);
             expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);

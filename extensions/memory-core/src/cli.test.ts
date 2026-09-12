@@ -3072,6 +3072,144 @@ describe("memory cli", () => {
     });
   });
 
+  it("honors the configured prior-entry loss limit during CLI promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const promotionSection = (date: string, index: number) =>
+        [
+          `## Promoted From Short-Term Memory (${date})`,
+          `<!-- openclaw-memory-promotion:legacy-${index} -->`,
+          `- ${"x".repeat(350)}`,
+          "",
+        ].join("\n");
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        [0, 1, 2, 3]
+          .map((index) => promotionSection(`2026-04-${String(index + 1).padStart(2, "0")}`, index))
+          .join("\n"),
+        "utf-8",
+      );
+      await writeDailyMemoryNote(workspaceDir, "2026-04-10", ["Retain the release checklist."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "release checklist",
+        results: [
+          {
+            path: "memory/2026-04-10.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Retain the release checklist.",
+            source: "memory",
+          },
+        ],
+      });
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          list: [{ id: "main", default: true, workspace: workspaceDir, bootstrapMaxChars: 1_400 }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: { dreaming: { phases: { deep: { maxPriorEntryLossFraction: 1 } } } },
+            },
+          },
+        },
+      });
+      const close = vi.fn(async () => {});
+      mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close });
+
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memory).toContain("Retain the release checklist.");
+      expect(memory.length).toBeLessThanOrEqual(1_400);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the smallest bootstrap cap across CLI workspace symlink aliases",
+    async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const workspaceAliasDir = `${workspaceDir}-alias`;
+        await fs.symlink(workspaceDir, workspaceAliasDir, "dir");
+        const existingMemory = `# Long-Term Memory\n\n${"x".repeat(9_100)}\n`;
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), existingMemory, "utf-8");
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Shared workspace fact."]);
+        await recordShortTermRecalls({
+          workspaceDir: workspaceAliasDir,
+          query: "shared workspace",
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.91,
+              snippet: "Shared workspace fact.",
+              source: "memory",
+            },
+          ],
+        });
+        getRuntimeConfig.mockReturnValue({
+          agents: {
+            list: [
+              {
+                id: "alpha",
+                default: true,
+                workspace: workspaceDir,
+                bootstrapMaxChars: 9_000,
+              },
+              { id: "beta", workspace: workspaceAliasDir, bootstrapMaxChars: 12_000 },
+            ],
+          },
+        });
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir: workspaceAliasDir }),
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        await runMemoryCli([
+          "promote",
+          "--agent",
+          "beta",
+          "--apply",
+          "--json",
+          "--min-score",
+          "0",
+          "--min-recall-count",
+          "0",
+          "--min-unique-queries",
+          "0",
+        ]);
+
+        const payload = firstWrittenJsonArg<{
+          candidates: unknown[];
+          apply: { appliedCandidates: unknown[]; rejectedCandidates: Array<{ reason: string }> };
+        }>(writeJson);
+        expect(payload?.candidates).toHaveLength(1);
+        expect(payload?.apply.appliedCandidates).toEqual([]);
+        expect(payload?.apply.rejectedCandidates).toEqual([
+          expect.objectContaining({ reason: expect.stringContaining("budget") }),
+        ]);
+        expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).toBe(
+          existingMemory,
+        );
+        expect(close).toHaveBeenCalled();
+      });
+    },
+  );
+
   it("names apply-time rejections without ranking blocked origins", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const relativePath = "memory/2026-04-02.md";

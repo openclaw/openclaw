@@ -21,7 +21,8 @@ import {
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
-import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
+import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
@@ -134,13 +135,6 @@ function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): 
     .replace(/^[-*+] +/, "")
     .trim();
   return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
-}
-
-function withTrailingNewline(content: string): string {
-  if (!content) {
-    return "";
-  }
-  return content.endsWith("\n") ? content : `${content}\n`;
 }
 
 function consolidationCandidateFingerprint(candidate: PromotionCandidate): string {
@@ -383,6 +377,10 @@ export async function applyShortTermPromotions(
     typeof options.memoryFileMaxChars === "number" && Number.isFinite(options.memoryFileMaxChars)
       ? Math.max(0, Math.floor(options.memoryFileMaxChars))
       : DEFAULT_MEMORY_FILE_MAX_CHARS;
+  const maxPriorEntryLossFraction = Math.max(
+    0,
+    Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
+  );
   const consolidationPlan =
     options.agentId && options.consolidation?.subagent && toAppend.length > 0
       ? await consolidateMemory({
@@ -391,10 +389,7 @@ export async function applyShortTermPromotions(
           existingMemory,
           candidates: toAppend,
           ...(options.consolidation.model ? { model: options.consolidation.model } : {}),
-          maxPriorEntryLossFraction: Math.max(
-            0,
-            Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
-          ),
+          maxPriorEntryLossFraction,
           memoryFileMaxChars: budgetChars,
           ...(typeof options.maxPromotedSnippetTokens === "number"
             ? { maxPromotedSnippetTokens: options.maxPromotedSnippetTokens }
@@ -489,10 +484,7 @@ export async function applyShortTermPromotions(
             nowMs,
             ...(options.timezone ? { timezone: options.timezone } : {}),
             memoryFileMaxChars: budgetChars,
-            maxPriorEntryLossFraction: Math.max(
-              0,
-              Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
-            ),
+            maxPriorEntryLossFraction,
           });
         }
       }
@@ -571,37 +563,44 @@ export async function applyShortTermPromotions(
         if (toAppend.length > 0) {
           // Model absence or rejected output preserves the shipped append-only
           // promotion contract, so a deep sweep never loses eligible memories.
-          const section = buildPromotionSection(
-            toAppend,
-            nowMs,
-            options.timezone,
-            options.maxPromotedSnippetTokens,
-          );
-          const compaction = compactMemoryForBudget({
+          const appendPlan = buildBudgetedMemoryAppend({
             existingMemory,
-            newSection: section,
+            newSection: buildPromotionSection(
+              toAppend,
+              nowMs,
+              options.timezone,
+              options.maxPromotedSnippetTokens,
+            ),
             budgetChars,
+            maxPriorEntryLossFraction,
           });
-          const droppedDates = compaction.droppedDates;
-          const baseMemory = compaction.compacted;
-          const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-          const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
-          // Append fallback keeps the historical read-modify-replace contract. Policy accepts
-          // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-          await commitMemoryContent({
-            filePath: memoryWritePath,
-            tempPrefix: `${path.basename(memoryPath)}.promotion`,
-            expectedHash: hashMemoryContent(existingMemory),
-            expectedContent: existingMemory,
-            allowInPlaceFallback: true,
-            content,
-          });
-          committedMemoryContent = content;
-          for (const candidate of toAppend) {
-            successfulCandidates.set(candidate.key, candidate);
+          const { content, droppedDates } = appendPlan;
+          if (budgetChars > 0 && content.length > budgetChars) {
+            const reason = `MEMORY.md budget exceeded (${content.length} > ${budgetChars} chars)`;
+            for (const candidate of toAppend) {
+              rejectionReasons.set(candidate.key, reason);
+            }
+            options.consolidation?.logger.info(
+              `memory-core: deferred ${toAppend.length} promotion candidate(s) because ${reason}.`,
+            );
+          } else {
+            // Append fallback keeps the historical read-modify-replace contract. Policy accepts
+            // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
+            await commitMemoryContent({
+              filePath: memoryWritePath,
+              tempPrefix: `${path.basename(memoryPath)}.promotion`,
+              expectedHash: hashMemoryContent(existingMemory),
+              expectedContent: existingMemory,
+              allowInPlaceFallback: true,
+              content,
+            });
+            committedMemoryContent = content;
+            for (const candidate of toAppend) {
+              successfulCandidates.set(candidate.key, candidate);
+            }
+            compactedDates = droppedDates;
+            appendedCandidates = toAppend.length;
           }
-          compactedDates = droppedDates;
-          appendedCandidates = toAppend.length;
         }
       }
       if (rewriteSkippedReason) {

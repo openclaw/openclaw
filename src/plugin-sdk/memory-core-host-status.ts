@@ -12,6 +12,7 @@ export {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspace,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
