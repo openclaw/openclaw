@@ -32,7 +32,11 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
+import {
+  resolveFollowupImplicitReplyCurrentMessageId,
+  type AdmittedFollowupTurn,
+  type FollowupRunnerParams,
+} from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
@@ -130,6 +134,7 @@ export function resolveFollowupDeliveryDecision(params: {
     originatingReplyToMode: turn.queued.originatingReplyToMode,
     originatingTo: turn.queued.originatingTo,
     originatingThreadId: turn.queued.originatingThreadId,
+    currentMessageId: resolveFollowupImplicitReplyCurrentMessageId(turn.queued),
   };
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
@@ -419,12 +424,7 @@ async function sendFollowupPayloads(params: {
         requesterSenderUsername: turn.queued.run.senderUsername,
         requesterSenderE164: turn.queued.run.senderE164,
         threadId: turn.queued.originatingThreadId,
-        currentMessageId:
-          sameChannelOrigin &&
-          (turn.queued.run.inputProvenance?.kind === undefined ||
-            turn.queued.run.inputProvenance.kind === "external_user")
-            ? turn.queued.messageId
-            : undefined,
+        currentMessageId: resolveFollowupImplicitReplyCurrentMessageId(turn.queued),
         cfg: turn.config,
         mirror:
           metadata?.assistantMessageIndex !== undefined ||
