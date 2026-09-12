@@ -248,13 +248,19 @@ describe("OpenClaw configured-model planner", () => {
         config: binding.execution.runConfig,
         streamParams: {
           responseFormat: {
-            type: "object",
-            properties: {
-              reply: { type: "string" },
-              command: { type: "string" },
+            type: "json_schema",
+            json_schema: {
+              name: "openclaw_system_agent_plan",
+              schema: {
+                type: "object",
+                properties: {
+                  reply: { type: "string" },
+                  command: { type: "string" },
+                },
+                required: ["reply"],
+                additionalProperties: false,
+              },
             },
-            required: ["reply"],
-            additionalProperties: false,
           },
         },
       }),

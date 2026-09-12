@@ -98,7 +98,13 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
     runIdPrefix: "openclaw-planner",
     verifiedInference: params.verifiedInference,
     deps: params.deps,
-    responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
+    responseFormat: {
+      type: "json_schema",
+      json_schema: {
+        name: "openclaw_system_agent_plan",
+        schema: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
+      },
+    },
   });
   const parsed = parseSystemAgentAssistantPlanText(result?.text);
   return parsed && result ? { ...parsed, modelLabel: result.modelLabel } : null;
