@@ -468,8 +468,11 @@ function resolveFallbackDefaultAccountConfig(
   if (preferred) {
     return preferred;
   }
-  const definedAccounts = Object.values(accounts).filter(Boolean);
-  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
+  const definedAccountIds = Object.keys(accounts).filter((id) => accounts[id]);
+  const accountId = definedAccountIds.length === 1 ? definedAccountIds[0] : undefined;
+  return accountId === undefined
+    ? undefined
+    : resolveChannelAccountEntry(accounts, accountId, channelId);
 }
 
 function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {

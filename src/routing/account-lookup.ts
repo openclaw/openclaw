@@ -20,8 +20,25 @@ export function resolveChannelAccountKey<T>(
   accounts: Record<string, T> | undefined,
   accountId: string,
   channelId: string,
+  normalizeAccountId: ((accountId: string) => string) | undefined,
+  accountKeyPolicy: ChannelAccountKeyPolicy | undefined,
+  options: { allowMissing: true },
+): string;
+export function resolveChannelAccountKey<T>(
+  accounts: Record<string, T> | undefined,
+  accountId: string,
+  channelId: string,
   normalizeAccountId?: (accountId: string) => string,
   accountKeyPolicy?: ChannelAccountKeyPolicy,
+  options?: { allowMissing?: boolean },
+): string | undefined;
+export function resolveChannelAccountKey<T>(
+  accounts: Record<string, T> | undefined,
+  accountId: string,
+  channelId: string,
+  normalizeAccountId?: (accountId: string) => string,
+  accountKeyPolicy?: ChannelAccountKeyPolicy,
+  options?: { allowMissing?: boolean },
 ): string | undefined {
   const policy =
     accountKeyPolicy ??
@@ -31,7 +48,7 @@ export function resolveChannelAccountKey<T>(
         allowWorkspaceScopedSnapshot: true,
       })
       ?.owners.channelAccountKeyPolicies?.get(channelId);
-  return resolveAccountKey(accounts, accountId, normalizeAccountId, policy);
+  return resolveAccountKey(accounts, accountId, normalizeAccountId, policy, options);
 }
 
 export function resolveChannelAccountEntry<T>(
@@ -79,13 +96,16 @@ export function resolveAccountKey<T>(
   accountId: string,
   normalizeAccountId?: (accountId: string) => string,
   policy?: ChannelAccountKeyPolicy,
+  options?: { allowMissing?: boolean },
 ): string | undefined {
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
   const normalizer = policy ? normalizeRoutingAccountId : normalizeAccountId;
   const normalize = normalizer ?? normalizeLowercaseStringOrEmpty;
   const targetId = policy ? normalize(accountId) : accountId;
+  // Creation uses the owner's target id, never the spelling of a rejected alias.
+  const missingKey = options?.allowMissing ? targetId : undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return missingKey;
+  }
   if (Object.hasOwn(accounts, targetId) && (!normalizer || !isBlockedObjectKey(targetId))) {
     return targetId;
   }
@@ -120,5 +140,5 @@ export function resolveAccountKey<T>(
       }
     }
   }
-  return canonicalMatch;
+  return canonicalMatch ?? missingKey;
 }

@@ -84,14 +84,14 @@ export function setAccountEnabledInConfigSection(params: {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  const accountKey =
-    resolveChannelAccountKey(
-      base?.accounts,
-      accountId,
-      params.sectionKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+    { allowMissing: true },
+  );
   const hasAccounts = Boolean(base?.accounts);
   if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
@@ -122,14 +122,13 @@ export function deleteAccountFromConfigSection(params: {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  const accountKey =
-    resolveChannelAccountKey(
-      base?.accounts,
-      accountId,
-      params.sectionKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+  );
   if (!base) {
     return params.cfg;
   }
@@ -139,7 +138,9 @@ export function deleteAccountFromConfigSection(params: {
     return writeChannelSection(params.cfg, params.sectionKey, undefined);
   }
 
-  delete accounts[accountKey];
+  if (accountKey !== undefined) {
+    delete accounts[accountKey];
+  }
   const baseRecord = { ...(base as Record<string, unknown>) };
   if (accountId === DEFAULT_ACCOUNT_ID) {
     // Deleting the default account can also clear root-level credential fields that represented
@@ -174,18 +175,17 @@ export function clearAccountEntryFields<TAccountEntry extends object>(params: {
 } {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const accountKey = params.channelId
-    ? (resolveChannelAccountKey(
+    ? resolveChannelAccountKey(
         params.accounts,
         accountId,
         params.channelId,
         (id) => id,
         params.accountKeyPolicy,
-      ) ?? accountId)
-    : (resolveAccountKey(params.accounts, accountId, (id) => id, params.accountKeyPolicy) ??
-      accountId);
+      )
+    : resolveAccountKey(params.accounts, accountId, (id) => id, params.accountKeyPolicy);
   const baseAccounts =
     params.accounts && typeof params.accounts === "object" ? { ...params.accounts } : undefined;
-  if (!baseAccounts || !(accountKey in baseAccounts)) {
+  if (!baseAccounts || accountKey === undefined) {
     return { nextAccounts: baseAccounts, changed: false, cleared: false };
   }
 
