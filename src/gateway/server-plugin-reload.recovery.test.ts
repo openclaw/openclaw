@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CronService } from "../cron/service.js";
+import type { PluginHookGatewayContext } from "../plugins/hook-types.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
+import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../plugins/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -126,6 +128,73 @@ function createRecoveryFixture(
 ) {
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
+
+it.each(["commit", "rollback"] as const)(
+  "keeps service and lifecycle Cron getters current after %s",
+  async (outcome) => {
+    let serviceGetter: OpenClawPluginServiceContext["getCron"];
+    let hookGetter: PluginHookGatewayContext["getCron"];
+    const schedulers = ["first", "next"].map((name) => {
+      const cron = new CronService({
+        storePath: path.join(makeTrackedTempDir(`reload-cron-${name}`, tempDirs), "jobs.sqlite"),
+        cronEnabled: false,
+        log: mocks.log,
+        enqueueSystemEvent: () => {},
+        requestHeartbeat: () => {},
+        runIsolatedAgentJob: async () => ({ status: "ok" as const }),
+      });
+      const list = vi.spyOn(cron, "list").mockResolvedValue([]);
+      cleanups.push(async () => cron.stop());
+      return { cron, list };
+    });
+    const [first, next] = schedulers;
+    assert(first && next);
+    const fixture = await createRecoveryFixture({
+      abortOnCandidateStart: false,
+      beforePublish: async () => {
+        if (outcome === "rollback") {
+          throw new Error("Cron getter rollback");
+        }
+      },
+      register(api, owner) {
+        if (owner !== "first") {
+          return;
+        }
+        api.registerService({
+          id: "cron-getter",
+          start(ctx) {
+            serviceGetter = ctx.getCron;
+          },
+        });
+        api.on("gateway_start", (_event, ctx) => {
+          hookGetter = ctx.getCron;
+        });
+      },
+    });
+    fixture.runtime.runtimeState.cronState.cron = first.cron;
+    if (outcome === "rollback") {
+      await expect(fixture.reload()).rejects.toThrow("Cron getter rollback");
+    } else {
+      await fixture.reload();
+    }
+    assert(serviceGetter && hookGetter);
+    expect(hookGetter()).toBe(first.cron);
+    const stale = serviceGetter();
+    assert(stale);
+    await stale.list();
+    expect(first.list).toHaveBeenCalledOnce();
+
+    fixture.runtime.runtimeState.cronState.cron = next.cron;
+    expect(hookGetter()).toBe(next.cron);
+    const current = serviceGetter();
+    assert(current);
+    await current.list();
+    expect(next.list).toHaveBeenCalledOnce();
+    const remove = vi.spyOn(first.cron, "remove");
+    await expect(stale.remove("must-not-mutate")).rejects.toThrow("scheduler was replaced");
+    expect(remove).not.toHaveBeenCalled();
+  },
+);
 
 it("validates expanded replacement targets before draining their live owners", async () => {
   await verifyExpandedReplacementTargets(createRecoveryFixture);

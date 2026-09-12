@@ -24,6 +24,10 @@ const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const log = createSubsystemLogger("plugins/cleanup");
 
+function rejectRetiredModuleSource(): never {
+  throw new Error("Plugin was reloaded or disabled; use its current tools.");
+}
+
 export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
   readonly controller = new AbortController();
@@ -452,6 +456,8 @@ export class PluginInstance {
     this.calls.clear();
     this.waiters.forEach((wake) => wake());
     this.moduleLoader = undefined;
+    // Release captured paths without reopening the never-bound bundled-library fallback.
+    this.moduleSourceExists &&= rejectRetiredModuleSource;
     this.slots.clear();
     if (failures.length) {
       log.warn(

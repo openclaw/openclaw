@@ -166,7 +166,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
       pluginWorkspaceDir: workspaceDir,
-      kernel: { pluginRuntimeGeneration: owner, pluginMetadata: metadata },
+      kernel: {
+        pluginRuntimeGeneration: owner,
+        pluginMetadata: metadata,
+        getCronService: () => runtime.runtimeState.cronState.cron,
+      },
       runtimeState: { cronState: {}, gatewayLifetimeSidecars: [] },
       ambientEnvTriggers: "suppress",
       coreGatewayMethodNames: [],

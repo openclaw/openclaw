@@ -94,6 +94,13 @@ const loadPluginHostCleanupRuntime = createLazyRuntimeModule(
   () => import("./host-hook-cleanup.js"),
 );
 
+// Completed observations must not retain the retiring or successor registry's scope.
+function completedPluginRegistryRetirement(
+  result: PluginHostCleanupResult,
+): PluginHostRegistryRetirement {
+  return async () => ({ ...result, failures: [...result.failures] });
+}
+
 /** Candidate retirement releases resources without changing committed session state. */
 export function disposePluginRegistryInstances(
   registryView: PluginRegistry,
@@ -144,6 +151,11 @@ export function disposePluginRegistryInstances(
     quiescePluginRegistry(registry);
     void pluginInstanceInvocation
       .exit(wait)
+      .then((result) => {
+        if (retirements.get(registry) === wait) {
+          retirements.set(registry, completedPluginRegistryRetirement(result));
+        }
+      })
       .catch((error: unknown) => log.warn(`plugin host registry cleanup failed: ${String(error)}`));
   }
   return wait();

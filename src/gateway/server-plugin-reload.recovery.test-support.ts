@@ -187,7 +187,11 @@ export async function createPluginReloadRecoveryFixture(
   const runtime = {
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
-    kernel: { pluginRuntimeGeneration: owner, pluginMetadata: metadata },
+    kernel: {
+      pluginRuntimeGeneration: owner,
+      pluginMetadata: metadata,
+      getCronService: () => runtime.runtimeState.cronState.cron,
+    },
     runtimeState: {
       cronState: {},
       get gatewayLifetimeSidecars() {

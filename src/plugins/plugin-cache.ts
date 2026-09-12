@@ -276,6 +276,12 @@ export function retirePluginCache(
   retained.retirement = completion.promise;
   // Abort listeners may reenter retirement or release the final generation immediately.
   retained.controller.abort();
+  // Lazy error frames otherwise retain the retiring callback's scope after cleanup.
+  try {
+    void retained.controller.signal.reason.stack;
+  } catch {
+    // A custom stack formatter must not interrupt retirement.
+  }
   const begin = () => beginPluginCacheRetirement(cache, beforeRetire);
   void (retained.references.size ? retained.settled.promise.then(begin) : begin()).then(
     completion.resolve,

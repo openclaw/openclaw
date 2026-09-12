@@ -304,6 +304,8 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.heartbeatRunner = next;
       return previous;
     },
+    // Stable callbacks keep reload transactions out of retained plugin contexts.
+    getCronService: () => runtimeState.cronState.cron,
     swapCronState: (next: typeof runtimeState.cronState) => {
       const previous = runtimeState.cronState;
       runtimeState.cronState = next;
@@ -344,7 +346,7 @@ export async function prepareGatewayLifecycle(params: {
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
     get cron() {
-      return runtimeState.cronState.cron;
+      return kernel.getCronService();
     },
   };
 

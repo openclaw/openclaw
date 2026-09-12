@@ -321,7 +321,7 @@ export async function finishGatewayStartup(params: {
             await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
             return true;
           },
-          getCronService: () => runtimeState.cronState.cron,
+          getCronService: kernel.getCronService,
           onChannelsStarted: () => {
             releaseStartupAccountStarts();
           },

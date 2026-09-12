@@ -230,7 +230,7 @@ export async function reloadGatewayPlugins(
       config,
       workspaceDir: pluginWorkspaceDir,
       // SAFETY: Gateway cron implements the SDK hook surface, which erases core-only job fields.
-      getCron: () => runtimeState.cronState.cron as PluginHookGatewayCronService,
+      getCron: kernel.getCronService as () => PluginHookGatewayCronService,
     };
     await withPluginHttpRouteRegistry(registry, () =>
       start
@@ -426,7 +426,7 @@ export async function reloadGatewayPlugins(
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
         broadcastPluginEvent,
-        getCronService: () => runtimeState.cronState.cron,
+        getCronService: kernel.getCronService,
         previous: previousServices,
         onHandle: (handle) => {
           candidateServices = handle;
@@ -609,7 +609,7 @@ export async function reloadGatewayPlugins(
               config: previousConfig,
               workspaceDir: pluginWorkspaceDir,
               broadcastPluginEvent,
-              getCronService: () => runtimeState.cronState.cron,
+              getCronService: kernel.getCronService,
               previous: kernel.pluginRuntimeGeneration.currentServices(),
               onHandle: (handle) => {
                 kernel.pluginRuntimeGeneration.publishServices(

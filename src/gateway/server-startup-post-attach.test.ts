@@ -4958,12 +4958,10 @@ describe("startGatewayPostAttachRuntime", () => {
       } as never,
     });
 
-    await startGatewayPostAttachRuntime(
-      params,
-      createPostAttachRuntimeDeps({
-        createHookRunner: vi.fn(async () => hookRunner as never),
-      }),
-    );
+    const runtimeDeps = createPostAttachRuntimeDeps({
+      createHookRunner: vi.fn(async () => hookRunner as never),
+    });
+    await startGatewayPostAttachRuntime(params, runtimeDeps);
 
     await waitForGatewayTestState(() => {
       expect(runGatewayStart).toHaveBeenCalledTimes(1);
@@ -4974,10 +4972,14 @@ describe("startGatewayPostAttachRuntime", () => {
       throw new Error("gateway_start context did not expose getCron");
     }
     expect(ctx.getCron()).toBe(liveCron);
+    const serviceGetter = vi.mocked(runtimeDeps.startGatewaySidecars).mock.calls[0]?.[0]
+      .getCronService;
+    expect(serviceGetter?.()).toBe(liveCron);
 
     params.deps.cron = depsCron as never;
     currentLiveCron = reloadedCron;
     expect(ctx.getCron()).toBe(reloadedCron);
+    expect(serviceGetter?.()).toBe(reloadedCron);
   });
 });
 
