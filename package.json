@@ -1772,6 +1772,7 @@
     "ios:version:check": "node --import ./scripts/tsx.mjs scripts/ios-sync-versioning.ts --check",
     "ios:version:sync": "node --import ./scripts/tsx.mjs scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import ./scripts/tsx.mjs --expose-gc scripts/embedded-run-abort-leak.ts",
+    "leak:embedded-run:liveness": "node --import ./scripts/tsx.mjs --expose-gc scripts/embedded-run-liveness-leak.ts",
     "lint": "node --import ./scripts/tsx.mjs scripts/run-lint.mts",
     "lint:agent:ingress-owner": "node --import ./scripts/tsx.mjs scripts/check-ingress-agent-owner-context.mts",
     "lint:all": "node scripts/run-oxlint.mjs",

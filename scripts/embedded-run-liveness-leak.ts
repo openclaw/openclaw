@@ -1,7 +1,7 @@
 /**
  * Checks that a completed liveness join releases its caller while delivery is
  * still pending. Run with:
- * node --expose-gc --import ./scripts/tsx.mjs scripts/embedded-run-liveness-leak.ts
+ * pnpm leak:embedded-run:liveness
  */
 import { mkdirSync } from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
