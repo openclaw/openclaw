@@ -59,6 +59,7 @@ import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
+  parseReadableSqliteSessionEntryRows,
   readExactSessionEntryJson,
   readExactSessionEntryRow,
   readExactSessionEntryRowValidated,

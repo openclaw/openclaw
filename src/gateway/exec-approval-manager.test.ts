@@ -20,15 +20,11 @@ import type { ExecApprovalManagerOptions } from "./exec-approval-manager.types.j
 import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
 
 type TimeoutCallback = Parameters<typeof setTimeout>[0];
-type GetOperatorApprovalParams = Parameters<typeof getOperatorApprovalDetailed>[0];
 
-function getOperatorApproval(params: GetOperatorApprovalParams) {
+function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
   const result = getOperatorApprovalDetailed(params);
   return result.outcome === "found" ? result.record : null;
 }
-type MockTimerHandle = ReturnType<typeof setTimeout> & {
-  unref: ReturnType<typeof vi.fn>;
-};
 
 describe("ExecApprovalManager", () => {
   const tempDirs: string[] = [];
@@ -69,20 +65,24 @@ describe("ExecApprovalManager", () => {
     const timers: Array<{
       callback: TimeoutCallback;
       delay: number | undefined;
-      handle: MockTimerHandle;
+      handle: { unref: ReturnType<typeof vi.fn> };
     }> = [];
 
-    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      callback: TimeoutCallback,
-      delay?: number,
-    ) => {
-      const handle = { unref: vi.fn() } as unknown as MockTimerHandle;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay) => {
+      const handle = { unref: vi.fn() };
       timers.push({ callback, delay, handle });
-      return handle;
-    }) as unknown as typeof setTimeout);
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    });
     vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
 
     return timers;
+  }
+
+  function deadlineTimers(timers: ReturnType<typeof installTimerMocks>, delays: number[]) {
+    // Pending deadlines keep their waiter alive; cleanup and maintenance do not.
+    const deadlines = timers.filter(({ handle }) => handle.unref.mock.calls.length === 0);
+    expect(deadlines.map(({ delay }) => delay)).toEqual(delays);
+    return deadlines;
   }
 
   function runTimer(timer: { callback: TimeoutCallback } | undefined): void {
@@ -253,7 +253,7 @@ describe("ExecApprovalManager", () => {
     void manager.register(record, MAX_TIMER_TIMEOUT_MS + 1);
 
     expect(record.expiresAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
-    expect(timers[0]?.delay).toBe(MAX_TIMER_TIMEOUT_MS);
+    deadlineTimers(timers, [MAX_TIMER_TIMEOUT_MS]);
   });
 
   it("schedules registration from the record's remaining lifetime", (testContext) => {
@@ -265,7 +265,7 @@ describe("ExecApprovalManager", () => {
     void manager.register(record, 60_000);
 
     expect(record.expiresAtMs).toBe(61_000);
-    expect(timers[0]?.delay).toBe(59_750);
+    deadlineTimers(timers, [59_750]);
   });
 
   it("reschedules a deadline timer when the wall clock rolls backward", async () => {
@@ -276,15 +276,14 @@ describe("ExecApprovalManager", () => {
     const decisionPromise = manager.register(record, 60_000);
     vi.mocked(Date.now).mockReturnValue(500);
 
-    runTimer(timers[0]);
+    runTimer(deadlineTimers(timers, [60_000])[0]);
 
     expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       status: "pending",
     });
-    expect(timers[1]?.delay).toBe(60_500);
-
+    const rescheduled = deadlineTimers(timers, [60_000, 60_500]);
     vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
-    runTimer(timers[1]);
+    runTimer(rescheduled[1]);
     await expect(decisionPromise).resolves.toBeNull();
     expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       status: "expired",
@@ -460,7 +459,7 @@ describe("ExecApprovalManager", () => {
     const decisionPromise = manager.register(record, 60_000);
     vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
 
-    runTimer(timers[0]);
+    runTimer(deadlineTimers(timers, [60_000])[0]);
 
     await expect(decisionPromise).resolves.toBeNull();
     expect(lifecycleEvents.map((event) => event.phase)).toEqual(["pending", "terminal"]);
@@ -785,6 +784,7 @@ describe("ExecApprovalManager", () => {
 
   it("reports persistence failures from the timeout callback without throwing", async () => {
     const timers = installTimerMocks();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const onError = vi.fn();
     const { manager, databaseOptions, dir } = createPersistentManager({ onError });
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-timer-error");
@@ -793,7 +793,8 @@ describe("ExecApprovalManager", () => {
     fs.writeFileSync(blocker, "blocked");
     databaseOptions.path = path.join(blocker, "state.sqlite");
 
-    expect(() => runTimer(timers[0])).not.toThrow();
+    const deadline = deadlineTimers(timers, [60_000])[0];
+    expect(() => runTimer(deadline)).not.toThrow();
     await expect(decisionPromise).resolves.toBe("deny");
     expect(onError).toHaveBeenCalledWith(
       expect.any(Error),

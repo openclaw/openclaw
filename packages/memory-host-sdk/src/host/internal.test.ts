@@ -550,11 +550,25 @@ describe("memory host SDK package internals", () => {
     }
   });
 
-  it("measures the carried tail in weighted units for CJK content", () => {
-    const content = ["中".repeat(300), "x".repeat(1499)].join("\n");
+  it.each([
+    { label: "common CJK", character: "中", count: 60, retained: 24 },
+    { label: "rare BMP CJK", character: "\u3400", count: 60, retained: 8 },
+    { label: "supplementary CJK", character: "\u{20000}", count: 60, retained: 6 },
+    { label: "emoji", character: "🌸", count: 60, retained: 49 },
+    { label: "lone high surrogates", character: "\ud800", count: 120, retained: 99 },
+    { label: "lone low surrogates", character: "\udc00", count: 120, retained: 99 },
+  ])("preserves the weighted overlap tail for $label", ({ character, count, retained }) => {
+    const firstLine = `${"a".repeat(600)}${character.repeat(count)}`;
+    const nextLine = "x".repeat(1499);
+    const content = [firstLine, nextLine].join("\n");
 
     const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
 
+    // The 100-unit overlap window reserves one unit for its separator.
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      firstLine,
+      `${character.repeat(retained)}\n${nextLine}`,
+    ]);
     for (const chunk of chunks) {
       expect(estimateStringChars(chunk.text)).toBeLessThanOrEqual(1600);
     }

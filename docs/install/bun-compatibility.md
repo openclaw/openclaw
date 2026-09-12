@@ -68,6 +68,7 @@ When the KNN child cannot load extensions, memory search falls back to a batched
 
 ## Known limitations
 
+- **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.
 - **Package scripts:** Some scripts hardcode pnpm, so `bun run` still invokes pnpm internally.
 - **SQLite handles:** Bun 1.4.2 can retain statement handles and WAL/shared-memory files after `DatabaseSync.close()` or `Symbol.dispose()`; OpenClaw cannot finalize them through Bun's public `node:sqlite` API. See the [upstream close fix](https://github.com/oven-sh/bun/pull/40005); use Node when prompt file release matters.

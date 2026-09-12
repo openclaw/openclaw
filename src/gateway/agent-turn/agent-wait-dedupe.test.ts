@@ -66,6 +66,39 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it("expires terminal observations from their latest write without extending unrelated runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const dedupe = new Map<string, DedupeEntry>();
+    completeRun(dedupe, "cache-refreshed");
+    completeRun(dedupe, "cache-original");
+    vi.setSystemTime(1_000_100);
+    completeRun(dedupe, "cache-refreshed");
+    // Wall-clock correction can insert an earlier expiry after newer records.
+    vi.setSystemTime(999_900);
+    completeRun(dedupe, "cache-clock-correction");
+
+    for (const [now, expected] of [
+      [1_599_900, ["ok", "ok", "ok"]],
+      [1_599_901, ["ok", "ok", "timeout"]],
+      [1_600_000, ["ok", "ok", "timeout"]],
+      [1_600_001, ["ok", "timeout", "timeout"]],
+      [1_600_100, ["ok", "timeout", "timeout"]],
+      [1_600_101, ["timeout", "timeout", "timeout"]],
+    ] as const) {
+      vi.setSystemTime(now);
+      const runIds = ["cache-refreshed", "cache-original", "cache-clock-correction"];
+      for (const [index, runId] of runIds.entries()) {
+        const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+        await waiter.promise;
+        expect(waiter.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId, status: expected[index] }),
+        );
+      }
+    }
+  });
+
   it("retains chat input identity when terminal writers replace admission metadata", async () => {
     const runId = "run-chat-request-identity";
     const key = `chat:${runId}`;

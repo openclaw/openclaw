@@ -5,12 +5,25 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPinnedLookup } from "../../infra/net/ssrf.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { setMediaStoreNetworkDepsForTest } from "../../media/store.test-support.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "../../media/store-network.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -25,6 +38,25 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const TEST_SESSION_KEY = "agent:main:webchat:direct:user";
+
+let storeSaveSpy: MockInstance<typeof import("../../media/fetch.js").saveRemoteMedia> | undefined;
+
+beforeAll(async () => {
+  // Spy after graph evaluation: importOriginal(fetch) can pull store into its mock cycle.
+  const mediaFetch = await import("../../media/fetch.js");
+  const saveRemoteMedia = mediaFetch.saveRemoteMedia;
+  storeSaveSpy = vi
+    .spyOn(mediaFetch, "saveRemoteMedia")
+    .mockImplementation(wrapStoreSaveRemoteMedia(saveRemoteMedia));
+});
+
+afterAll(() => {
+  try {
+    disposeStoreRemoteFixtures();
+  } finally {
+    storeSaveSpy?.mockRestore();
+  }
+});
 
 type ReplyMediaPayloads = Parameters<
   typeof normalizeWebchatReplyMediaPathsForDisplay
@@ -49,7 +81,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   });
 
   afterEach(async () => {
-    setMediaStoreNetworkDepsForTest();
     await testState.cleanup();
   });
 
@@ -204,13 +235,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       upstream.listen(0, "127.0.0.1", resolve);
     });
     const address = upstream.address() as AddressInfo;
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-    });
 
     try {
       const remoteImageUrl = `http://127.0.0.1:${address.port}/remote.png?sig=secret`;
@@ -233,12 +257,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         ],
       });
       expect(payload?.mediaUrls).toHaveLength(3);
-      const { assistantContent: content } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: payload ? [payload] : [],
-        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-      });
+      const matchedUrls: string[] = [];
+      const { assistantContent: content } = await withStoreRemoteFixture(
+        { url: remoteImageUrl, onMatch: (url) => matchedUrls.push(url) },
+        () =>
+          buildAssistantReplyContent({
+            sessionKey: TEST_SESSION_KEY,
+            agentId: "main",
+            payloads: payload ? [payload] : [],
+            managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+          }),
+      );
+      expect(matchedUrls).toEqual([remoteImageUrl]);
       expect(content).toEqual([
         { type: "text", text: "Artifacts ready" },
         expect.objectContaining({

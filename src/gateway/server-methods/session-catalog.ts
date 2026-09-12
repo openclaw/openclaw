@@ -303,7 +303,7 @@ function catalogResult(
   error?: SessionCatalog["error"],
   createSession?: NonNullable<SessionCatalog["capabilities"]["createSession"]>,
 ): SessionCatalog {
-  const result: SessionCatalog = {
+  return {
     id: provider.id,
     label: provider.label,
     capabilities: {
@@ -315,11 +315,8 @@ function catalogResult(
     },
     ...(shareRoute ? { shareRoute } : {}),
     hosts,
+    ...(error ? { error } : {}),
   };
-  if (error) {
-    result.error = error;
-  }
-  return result;
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
@@ -381,6 +378,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
         cfg: currentConfig,
         fallbackAgentId: resolvedAgent.agentId,
+        sessionKeys: result.catalogs
+          .flatMap((catalog) => catalog.hosts)
+          .flatMap((host) => host.sessions)
+          .flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
       });
       return {
         catalogs: result.catalogs.map((catalog) => ({

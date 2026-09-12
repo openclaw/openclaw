@@ -175,7 +175,7 @@ describe.each([
     }
     await fs.writeFile(
       path.join(root, "index.html"),
-      `<html data-openclaw-control-ui-build-id="source-build"><head><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
+      `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
     server = createServer((req, res) => {
       res.setHeader(
@@ -259,6 +259,9 @@ describe.each([
       expect(document.response.headers["cache-control"]).toBe("no-cache");
       if (method === "GET") {
         const html = document.body.toString();
+        expect(html).toContain(`<script>const fragment = 'href="unfinished';</script>`);
+        expect(html).toContain(`src="${basePath}/assets/app-fixture.js"`);
+        expect(html).toContain(`href="${basePath}/assets/app.css"`);
         expect(html).not.toContain("source-build");
         expect(html.includes('data-openclaw-control-ui-build-id="fixture-build"')).toBe(
           kind === "bundled",

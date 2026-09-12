@@ -932,6 +932,73 @@ describe("searchPathKeyword", () => {
   });
 });
 
+describe("searchKeyword ranked limits", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "stops examining scoped candidates after filling the %s result window",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 64; index++) {
+          insertKeywordFixture(db, {
+            id: `chunk-${index}`,
+            path: `memory/${index}.md`,
+            text: "common keyword",
+            source: index % 2 === 0 ? "memory" : "sessions",
+          });
+        }
+        let examined = 0;
+        db.function("observe_keyword_candidate", () => {
+          examined++;
+          return 1;
+        });
+        const results = await searchKeywordFixture(db, "common", {
+          ftsTokenizer,
+          limit: 3,
+          sourceFilter: {
+            sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
+            params: ["sessions"],
+          },
+        });
+        expect(results.map((row) => row.id)).toEqual(["chunk-1", "chunk-3", "chunk-5"]);
+        expect(examined).toBeLessThanOrEqual(6);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("preserves default BM25 scores without changing a configured rank mapping", async () => {
+    const { db } = createMemorySearchDb();
+    try {
+      insertKeywordFixture(db, {
+        id: "weak",
+        path: "memory/weak.md",
+        text: "common " + "unrelated ".repeat(20),
+      });
+      insertKeywordFixture(db, {
+        id: "strong",
+        path: "memory/strong.md",
+        text: "common common common",
+      });
+      const expected = await searchKeywordFixture(db, "common");
+      expect(expected.map((row) => row.id)).toEqual(["strong", "weak"]);
+      db.prepare(
+        "INSERT INTO memory_index_chunks_fts(memory_index_chunks_fts, rank) VALUES ('rank', 'bm25(0.0)')",
+      ).run();
+
+      await expect(searchKeywordFixture(db, "common")).resolves.toEqual(expected);
+      expect(
+        db
+          .prepare("SELECT rank FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("common")
+          .map((row) => row.rank),
+      ).toEqual([-0, -0]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
   function supportsFts(): boolean {
     const { db, schema } = createMemorySearchDb();

@@ -118,17 +118,22 @@ export function openOpenClawAgentDatabaseReadOnly(
 export function retainOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
 ):
-  | { found: true; claim: OpenClawAgentDatabaseClaim }
+  | { found: true; database: OpenClawAgentReadOnlyDatabase; claim: OpenClawAgentDatabaseClaim }
   | { found: false; reason: "database-missing" | "schema-missing" } {
   const opened = findOpenAgentDatabase(options);
   if (opened && !opened.db.isTransaction) {
     const borrowed = borrowOpenClawAgentDatabase(options);
-    return { found: true, claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release) };
+    return {
+      found: true,
+      database: opened,
+      claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
+    };
   }
   const fresh = openOpenClawAgentDatabaseReadOnly(options);
   return fresh.found
     ? {
         found: true,
+        database: fresh.database,
         claim: createOpenClawAgentDatabaseClaim(fresh.database, fresh.database.close),
       }
     : fresh;

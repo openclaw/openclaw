@@ -1,7 +1,6 @@
 // Media store remote-source tests cover canonical guarded-fetch delegation.
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -9,8 +8,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "./store-network.test-support.js";
 import { saveMediaSource } from "./store.js";
-import { setMediaStoreNetworkDepsForTest } from "./store.test-support.js";
 
 const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
@@ -23,9 +26,15 @@ vi.mock("../infra/net/runtime-fetch.js", async (importOriginal) => ({
   fetchWithRuntimeDispatcherOrMockedGlobal: runtimeFetchMock,
 }));
 
-async function useActualSaveRemoteMedia(): Promise<void> {
+async function useActualSaveRemoteMedia(url: string): Promise<void> {
   const actual = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
-  saveRemoteMediaMock.mockImplementationOnce(actual.saveRemoteMedia);
+  const save = wrapStoreSaveRemoteMedia(actual.saveRemoteMedia);
+  saveRemoteMediaMock.mockImplementationOnce((options) =>
+    withStoreRemoteFixture(
+      { url, lookupFn: async () => [{ address: "93.184.216.34", family: 4 }] },
+      () => save(options),
+    ),
+  );
 }
 
 describe("media store remote sources", () => {
@@ -41,24 +50,11 @@ describe("media store remote sources", () => {
   beforeEach(() => {
     saveRemoteMediaMock.mockReset();
     runtimeFetchMock.mockReset();
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => {
-        const addresses = ["93.184.216.34"];
-        return {
-          hostname,
-          addresses,
-          lookup: createPinnedLookup({ hostname, addresses }),
-        };
-      },
-    });
   });
 
   afterAll(async () => {
-    try {
-      setMediaStoreNetworkDepsForTest();
-    } finally {
-      await testState.cleanup();
-    }
+    disposeStoreRemoteFixtures();
+    await testState.cleanup();
   });
 
   it("forwards the source contract to guarded fetch and keeps the SavedMedia shape", async () => {
@@ -85,8 +81,6 @@ describe("media store remote sources", () => {
       readIdleTimeoutMs: 30_000,
       originalFilename: "_.txt",
       subdir: "remote",
-      lookupFn: expect.any(Function),
-      ssrfPolicy: { allowedHostnames: ["example.com"] },
     });
     expect(saved).toStrictEqual({
       id: "stored.txt",
@@ -104,7 +98,7 @@ describe("media store remote sources", () => {
   });
 
   it("preserves an unmapped URL suffix through the canonical public flow", async () => {
-    await useActualSaveRemoteMedia();
+    await useActualSaveRemoteMedia("https://example.com/files/report.custom?token=secret");
     runtimeFetchMock.mockResolvedValueOnce(
       new Response("custom", {
         status: 200,
@@ -125,7 +119,7 @@ describe("media store remote sources", () => {
   });
 
   it("reports HTTP failure while cancelling a nonempty never-ending body", async () => {
-    await useActualSaveRemoteMedia();
+    await useActualSaveRemoteMedia("https://example.com/stalled-error.bin");
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     runtimeFetchMock.mockResolvedValueOnce(
       new Response(
@@ -157,14 +151,8 @@ describe("media store remote sources", () => {
     const transport = await vi.importActual<typeof import("../infra/net/runtime-fetch.js")>(
       "../infra/net/runtime-fetch.js",
     );
-    saveRemoteMediaMock.mockImplementationOnce(media.saveRemoteMedia);
+    saveRemoteMediaMock.mockImplementationOnce(wrapStoreSaveRemoteMedia(media.saveRemoteMedia));
     runtimeFetchMock.mockImplementation(transport.fetchWithRuntimeDispatcher);
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => {
-        const addresses = ["127.0.0.1"];
-        return { hostname, addresses, lookup: createPinnedLookup({ hostname, addresses }) };
-      },
-    });
     const responseClosed = createDeferredCore<boolean>();
     const socketClosed = createDeferredCore();
     const body = "synthetic upstream unavailable";
@@ -186,9 +174,12 @@ describe("media store remote sources", () => {
         },
         async (baseUrl) => {
           const openUrl = `${baseUrl}/open-error`;
-          const failure = await saveMediaSource(openUrl, undefined, "real-http-error", 64).catch(
-            (error: unknown) => error,
-          );
+          const matchedUrls: string[] = [];
+          const failure = await withStoreRemoteFixture(
+            { url: openUrl, onMatch: (url) => matchedUrls.push(url) },
+            () => saveMediaSource(openUrl, undefined, "real-http-error", 64),
+          ).catch((error: unknown) => error);
+          expect(matchedUrls).toEqual([openUrl]);
           expect(failure).toMatchObject({
             name: "MediaFetchError",
             code: "http_error",
@@ -223,7 +214,7 @@ describe("media store remote sources", () => {
   });
 
   it("keeps redirect cancellation and cross-origin header stripping in the guard", async () => {
-    await useActualSaveRemoteMedia();
+    await useActualSaveRemoteMedia("https://example.com/start");
     const cancel = vi.fn();
     runtimeFetchMock
       .mockResolvedValueOnce(
@@ -261,7 +252,7 @@ describe("media store remote sources", () => {
   ])(
     "rejects a $name redirect location after cancelling its body",
     async ({ location, expected }) => {
-      await useActualSaveRemoteMedia();
+      await useActualSaveRemoteMedia("https://example.com/start");
       const cancel = vi.fn();
       runtimeFetchMock.mockResolvedValueOnce(
         new Response(new ReadableStream<Uint8Array>({ cancel }), {

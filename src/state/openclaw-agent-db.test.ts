@@ -676,6 +676,7 @@ function launchAgentSchemaOpener(params: {
 }) {
   const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
   const stateModuleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+  const sqliteModuleUrl = new URL("../infra/node-sqlite.ts", import.meta.url).href;
   const child = spawn(
     process.execPath,
     [
@@ -684,7 +685,7 @@ function launchAgentSchemaOpener(params: {
       "--input-type=module",
       "-e",
       `
-        import { DatabaseSync } from "node:sqlite";
+        import { openNodeSqliteDatabase } from ${JSON.stringify(sqliteModuleUrl)};
         import {
           ensureOpenClawAgentDatabaseSchema,
         } from ${JSON.stringify(agentModuleUrl)};
@@ -692,7 +693,7 @@ function launchAgentSchemaOpener(params: {
           closeOpenClawStateDatabaseForTest,
         } from ${JSON.stringify(stateModuleUrl)};
 
-        const db = new DatabaseSync(process.env.OPENCLAW_AGENT_DB_RACE_PATH);
+        const db = openNodeSqliteDatabase(process.env.OPENCLAW_AGENT_DB_RACE_PATH);
         db.exec("PRAGMA busy_timeout = 5000;");
         const observedDb = new Proxy(db, {
           get(target, property) {

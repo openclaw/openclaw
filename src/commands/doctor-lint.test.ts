@@ -16,6 +16,7 @@ import {
   createDoctorLintSemanticIndex,
   snapshotDoctorLintSqliteFamily,
 } from "./doctor-lint.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   actualOpenNodeSqliteDatabase: vi.fn(),
@@ -80,11 +81,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
     callGateway: mocks.callGateway,
   };
 });
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
 

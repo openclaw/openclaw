@@ -543,12 +543,17 @@ export async function searchKeyword(params: {
     if (terms.length > 0) {
       registerSearchSqlFunctions(params.db, terms);
     }
+    // Hidden rank lets FTS5 supply score order before LIMIT. Pin its mapping per
+    // query so a persisted custom rank cannot change our default BM25 scores.
+    const matchClause = matchQuery
+      ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
+      : "1=1";
     return params.db
       .prepare(
         `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `bm25(${params.ftsTable})` : "0"} AS rank\n` +
+          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchQuery ? `${params.ftsTable} MATCH ?` : "1=1"}${filter.sql}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` WHERE ${matchClause}${filter.sql}${liveChunkClause}${params.sourceFilter.sql}\n` +
           (matchQuery ? ` ORDER BY rank ASC\n` : "") +
           ` LIMIT ?`,
       )

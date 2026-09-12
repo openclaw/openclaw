@@ -315,15 +315,20 @@ unix("leaves source and destination unchanged when destination inspection is unr
     db.prepare = (sql) => {
       const statement = prepare(sql);
       if (sql.startsWith('select "owner"')) {
-        const iterate = statement.iterate.bind(statement);
-        statement.iterate = (root) => {
+        const requireReadableRoot = (root: unknown) => {
           if (typeof root !== "string") {
             throw new Error("expected one positional installation root");
           }
           if (root === to) {
             throw new Error("destination unreadable");
           }
-          return iterate(root);
+          return root;
+        };
+        const get = statement.get.bind(statement);
+        statement.get = (root) => get(requireReadableRoot(root));
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = (root) => {
+          return iterate(requireReadableRoot(root));
         };
       }
       return statement;

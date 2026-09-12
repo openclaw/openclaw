@@ -30,14 +30,27 @@ describe("unpublished state database acquisition", () => {
         }
       }
       databases.clear();
+      // Expire idle coordinator handles before discarding the fake clock.
+      vi.runOnlyPendingTimers();
       vi.clearAllTimers();
       vi.useRealTimers();
       cleanup();
     });
   });
 
+  function observeMaintenanceTimers() {
+    const scheduled = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    return () =>
+      scheduled.mock.results.filter(
+        (result) =>
+          result.type === "return" && !cleared.mock.calls.some(([timer]) => timer === result.value),
+      ).length;
+  }
+
   function acquisitionFixture() {
     vi.useFakeTimers();
+    const maintenanceTimerCount = observeMaintenanceTimers();
     const pathname = path.join(tempDirs.make("openclaw-state-acquisition-"), "state.sqlite");
     const params = {
       pathname,
@@ -65,22 +78,23 @@ describe("unpublished state database acquisition", () => {
       }
       return db;
     });
-    return { params, open, openNative, opened };
+    return { params, open, openNative, opened, maintenanceTimerCount };
   }
 
   function expectSuccessfulReopen(params: Parameters<typeof openUnpublishedStateDatabase>[0]) {
+    const maintenanceTimerCount = observeMaintenanceTimers();
     const reopened = openUnpublishedStateDatabase(params);
     try {
       expect(reopened.db.prepare("SELECT value FROM payload").all()).toEqual([
         { value: "committed" },
       ]);
       expect(reopened.db.isOpen).toBe(true);
-      expect(vi.getTimerCount()).toBe(1);
+      expect(maintenanceTimerCount()).toBe(1);
     } finally {
       reopened.walMaintenance.close();
       closeTrackedStateDatabase(reopened.db);
     }
-    expect(vi.getTimerCount()).toBe(0);
+    expect(maintenanceTimerCount()).toBe(0);
   }
 
   it.each([
@@ -91,7 +105,7 @@ describe("unpublished state database acquisition", () => {
     "schema",
     "hardening",
   ])("releases every acquisition after failed %s and preserves committed state", (phase) => {
-    const { params, open, openNative, opened } = acquisitionFixture();
+    const { params, open, openNative, opened, maintenanceTimerCount } = acquisitionFixture();
     const failure = new Error(`${phase} failed`);
     if (phase === "statement cache") {
       vi.spyOn(kyselySync, "enableNodeSqliteKyselyStatementCache").mockImplementation(() => {
@@ -150,7 +164,7 @@ describe("unpublished state database acquisition", () => {
       const db = expectDefined(opened.at(-1), "failed acquisition");
       expect(db.isOpen).toBe(false);
       expect(kyselyCache.kyselyByDatabase.has(db)).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
     }
     expect(params.recordOpenFailure).not.toHaveBeenCalled();
     vi.restoreAllMocks();
@@ -169,7 +183,7 @@ describe("unpublished state database acquisition", () => {
   )(
     "preserves the $phase error and $cleanupFailure cleanup failures with a disposal-only owner",
     ({ phase, cleanupFailure }) => {
-      const { params, opened } = acquisitionFixture();
+      const { params, opened, maintenanceTimerCount } = acquisitionFixture();
       const failure = new Error(`${phase} failed`);
       const maintenanceFailure = new Error("maintenance close failed");
       const nativeFailure = new Error("native close failed");
@@ -226,7 +240,7 @@ describe("unpublished state database acquisition", () => {
       });
       expect(db.isOpen).toBe(nativeFails);
       expect(kyselyCache.kyselyByDatabase.has(db)).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
       expect(
         openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(params.pathname),
       ).toBeUndefined();
@@ -270,7 +284,7 @@ describe("unpublished state database acquisition", () => {
   )(
     "latches the real $terminal failure without retrying retained native cleanup (cache failure: $cacheFails)",
     ({ terminal, cacheFails }) => {
-      const { params, open, openNative, opened } = acquisitionFixture();
+      const { params, open, openNative, opened, maintenanceTimerCount } = acquisitionFixture();
       const seed = openNative(params.pathname);
       try {
         if (terminal === "schema") {
@@ -344,7 +358,7 @@ describe("unpublished state database acquisition", () => {
       expect(() =>
         acquireStateDatabaseHandleExclusion({ databasePath: params.pathname, busyTimeoutMs: 0 }),
       ).toThrow(/state-handles/);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
       vi.restoreAllMocks();
       expect(openClawStateDatabaseCache.closeOpenClawStateDatabaseByPath(params.pathname)).toBe(
         true,

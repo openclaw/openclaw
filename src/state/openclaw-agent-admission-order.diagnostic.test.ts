@@ -208,9 +208,14 @@ describe("asynchronous canonical admission", () => {
   it("observes an independent WAL commit between the child's integrity and FK checks", async () => {
     const { pathname, writer } = seed();
     expect(writer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    const sqliteLibraryModule = new URL("../infra/bun-sqlite-library.ts", import.meta.url).href;
+    const integrityWorkerModule = new URL("../infra/sqlite-integrity.worker.ts", import.meta.url)
+      .href;
     const commitBetweenChecks = `
         import { execFileSync } from "node:child_process";
-        import { DatabaseSync } from "node:sqlite";
+        const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(sqliteLibraryModule)});
+        ensureSqliteLibrarySelected();
+        const { DatabaseSync } = await import("node:sqlite");
         const prepare = DatabaseSync.prototype.prepare;
         DatabaseSync.prototype.prepare = function (sql) {
           const statement = prepare.call(this, sql);
@@ -220,32 +225,32 @@ describe("asynchronous canonical admission", () => {
               const rows = all();
               // A separate process commits before the real FK check begins.
               execFileSync(process.execPath, ["-e", ${JSON.stringify(`
+                if (process.versions.bun && process.env.OPENCLAW_SQLITE_LIBRARY) {
+                  require("bun:sqlite").Database.setCustomSQLite(process.env.OPENCLAW_SQLITE_LIBRARY);
+                }
                 const { DatabaseSync } = require("node:sqlite");
-                const writer = new DatabaseSync(process.argv[1]);
+                const writer = new DatabaseSync(process.env.OPENCLAW_AGENT_DB_COMMIT_PATH);
                 writer.exec("PRAGMA foreign_keys=OFF; DELETE FROM memory_index_chunks WHERE id='synthetic-parent';");
                 writer.close();
-              `)}, process.argv[2]], { timeout: 5000 });
+              `)}], { timeout: 5000, env: process.env });
               process.send({ phase: "external-commit" });
               return rows;
             };
           }
           return statement;
         };
+        await import(${JSON.stringify(integrityWorkerModule)});
       `;
-    const worker = fork(
-      new URL("../infra/sqlite-integrity.worker.ts", import.meta.url),
-      [pathname],
-      {
-        execArgv: [
-          "--import",
-          "tsx",
-          "--import",
-          `data:text/javascript,${encodeURIComponent(commitBetweenChecks)}`,
-        ],
-        serialization: "advanced",
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      },
-    );
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sqlite-integrity-wal-fixture-"));
+    roots.push(fixtureRoot);
+    const fixturePath = path.join(fixtureRoot, "worker.mts");
+    fs.writeFileSync(fixturePath, commitBetweenChecks);
+    const worker = fork(fixturePath, [pathname], {
+      execArgv: process.versions.bun ? [] : ["--import", "tsx"],
+      serialization: "advanced",
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      env: { ...process.env, OPENCLAW_AGENT_DB_COMMIT_PATH: pathname },
+    });
     const closed = new Promise<void>((resolve) => {
       worker.once("close", () => resolve());
     });

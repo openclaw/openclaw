@@ -1,6 +1,7 @@
 // Control UI tests cover debug behavior.
+import hljs from "highlight.js/lib/core";
 import { render, type LitElement } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -176,6 +177,63 @@ afterEach(async () => {
 });
 
 describe("renderDebug", () => {
+  it("retains event payload DOM and only highlights changed diagnostics", () => {
+    const container = document.createElement("div");
+    const events = Array.from({ length: 250 }, (_, index) => ({
+      ts: 1,
+      event: "agent",
+      payload: { message: `event ${index}` },
+    }));
+    const props = createProps({ eventLog: events, callResult: '{"ok":true}' });
+    const highlight = vi.spyOn(hljs, "highlight");
+    try {
+      render(renderDebug(props), container);
+      const eventSection = container.querySelector(".settings-section:last-child");
+      assert(eventSection);
+      const payloads = Array.from(eventSection.querySelectorAll("pre"));
+      assert(payloads[0]);
+      const firstToken = payloads[0].querySelector("span");
+      assert(firstToken);
+      highlight.mockClear();
+
+      const newest = { ts: 1, event: "agent", payload: { message: "newest" } };
+      const nextProps = { ...props, eventLog: [newest, ...events.slice(0, -1)] };
+      render(renderDebug(nextProps), container);
+
+      const nextPayloads = Array.from(eventSection.querySelectorAll("pre"));
+      expect(nextPayloads).toHaveLength(250);
+      assert(nextPayloads[0] && nextPayloads[1]);
+      expect(nextPayloads[0].textContent).toContain("newest");
+      expect(nextPayloads.slice(1)).toEqual(payloads.slice(0, -1));
+      expect(nextPayloads[1].querySelector("span")).toBe(firstToken);
+      expect(highlight).toHaveBeenCalledTimes(1);
+
+      highlight.mockClear();
+      render(renderDebug({ ...nextProps, callParams: '{"typed":true}' }), container);
+      expect(highlight).not.toHaveBeenCalled();
+
+      render(
+        renderDebug({
+          ...nextProps,
+          status: { version: "updated" },
+          health: { ok: true },
+          heartbeat: { source: "updated" },
+          models: [{ id: "updated" }],
+          callResult: '{"result":"updated"}',
+        }),
+        container,
+      );
+      expect(highlight).toHaveBeenCalledTimes(5);
+      expect(container.textContent).toContain("updated");
+
+      render(renderDebug({ ...props, eventLog: [] }), container);
+      expect(eventSection.querySelector("pre")).toBeNull();
+      expect(eventSection.textContent).not.toContain("event 0");
+    } finally {
+      highlight.mockRestore();
+    }
+  });
+
   it("disables refresh and explains how to recover while disconnected", () => {
     const container = document.createElement("div");
     render(
