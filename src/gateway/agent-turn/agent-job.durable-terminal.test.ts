@@ -408,6 +408,59 @@ describe("durable agent job terminal receipts", () => {
     });
   });
 
+  it("honors a same-owner durable winner when the local terminal write is retained", async () => {
+    const runId = `run-retained-terminal-${runSequence++}`;
+    startRun(runId);
+    writeAgentRunTerminalReceipt({
+      runId,
+      owner,
+      terminalJson: JSON.stringify({
+        status: "error",
+        executionSettled: true,
+        error: "first durable completion",
+        endedAt: 15,
+      }),
+    });
+
+    finishRun(runId, { endedAt: 99 });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "first durable completion",
+      endedAt: 15,
+    });
+    expect(
+      JSON.parse(readAgentRunTerminalReceipt({ runId, owner })?.terminalJson ?? "null"),
+    ).toMatchObject({ status: "error", error: "first durable completion", endedAt: 15 });
+  });
+
+  it("does not recreate a pruned receipt from a stale late completion callback", async () => {
+    const runId = `run-pruned-terminal-${runSequence++}`;
+    startRun(runId);
+    finishRun(runId);
+    expect(deleteAgentRunTerminalReceipt({ runId })).toBe(true);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        status: "error",
+        executionSettled: true,
+        error: "late callback",
+        endedAt: 99,
+      },
+    });
+
+    expect(readAgentRunTerminalReceipt({ runId, owner })).toBeUndefined();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+    resetAgentJobStateForTest();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
   it("allows a provisional retry error to resolve as success before durable publication", async () => {
     vi.useFakeTimers();
     const runId = `run-provisional-${runSequence++}`;

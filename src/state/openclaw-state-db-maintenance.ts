@@ -176,7 +176,6 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   14: LAZY_ADDITIVE_STATE_TABLES,
   15: LAZY_ADDITIVE_STATE_TABLES,
   16: LAZY_ADDITIVE_STATE_TABLES,
-  17: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -265,7 +264,7 @@ export const openClawStateMigrationAssertions = new Map<
   number,
   (database: DatabaseSync, options: { pathname: string }) => void
 >(
-  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const).map(
+  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const).map(
     (version) =>
       [
         version,
@@ -374,96 +373,6 @@ function migratePreparedWorkerOwnership(db: DatabaseSync, previousVersion: numbe
     changed = ensureColumn(db, "worker_environments", column) || changed;
   }
   return changed;
-}
-
-const AGENT_RUN_TERMINAL_RECEIPTS_V17_SCHEMA_SQL = `
-CREATE TABLE agent_run_terminal_receipts (
-  run_id TEXT NOT NULL PRIMARY KEY CHECK (length(run_id) BETWEEN 1 AND 256),
-  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
-  session_key TEXT CHECK (session_key IS NULL OR length(session_key) BETWEEN 1 AND 1024),
-  session_id TEXT CHECK (session_id IS NULL OR length(session_id) BETWEEN 1 AND 256),
-  terminal_json TEXT NOT NULL CHECK (
-    length(CAST(terminal_json AS BLOB)) BETWEEN 2 AND 65536
-    AND json_valid(terminal_json)
-    AND json_type(terminal_json) = 'object'
-  ),
-  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
-  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms)
-) STRICT;
-
-CREATE INDEX idx_agent_run_terminal_receipts_expiry
-  ON agent_run_terminal_receipts(expires_at_ms, created_at_ms, run_id);
-`;
-
-/** Replace the legacy bounded run-id constraint while retaining every receipt byte-for-byte. */
-function migrateAgentRunTerminalReceiptRunIds(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 18 || !tableExists(db, "agent_run_terminal_receipts")) {
-    return false;
-  }
-
-  // This rebuild selects only the seven recognized v17 columns. Admit the
-  // complete source contract before dropping or copying anything so additive
-  // drift, changed constraints, and a globally colliding index cannot lose data.
-  assertSqliteSchemaContains(
-    db,
-    "OpenClaw v17 terminal receipt migration source",
-    AGENT_RUN_TERMINAL_RECEIPTS_V17_SCHEMA_SQL,
-  );
-  const unsupportedObjects = db
-    .prepare(
-      `SELECT type, name
-         FROM sqlite_schema
-        WHERE tbl_name = 'agent_run_terminal_receipts'
-          AND type IN ('index', 'trigger')
-          AND sql IS NOT NULL
-          AND name <> 'idx_agent_run_terminal_receipts_expiry'
-        ORDER BY type, name`,
-    )
-    .all();
-  if (unsupportedObjects.length > 0) {
-    throw new Error(
-      "OpenClaw v17 terminal receipt schema has unsupported attached objects; refusing to discard them.",
-    );
-  }
-
-  const marker = "CREATE TABLE IF NOT EXISTS agent_run_terminal_receipts (";
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("Canonical agent run terminal receipt schema block is missing.");
-  }
-  const migrationTable = "agent_run_terminal_receipts_migration_v18";
-  if (tableExists(db, migrationTable)) {
-    throw new Error(`OpenClaw terminal receipt migration table already exists: ${migrationTable}`);
-  }
-  const canonicalTableSql = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length).replace(
-    marker,
-    `CREATE TABLE ${migrationTable} (`,
-  );
-  const columns = [
-    "run_id",
-    "agent_id",
-    "session_key",
-    "session_id",
-    "terminal_json",
-    "created_at_ms",
-    "expires_at_ms",
-  ].join(", ");
-
-  // The caller owns one immediate transaction through the rebuild, index
-  // recreation, content marker, and published version update.
-  db.exec("DROP INDEX IF EXISTS idx_agent_run_terminal_receipts_expiry;");
-  db.exec(canonicalTableSql);
-  db.exec(
-    `INSERT INTO ${migrationTable} (rowid, ${columns})
-     SELECT rowid, ${columns} FROM agent_run_terminal_receipts;`,
-  );
-  db.exec("DROP TABLE agent_run_terminal_receipts;");
-  db.exec(`ALTER TABLE ${migrationTable} RENAME TO agent_run_terminal_receipts;`);
-  db.exec(`CREATE INDEX idx_agent_run_terminal_receipts_expiry
-    ON agent_run_terminal_receipts(expires_at_ms, created_at_ms, run_id);`);
-  return true;
 }
 
 // v15 collection cleanup released a dropped skill's claim so a path recreated by hand
@@ -624,10 +533,6 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migratePreparedWorkerOwnership,
     applied: "Recorded prepared worker ownership and one-use lifecycle (v17)",
-  },
-  {
-    migrate: migrateAgentRunTerminalReceiptRunIds,
-    applied: "Removed the terminal receipt run ID length ceiling (v18)",
   },
 ];
 

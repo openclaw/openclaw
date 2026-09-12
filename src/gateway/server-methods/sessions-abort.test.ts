@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -10,6 +13,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { writeAgentRunTerminalReceipt } from "../../state/agent-run-terminal-receipts.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { resetAgentJobStateForTest } from "../agent-turn/agent-job.js";
 import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -40,9 +45,59 @@ beforeEach(async () => {
 afterEach(() => {
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
+  resetAgentJobStateForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
+
+function profileClient(profileId: string) {
+  return {
+    authenticatedUserProfile: { profileId },
+    connect: { scopes: ["operator.read"] },
+  } as never;
+}
+
+function restrictedProfileConfig() {
+  return {
+    gateway: {
+      roles: {
+        default: "limited",
+        definitions: {
+          limited: {
+            sessions: { others: "none" },
+            agents: ["main"],
+            scopes: ["operator.read"],
+          },
+        },
+      },
+    },
+  };
+}
+
+async function seedRecoveredRun(params: {
+  createdProfileId: string;
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+}): Promise<void> {
+  const agentId = "main";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await replaceSessionEntry(
+    { agentId, sessionKey: params.sessionKey, storePath },
+    {
+      sessionId: params.sessionId,
+      updatedAt: 42,
+      createdActor: { type: "human", source: "profile", id: params.createdProfileId },
+    },
+  );
+  writeAgentRunTerminalReceipt({
+    runId: params.runId,
+    owner: { agentId, sessionKey: params.sessionKey, sessionId: params.sessionId },
+    terminalJson: JSON.stringify({ status: "ok", startedAt: 10, endedAt: 20 }),
+  });
+  resetAgentJobStateForTest();
+  closeOpenClawStateDatabaseForTest();
+}
 
 async function configureFixedSessionStore(label = "default"): Promise<string> {
   const storePath = path.join(requireStateDir(), `shared-abort-sessions-${label}`, "sessions.json");
@@ -269,6 +324,138 @@ test.each(["main", "work"])("sessions.abort still resolves the %s agent store", 
       }),
     ),
   ).toBe(true);
+});
+
+test("agent.wait recovers an authorized terminal result through real storage and session boundaries", async () => {
+  const runId = "run-wait-authorized-restart";
+  const sessionKey = "agent:main:wait-authorized-restart";
+  const owner = ensureProfileForEmail("wait-authorized-owner@example.test");
+  await seedRecoveredRun({
+    createdProfileId: owner.id,
+    runId,
+    sessionId: "session-wait-authorized-restart",
+    sessionKey,
+  });
+
+  const result = await directSessionReq(
+    "agent.wait",
+    { runId, timeoutMs: 0 },
+    {
+      client: profileClient(owner.id),
+      context: { getRuntimeConfig: () => restrictedProfileConfig() },
+    },
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    payload: { runId, status: "ok", startedAt: 10, endedAt: 20 },
+  });
+});
+
+test("agent.wait rejects an unrelated caller before exposing a recovered result", async () => {
+  const runId = "run-wait-unrelated-restart";
+  const owner = ensureProfileForEmail("wait-unrelated-owner@example.test");
+  const other = ensureProfileForEmail("wait-unrelated-other@example.test");
+  await seedRecoveredRun({
+    createdProfileId: owner.id,
+    runId,
+    sessionId: "session-wait-unrelated-restart",
+    sessionKey: "agent:main:wait-unrelated-restart",
+  });
+
+  const result = await directSessionReq(
+    "agent.wait",
+    { runId, timeoutMs: 0 },
+    {
+      client: profileClient(other.id),
+      context: { getRuntimeConfig: () => restrictedProfileConfig() },
+    },
+  );
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent run was not found" },
+  });
+  expect(result.payload).toBeUndefined();
+});
+
+test("agent.wait rejects a revoked caller before exposing a recovered result", async () => {
+  const runId = "run-wait-revoked-restart";
+  const sessionKey = "agent:main:wait-revoked-restart";
+  const sessionId = "session-wait-revoked-restart";
+  const owner = ensureProfileForEmail("wait-revoked-owner@example.test");
+  const replacementOwner = ensureProfileForEmail("wait-revoked-new-owner@example.test");
+  await seedRecoveredRun({
+    createdProfileId: owner.id,
+    runId,
+    sessionId,
+    sessionKey,
+  });
+  const storePath = path.join(requireStateDir(), "agents", "main", "sessions", "sessions.json");
+  await deleteSessionEntryLifecycle({
+    storePath,
+    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    archiveTranscript: false,
+  });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    {
+      sessionId,
+      updatedAt: 43,
+      createdActor: { type: "human", source: "profile", id: replacementOwner.id },
+    },
+  );
+
+  const result = await directSessionReq(
+    "agent.wait",
+    { runId, timeoutMs: 0 },
+    {
+      client: profileClient(owner.id),
+      context: { getRuntimeConfig: () => restrictedProfileConfig() },
+    },
+  );
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent run was not found" },
+  });
+  expect(result.payload).toBeUndefined();
+});
+
+test("agent.wait rejects a replacement session before exposing a recovered result", async () => {
+  const runId = "run-wait-replacement-restart";
+  const sessionKey = "agent:main:wait-replacement-restart";
+  const owner = ensureProfileForEmail("wait-replacement-owner@example.test");
+  await seedRecoveredRun({
+    createdProfileId: owner.id,
+    runId,
+    sessionId: "session-wait-retained",
+    sessionKey,
+  });
+  const storePath = path.join(requireStateDir(), "agents", "main", "sessions", "sessions.json");
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    {
+      sessionId: "session-wait-replacement",
+      updatedAt: 43,
+      createdActor: { type: "human", source: "profile", id: owner.id },
+    },
+  );
+
+  const result = await directSessionReq(
+    "agent.wait",
+    { runId, timeoutMs: 0 },
+    {
+      client: profileClient(owner.id),
+      context: { getRuntimeConfig: () => restrictedProfileConfig() },
+    },
+  );
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent run was not found" },
+  });
+  expect(result.payload).toBeUndefined();
 });
 
 test("sessions.abort reports an authorized exact completed run after hot state is lost", async () => {
