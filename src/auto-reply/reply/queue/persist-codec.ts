@@ -720,7 +720,7 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
  * so the original receipt would stay claimable and the turn could execute
  * twice. This queue persists only routes the receipt owner does not cover.
  */
-export function isCanonicalPendingInputOwnedFollowup(item: FollowupRun): boolean {
+function isCanonicalPendingInputOwnedFollowup(item: FollowupRun): boolean {
   return item.userTurnTranscriptRecorder?.getPendingInputMessage?.() !== undefined;
 }
 
