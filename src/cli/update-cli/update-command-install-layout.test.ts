@@ -19,7 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as shared from "./shared.js";
-import { updateCommand } from "./update-command.js";
+import { runUpdateCommand as updateCommand } from "./update-command-runner.js";
 
 const triage = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/update-triage.js", () => ({

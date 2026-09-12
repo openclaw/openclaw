@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import {
+  applyPackagedRuntimeActivationPolicy,
   completePackageLifecycle,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
@@ -16,6 +17,7 @@ import {
   pruneInstalledPackageDist,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { collectPackageDistContentInventoryErrors } from "../../src/infra/package-dist-inventory.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -29,6 +31,37 @@ async function expectPathMissing(filePath: string) {
 }
 
 describe("bundled plugin postinstall", () => {
+  it.each([
+    { policy: "0", initialActivation: undefined, expectedActivation: "manual" },
+    { policy: "1", initialActivation: "manual", expectedActivation: undefined },
+  ])(
+    "applies packaged runtime activation policy $policy",
+    async ({ policy, initialActivation, expectedActivation }) => {
+      const packageRoot = await createTempDirAsync("openclaw-postinstall-activation-");
+      const buildInfoPath = path.join(packageRoot, "dist", "build-info.json");
+      await fs.mkdir(path.dirname(buildInfoPath), { recursive: true });
+      await fs.writeFile(
+        buildInfoPath,
+        `${JSON.stringify({
+          buildId: "candidate",
+          ...(initialActivation ? { activation: initialActivation } : {}),
+        })}\n`,
+      );
+      await writePackageDistInventory(packageRoot);
+
+      applyPackagedRuntimeActivationPolicy({
+        env: { OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: policy },
+        packageRoot,
+      });
+
+      expect(JSON.parse(await fs.readFile(buildInfoPath, "utf8"))).toEqual({
+        buildId: "candidate",
+        ...(expectedActivation ? { activation: expectedActivation } : {}),
+      });
+      await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toEqual([]);
+    },
+  );
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),

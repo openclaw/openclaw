@@ -549,6 +549,54 @@ it.each([
   }),
 );
 
+it("retains the inspected systemd manager route during preparation", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const seenRoutes: Array<string | undefined> = [];
+    mocks.service.mockReturnValue(
+      createMockGatewayService({
+        readCommand: async (env) => {
+          seenRoutes.push(env.DBUS_SESSION_BUS_ADDRESS);
+          return {
+            programArguments: [
+              process.execPath,
+              path.join(process.cwd(), "openclaw.mjs"),
+              "gateway",
+            ],
+            environment: { HOME: home },
+          };
+        },
+        readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
+        isLoaded: async () => true,
+        stop: async () => undefined,
+      }),
+    );
+    const params = {
+      updateInstallKind: "package" as const,
+      root: process.cwd(),
+      shouldRestart: true,
+      jsonMode: true,
+      phase: "inspect" as const,
+    };
+    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
+    const admittedRoute = "unix:path=/run/user/2001/bus";
+    before.serviceEnv = {
+      ...before.serviceEnv,
+      DBUS_SESSION_BUS_ADDRESS: admittedRoute,
+    };
+    const readsBeforePreparation = seenRoutes.length;
+
+    await expect(
+      maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "prepare",
+        expectedService: before,
+      }),
+    ).resolves.toMatchObject({ stopped: true });
+
+    expect(seenRoutes.slice(readsBeforePreparation)).toEqual([admittedRoute, admittedRoute]);
+  }));
+
 it.each([
   "shipped handoff",
   "matching UID",

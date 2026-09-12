@@ -25,6 +25,7 @@ export type BuildInfo = {
   commit: string | null;
   builtAt: string;
   buildId: string;
+  activation?: "manual";
 };
 
 type ResolveBuildInfoOptions = {
@@ -96,6 +97,10 @@ export function resolveBuildInfo(options: ResolveBuildInfoOptions = {}): BuildIn
   const explicitSha = env.GIT_SHA?.trim();
   const githubSha = env.GITHUB_SHA?.trim();
   const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const allowGatewayActivation = env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION?.trim();
+  if (allowGatewayActivation && allowGatewayActivation !== "0" && allowGatewayActivation !== "1") {
+    throw new Error("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION must be 0 or 1 when set");
+  }
   const checkedOutCommit =
     explicitCommit || explicitSha
       ? null
@@ -126,6 +131,7 @@ export function resolveBuildInfo(options: ResolveBuildInfoOptions = {}): BuildIn
     commit,
     builtAt,
     buildId,
+    ...(allowGatewayActivation === "0" ? { activation: "manual" as const } : {}),
   };
 }
 

@@ -97,6 +97,31 @@ describe("write-build-info", () => {
     ).toBe("2026.7.10-release-aaaaaaaaaaaa-2026-07-10T01-02-03.000Z");
   });
 
+  it("records manual activation without changing the build identity", () => {
+    const rootDir = createPackage();
+    const base = {
+      rootDir,
+      env: {
+        GIT_COMMIT: "a".repeat(40),
+        OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.000Z",
+      },
+    };
+
+    const automatic = resolveBuildInfo(base);
+    const manual = resolveBuildInfo({
+      ...base,
+      env: { ...base.env, OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0" },
+    });
+
+    expect(manual).toEqual({ ...automatic, activation: "manual" });
+    expect(() =>
+      resolveBuildInfo({
+        ...base,
+        env: { ...base.env, OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "unexpected" },
+      }),
+    ).toThrow("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION must be 0 or 1 when set");
+  });
+
   it("preserves GIT_COMMIT then GIT_SHA explicit input precedence", () => {
     const rootDir = createPackage();
     const fallbackSha = "1234567890abcdef1234567890abcdef12345678";

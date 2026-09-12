@@ -3088,34 +3088,37 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("hard-respawns update restarts and exits only after the replacement becomes healthy", async () => {
-    vi.clearAllMocks();
-    peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({
-      mode: "spawned",
-      pid: 7777,
-      child: { kill: vi.fn() },
-    });
+  it.each(["update.run", "runtime.generation.changed"])(
+    "hard-respawns %s restarts and exits only after the replacement becomes healthy",
+    async (reason) => {
+      vi.clearAllMocks();
+      peekGatewaySigusr1RestartReason.mockReturnValue(reason);
+      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+        mode: "spawned",
+        pid: 7777,
+        child: { kill: vi.fn() },
+      });
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const waitForHealthyChild = vi.fn(async () => true);
-      const close = vi.fn(async () => {});
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
-      await waitForStart(started);
-      const sigusr1 = captureSignal("SIGUSR1");
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const waitForHealthyChild = vi.fn(async () => true);
+        const close = vi.fn(async () => {});
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
+        await waitForStart(started);
+        const sigusr1 = captureSignal("SIGUSR1");
 
-      sigusr1();
+        sigusr1();
 
-      await expect(exited).resolves.toBe(0);
-      expect(waitForHealthyChild).toHaveBeenCalledWith(18789, 7777, "127.0.0.1");
-      expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-      expect(start).toHaveBeenCalledTimes(1);
-      expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
-    });
-  });
+        await expect(exited).resolves.toBe(0);
+        expect(waitForHealthyChild).toHaveBeenCalledWith(18789, 7777, "127.0.0.1");
+        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each(["update.run", "update.auto"] as const)(
     "writes a handoff before exiting for supervised %s restarts",

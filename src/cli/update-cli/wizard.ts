@@ -139,8 +139,8 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   }
 
   try {
-    const { updateCommand } = await import("./update-command.js");
-    await updateCommand({
+    const { runUpdateCommand } = await import("./update-command-runner.js");
+    await runUpdateCommand({
       channel: requestedChannel ?? undefined,
       restart,
       timeout: opts.timeout,

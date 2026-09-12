@@ -2,6 +2,7 @@
 // Package lifecycle cleanup and completion touch only this installed package.
 // Doctor owns operator-state migration and genuinely dangling runtime-link repair;
 // shared caches outside this package can still serve other installs or profiles.
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -11,6 +12,7 @@ import {
   rmdirSync,
   rmSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,7 +20,11 @@ import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const CONTENT_INVENTORY_PATH = "dist/postinstall-content-inventory.json";
+const BUILD_INFO_PATH = "dist/build-info.json";
 // One budget covers all three prune walks (legacy-deps prepass, file listing,
 // empty-dir sweep). npm upgrades transiently hold old+new content-hashed dist
 // files, so a real upgrade scan totals ~24k entries today (2026.6.x); keep ~4x
@@ -354,6 +360,70 @@ export function isSourceCheckoutRoot(params) {
   );
 }
 
+export function applyPackagedRuntimeActivationPolicy(params = {}) {
+  const env = params.env ?? process.env;
+  const policy = env?.[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]?.trim();
+  if (policy !== "0" && policy !== "1") {
+    return false;
+  }
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const buildInfoPath = join(packageRoot, BUILD_INFO_PATH);
+  const pathExists = params.existsSync ?? existsSync;
+  if (!pathExists(buildInfoPath)) {
+    return false;
+  }
+  const readFile = params.readFileSync ?? readFileSync;
+  const writeFile = params.writeFileSync ?? writeFileSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const buildInfoStat = pathLstat(buildInfoPath);
+  if (!buildInfoStat.isFile() || buildInfoStat.isSymbolicLink()) {
+    throw new Error(`unsafe build metadata: ${BUILD_INFO_PATH}`);
+  }
+  const parsed = JSON.parse(readFile(buildInfoPath, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`invalid build metadata: ${BUILD_INFO_PATH}`);
+  }
+  if (policy === "0") {
+    if (parsed.activation === "manual") {
+      return false;
+    }
+    parsed.activation = "manual";
+  } else {
+    if (parsed.activation !== "manual") {
+      return false;
+    }
+    delete parsed.activation;
+  }
+  const buildInfoBytes = Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`);
+  writeFile(buildInfoPath, buildInfoBytes);
+
+  const contentInventoryPath = join(packageRoot, CONTENT_INVENTORY_PATH);
+  if (pathExists(contentInventoryPath)) {
+    const contentInventoryStat = pathLstat(contentInventoryPath);
+    if (!contentInventoryStat.isFile() || contentInventoryStat.isSymbolicLink()) {
+      throw new Error(`unsafe content inventory: ${CONTENT_INVENTORY_PATH}`);
+    }
+    const contentInventory = JSON.parse(readFile(contentInventoryPath, "utf8"));
+    if (!Array.isArray(contentInventory)) {
+      throw new Error(`invalid content inventory: ${CONTENT_INVENTORY_PATH}`);
+    }
+    const buildInfoEntryIndex = contentInventory.findIndex(
+      (entry) => entry?.path === BUILD_INFO_PATH,
+    );
+    if (buildInfoEntryIndex < 0) {
+      throw new Error(`missing ${BUILD_INFO_PATH} from ${CONTENT_INVENTORY_PATH}`);
+    }
+    contentInventory[buildInfoEntryIndex] = {
+      path: BUILD_INFO_PATH,
+      sha256: createHash("sha256").update(buildInfoBytes).digest("hex"),
+      mode: buildInfoStat.mode & 0o777,
+      size: buildInfoBytes.byteLength,
+    };
+    writeFile(contentInventoryPath, `${JSON.stringify(contentInventory, null, 2)}\n`);
+  }
+  return true;
+}
+
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -367,6 +437,13 @@ export function runBundledPluginPostinstall(params = {}) {
     // must not alter that install or the operator state from a development checkout.
     return;
   }
+  applyPackagedRuntimeActivationPolicy({
+    env,
+    packageRoot,
+    existsSync: pathExists,
+    readFileSync: params.readFileSync,
+    writeFileSync: params.writeFileSync,
+  });
   pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,

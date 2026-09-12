@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { ExitError } from "../../runtime.js";
-import { updateCommand } from "./update-command.js";
+import { runUpdateCommand as updateCommand } from "./update-command-runner.js";
 
 const mocks = vi.hoisted(() => ({
   stateAdmission: vi.fn(() => {

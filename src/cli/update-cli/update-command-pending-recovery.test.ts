@@ -39,10 +39,10 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { runUpdateCommand as updateCommand } from "./update-command-runner.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
-import { updateCommand } from "./update-command.js";
 
 const dirs = new Set<string>();
 afterEach(() => cleanupTempDirs(dirs));

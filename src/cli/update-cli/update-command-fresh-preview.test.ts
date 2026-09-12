@@ -25,6 +25,7 @@ import { installFreshUpdateFixture, targetMetadata } from "./update-command-fres
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
+import { runUpdateCommand as updateCommand } from "./update-command-runner.js";
 import * as servicePlan from "./update-command-service-plan.js";
 import {
   deferUpdateCommandTerminalResult,
@@ -32,7 +33,6 @@ import {
   resolveSettledUpdateCommandResult,
 } from "./update-command-terminal.js";
 import * as commandTriage from "./update-command-triage.js";
-import { updateCommand } from "./update-command.js";
 
 const promptConfirm = vi.hoisted(() => vi.fn(async () => false));
 vi.mock("@clack/prompts", async (original) => ({

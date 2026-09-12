@@ -1287,6 +1287,69 @@ describe("infra runtime", () => {
       }
     });
 
+    it("preserves a pending chat acknowledgement when runtime generation detection pulls restart earlier", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const beforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "session-A",
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit },
+        });
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          preservePendingEmitHooksOnDeferralBypass: true,
+          reason: "runtime.generation.changed",
+          skipCooldown: true,
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("runtime.generation.changed");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("preserves a preparing chat acknowledgement when runtime generation detection promotes its reason", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const beforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      let pending = 1;
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => pending);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "session-A",
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          preservePendingEmitHooksOnDeferralBypass: true,
+          reason: "runtime.generation.changed",
+          skipCooldown: true,
+        });
+        pending = 0;
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("runtime.generation.changed");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("bypasses an active restart deferral when a forced restart arrives", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const staleBeforeEmit = vi.fn(async () => {});

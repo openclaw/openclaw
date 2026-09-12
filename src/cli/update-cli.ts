@@ -202,8 +202,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts: CommanderUpdateOptions) => {
       try {
-        const { updateCommand } = await import("./update-cli/update-command.js");
-        await updateCommand({
+        const { runUpdateCommand } = await import("./update-cli/update-command-runner.js");
+        await runUpdateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
           reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),

@@ -753,7 +753,7 @@ const runPostCorePluginConvergenceSpy = vi.spyOn(
   "runPostCorePluginConvergence",
 );
 const { registerUpdateCli } = await import("./update-cli.js");
-const { updateCommand } = await import("./update-cli/update-command.js");
+const { runUpdateCommand: updateCommand } = await import("./update-cli/update-command-runner.js");
 
 async function invokeUpdateCli(opts: Parameters<typeof updateCommand>[0]) {
   const program = new Command();
@@ -6197,9 +6197,13 @@ describe("update-cli", () => {
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
     expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
-      // The inspection snapshot retains the scoped marker after the updater
+      // The inspection snapshot retains the scoped markers after the updater
       // restores process.env on refusal.
-      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      env: {
+        ...process.env,
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "1",
+      },
       supportedVersions: { state: 3, agent: 9 },
       configuredAgentDatabaseTargets: [],
       configuredAgentDatabaseCandidatePaths: [
@@ -14284,6 +14288,7 @@ describe("update-cli", () => {
         select.mockResolvedValue("dev");
         confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
         vi.mocked(runGatewayUpdate).mockImplementation(async (options) => {
+          expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
           await writeOpenClawPackageFixture(tempDir, "2026.8.1", { git: true, builtSha: sha });
           await options?.prepareGitExposure?.(tempDir, sha, undefined);
           await options?.validateCandidate?.(tempDir);

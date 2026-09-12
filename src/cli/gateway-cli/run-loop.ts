@@ -23,6 +23,7 @@ import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
+import { requiresFreshGatewayProcess } from "../../infra/gateway-fresh-process-restart.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -444,6 +445,7 @@ export async function runGatewayLoop(params: {
       reason: restartReason ?? "gateway.restart",
     });
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
+    const requiresFreshProcess = requiresFreshGatewayProcess(restartReason);
 
     if (cancelled) {
       return reacquireAndResumeInProcessRestart(expectedOwner);
@@ -461,8 +463,8 @@ export async function runGatewayLoop(params: {
     const respawnOptions = {
       env: createGatewayRestartTraceHandoffEnv(captureGatewayRestartTraceHandoff()),
     };
-    const isStandaloneUpdate = isUpdateRestart && !supervisorMode;
-    const respawn = isStandaloneUpdate
+    const isStandaloneFreshProcessRestart = requiresFreshProcess && !supervisorMode;
+    const respawn = isStandaloneFreshProcessRestart
       ? eagerLifecycleRuntime.respawnGatewayProcessForUpdate(respawnOptions)
       : eagerLifecycleRuntime.restartGatewayProcessWithFreshPid(respawnOptions);
     if (respawn.mode === "spawned") {
@@ -490,7 +492,7 @@ export async function runGatewayLoop(params: {
       return reacquireAndResumeInProcessRestart();
     }
     if (respawn.mode === "supervised") {
-      const restartKind = isUpdateRestart ? "update-process" : "full-process";
+      const restartKind = requiresFreshProcess ? "update-process" : "full-process";
       markGatewayRestartTrace("restart.full-process-handoff", [
         ["kind", restartKind],
         ["mode", respawn.mode],
@@ -538,11 +540,11 @@ export async function runGatewayLoop(params: {
       return exitProcessAfterLogFlush(0);
     }
     if (respawn.mode === "failed") {
-      if (!isStandaloneUpdate) {
+      if (!isStandaloneFreshProcessRestart) {
         writeStabilityBundle("gateway.restart_respawn_failed");
       }
       gatewayLog.warn(
-        `${isStandaloneUpdate ? "update respawn" : "full process restart"} failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+        `${isStandaloneFreshProcessRestart ? "fresh-process respawn" : "full process restart"} failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
       if (isUpdateRestart) {
         await markRestartHandoffUnavailable("restart-unhealthy");
@@ -552,7 +554,7 @@ export async function runGatewayLoop(params: {
         `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
       );
     }
-    if (!isUpdateRestart && isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
+    if (!requiresFreshProcess && requiresFreshGatewayProcess(activeRestartRequest?.restartReason)) {
       return handleRestartAfterServerClose();
     }
     return reacquireAndResumeInProcessRestart();
@@ -991,9 +993,9 @@ export async function runGatewayLoop(params: {
       const currentRestartRequest = pendingStartupRequest ?? activeRestartRequest;
       if (
         action === "restart" &&
-        isUpdateProcessRestartReason(restartReason) &&
+        requiresFreshGatewayProcess(restartReason) &&
         currentRestartRequest?.action === "restart" &&
-        (!isUpdateProcessRestartReason(currentRestartRequest.restartReason) ||
+        (!requiresFreshGatewayProcess(currentRestartRequest.restartReason) ||
           (restartIntent?.successorOwner &&
             !sameManagedUpdateOwner(
               restartIntent.successorOwner,

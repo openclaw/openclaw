@@ -15,6 +15,7 @@ const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
+const UPDATE_RUNTIME_ACTIVATION_POLICY_ENV = "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 
 function applyManagedServiceSelectorEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
@@ -119,6 +120,23 @@ export async function withUpdateInProgressEnv<T>(
       } else {
         process.env[key] = value;
       }
+    }
+  }
+}
+
+export async function withUpdateRuntimeActivationPolicy<T>(
+  allowGatewayActivation: boolean,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[UPDATE_RUNTIME_ACTIVATION_POLICY_ENV];
+  process.env[UPDATE_RUNTIME_ACTIVATION_POLICY_ENV] = allowGatewayActivation ? "1" : "0";
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[UPDATE_RUNTIME_ACTIVATION_POLICY_ENV];
+    } else {
+      process.env[UPDATE_RUNTIME_ACTIVATION_POLICY_ENV] = previous;
     }
   }
 }

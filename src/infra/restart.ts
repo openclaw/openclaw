@@ -18,6 +18,7 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
+import { requiresFreshGatewayProcess } from "./gateway-fresh-process-restart.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
@@ -64,8 +65,7 @@ let restartTransientGeneration = 0;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
-  const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
-  return isUpdateRestart(next) && !isUpdateRestart(current);
+  return requiresFreshGatewayProcess(next) && !requiresFreshGatewayProcess(current);
 }
 
 function hasUnconsumedRestartSignal(): boolean {
