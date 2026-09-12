@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { Server } from "node:https";
+import type { TlsOptions } from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -10,14 +11,21 @@ const mocks = vi.hoisted(() => ({ watchFile: vi.fn(), unwatchFile: vi.fn(), load
 vi.mock("node:fs", () => ({ watchFile: mocks.watchFile, unwatchFile: mocks.unwatchFile }));
 vi.mock("../infra/tls/gateway.js", () => ({ loadGatewayTlsServerRuntime: mocks.load }));
 
-const material = (): GatewayTlsRuntime => ({
-  enabled: true,
-  required: true,
-  certPath: "/synthetic/cert.pem",
-  keyPath: "/synthetic/key.pem",
-  fingerprintSha256: "same-leaf-fingerprint",
-  tlsOptions: { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM, minVersion: "TLSv1.3" },
-});
+function material() {
+  const tlsOptions: TlsOptions = {
+    cert: TEST_TLS_CERT_PEM,
+    key: TEST_TLS_KEY_PEM,
+    minVersion: "TLSv1.3",
+  };
+  return {
+    enabled: true,
+    required: true,
+    certPath: "/synthetic/cert.pem",
+    keyPath: "/synthetic/key.pem",
+    fingerprintSha256: "same-leaf-fingerprint",
+    tlsOptions,
+  } satisfies GatewayTlsRuntime;
+}
 
 function createRenewal() {
   const watcher = new EventEmitter();
