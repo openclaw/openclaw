@@ -11,10 +11,10 @@ const NATIVE_SHELL_CLASSES = [
 ] as const;
 
 export function mobileNavLayoutMediaQuery(): string {
-  const maxWidth = isNativeWebChromeHost()
-    ? NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH
-    : MOBILE_NAV_MAX_WIDTH;
-  return `(max-width: ${maxWidth}px)`;
+  if (isNativeWebChromeHost()) {
+    return `(max-width: ${NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH}px)`;
+  }
+  return `(max-width: ${MOBILE_NAV_MAX_WIDTH}px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)`;
 }
 
 export function isMobileNavLayout(): boolean {
