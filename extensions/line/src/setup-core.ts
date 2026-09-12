@@ -27,6 +27,8 @@ type LineChannelSection = Record<string, unknown> & {
   accounts?: Record<string, Record<string, unknown>>;
 };
 
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
+
 // Default-account writes land at the channel root, but the credential resolver
 // (resolveLineAccount) reads a promoted accounts.default record ahead of the
 // root, so a rotation must retire the same fields from that record or the
@@ -43,12 +45,13 @@ function retirePromotedDefaultAccountFields(
     return cfg;
   }
   // Mirror resolveAccountEntry (the resolver read path): the exact `default`
-  // record wins over case variants, so retirement must clear the record the
-  // resolver actually reads; clearing only a variant would leave the active
-  // stale credential in place.
+  // record wins, then a trimmed-lowercase key match. Using normalizeAccountId
+  // here would also sanitize punctuation (e.g. `-default-` → `default`), which
+  // can select a record the resolver never reads and leave the active stale
+  // credential in place.
   const accountKey = Object.hasOwn(accounts, DEFAULT_ACCOUNT_ID)
     ? DEFAULT_ACCOUNT_ID
-    : Object.keys(accounts).find((key) => normalizeAccountId(key) === DEFAULT_ACCOUNT_ID);
+    : Object.keys(accounts).find((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
   const record = accountKey ? accounts[accountKey] : undefined;
   if (!accountKey || !record || typeof record !== "object") {
     return cfg;
@@ -89,8 +92,16 @@ export function patchLineAccountConfig(params: {
     ensureChannelEnabled: Boolean(params.enabled),
     ensureAccountEnabled: false,
   });
-  return params.clearFields?.length && normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID
-    ? retirePromotedDefaultAccountFields(next, params.clearFields)
+  // Promoted-record retirement is credential-only. patchLineAccountConfig also
+  // serves the DM-policy writer (clearFields: ["allowFrom"]); deleting account
+  // policy fields could invalidate a saved record (e.g. `dmPolicy: "open"`
+  // losing its allowlist), which the previous root-only clear preserved.
+  const promotedCredentialFields = params.clearFields?.filter((field) =>
+    accountCredentialKeys.includes(field),
+  );
+  return promotedCredentialFields?.length &&
+    normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID
+    ? retirePromotedDefaultAccountFields(next, promotedCredentialFields)
     : next;
 }
 
@@ -99,8 +110,6 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
 }
 
 export { parseLineAllowFromId };
-
-const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: accountCredentialKeys,

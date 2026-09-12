@@ -13,9 +13,18 @@ type LineChannelConfig = {
   channelSecret?: string;
   tokenFile?: string;
   secretFile?: string;
+  dmPolicy?: string;
+  allowFrom?: string[];
   accounts?: Record<
     string,
-    { channelAccessToken?: string; channelSecret?: string; tokenFile?: string; name?: string }
+    {
+      channelAccessToken?: string;
+      channelSecret?: string;
+      tokenFile?: string;
+      name?: string;
+      dmPolicy?: string;
+      allowFrom?: string[];
+    }
   >;
 };
 
@@ -315,5 +324,66 @@ describe("LINE rotation after single-account promotion", () => {
     expect(promotedAccount(rotated)?.Default).toEqual({ name: "Main" });
     expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
     expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
+  });
+
+  it("clears the record the resolver reads when a misleading key sorts first", () => {
+    // resolveAccountEntry falls back on trimmed lowercase equality, so with no
+    // exact `default` key the resolver reads `Default` — not `-default-`, which
+    // only canonicalizes to `default` under normalizeAccountId's punctuation
+    // sanitizing. Retirement must clear the same record the resolver reads.
+    const misleading = {
+      channels: {
+        line: {
+          enabled: true,
+          accounts: {
+            "-default-": { channelAccessToken: "DECOY_TOKEN" },
+            Default: { channelAccessToken: "STALE_VARIANT_TOKEN" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = applyLineSetup({ channelAccessToken: "ROTATED_TOKEN" }, misleading);
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(promotedAccount(rotated)?.Default).toEqual({});
+    expect(promotedAccount(rotated)?.["-default-"]).toEqual({
+      channelAccessToken: "DECOY_TOKEN",
+    });
+    expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
+    expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
+  });
+
+  it("preserves promoted policy fields when the DM-policy writer clears allowFrom", () => {
+    // The DM-policy writer (setup-surface lineDmPolicy.applyPatch) calls
+    // patchLineAccountConfig with clearFields: ["allowFrom"] when pairing or
+    // disabled is selected. Promoted-record retirement is credential-only, so
+    // the account record keeps its saved policy; deleting the account
+    // allowlist while leaving dmPolicy: "open" would fail LINE's per-account
+    // open-policy validation.
+    const withPolicy = {
+      channels: {
+        line: {
+          enabled: true,
+          allowFrom: ["*"],
+          accounts: {
+            default: { dmPolicy: "open", allowFrom: ["*"] },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = patchLineAccountConfig({
+      cfg: withPolicy,
+      accountId: "default",
+      enabled: true,
+      patch: { dmPolicy: "pairing" },
+      clearFields: ["allowFrom"],
+    });
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.dmPolicy).toBe("pairing");
+    expect(channel.allowFrom).toBeUndefined();
+    expect(promotedAccount(rotated)?.default).toEqual({ dmPolicy: "open", allowFrom: ["*"] });
   });
 });
