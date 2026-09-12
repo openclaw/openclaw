@@ -1,7 +1,6 @@
 import { html, noChange, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -48,13 +47,11 @@ type ChatPagePaneRenderOptions = {
   ownerKey: string;
   pane: ChatSplitPane;
   sessionSlots: readonly (string | undefined)[];
-  showGatewayPicker: boolean;
   splitMode: boolean;
   weight: number;
 };
 
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
-  const nativeGateways = options.showGatewayPicker ? nativeGatewaysCapability() : null;
   const sessions = options.context?.sessions?.state.result?.sessions ?? [];
   return html`
     <div
@@ -122,8 +119,6 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .narrow=${options.narrow}
               .mergedChrome=${options.mergedChrome && active}
               .navDrawerOpen=${options.navDrawerOpen && active}
-              .nativeGateways=${nativeGateways}
-              .gatewaysSnapshot=${nativeGateways?.snapshot ?? null}
               .onboarding=${options.onboarding}
               .onOpenSplitView=${options.onOpenSplitView}
               .onSplitDown=${options.onSplitDown}

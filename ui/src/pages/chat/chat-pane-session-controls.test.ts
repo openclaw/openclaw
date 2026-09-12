@@ -147,6 +147,42 @@ describe("chat account selection", () => {
     expect(view.onManage).toHaveBeenCalledOnce();
   });
 
+  it("retries a failed inventory when the section is reopened", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("inventory offline"))
+      .mockResolvedValueOnce({
+        profileId: "owner",
+        links: [],
+        accounts: [
+          {
+            authProfileId: "openai:work",
+            provider: "openai",
+            label: "Work workspace",
+            authType: "oauth",
+            selected: true,
+          },
+        ],
+      } satisfies UsersListModelAccountsResult);
+    const view = mountAccountControl(request, {
+      kind: "personal",
+      label: "Personal workspace",
+      authProfileId: "openai:personal",
+      source: "user",
+    });
+    view.open();
+    await vi.waitFor(() =>
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "inventory offline",
+      ),
+    );
+    view.open();
+    view.open();
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("discards a late inventory after leaving its initiating chat", async () => {
     const pending = createDeferred<UsersListModelAccountsResult>();
     const view = mountAccountControl(() => pending.promise, {

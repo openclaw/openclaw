@@ -616,7 +616,7 @@ final class ControlChannel {
                     "mode=\(String(describing: mode), privacy: .public) " +
                     "reason=\(reasonText, privacy: .public)")
             if mode == .local {
-                GatewayProcessManager.shared.setActive(true)
+                GatewayProcessManager.shared.setActive(true, source: .recovery)
             }
             if mode == .remote {
                 do {

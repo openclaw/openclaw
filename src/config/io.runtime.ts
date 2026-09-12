@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
@@ -8,6 +9,7 @@ import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   createManagedRuntimeEnvBase,
+  hashConfigRaw,
   replaceEnvSnapshot,
   resolveManagedRuntimeEnvBaseline,
   restoreEnvChangesIfUnchanged,
@@ -23,6 +25,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
+import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -453,12 +456,12 @@ async function finalizeCommittedConfigWrite(params: {
     }
     if (!stableEnvGeneration) {
       canonicalReadFailure = new ConfigRuntimeRefreshError(
-        `Config was written to ${io.configPath}, but the active config environment changed during every canonical reread`,
+        "the active config environment changed during every canonical reread",
       );
     }
   } catch (error) {
     canonicalReadFailure = new ConfigRuntimeRefreshError(
-      `Config was written to ${io.configPath}, but the canonical reread failed: ${formatErrorMessage(error)}`,
+      `canonical reread failed: ${formatErrorMessage(error)}`,
       { cause: error },
     );
   } finally {
@@ -520,12 +523,10 @@ async function finalizeCommittedConfigWrite(params: {
       preflightResult: params.runtimePreflightResult,
       deferRuntimeActivation,
       createRefreshError: (detail, cause) =>
-        new ConfigRuntimeRefreshError(
-          `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
-          { cause },
-        ),
+        new ConfigRuntimeRefreshError(`runtime snapshot refresh failed: ${detail}`, { cause }),
     });
   } catch (error) {
+    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
     try {
       const rolledBackConfig = await rollbackConfigFileWriteIfUnchanged({
         configPath: io.configPath,
@@ -534,7 +535,14 @@ async function finalizeCommittedConfigWrite(params: {
         fsModule: fs,
         assertCurrent: params.assertPostCommitCurrent,
       });
+      rollbackStatus = rolledBackConfig ? "restored" : "not-restored";
       if (rolledBackConfig) {
+        params.assertPostCommitCurrent?.();
+        recordUpdateDoctorConfigWrite(
+          io.configPath,
+          writeResult.persistedHash,
+          hashConfigRaw(baseSnapshot.raw),
+        );
         restoreEnvChangesIfUnchanged({
           env: io.env,
           before: envBeforeCanonicalRead,
@@ -543,12 +551,21 @@ async function finalizeCommittedConfigWrite(params: {
         params.rollbackWriteEffects?.();
       }
     } catch (rollbackError) {
-      throw new ConfigRuntimeRefreshError(
-        `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-        { cause: error },
-      );
+      throw new ConfigWritePostCommitError({
+        configPath: io.configPath,
+        rollbackStatus,
+        cause: new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+          { cause: rollbackError },
+        ),
+      });
     }
-    throw error;
+    throw new ConfigWritePostCommitError({
+      configPath: io.configPath,
+      rollbackStatus,
+      cause: error,
+    });
   }
   return writeResult;
 }

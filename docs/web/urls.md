@@ -23,6 +23,11 @@ the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials, and recipients still need Gateway access.
 
+If the Gateway disconnects while a session link is loading, the Control UI retries
+the interrupted load after reconnecting. Navigating elsewhere cancels that recovery;
+it does not reopen an old destination or add a browser-history entry. Already loaded
+conversations stay mounted across reconnects.
+
 The Dashboards gallery adds `?dashboard=expanded` to the owning task's chat
 link, for example `/chat/main/deploy-monitor-6db92d48?dashboard=expanded`.
 This makes Dashboard the main view and focuses it. **Restore split** brings

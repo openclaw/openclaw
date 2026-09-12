@@ -936,6 +936,8 @@ enum class GatewayMethod(
   ModelsAuthRefresh("models.authRefresh"),
   ModelsAuthLogin("models.authLogin"),
   ModelsAuthSetApiKey("models.authSetApiKey"),
+  SessionsStorageStatus("sessions.storage.status"),
+  SessionsStorageRun("sessions.storage.run"),
 }
 
 enum class GatewayEvent(

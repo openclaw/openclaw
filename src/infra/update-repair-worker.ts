@@ -66,28 +66,25 @@ export async function runUpdateRepairWorker(
     () => controller.abort(new Error("wall-clock-budget")),
     budget.wallClockMs,
   );
+  const { installRoot } = params.target;
   const env = {
-    ...process.env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    ...installationTargetEnv({
-      stateDir: params.target.stateDir,
-      configPath: params.target.configPath,
-      defaultWorkspaceDir: params.target.workspaceDir,
+    ...(params.admissionEnv ?? {
+      ...process.env,
+      ...installationTargetEnv({
+        stateDir: params.target.stateDir,
+        configPath: params.target.configPath,
+        defaultWorkspaceDir: params.target.workspaceDir,
+      }),
     }),
+    NODE_DISABLE_COMPILE_CACHE: "1",
   };
   let child;
   try {
     child = spawn(
       params.nodeRunner ?? process.execPath,
-      [
-        path.join(
-          params.target.installRoot,
-          "dist",
-          runtimeProcessEntrypoints.updateRepair.distWorkerPath,
-        ),
-      ],
+      [path.join(installRoot, "dist", runtimeProcessEntrypoints.updateRepair.distWorkerPath)],
       {
-        cwd: params.target.installRoot,
+        cwd: installRoot,
         env,
         detached: process.platform !== "win32",
         windowsHide: true,
@@ -167,21 +164,22 @@ export async function runUpdateRepairWorker(
         if (started) {
           throw new Error("Candidate repair worker repeated startup.");
         }
+        // Released workers only repair live state and discard rehearsal selectors.
+        // Never let one reopen a migrated copy under the previous runtime.
+        if (params.context.phase === "validating" && !message.candidateRehearsal) {
+          throw new Error(
+            "This candidate cannot repair isolated rehearsal state. Run openclaw triage to inspect the validation failure.",
+          );
+        }
         started = true;
-        const {
-          phase: _phase,
-          beforeVersion,
-          targetVersion,
-          symptoms,
-          ...failureContext
-        } = params.context;
+        const { phase, beforeVersion, targetVersion, symptoms, ...failureContext } = params.context;
         const start = updateRepairParentMessageSchema.parse({
           type: "start",
           runId: params.runId,
           requester: params.requester,
-          target: params.target,
+          target: { ...params.target, installRoot },
           failure: failureContext,
-          context: { beforeVersion, targetVersion, symptoms },
+          context: { phase, beforeVersion, targetVersion, symptoms },
           budget: { ...budget, wallClockMs: Math.max(1, deadline - Date.now()) },
         });
         send(start);

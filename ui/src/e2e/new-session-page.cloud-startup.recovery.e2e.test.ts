@@ -124,11 +124,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator('[data-value="cloud:aws"]').hover();
       await page.locator('[data-value="machine:fast"]').click();
       await expect
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
@@ -174,7 +170,10 @@ suite.define(() => {
         .toBe(message);
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-      ).toBe("aws · fast");
+      ).toBe("aws");
+      expect(
+        await page.locator("#new-session-where-trigger").getAttribute("data-machine-class"),
+      ).toBe("fast");
       await gateway.waitForRequest("models.list");
       try {
         await expect

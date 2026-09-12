@@ -22,6 +22,7 @@ import {
 import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import {
   requireWorkspaceResultGit,
+  updateWorkspaceResultRefs,
   withWorkspaceResultRefMutation,
 } from "./workspace-result-git.js";
 import {
@@ -311,9 +312,18 @@ export async function stageSessionRepositoryCheckpoint(
   assertRevision();
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   await requireWorkspaceResultGit(root, ["init", "--quiet", "--bare", "--object-format=sha1"]);
-  const discard = async () => {
-    await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef: candidateRef });
-    await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef: companionCandidate });
+  let discardPromise: Promise<void> | undefined;
+  const discard = () => {
+    // These candidates are never recreated after preparation. Share completed
+    // cleanup across publish/finally, but leave failed Git cleanup retryable.
+    discardPromise ??= updateWorkspaceResultRefs(root, [
+      { ref: candidateRef },
+      { ref: companionCandidate },
+    ]).catch((error: unknown) => {
+      discardPromise = undefined;
+      throw error;
+    });
+    return discardPromise;
   };
   try {
     await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({

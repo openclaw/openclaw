@@ -49,7 +49,7 @@ it.each([false, true])(
           status: kind === "interrupted" ? "failed" : kind === "started" ? "running" : "completed",
         });
         expect(progress.getSnapshot().lines).toHaveLength(
-          toolProgress ? (kind === "interacted" ? 2 : 1) : kind === "interrupted" ? 1 : 0,
+          toolProgress ? (kind === "interacted" ? 2 : 1) : 0,
         );
         expect(update.mock.lastCall?.[0]).toContain("Working");
         if (toolProgress) {
@@ -57,6 +57,8 @@ it.each([false, true])(
           expect(update.mock.lastCall?.[0]).toContain(
             kind === "interacted" ? "message sent" : kind,
           );
+        } else {
+          expect(update.mock.lastCall?.[0]).toBe("Working");
         }
       }
       expect(new Set(events.slice(0, -1).map((event) => event.itemId)).size).toBe(1);

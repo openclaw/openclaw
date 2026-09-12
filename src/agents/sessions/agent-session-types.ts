@@ -7,7 +7,6 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import type {
-  ContextUsage,
   ExtensionCommandContextActions,
   ExtensionErrorListener,
   ExtensionRunner,
@@ -124,18 +123,4 @@ export interface ModelCycleResult {
   thinkingLevel: ThinkingLevel;
   /** Whether the cycle used the scoped model list. */
   isScoped: boolean;
-}
-
-/** Session statistics exposed to session commands. */
-export interface SessionStats {
-  sessionFile: string | undefined;
-  sessionId: string;
-  userMessages: number;
-  assistantMessages: number;
-  toolCalls: number;
-  toolResults: number;
-  totalMessages: number;
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  cost: number;
-  contextUsage?: ContextUsage;
 }

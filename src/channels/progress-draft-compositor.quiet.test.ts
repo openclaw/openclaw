@@ -178,30 +178,38 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
     },
   );
 
-  it("starts and flushes a quiet draft for a non-zero exit", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: false, maxLines: 3, label: false },
+  it.each([undefined, false, true])(
+    "only starts a failed-command draft with tool progress enabled (%s)",
+    async (toolProgress) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines: 3, label: false },
+          },
         },
-      },
-      update,
-    });
-    try {
-      await progress.pushCommandOutputEvent({
-        phase: "end",
-        toolCallId: "failed-command",
-        exitCode: 1,
+        update,
       });
-      expect(progress.hasStarted).toBe(true);
-      expect(update.mock.lastCall?.[0]).toContain("exit 1");
-      expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
-    } finally {
-      progress.cancel();
-    }
-  });
+      try {
+        await progress.pushCommandOutputEvent({
+          phase: "end",
+          toolCallId: "failed-command",
+          exitCode: 1,
+        });
+        expect(progress.hasStarted).toBe(toolProgress === true);
+        if (toolProgress) {
+          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+          expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        } else {
+          expect(update).not.toHaveBeenCalled();
+          expect(progress.getSnapshot().lines).toEqual([]);
+        }
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
 
   it.each([
     { presentation: undefined, toolProgress: false, maxLines: 1 },
@@ -209,7 +217,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
     { presentation: "summary" as const, toolProgress: false, maxLines: 1 },
     { presentation: "summary" as const, toolProgress: true, maxLines: 3 },
   ])(
-    "keeps exits above a full quiet plan through reasoning and commentary ($presentation, $toolProgress, $maxLines)",
+    "keeps failed commands out of quiet plans through reasoning and commentary ($presentation, $toolProgress, $maxLines)",
     async ({ presentation, toolProgress, maxLines }) => {
       const update = vi.fn();
       const progress = createTestProgressDraftCompositor({
@@ -228,13 +236,14 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
           { step: "Repair", status: "in_progress" },
           { step: "Verify", status: "pending" },
         ]);
+        const planText = update.mock.lastCall?.[0];
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
           exitCode: 1,
         });
-        expect(update.mock.lastCall?.[0]).toContain("exit 1");
-        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        expect(update.mock.lastCall?.[0]).toBe(planText);
+        expect(progress.getSnapshot().lines).toEqual([]);
         for (let index = 0; index < 5; index++) {
           await progress.pushToolEvent({
             name: "read",
@@ -242,11 +251,11 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
             phase: "start",
           });
           await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
-          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+          expect(update.mock.lastCall?.[0]).not.toContain("exit 1");
           await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
             itemId: `comment-${index}`,
           });
-          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+          expect(update.mock.lastCall?.[0]).not.toContain("exit 1");
         }
         expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
           maxLines,
@@ -275,7 +284,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
       recovery: "tool",
     },
   ] as const)(
-    "clears a quiet failure whose stored id came from an earlier item family ($order)",
+    "hides quiet failures across tool item and command output events ($order)",
     async ({ failures, recovery }) => {
       const update = vi.fn();
       const progress = createTestProgressDraftCompositor({
@@ -287,8 +296,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
         },
         update,
       });
-      // The agent keys one exec call's item families separately (tool:<call>,
-      // command:<call>); the merged line keeps the id of whichever reported first.
+      // Providers can report the same failure through both event families.
       const push = (family: "tool" | "command", outcome: "failed" | "completed") =>
         family === "tool"
           ? progress.pushItemEvent({
@@ -311,9 +319,9 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
         ]);
         for (const family of failures) {
           await push(family, "failed");
-          expect(update.mock.lastCall?.[0]).toMatch(/failed|exit 1/);
+          expect(update.mock.lastCall?.[0]).not.toMatch(/failed|exit 1/);
         }
-        expect(update.mock.lastCall?.[1]?.lines).toHaveLength(1);
+        expect(progress.getSnapshot().lines).toHaveLength(0);
         await push(recovery, "completed");
         expect(update.mock.lastCall?.[0]).toContain("Repair");
         expect(update.mock.lastCall?.[0]).not.toMatch(/failed|exit 1/);

@@ -821,76 +821,70 @@ function isSafeLegacySessionId(value: unknown): value is string {
   );
 }
 
-export const stateMigrations: PluginDoctorStateMigration[] = [
-  {
-    id: "codex-app-server-sidecars-to-plugin-state",
-    label: "Codex app-server thread bindings",
-    async detectLegacyState(params) {
-      const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
-      return sources.length > 0
-        ? {
-            preview: [
-              `- Codex app-server bindings: legacy sidecar -> plugin state (${CODEX_APP_SERVER_BINDING_NAMESPACE})`,
-            ],
-          }
-        : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      const { sources, surfaces } = await collectLegacyBindingSources(params);
-      if (sources.length === 0) {
-        return { changes, warnings };
+export async function detectLegacySessionBindingSidecars(params: MigrationParams) {
+  const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
+  return sources.length > 0
+    ? {
+        preview: [
+          `- Codex app-server bindings: legacy sidecar -> plugin state (${CODEX_APP_SERVER_BINDING_NAMESPACE})`,
+        ],
       }
-      const ownerCollection = await collectBindingOwners(sources, surfaces, params);
-      if (ownerCollection.failures.length > 0) {
-        warnings.push(
-          `Left ${sources.length} Codex binding sidecar(s) in place because session ownership is indeterminate: ${ownerCollection.failures.join("; ")}`,
-        );
-        return { changes, warnings };
-      }
-      const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
-        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      let migrated = 0;
-      let partialImports = 0;
-      for (const source of sources) {
-        const candidates =
-          ownerCollection.owners.get(
-            await canonicalPathFromExistingAncestor(source.transcriptPath),
-          ) ?? [];
-        const result = await migrateSource(source, candidates, params, store);
-        if (result.warning) {
-          warnings.push(result.warning);
-        }
-        if (result.notice) {
-          notices.push(result.notice);
-        }
-        if (result.archived) {
-          migrated++;
-        } else {
-          partialImports += result.importedKeys;
-        }
-      }
-      if (migrated > 0) {
-        changes.push(
-          `Migrated ${migrated} Codex app-server binding sidecar(s) to plugin state and archived the legacy sources`,
-        );
-      }
-      if (partialImports > 0) {
-        changes.push(
-          `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
-        );
-      }
-      return {
-        changes,
-        warnings,
-        ...(notices.length > 0 ? { notices } : {}),
-      };
-    },
-  },
-];
+    : null;
+}
+
+export async function migrateLegacySessionBindingSidecars(params: MigrationParams) {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const notices: string[] = [];
+  const { sources, surfaces } = await collectLegacyBindingSources(params);
+  if (sources.length === 0) {
+    return { changes, warnings };
+  }
+  const ownerCollection = await collectBindingOwners(sources, surfaces, params);
+  if (ownerCollection.failures.length > 0) {
+    warnings.push(
+      `Left ${sources.length} Codex binding sidecar(s) in place because session ownership is indeterminate: ${ownerCollection.failures.join("; ")}`,
+    );
+    return { changes, warnings };
+  }
+  const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  let migrated = 0;
+  let partialImports = 0;
+  for (const source of sources) {
+    const candidates =
+      ownerCollection.owners.get(await canonicalPathFromExistingAncestor(source.transcriptPath)) ??
+      [];
+    const result = await migrateSource(source, candidates, params, store);
+    if (result.warning) {
+      warnings.push(result.warning);
+    }
+    if (result.notice) {
+      notices.push(result.notice);
+    }
+    if (result.archived) {
+      migrated++;
+    } else {
+      partialImports += result.importedKeys;
+    }
+  }
+  if (migrated > 0) {
+    changes.push(
+      `Migrated ${migrated} Codex app-server binding sidecar(s) to plugin state and archived the legacy sources`,
+    );
+  }
+  if (partialImports > 0) {
+    changes.push(
+      `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
+    );
+  }
+  return {
+    changes,
+    warnings,
+    ...(notices.length > 0 ? { notices } : {}),
+  };
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

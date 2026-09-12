@@ -669,6 +669,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.storage.status", "sessions-read", "operator.admin", "2026.9"],
+  ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

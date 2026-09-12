@@ -168,6 +168,12 @@ Launching the app directly with `--attach-only` or `--no-launchd` has the same
 effect. The override persists in `~/.openclaw/disable-launchagent`; remove that
 file to restore app-managed launchd behavior.
 
+Named profiles still require the listener to belong to that profile's Gateway
+service. Attach-only mode does not permit attaching another process or profile.
+If a port ownership conflict occurs, automatic recovery preserves the failure
+instead of repeatedly reopening the dashboard. Resolve the conflict, then
+relaunch the app.
+
 Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use

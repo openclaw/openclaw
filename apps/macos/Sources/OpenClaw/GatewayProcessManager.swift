@@ -214,7 +214,12 @@ final class GatewayProcessManager {
         }
     }
 
-    func setActive(_ active: Bool) {
+    enum ActivationSource {
+        case request
+        case recovery
+    }
+
+    func setActive(_ active: Bool, source: ActivationSource = .request) {
         if CommandResolver.connectionModeIsRemote(), !self.hostsLocalGatewayWithRemotePrimary {
             self.desiredActive = false
             self.stop()
@@ -224,6 +229,9 @@ final class GatewayProcessManager {
             return
         }
         if active, self.profilePortConflict != nil {
+            // Background recovery cannot erase an ownership rejection and briefly
+            // publish the rejected endpoint as ready before the next attach fails.
+            guard source != .recovery else { return }
             self.profilePortConflict = nil
             Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(nil) }
         }

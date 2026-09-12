@@ -1,57 +1,21 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { LogbookStore } from "./store.js";
 
-const cardReads = vi.hoisted(() => ({ queries: 0, payloadRows: 0 }));
-
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
-      const db = actual.openNodeSqliteDatabase(...args);
-      const prepare = db.prepare.bind(db);
-      vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        if (!/\bfrom\s+"?cards\b/i.test(sql)) {
-          return statement;
-        }
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-          cardReads.queries++;
-          const rows = all(...bindings);
-          cardReads.payloadRows += rows.filter((row) => "distractions" in row).length;
-          return rows;
-        });
-        const iterate = statement.iterate.bind(statement);
-        vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
-          cardReads.queries++;
-          for (const row of iterate(...bindings)) {
-            if ("distractions" in row) {
-              cardReads.payloadRows++;
-            }
-            yield row;
-          }
-          return undefined;
-        });
-        return statement;
-      });
-      return db;
-    },
-  };
-});
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-it("hydrates a timeline once and counts status without reading card payloads", async () => {
+it("serves timeline and status through their bounded store operations", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-03T12:00:00"));
   const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-card-reads-")));
@@ -62,7 +26,7 @@ it("hydrates a timeline once and counts status without reading card payloads", a
     config: {},
     logger: { info() {}, warn() {}, error() {}, debug() {} },
   };
-  const store = await LogbookStore.open(path.join(stateDir, "logbook"));
+  const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
   const day = "2026-07-03";
   const startMs = new Date(`${day}T09:00:00`).getTime();
   const drafts = Array.from({ length: 8 }, (_, index) => ({
@@ -80,6 +44,7 @@ it("hydrates a timeline once and counts status without reading card payloads", a
   await store.close();
 
   plugin.register({
+    runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
     pluginConfig: { captureEnabled: false },
     lifecycle: { registerRuntimeLifecycle() {} },
     runtime: {},
@@ -100,8 +65,9 @@ it("hydrates a timeline once and counts status without reading card payloads", a
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       return respond.mock.calls[0]?.[1];
     };
-    cardReads.queries = 0;
-    cardReads.payloadRows = 0;
+    const timeline = vi.spyOn(LogbookStore.prototype, "timelineForDay");
+    const cardPayloads = vi.spyOn(LogbookStore.prototype, "cardsForDay");
+    const cardCount = vi.spyOn(LogbookStore.prototype, "countCardsForDay");
     expect(await call("logbook.timeline", { day })).toEqual({
       day,
       cards,
@@ -112,13 +78,11 @@ it("hydrates a timeline once and counts status without reading card payloads", a
         apps: [],
       },
     });
-    expect.soft(cardReads.queries).toBe(1);
-    expect.soft(cardReads.payloadRows).toBe(cards.length);
+    expect(timeline).toHaveBeenCalledExactlyOnceWith(day);
 
-    cardReads.queries = 0;
-    cardReads.payloadRows = 0;
     expect(await call("logbook.status")).toMatchObject({ today: day, todayCards: 8 });
-    expect.soft(cardReads.payloadRows).toBe(0);
+    expect(cardCount).toHaveBeenCalledExactlyOnceWith(day);
+    expect(cardPayloads).not.toHaveBeenCalled();
   } finally {
     await service.stop?.(context);
     rmSync(stateDir, { recursive: true, force: true });

@@ -1208,7 +1208,7 @@ export function buildAgentSystemPrompt(params: {
               ? [
                   "Large work: `sessions_spawn`; follow the accepted completion mode.",
                   '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
-                  "`visible:true` for work the user follows or asked for; else hidden.",
+                  "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
                 ]
               : []),
             ...(availableTools.has("screen")

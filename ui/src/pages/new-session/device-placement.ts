@@ -11,6 +11,8 @@ export type DevicePlacementOption = Readonly<
     deviceId: string;
     label: string;
     subtitle?: string;
+    hideDetails?: boolean;
+    remediation?: "enable-session-hosting" | "update-device";
     facts: readonly string[];
     selectable: boolean;
     disabledReason?: string;
@@ -101,6 +103,17 @@ export function projectDevicePlacements(
           deviceId,
           label: environment.label ?? deviceId,
           platform: environment.platform,
+          hideDetails:
+            !placementDisabledReason &&
+            environment.status === "unavailable" &&
+            !environment.issues?.length,
+          remediation: placementDisabledReason
+            ? undefined
+            : environment.issues?.some((issue) => issue.code === "update-required")
+              ? "update-device"
+              : environment.status === "available" && environment.sessionHost !== true
+                ? "enable-session-hosting"
+                : undefined,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
           workerSlots: environment.workerSlots,
           capabilities: environment.capabilities,

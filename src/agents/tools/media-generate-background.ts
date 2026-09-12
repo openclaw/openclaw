@@ -22,6 +22,7 @@ import {
   type MediaGenerationExecutionResult,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
 export type MediaGenerationTaskResources = {
@@ -59,22 +60,11 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         try {
           executed = await resources.run(() => params.run(handle));
         } catch (error) {
-          let cleanupFailure: { error: unknown } | undefined;
-          try {
-            await resources.release();
-          } catch (cleanupError) {
-            cleanupFailure = { error: cleanupError };
-          }
-          if (cleanupFailure) {
-            throw new AggregateError(
-              [error, cleanupFailure.error],
-              "Media generation and cleanup failed",
-              {
-                cause: error,
-              },
-            );
-          }
-          throw error;
+          return rethrowAfterMediaCleanup(
+            error,
+            () => resources.release(),
+            "Media generation and cleanup failed",
+          );
         }
         await resources.release();
         return executed;
@@ -153,21 +143,11 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   } catch (error) {
     // Admission or scheduling can fail before the callback owns the resource claim.
     if (resources && !resourcesTransferred) {
-      let cleanupFailure: { error: unknown } | undefined;
-      try {
-        await resources.release();
-      } catch (cleanupError) {
-        cleanupFailure = { error: cleanupError };
-      }
-      if (cleanupFailure) {
-        throw new AggregateError(
-          [error, cleanupFailure.error],
-          "Media admission and cleanup failed",
-          {
-            cause: error,
-          },
-        );
-      }
+      return rethrowAfterMediaCleanup(
+        error,
+        () => resources.release(),
+        "Media admission and cleanup failed",
+      );
     }
     throw error;
   }

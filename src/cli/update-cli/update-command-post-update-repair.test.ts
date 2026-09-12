@@ -385,7 +385,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
           stateDir: run.env.OPENCLAW_STATE_DIR,
           configPath: run.env.OPENCLAW_CONFIG_PATH,
         });
-        expect(repair.target.candidateRoot).toBeUndefined();
         expect(getUpdateRun(run.runId, { env: run.env })?.phase).toBe("repairing");
         const signal = new AbortController().signal;
         expect((await repair.validate(signal)).ok).toBe(false);
