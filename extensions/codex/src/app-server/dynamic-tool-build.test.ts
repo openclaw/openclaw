@@ -2581,6 +2581,25 @@ describe("Codex app-server dynamic tool build", () => {
     expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
   });
 
+  it("honors the host-prepared heartbeat tool flags without a heartbeat trigger", async () => {
+    const sessionFile = path.join(tempDir, "session-heartbeat-tool.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-heartbeat-tool");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.enableHeartbeatTool = true;
+    params.forceHeartbeatTool = true;
+    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      options?.enableHeartbeatTool === true ? [heartbeatTool] : [],
+    );
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["heartbeat_respond"]);
+  });
+
   it("passes runtime config into Codex exec dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

@@ -258,6 +258,11 @@ export async function buildDynamicTools(
     input.sandbox,
     input.nativeToolSurfaceEnabled,
   );
+  const heartbeatToolEnabled =
+    params.trigger === "heartbeat" ||
+    params.enableHeartbeatTool === true ||
+    params.forceHeartbeatTool === true ||
+    input.forceHeartbeatTool === true;
   const options: OpenClawCodingToolsOptions = {
     agentId: input.sessionAgentId,
     policyAgentId: input.policyAgentId,
@@ -345,8 +350,8 @@ export async function buildDynamicTools(
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-    enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-    forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+    enableHeartbeatTool: heartbeatToolEnabled,
+    forceHeartbeatTool: heartbeatToolEnabled,
     onYield: (message, acknowledgment) => {
       input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({
