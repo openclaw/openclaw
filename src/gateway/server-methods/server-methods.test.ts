@@ -4795,6 +4795,21 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
+  it("does not serve a public cache to admin health requests", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ adminOnly: true });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      scopes: ["operator.admin"],
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: true,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
   it("maps health collection failures to UNAVAILABLE", async () => {
     const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
     const { respond } = await requestHealthSnapshot({
