@@ -222,7 +222,6 @@ describe("AppSidebar agent chip", () => {
       "agent:research",
       "command:sidebar-agents",
       "command:all-agents",
-      "command:new-agent",
       "command:capabilities",
       "command:agent-settings",
     ]);
@@ -484,6 +483,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
+    expect(menu?.querySelector('[role="separator"]')).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
     expect(
@@ -493,7 +493,6 @@ describe("AppSidebar agent chip", () => {
     ).toEqual([
       "command:sidebar-agents",
       "command:all-agents",
-      "command:new-agent",
       "command:capabilities",
       "command:agent-settings",
     ]);

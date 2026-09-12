@@ -363,9 +363,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               pathname: pathForAgentPanel(activeId, null, params.basePath),
             });
             break;
-          case `${COMMAND_VALUE_PREFIX}new-agent`:
-            params.onNavigate("custodian", { search: "?intent=new-agent" });
-            break;
         }
       }}
       @wa-after-show=${(event: Event) => {
@@ -416,10 +413,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               <div class="sidebar-agent-menu__agent-grid">
                 ${sidebarAgentMenuRows(params).map((entry) => renderAgentRow(entry, params))}
               </div>
+              <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing
       }
-      ${!params.rosterMode ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>` : nothing}
       <wa-dropdown-item
         class="sidebar-customize-menu__item"
         value="command:sidebar-agents"
@@ -433,10 +430,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
                 <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
                 <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-                <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
               </wa-dropdown-item>
               <wa-dropdown-item
                 class="sidebar-customize-menu__item"
