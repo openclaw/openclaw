@@ -50,6 +50,11 @@ export type EmbeddedAgentMeta = {
   contextTokens?: number;
   contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
+  /** Sanitized provider-policy refusal attached to this physical attempt. */
+  providerRefusal?: {
+    provider?: string;
+    category?: string;
+  };
   /** Runtime-owned selection, independent of the final response or credential source. */
   runtimeModelSelection?: ModelRef;
   /** Redacted credential source selected for the terminal physical model attempt. */

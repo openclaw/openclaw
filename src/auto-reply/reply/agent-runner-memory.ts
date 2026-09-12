@@ -1753,6 +1753,7 @@ export async function runMemoryFlushIfNeeded(params: {
           onDeferredLifecycleAbort: deferredLifecycle.abort,
           onRetryWait: deferredLifecycle.beginRetryWait,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
+          authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
         });

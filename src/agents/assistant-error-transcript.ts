@@ -31,6 +31,12 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
     clear(): void {
       pending = undefined;
     },
+    snapshot(): typeof pending {
+      return pending;
+    },
+    restore(snapshot: typeof pending): void {
+      pending = snapshot;
+    },
     record(message: AssistantMessage, target: TranscriptTarget): AssistantMessage | undefined {
       // A recovered reply supersedes partial text (including stray "I"/"agree"
       // fragments). Facts must be appended now, before dependent tool results.

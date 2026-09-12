@@ -42,6 +42,7 @@ export type AgentFallbackCandidateCommonParams = {
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
   assistantErrorTranscript: RunEmbeddedAgentParams["assistantErrorTranscript"];
+  authProfileFailurePolicy: RunEmbeddedAgentParams["authProfileFailurePolicy"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;

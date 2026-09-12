@@ -211,6 +211,7 @@ export async function runEmbeddedFallbackCandidate(
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
+        authProfileFailurePolicy: params.authProfileFailurePolicy,
         prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);

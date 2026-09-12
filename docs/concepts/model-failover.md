@@ -57,6 +57,61 @@ reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
 terminal stops, not provider failures or requests to try another model. The
 existing run deadline and cost limits still apply.
 
+## Automatic cyber-policy escalation
+
+The embedded OpenClaw runtime retries one replay-safe OpenAI cyber-policy refusal on Daybreak
+Blue. This includes normal embedded turns using the ChatGPT-authenticated OpenAI Responses
+transport, not only Codex plugin sessions. That transport projects OpenAI's structured cyber-policy
+error into the refusal metadata used by this policy, from every terminal path it can arrive on: a
+non-OK HTTP body, a streamed `error` event, and a `response.failed` event. Generic refusal text
+without a structured cyber category remains terminal.
+
+This policy route is turn-local: it does not change the selected session model and it does not send
+ordinary provider failures to Daybreak. Codex-backed sessions keep their separate plugin-owned
+policy described in [Codex harness runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation).
+
+The default target is `openai/gpt-daybreak-blue-latest`. The retry runs only when all of these are
+true:
+
+- the selected embedded attempt reports `provider_refusal` with provider `openai` and category
+  `cyber`;
+- the attempt's replay metadata proves that no tool or delivery side effect would be repeated;
+- the target differs from the model that was refused;
+- the selection is not strict; and
+- the feature is enabled.
+
+A strict selection stays strict. A locked model selection reaches the runner as an explicit empty
+fallback list, and this policy honors that the same way ordinary fallback does: the refusal remains
+terminal until the operator unlocks the selection.
+
+If the Daybreak attempt fails without committing work, OpenClaw preserves the original provider
+refusal instead of trying unrelated configured fallbacks. If the retry already executed a tool or
+delivered output before failing, its own result is kept instead, because its replay verdict,
+delivery evidence, and terminal receipt describe what actually ran. If the retry throws anything
+other than an ordinary failover-class error, that exception propagates unchanged: a recorded
+terminal stop prohibits replay, and an unclassified throw is how the fallback runner reports an
+attempt that already committed work. An authorization failure cools down that target for the
+current session before another cyber refusal probes it again.
+
+```json5
+{
+  agents: {
+    defaults: {
+      embeddedAgent: {
+        cyberFailover: {
+          mode: "auto", // or "off"
+          model: "openai/gpt-daybreak-blue-latest",
+          cooloffMs: 600000,
+        },
+      },
+    },
+  },
+}
+```
+
+General model fallback ordering is unchanged. A non-cyber refusal, a Codex/native-harness result,
+or any replay-unsafe attempt remains terminal under the existing refusal policy.
+
 ## Selection source policy
 
 The selection source controls whether the fallback chain is allowed:

@@ -331,11 +331,14 @@ export function resolveReplayInvalidFlag(params: {
   incompleteTurnText?: string | null;
 }): boolean {
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const replaySafeProviderRefusal =
+    params.attempt.replayMetadata.replaySafe &&
+    isProviderRefusalAssistantError(resolveCurrentAttemptAssistant(params.attempt));
   return (
     !params.attempt.replayMetadata.replaySafe ||
     terminal.promptErrorSource === "compaction" ||
     terminal.timedOutDuringCompaction ||
-    Boolean(params.incompleteTurnText)
+    (Boolean(params.incompleteTurnText) && !replaySafeProviderRefusal)
   );
 }
 

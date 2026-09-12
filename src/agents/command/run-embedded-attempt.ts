@@ -527,6 +527,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                   attemptLifecycleState.currentTurnUserMessagePersisted),
               userTurnTranscriptRecorder,
               assistantErrorTranscript: runOptions.assistantErrorTranscript,
+              authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
               contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
               onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,

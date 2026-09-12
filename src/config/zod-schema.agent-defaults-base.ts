@@ -36,6 +36,14 @@ const EmbeddedAgentConfigSchema = z
       .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
       .optional(),
     executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+    cyberFailover: z
+      .object({
+        mode: z.union([z.literal("auto"), z.literal("off")]).optional(),
+        model: z.string().min(1).optional(),
+        cooloffMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

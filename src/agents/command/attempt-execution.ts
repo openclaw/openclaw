@@ -620,6 +620,7 @@ export function runAgentAttempt(params: {
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   assistantErrorTranscript?: RunEmbeddedAgentInternalParams["assistantErrorTranscript"];
+  authProfileFailurePolicy?: RunEmbeddedAgentInternalParams["authProfileFailurePolicy"];
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
@@ -1405,6 +1406,7 @@ export function runAgentAttempt(params: {
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     assistantErrorTranscript: params.assistantErrorTranscript,
+    authProfileFailurePolicy: params.authProfileFailurePolicy,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,

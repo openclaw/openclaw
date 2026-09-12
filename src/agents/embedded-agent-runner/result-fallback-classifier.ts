@@ -8,6 +8,10 @@ import {
   hasCommittedOutboundDeliveryEvidence,
   hasVisibleAgentPayload,
 } from "./delivery-evidence.js";
+import {
+  EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
+  isReplaySafeEmbeddedOpenAiCyberRefusal,
+} from "./embedded-cyber-failover.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 type ProviderErrorPayloadFailoverReason = Extract<
@@ -205,10 +209,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const incompleteTurn = params.result.meta.error?.kind === "incomplete_turn";
-  if (incompleteTurn && params.result.meta.error?.fallbackSafe !== true) {
-    return null;
-  }
-  const fallbackSafeIncompleteTurn = incompleteTurn;
+  const fallbackSafeIncompleteTurn =
+    incompleteTurn && params.result.meta.error?.fallbackSafe === true;
   if (params.result.meta.replayInvalid === true && !fallbackSafeIncompleteTurn) {
     return null;
   }
@@ -218,6 +220,23 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (params.result.meta.error?.kind === "hook_block") {
     // Hook blocks intentionally suppress normal agent output. Retrying on another model would
     // bypass a policy decision rather than recover a malformed model result.
+    return null;
+  }
+  if (
+    isReplaySafeEmbeddedOpenAiCyberRefusal({
+      provider: params.provider,
+      result: params.result,
+    })
+  ) {
+    return {
+      message: `${params.provider}/${params.model} was refused by OpenAI cyber policy`,
+      reason: "unknown",
+      code: EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
+      preserveResultOnExhaustion: true,
+      preserveResultPriority: 100,
+    };
+  }
+  if (incompleteTurn && !fallbackSafeIncompleteTurn) {
     return null;
   }
   const payloads = params.result.payloads ?? [];

@@ -43,6 +43,35 @@ describe("incomplete-turn terminal metadata", () => {
     );
   });
 
+  it("keeps an explicitly replay-safe structured provider refusal replayable", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      stopReason: "error",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "openai", category: "cyber" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(incompleteTurnText).toContain("provider refused this request");
+    expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
+  });
+
   it("uses the current completed assistant instead of stale session tool-use evidence", () => {
     const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const currentAssistant = buildEmbeddedRunnerAssistant({

@@ -23,6 +23,7 @@ import {
 } from "./helpers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
+import { resolveProviderRefusal } from "./provider-refusal.js";
 import { buildTraceToolSummary } from "./run-attempt-result.js";
 import {
   isEmbeddedRunTerminalInterrupted,
@@ -119,6 +120,7 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
+    providerRefusal: resolveProviderRefusal(attributionAssistant),
     ...(attempt.runtimeModelSelection
       ? { runtimeModelSelection: attempt.runtimeModelSelection }
       : {}),

@@ -1,19 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
-import {
-  formatAgentRunRouteChange,
-  normalizeAgentRunTerminalReceipt,
-} from "../agent-run-terminal-receipt.js";
-import {
-  buildAgentRunTerminalReplySnapshot,
-  normalizeAgentRunTerminalReplySnapshot,
-} from "../agent-run-terminal-reply.js";
 import {
   createAssistantErrorTranscript,
   type AssistantErrorTranscript,
 } from "../assistant-error-transcript.js";
+import { resolveModelFallbackError } from "../failover-error.js";
 import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
@@ -34,16 +26,38 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
-import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
+import {
+  didEmbeddedCyberFailoverTargetCommitWork,
+  EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
+  isEmbeddedCyberFailoverTargetSkipped,
+  isEmbeddedCyberFailoverTargetUsable,
+  isEmbeddedModelSelectionStrict,
+  isSameEmbeddedCyberFailoverTarget,
+  recordEmbeddedCyberFailoverTargetUnavailable,
+  resolveEmbeddedCyberFailoverConfig,
+  resolveEmbeddedCyberFailoverTarget,
+} from "./embedded-cyber-failover.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
-import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
+import {
+  buildRunEntryTerminal,
+  canAdvanceContextEngineTurn,
+  mergeRunEntryExecutionTrace,
+  resolveRunEntryTerminalOutcome,
+  type EmbeddedAgentRunEntryTerminal,
+  type RunEntryTerminalBehavior,
+} from "./run-entry-terminal.js";
+import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
+import type { EmbeddedAgentRunResult } from "./types.js";
+
+export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
 
 type RunEntryCandidateOptions = {
   assistantErrorTranscript: AssistantErrorTranscript;
+  authProfileFailurePolicy?: AuthProfileFailurePolicy;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
@@ -66,23 +80,7 @@ type RunEntryHarnessPreparation =
       run: (prepare: () => Promise<void>) => Promise<void>;
     };
 
-type DeliveryEvidence = {
-  hasRetryBlockedDelivery: boolean;
-  hasDirectlySentBlockReply: boolean;
-  hasBlockReplyPipelineOutput: boolean;
-};
-
-type RunEntryBehavior =
-  | {
-      kind: "channel-delivery";
-      readDeliveryEvidence: () => DeliveryEvidence;
-    }
-  | { kind: "followup-delivery" }
-  | {
-      kind: "command-rpc";
-      hasCommittedSideEffect: () => boolean;
-    }
-  | { kind: "maintenance" };
+type RunEntryBehavior = RunEntryTerminalBehavior;
 
 type RunEntrySessionOverride =
   | { kind: "preserve" }
@@ -90,11 +88,6 @@ type RunEntrySessionOverride =
       kind: "reconcile-completed";
       reconcile: (candidate: { provider: string; model: string }) => Promise<void>;
     };
-
-export type EmbeddedAgentRunEntryTerminal = {
-  outcome: ReturnType<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>;
-  metadata: Record<string, unknown>;
-};
 
 type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   outcome: "completed" | "exhausted";
@@ -166,212 +159,6 @@ function preserveFollowupResultForDelivery(
     preserveResultOnExhaustion: true,
     preserveResultPriority: -1,
   };
-}
-
-function resolveTerminalOutcome(params: {
-  result: EmbeddedAgentRunResult;
-  fallbackExhausted: boolean;
-}): EmbeddedAgentRunEntryTerminal["outcome"] {
-  const meta = params.result.meta;
-  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
-    phase: params.fallbackExhausted || meta.error ? "error" : "end",
-    data: { ...meta, error: meta.error?.message },
-  });
-}
-
-function canAdvanceContextEngineTurn(params: {
-  result: EmbeddedAgentRunResult;
-  fallbackOutcome: "completed" | "exhausted";
-  terminal: EmbeddedAgentRunEntryTerminal;
-}): boolean {
-  const meta = params.result.meta;
-  return (
-    params.fallbackOutcome === "completed" &&
-    params.terminal.outcome.status === "ok" &&
-    meta.yielded !== true &&
-    meta.aborted !== true &&
-    meta.error === undefined &&
-    meta.timeoutPhase === undefined &&
-    meta.stopReason !== "error" &&
-    meta.stopReason !== "timeout"
-  );
-}
-
-function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
-  result: T;
-  terminalStatus: EmbeddedAgentRunEntryTerminal["outcome"]["status"];
-  provider: string;
-  model: string;
-  requestedProvider: string;
-  requestedModel: string;
-  fallbackAttempts: FallbackAttempt[];
-}): T {
-  const currentTrace = params.result.meta.executionTrace;
-  const winnerProvider =
-    params.terminalStatus === "ok" ? (currentTrace?.winnerProvider ?? params.provider) : undefined;
-  const winnerModel =
-    params.terminalStatus === "ok" ? (currentTrace?.winnerModel ?? params.model) : undefined;
-  const outerAttempts: TraceAttempt[] = params.fallbackAttempts.map((attempt) => ({
-    provider: attempt.provider,
-    model: attempt.model,
-    result: attempt.reason === "timeout" ? "timeout" : "candidate_failed",
-    ...(attempt.reason ? { reason: attempt.reason } : {}),
-    ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
-  }));
-  const innerAttempts = (currentTrace?.attempts ?? []).filter(
-    (attempt) => attempt.result !== "success",
-  );
-  const winnerAttempt = currentTrace?.attempts?.findLast(
-    (attempt) =>
-      attempt.result === "success" &&
-      attempt.provider === winnerProvider &&
-      attempt.model === winnerModel,
-  );
-  const attempts = [
-    ...outerAttempts,
-    ...innerAttempts,
-    ...(winnerProvider && winnerModel
-      ? [
-          winnerAttempt ?? {
-            provider: winnerProvider,
-            model: winnerModel,
-            result: "success" as const,
-          },
-        ]
-      : []),
-  ];
-  const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
-  const requested = { provider: params.requestedProvider, model: params.requestedModel };
-  const agentMeta = terminalReceipt
-    ? {
-        ...params.result.meta.agentMeta,
-        terminalReceipt: {
-          ...terminalReceipt,
-          requested,
-          rerouted:
-            terminalReceipt.rerouted ||
-            isProviderModelRerouted(requested, terminalReceipt.effective),
-        },
-      }
-    : params.result.meta.agentMeta;
-  return {
-    ...params.result,
-    meta: {
-      ...params.result.meta,
-      agentMeta,
-      executionTrace: {
-        ...currentTrace,
-        winnerProvider,
-        winnerModel,
-        attempts: attempts.length > 0 ? attempts : undefined,
-        fallbackUsed: currentTrace?.fallbackUsed === true || outerAttempts.length > 0,
-      },
-    },
-  };
-}
-
-function buildTerminal(params: {
-  result: EmbeddedAgentRunResult;
-  outcome: EmbeddedAgentRunEntryTerminal["outcome"];
-  behavior: RunEntryBehavior;
-  runId: string;
-  requested: { provider: string; model: string };
-  sessionId: string;
-}): EmbeddedAgentRunEntryTerminal {
-  const meta = params.result.meta;
-  const outcome = params.outcome;
-  const internalReply = params.result.messagingToolSourceReplyPayloads?.findLast(
-    (payload) => payload.sourceReplyFinal === true,
-  );
-  let terminalReply =
-    normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot(
-      // Internal UI delivery still needs forwarding by A2A. Its final payload
-      // owns that reply even when the model subsequently emits NO_REPLY.
-      internalReply
-        ? { visibleText: internalReply.text }
-        : {
-            visibleText: meta.finalAssistantVisibleText,
-            rawText: meta.finalAssistantRawText,
-            terminalReplyKind: meta.terminalReplyKind,
-          },
-    );
-  const agentMeta = meta.agentMeta;
-  const normalizedTerminalReceipt =
-    normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??
-    // CLI backends report delivery without an embedded model-turn receipt.
-    // The entry owner supplies run identity; the tool supplied the send fact.
-    (params.result.sourceReplyDelivered && agentMeta?.provider && agentMeta.model
-      ? {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          turnId: params.runId,
-          requested: params.requested,
-          effective: {
-            provider: agentMeta.provider,
-            model: agentMeta.model,
-            responseModel: agentMeta.model,
-          },
-          successfulToolNames: ["message"],
-          sourceReplyDelivered: true as const,
-          rerouted: isProviderModelRerouted(params.requested, {
-            provider: agentMeta.provider,
-            model: agentMeta.model,
-          }),
-        }
-      : undefined);
-  const terminalReceipt =
-    normalizedTerminalReceipt?.runId === params.runId
-      ? {
-          ...normalizedTerminalReceipt,
-          terminalDisposition:
-            terminalReply.disposition === "visible"
-              ? ("visible" as const)
-              : ("not-visible" as const),
-        }
-      : undefined;
-  const modelRouteChange = formatAgentRunRouteChange(terminalReceipt, params.runId);
-  if (modelRouteChange && terminalReply.disposition === "visible") {
-    // Carry one receipt-owned fact beside assistant text so internal parents can
-    // report the reroute without exposing it through raw external delivery.
-    terminalReply = { ...terminalReply, modelRouteChange };
-  }
-  const metadata: Record<string, unknown> = { terminalReply };
-  if (terminalReceipt) {
-    metadata.terminalReceipt = terminalReceipt;
-  }
-  if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
-    for (const key of [
-      "stopReason",
-      "yielded",
-      "timeoutPhase",
-      "providerStarted",
-      "aborted",
-      "livenessState",
-      "replayInvalid",
-    ] as const) {
-      if (!Object.hasOwn(meta, key)) {
-        continue;
-      }
-      metadata[key] = key in outcome ? outcome[key as keyof typeof outcome] : meta[key];
-    }
-  } else {
-    for (const key of ["stopReason", "livenessState", "timeoutPhase", "providerStarted"] as const) {
-      if (outcome[key] !== undefined) {
-        metadata[key] = outcome[key];
-      }
-    }
-    if (typeof meta.aborted === "boolean") {
-      metadata.aborted = meta.aborted;
-    }
-    if (meta.replayInvalid === true) {
-      metadata.replayInvalid = true;
-    }
-    if (meta.yielded === true) {
-      metadata.yielded = true;
-    }
-  }
-  return { outcome, metadata };
 }
 
 /** Runs one logical turn across model candidates and advances only the accepted winner. */
@@ -446,147 +233,340 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           );
         }
       : undefined;
+  const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
+  const canFallbackAfterError = canFallback;
   try {
-    const fallbackResult = await runWithModelFallback<RunEntryCandidate<T>>({
-      ...params.selection,
-      ...params.identity,
-      abortSignal: params.abortSignal,
-      resolveAgentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride,
-      prepareCandidateChain: async (candidates) => {
-        for (const candidate of candidates) {
-          try {
-            const agentHarnessRuntimeOverride = params.harness.resolveRuntimeOverride(
-              candidate.provider,
-              candidate.model,
-            );
-            await prepareHarnessRuntime({
-              provider: candidate.provider,
-              model: candidate.model,
-              ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
-            });
-            const resolvedHost = params.harness.resolveContextEngineHost?.(
-              candidate.provider,
-              candidate.model,
-            );
-            const host =
-              resolvedHost ??
-              (() => {
-                const harness = selectAgentHarness({
-                  provider: candidate.provider,
-                  modelId: candidate.model,
-                  config: params.selection.cfg,
-                  agentId: params.identity.agentId,
-                  sessionKey: params.harness.sessionKey,
-                  agentHarnessRuntimeOverride,
-                });
-                return {
-                  id: `agent-harness:${harness.id}`,
-                  label: `agent harness "${harness.id}"`,
-                  capabilities: harness.contextEngineHostCapabilities ?? [],
-                };
-              })();
-            contextEngineLogicalTurnLease.selectForHost({
-              host,
-              operation: "agent-run",
-              requiresDurableCommit: false,
-            });
-          } catch {
-            contextEngineLogicalTurnLease.degradeBeforeStart(
-              "a model fallback candidate harness could not be validated before dispatch",
-            );
-            return;
-          }
-        }
-      },
-      prepareAgentHarnessRuntime: prepareHarnessRuntime,
-      onFallbackStep: params.onFallbackStep,
-      ...(params.behavior.kind === "maintenance"
-        ? {}
-        : {
-            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
-              result.result.meta.modelFallbackStopReason
-                ? { stopReason: result.result.meta.modelFallbackStopReason }
-                : canFallback?.() === false
-                  ? undefined
-                  : result.classification,
-          }),
-      ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
-      ...(params.behavior.kind === "maintenance"
-        ? {}
-        : {
-            mergeExhaustedResult: ({
-              latestResult,
-              preferredResult,
-            }: {
-              latestResult: RunEntryCandidate<T>;
-              preferredResult: RunEntryCandidate<T>;
-            }) => ({
-              result: mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
-                latestResult: latestResult.result,
-                preferredResult: preferredResult.result,
-              }) as T,
-              turnAttempt: latestResult.turnAttempt,
-            }),
-          }),
-      run: async (provider, model, options) => {
-        assistantErrorTranscript.clear();
-        if (!options) {
-          throw new Error("Model fallback attempt is missing routing provenance");
-        }
-        const isFallbackRetry = candidateIndex > 0;
-        candidateIndex += 1;
-        let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
-        let classified:
-          | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
-          | undefined;
-        const classifyResult = (result: EmbeddedAgentRunResult) => {
-          // Custody can settle between classification and finalization; never cache its veto.
-          if (canFallback?.() === false) {
-            return undefined;
-          }
-          if (!classified || classified.result !== result) {
-            const classification =
-              params.behavior.kind === "maintenance"
-                ? undefined
-                : classifyEmbeddedAgentRunResultForModelFallback({
-                    result,
-                    provider,
-                    model,
-                    ...readChannelDeliveryEvidence?.(),
+    let capturedCyberRefusal: { provider: string; model: string } | undefined;
+    const runFallbackSearch = (
+      selection: EmbeddedAgentRunEntryParams<T>["selection"],
+      runOptions: { captureCyberRefusal?: boolean; forceFallbackRetry?: boolean } = {},
+    ) =>
+      runWithModelFallback<RunEntryCandidate<T>>({
+        ...selection,
+        ...params.identity,
+        abortSignal: params.abortSignal,
+        resolveAgentHarnessRuntimeOverride: params.harness.resolveRuntimeOverride,
+        prepareCandidateChain: async (candidates) => {
+          for (const candidate of candidates) {
+            try {
+              const agentHarnessRuntimeOverride = params.harness.resolveRuntimeOverride(
+                candidate.provider,
+                candidate.model,
+              );
+              await prepareHarnessRuntime({
+                provider: candidate.provider,
+                model: candidate.model,
+                ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+              });
+              const resolvedHost = params.harness.resolveContextEngineHost?.(
+                candidate.provider,
+                candidate.model,
+              );
+              const host =
+                resolvedHost ??
+                (() => {
+                  const harness = selectAgentHarness({
+                    provider: candidate.provider,
+                    modelId: candidate.model,
+                    config: params.selection.cfg,
+                    agentId: params.identity.agentId,
+                    sessionKey: params.harness.sessionKey,
+                    agentHarnessRuntimeOverride,
                   });
-            const effectiveClassification =
-              params.behavior.kind === "followup-delivery"
-                ? preserveFollowupResultForDelivery(classification)
-                : classification;
-            // Keep pre-release acceptance for the exact result. Failed finalization
-            // returns a replacement that must not inherit its predecessor's decision.
-            classified = {
-              result,
-              value: effectiveClassification,
+                  return {
+                    id: `agent-harness:${harness.id}`,
+                    label: `agent harness "${harness.id}"`,
+                    capabilities: harness.contextEngineHostCapabilities ?? [],
+                  };
+                })();
+              contextEngineLogicalTurnLease.selectForHost({
+                host,
+                operation: "agent-run",
+                requiresDurableCommit: false,
+              });
+            } catch {
+              contextEngineLogicalTurnLease.degradeBeforeStart(
+                "a model fallback candidate harness could not be validated before dispatch",
+              );
+              return;
+            }
+          }
+        },
+        prepareAgentHarnessRuntime: prepareHarnessRuntime,
+        onFallbackStep: params.onFallbackStep,
+        ...(params.behavior.kind === "maintenance"
+          ? {}
+          : {
+              classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
+                result.result.meta.modelFallbackStopReason
+                  ? { stopReason: result.result.meta.modelFallbackStopReason }
+                  : canFallback?.() === false
+                    ? undefined
+                    : result.classification,
+            }),
+        ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
+        ...(params.behavior.kind === "maintenance"
+          ? {}
+          : {
+              mergeExhaustedResult: ({
+                latestResult,
+                preferredResult,
+              }: {
+                latestResult: RunEntryCandidate<T>;
+                preferredResult: RunEntryCandidate<T>;
+              }) => ({
+                result: mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
+                  latestResult: latestResult.result,
+                  preferredResult: preferredResult.result,
+                }) as T,
+                turnAttempt: latestResult.turnAttempt,
+              }),
+            }),
+        run: async (provider, model, options) => {
+          assistantErrorTranscript.clear();
+          if (!options) {
+            throw new Error("Model fallback attempt is missing routing provenance");
+          }
+          const isFallbackRetry = runOptions.forceFallbackRetry === true || candidateIndex > 0;
+          candidateIndex += 1;
+          let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+          let classified:
+            | { result: EmbeddedAgentRunResult; value: ModelFallbackResultClassification }
+            | undefined;
+          const classifyResult = (result: EmbeddedAgentRunResult) => {
+            // Custody can settle between classification and finalization; never cache its veto.
+            if (canFallback?.() === false) {
+              if (runOptions.captureCyberRefusal) {
+                capturedCyberRefusal = undefined;
+              }
+              return undefined;
+            }
+            if (!classified || classified.result !== result) {
+              const classification =
+                params.behavior.kind === "maintenance"
+                  ? undefined
+                  : classifyEmbeddedAgentRunResultForModelFallback({
+                      result,
+                      provider,
+                      model,
+                      ...readChannelDeliveryEvidence?.(),
+                    });
+              const effectiveClassification =
+                params.behavior.kind === "followup-delivery"
+                  ? preserveFollowupResultForDelivery(classification)
+                  : classification;
+              // Keep pre-release acceptance for the exact result. Failed finalization
+              // returns a replacement that must not inherit its predecessor's decision.
+              const acceptedClassification = effectiveClassification;
+              const cyberRefusal =
+                acceptedClassification &&
+                "code" in acceptedClassification &&
+                acceptedClassification.code === EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE;
+              if (runOptions.captureCyberRefusal) {
+                // Classification may run before settled-turn finalization and then
+                // again on its replacement result. Only the current accepted result
+                // may authorize policy escalation; a stale preliminary refusal must
+                // not override a later fallback winner or finalized failure.
+                capturedCyberRefusal = cyberRefusal ? { provider, model } : undefined;
+              }
+              classified = {
+                result,
+                value:
+                  runOptions.captureCyberRefusal && cyberRefusal
+                    ? undefined
+                    : acceptedClassification,
+              };
+            }
+            return classified.value;
+          };
+          const result = await params.runCandidate(provider, model, {
+            assistantErrorTranscript,
+            // The original OpenAI refusal proves this turn's credential already
+            // reached the provider. Keep a target-only entitlement rejection from
+            // poisoning shared auth health for ordinary OpenAI model selection.
+            ...(runOptions.forceFallbackRetry
+              ? { authProfileFailurePolicy: "local" as const }
+              : {}),
+            classifyResult,
+            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+            isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+            isFallbackRetry,
+            modelRoutingProvenance: runOptions.forceFallbackRetry
+              ? {
+                  ...options.modelRoutingProvenance,
+                  stage: "fallback",
+                  fallbackReason: "unknown",
+                }
+              : options.modelRoutingProvenance,
+            contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: (facts) => {
+              contextEngineTurnCandidate = facts;
+              unsettledContextEngineTurnAttempt = facts;
+            },
+          });
+          return {
+            result,
+            classification: classifyResult(result),
+            turnAttempt: contextEngineTurnCandidate,
+          };
+        },
+      });
+
+    const originalFallbackResult = await runFallbackSearch(params.selection, {
+      captureCyberRefusal: true,
+    });
+    const originalErrorTranscript = assistantErrorTranscript.snapshot();
+    let fallbackResult = originalFallbackResult;
+    let policyEscalated = false;
+    const cyberFailover = resolveEmbeddedCyberFailoverConfig(params.selection.cfg);
+    const target =
+      capturedCyberRefusal && cyberFailover.mode === "auto"
+        ? resolveEmbeddedCyberFailoverTarget({
+            cfg: params.selection.cfg,
+            agentId: params.identity.agentId,
+            raw: cyberFailover.model,
+            manifestPlugins: params.selection.manifestPlugins,
+          })
+        : null;
+    const authScope = params.selection.userLockedAuthProfileId?.trim() || undefined;
+    if (
+      capturedCyberRefusal &&
+      target &&
+      !isEmbeddedModelSelectionStrict(params.selection) &&
+      !isSameEmbeddedCyberFailoverTarget(capturedCyberRefusal, target) &&
+      !isEmbeddedCyberFailoverTargetSkipped({
+        sessionId: params.identity.sessionId,
+        target,
+        authScope,
+      })
+    ) {
+      if (originalFallbackResult.result.turnAttempt) {
+        discardContextEngineTurnAttemptIntent({
+          facts: originalFallbackResult.result.turnAttempt,
+          lease: contextEngineLogicalTurnLease,
+        });
+        unsettledContextEngineTurnAttempt = undefined;
+      }
+      try {
+        const targetFallbackResult = await runFallbackSearch(
+          {
+            ...params.selection,
+            provider: target.provider,
+            model: target.model,
+            requestedRouteResolution: "resolved",
+            fallbacksOverride: [],
+          },
+          { forceFallbackRetry: true },
+        );
+        if (
+          targetFallbackResult.outcome === "completed" &&
+          isEmbeddedCyberFailoverTargetUsable(targetFallbackResult.result.result)
+        ) {
+          policyEscalated = true;
+          fallbackResult = {
+            ...targetFallbackResult,
+            attempts: [
+              ...originalFallbackResult.attempts,
+              {
+                provider: capturedCyberRefusal.provider,
+                model: capturedCyberRefusal.model,
+                error: "OpenAI cyber policy refusal",
+                reason: "unknown",
+                code: EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
+              },
+              ...targetFallbackResult.attempts,
+            ],
+          };
+        } else {
+          recordEmbeddedCyberFailoverTargetUnavailable({
+            sessionId: params.identity.sessionId,
+            target,
+            authScope,
+            attempts: targetFallbackResult.attempts,
+            cooloffMs: cyberFailover.cooloffMs,
+          });
+          // The retry runs the same turn with tools enabled, so a cancellation or
+          // failure after it committed work is not interchangeable with the original
+          // refusal. Include live caller evidence because result metadata can lag a
+          // command side effect or external delivery that already completed.
+          const targetResult = targetFallbackResult.result.result;
+          if (
+            targetResult.meta.aborted === true ||
+            didEmbeddedCyberFailoverTargetCommitWork(targetResult) ||
+            hasCommittedSideEffect?.() === true
+          ) {
+            fallbackResult = {
+              ...targetFallbackResult,
+              attempts: [
+                ...originalFallbackResult.attempts,
+                {
+                  provider: capturedCyberRefusal.provider,
+                  model: capturedCyberRefusal.model,
+                  error: "OpenAI cyber policy refusal",
+                  reason: "unknown",
+                  code: EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
+                },
+                ...targetFallbackResult.attempts,
+              ],
+            };
+          } else {
+            if (targetFallbackResult.result.turnAttempt) {
+              discardContextEngineTurnAttemptIntent({
+                facts: targetFallbackResult.result.turnAttempt,
+                lease: contextEngineLogicalTurnLease,
+              });
+              unsettledContextEngineTurnAttempt = undefined;
+            }
+            assistantErrorTranscript.restore(originalErrorTranscript);
+            fallbackResult = {
+              ...originalFallbackResult,
+              result: { ...originalFallbackResult.result, turnAttempt: undefined },
             };
           }
-          return classified.value;
-        };
-        const result = await params.runCandidate(provider, model, {
-          assistantErrorTranscript,
-          classifyResult,
-          allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-          isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-          isFallbackRetry,
-          modelRoutingProvenance: options.modelRoutingProvenance,
-          contextEngineLogicalTurnLease,
-          onContextEngineTurnCandidate: (facts) => {
-            contextEngineTurnCandidate = facts;
-            unsettledContextEngineTurnAttempt = facts;
-          },
+        }
+      } catch (error) {
+        const resolution = resolveModelFallbackError(error, {
+          provider: target.provider,
+          model: target.model,
+          sessionId: params.identity.sessionId,
+          lane: params.identity.lane,
         });
-        return {
-          result,
-          classification: classifyResult(result),
-          turnAttempt: contextEngineTurnCandidate,
+        // Only a failover-class failure that committed nothing is interchangeable
+        // with the refusal it replaced. A recorded terminal stop prohibits replay
+        // and coordination failures never belonged to a model, so neither may be
+        // swapped out. Error class alone is not enough: `runWithModelFallback`
+        // rethrows a recognized provider error such as `overloaded` once
+        // `canFallbackAfterError` reports committed work, and that throw still
+        // resolves as `failover`. Consult the same live delivery evidence the
+        // runner used, or a delivered reply's failure identity would be replaced
+        // by the initial refusal and reported as though nothing ran.
+        if (resolution.kind !== "failover" || hasCommittedSideEffect?.() === true) {
+          throw error;
+        }
+        if (resolution.error.reason === "auth" || resolution.error.reason === "auth_permanent") {
+          recordEmbeddedCyberFailoverTargetUnavailable({
+            sessionId: params.identity.sessionId,
+            target,
+            authScope,
+            attempts: [
+              {
+                provider: target.provider,
+                model: target.model,
+                error: resolution.error.message,
+                reason: resolution.error.reason,
+                code: resolution.error.code,
+              },
+            ],
+            cooloffMs: cyberFailover.cooloffMs,
+          });
+        }
+        assistantErrorTranscript.restore(originalErrorTranscript);
+        fallbackResult = {
+          ...originalFallbackResult,
+          result: { ...originalFallbackResult.result, turnAttempt: undefined },
         };
-      },
-    });
+      }
+    }
     const abortFields =
       params.behavior.kind === "command-rpc"
         ? resolveAgentRunAbortLifecycleFields(params.abortSignal)
@@ -604,7 +584,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     const outcome =
       fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const);
     // A completed fallback search can still return a failed or interrupted run.
-    const terminalOutcome = resolveTerminalOutcome({
+    const terminalOutcome = resolveRunEntryTerminalOutcome({
       result: candidateResult,
       fallbackExhausted: outcome === "exhausted",
     });
@@ -623,7 +603,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       outcome,
       result,
     };
-    const terminal = buildTerminal({
+    const terminal = buildRunEntryTerminal({
       result,
       outcome: terminalOutcome,
       behavior: params.behavior,
@@ -670,6 +650,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       }
       sessionOverrideSettled = true;
       if (
+        !policyEscalated &&
         settledResult.outcome === "completed" &&
         params.sessionOverride.kind === "reconcile-completed"
       ) {

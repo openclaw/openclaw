@@ -283,6 +283,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
+          authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
           notifyUserMessagePersisted: () => {
             queuedUserMessagePersistedAcrossFallback = true;
           },
