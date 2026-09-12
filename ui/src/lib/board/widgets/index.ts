@@ -31,6 +31,15 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     loadModule: () => import("./report.ts"),
     previewSafe: true,
   },
+  {
+    kind: "session:website",
+    tagName: "openclaw-website-widget",
+    get label() {
+      return t("board.widget.kindWebsite");
+    },
+    loadModule: () => import("./website.ts"),
+    previewSafe: false,
+  },
 ];
 
 export function pluginIdForWidgetKind(kind: string | undefined): string {

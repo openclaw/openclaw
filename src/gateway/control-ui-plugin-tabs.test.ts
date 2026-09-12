@@ -218,6 +218,7 @@ describe("listControlUiPluginTabs", () => {
     expect(listControlUiPluginWidgetKinds(["operator.read"])).toEqual([
       { pluginId: "session", kind: "session:report", label: "Report" },
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
+      { pluginId: "session", kind: "session:website", label: "Website" },
       { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
       { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
     ]);

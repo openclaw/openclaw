@@ -2522,6 +2522,7 @@ describe("host-hook fixture plugin contract", () => {
       controlUiWidgetKinds: [
         { pluginId: "session", kind: "session:report", label: "Report" },
         { pluginId: "session", kind: "session:progress", label: "Session progress" },
+        { pluginId: "session", kind: "session:website", label: "Website" },
       ],
       pluginSurfaceUrls: {},
       descriptors: [
