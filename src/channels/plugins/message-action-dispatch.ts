@@ -40,15 +40,21 @@ type ChannelMessageActionReadPolicy =
   | {
       readonly kind: "conversation-read";
       readonly targetlessCache: "deny" | "bundled-current-context";
+      readonly readOnly: boolean;
     };
 
 const NO_CONVERSATION_READ = { kind: "none" } as const;
 const CONVERSATION_READ = {
   kind: "conversation-read",
   targetlessCache: "deny",
+  readOnly: false,
+} as const;
+const READ_ONLY_CONVERSATION_READ = {
+  ...CONVERSATION_READ,
+  readOnly: true,
 } as const;
 const BUNDLED_CURRENT_CONTEXT_CACHE_READ = {
-  kind: "conversation-read",
+  ...READ_ONLY_CONVERSATION_READ,
   targetlessCache: "bundled-current-context",
 } as const;
 
@@ -60,8 +66,8 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   poll: NO_CONVERSATION_READ,
   "poll-vote": CONVERSATION_READ,
   react: CONVERSATION_READ,
-  reactions: CONVERSATION_READ,
-  read: CONVERSATION_READ,
+  reactions: READ_ONLY_CONVERSATION_READ,
+  read: READ_ONLY_CONVERSATION_READ,
   edit: CONVERSATION_READ,
   unsend: CONVERSATION_READ,
   reply: NO_CONVERSATION_READ,
@@ -75,23 +81,23 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   delete: CONVERSATION_READ,
   pin: CONVERSATION_READ,
   unpin: CONVERSATION_READ,
-  "list-pins": CONVERSATION_READ,
-  permissions: CONVERSATION_READ,
+  "list-pins": READ_ONLY_CONVERSATION_READ,
+  permissions: READ_ONLY_CONVERSATION_READ,
   "thread-create": NO_CONVERSATION_READ,
-  "thread-list": CONVERSATION_READ,
+  "thread-list": READ_ONLY_CONVERSATION_READ,
   "thread-reply": NO_CONVERSATION_READ,
-  search: CONVERSATION_READ,
+  search: READ_ONLY_CONVERSATION_READ,
   sticker: NO_CONVERSATION_READ,
   "sticker-search": BUNDLED_CURRENT_CONTEXT_CACHE_READ,
-  "member-info": CONVERSATION_READ,
-  "role-info": CONVERSATION_READ,
-  "emoji-list": CONVERSATION_READ,
+  "member-info": READ_ONLY_CONVERSATION_READ,
+  "role-info": READ_ONLY_CONVERSATION_READ,
+  "emoji-list": READ_ONLY_CONVERSATION_READ,
   "emoji-upload": NO_CONVERSATION_READ,
   "sticker-upload": NO_CONVERSATION_READ,
   "role-add": NO_CONVERSATION_READ,
   "role-remove": NO_CONVERSATION_READ,
-  "channel-info": CONVERSATION_READ,
-  "channel-list": CONVERSATION_READ,
+  "channel-info": READ_ONLY_CONVERSATION_READ,
+  "channel-list": READ_ONLY_CONVERSATION_READ,
   "channel-create": NO_CONVERSATION_READ,
   "conversation-open": NO_CONVERSATION_READ,
   "channel-edit": NO_CONVERSATION_READ,
@@ -102,8 +108,8 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   "category-delete": NO_CONVERSATION_READ,
   "topic-create": NO_CONVERSATION_READ,
   "topic-edit": NO_CONVERSATION_READ,
-  "voice-status": CONVERSATION_READ,
-  "event-list": CONVERSATION_READ,
+  "voice-status": READ_ONLY_CONVERSATION_READ,
+  "event-list": READ_ONLY_CONVERSATION_READ,
   "event-create": NO_CONVERSATION_READ,
   timeout: NO_CONVERSATION_READ,
   kick: NO_CONVERSATION_READ,
@@ -143,8 +149,16 @@ function resolveMessageActionReadEnforcement(params: {
   pluginTrustedOfficialInstall?: boolean;
 }): MessageActionReadEnforcement {
   const providerOwnedReadGates = params.actions?.providerOwnedReadGates;
+  const actionPolicy = resolveChannelMessageActionReadPolicy(params.action);
+  // Read-capable actions can also mutate provider or local state. Do not expand
+  // their authority without a provider-side final-effect lifecycle fence.
+  const officialReadOnly =
+    params.pluginTrustedOfficialInstall === true &&
+    params.actions?.supportsConversationReadAuthority === true &&
+    actionPolicy?.kind === "conversation-read" &&
+    actionPolicy.readOnly;
   if (
-    (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) &&
+    (params.pluginOrigin === "bundled" || officialReadOnly) &&
     (providerOwnedReadGates === true || providerOwnedReadGates?.includes(params.action) === true)
   ) {
     return { kind: "provider-owned" };
@@ -555,7 +569,6 @@ function prepareMessageActionReadContext(
   });
   let assertReadAuthorityCurrent: (() => void) | undefined;
   if (
-    origin !== "direct-operator" &&
     actionPolicy.kind === "conversation-read" &&
     enforcement.kind === "provider-owned" &&
     registration.origin !== "bundled"
@@ -728,7 +741,11 @@ export async function dispatchChannelMessageAction(
   }
   prepared.assertReadAuthorityCurrent?.();
   try {
-    return await actions.handleAction(authorizedActionContext);
+    return await actions.handleAction({
+      ...authorizedActionContext,
+      // Never accept an assertion supplied by the caller or tool arguments.
+      assertConversationReadAuthority: prepared.assertReadAuthorityCurrent,
+    });
   } finally {
     // A replaced/disabled owner cannot publish late read data, including provider errors.
     prepared.assertReadAuthorityCurrent?.();

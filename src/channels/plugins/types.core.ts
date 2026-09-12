@@ -742,6 +742,8 @@ export type ChannelMessageActionContext = {
    * Plugins must use it only for conversation-read visibility policy.
    */
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** Host-owned read grant: check synchronously before every provider request, including retries. */
+  assertConversationReadAuthority?: () => void;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -802,10 +804,14 @@ export type ChannelMessageActionAdapter = {
   ) => ChannelMessageToolDiscovery | null | undefined;
   /**
    * Delegate conversation-read authorization to this adapter for bundled or
-   * loader-verified official registrations. Other installs remain exact-current.
+   * loader-verified official registrations. Official external eligibility is
+   * limited to read-only actions; read-capable mutations remain exact-current.
+   * Other installs remain exact-current.
    * The adapter must enforce provider account, sender, and destination policy.
    */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
+  /** The adapter enforces the host read assertion before every request after asynchronous work. */
+  supportsConversationReadAuthority?: true;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {

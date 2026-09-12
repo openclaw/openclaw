@@ -14,6 +14,7 @@ import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
+import { discordConversationReadAuthority } from "./conversation-read-authority.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
 import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
@@ -269,6 +270,7 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
+  supportsConversationReadAuthority: true,
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
@@ -357,26 +359,29 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     sessionKey,
     inboundEventKind,
     conversationReadOrigin,
+    assertConversationReadAuthority,
     reply,
   }) => {
-    return await (
-      await loadDiscordChannelActionsRuntime()
-    ).handleDiscordMessageAction({
-      action,
-      params,
-      cfg,
-      accountId,
-      requesterSenderId,
-      senderIsOwner,
-      toolContext,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      ...(sessionKey ? { sessionKey } : {}),
-      ...(inboundEventKind ? { inboundEventKind } : {}),
-      ...(requesterAccountId ? { requesterAccountId } : {}),
-      ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-      ...(reply ? { reply } : {}),
+    return await discordConversationReadAuthority.run(assertConversationReadAuthority, async () => {
+      return await (
+        await loadDiscordChannelActionsRuntime()
+      ).handleDiscordMessageAction({
+        action,
+        params,
+        cfg,
+        accountId,
+        requesterSenderId,
+        senderIsOwner,
+        toolContext,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(inboundEventKind ? { inboundEventKind } : {}),
+        ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+        ...(reply ? { reply } : {}),
+      });
     });
   },
 };
