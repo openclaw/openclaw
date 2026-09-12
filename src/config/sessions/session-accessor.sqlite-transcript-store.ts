@@ -50,7 +50,7 @@ import {
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
   transcriptEventContextEligibility,
-} from "./session-transcript-projection-rebuild.js";
+} from "./session-transcript-projection-append.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";

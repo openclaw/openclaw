@@ -18,7 +18,10 @@ import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { hasUnclassifiedSessionTranscriptEvents } from "./session-transcript-projection-rebuild.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  startSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -165,9 +168,11 @@ export function withCurrentProjectionSnapshot<T>(
   }
   // Request latency never scales with transcript size. The maintenance owner
   // rebuilds after this stack unwinds; callers return a retryable response.
-  startSessionTranscriptIndexReconcile({
-    ...databaseOptions,
-    preferredSessionId: resolved.sessionId,
-  });
+  if (!isSessionTranscriptIndexReconcileRunning(databaseOptions)) {
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: resolved.sessionId,
+    });
+  }
   throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }

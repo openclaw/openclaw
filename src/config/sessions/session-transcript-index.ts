@@ -16,21 +16,15 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  visitSessionTranscriptProjection,
-  extractTranscriptIndexEntry,
-  hasTranscriptMessage,
-  hasUnclassifiedSessionTranscriptEvents,
-  shouldProjectActiveEvent,
-  transcriptEventContextEligibility,
-  type PreparedSessionTranscriptProjection,
+  prepareSessionTranscriptProjectionAppend,
+  type PreparedSessionTranscriptProjectionAppend,
   type TranscriptIndexEntry,
-} from "./session-transcript-projection-rebuild.js";
+} from "./session-transcript-projection-append.js";
 import {
-  isCanonicalSessionTranscriptEntry,
-  isSessionTranscriptLeafControl,
-  isSessionTranscriptSideAppendEntry,
-  parseSessionTranscriptTreeEntry,
-} from "./transcript-tree.js";
+  hasUnclassifiedSessionTranscriptEvents,
+  visitSessionTranscriptProjection,
+  type PreparedSessionTranscriptProjection,
+} from "./session-transcript-projection-rebuild.js";
 type TranscriptIndexDatabase = Omit<
   Pick<
     OpenClawAgentKyselyDatabase,
@@ -270,85 +264,57 @@ export function createTranscriptIndexAppenderInTransaction(
         // transcripts): stay unindexed until reconcile rebuilds the session.
         return true;
       }
-      applyForwardIndex(params);
+      const append = prepareSessionTranscriptProjectionAppend({
+        ...params,
+        cursor: {
+          activeEventCount: 0,
+          activeMessageCount: 0,
+          indexedSeq: -1,
+          leafEventId: null,
+        },
+      });
+      if (!append) {
+        return true;
+      }
+      applyForwardIndex(params.createdAt, append);
       return false;
     }
     if (watermark.needsRebuild) {
       return true;
     }
-    if (
-      params.seq !== watermark.indexedSeq + 1 ||
-      (hasUnclassifiedEvents ??= hasUnclassifiedSessionTranscriptEvents(db, sessionId))
-    ) {
+    if ((hasUnclassifiedEvents ??= hasUnclassifiedSessionTranscriptEvents(db, sessionId))) {
       // Out-of-band or older writers left incomplete projection facts. Once checked,
       // this batch's own forward rows all carry an explicit context classification.
       watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
       return true;
     }
-    if (
-      isSessionTranscriptLeafControl(params.event) ||
-      isSessionTranscriptSideAppendEntry(params.event)
-    ) {
-      // Leaf controls repoint the active branch and side appends attach off
-      // the main chain; the visible path must be re-resolved rather than
-      // guessed at append time.
+    const append = prepareSessionTranscriptProjectionAppend({ ...params, cursor: watermark });
+    if (!append) {
+      // Out-of-band writes, branch changes, and legacy/canonical transitions
+      // need the full visible-tree resolver rather than append-time inference.
       watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
       return true;
     }
-    const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);
-    if (isCanonicalEvent && watermark.leafEventId === null && watermark.activeEventCount > 0) {
-      // A canonical tree supersedes legacy flat message rows. Re-resolve once
-      // instead of retaining rows that are no longer on the selected path.
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
-      return true;
-    }
-    const treeEntry = parseSessionTranscriptTreeEntry(params.event);
-    if (
-      !isCanonicalEvent &&
-      watermark.leafEventId !== null &&
-      shouldProjectActiveEvent(params.event)
-    ) {
-      // A noncanonical row after a tracked tree cursor may be a flat fallback or
-      // an opaque append ancestor. Only the full resolver can decide visibility.
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
-      return true;
-    }
-    if (treeEntry && treeEntry.parentId !== watermark.leafEventId) {
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
-      return true;
-    }
-    applyForwardIndex(params);
+    applyForwardIndex(params.createdAt, append);
     return false;
   };
 
-  function applyForwardIndex(params: TranscriptIndexAppend): void {
-    const entry = extractTranscriptIndexEntry(params.event, params.createdAt);
-    if (entry) {
+  function applyForwardIndex(
+    createdAt: number,
+    append: PreparedSessionTranscriptProjectionAppend,
+  ): void {
+    if (append.ftsRow) {
       insertFts ??= createFtsInserter(db, sessionId);
-      insertFts(entry);
+      insertFts(append.ftsRow);
     }
-    const projectsActiveEvent = shouldProjectActiveEvent(params.event);
-    const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
-    if (projectsActiveEvent) {
+    if (append.activeRow) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
-      insertActiveEvent({
-        activePosition: watermark?.activeEventCount ?? 0,
-        contextEligible: transcriptEventContextEligibility(params.event),
-        eventSeq: params.seq,
-        messagePosition: projectsMessage ? (watermark?.activeMessageCount ?? 0) : null,
-      });
+      insertActiveEvent(append.activeRow);
     }
-    // Mirror scanSessionTranscriptTree's leaf advancement: canonical entries
-    // (parent-linked or parentless) become the tip the next append chains to;
-    // headers and unknown control rows leave the tip untouched.
-    const advancesLeaf = params.eventId !== null && isCanonicalSessionTranscriptEntry(params.event);
     const nextWatermark = {
-      activeEventCount: (watermark?.activeEventCount ?? 0) + (projectsActiveEvent ? 1 : 0),
-      activeMessageCount: (watermark?.activeMessageCount ?? 0) + (projectsMessage ? 1 : 0),
-      indexedSeq: params.seq,
-      leafEventId: advancesLeaf ? params.eventId : (watermark?.leafEventId ?? null),
+      ...append.cursor,
       needsRebuild: false,
-      updatedAt: params.createdAt,
+      updatedAt: createdAt,
     };
     // Initialization still upserts; this synchronous batch owns all subsequent updates.
     const write = watermark

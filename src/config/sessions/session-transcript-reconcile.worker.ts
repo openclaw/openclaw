@@ -7,13 +7,13 @@ import {
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
   prepareMemorySessionTranscriptProjection,
   type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
-  type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
@@ -247,6 +247,7 @@ async function prepareMemoryProjection(sessionId: string) {
         sessionId,
         frame.snapshot.transcriptUpdatedAt,
         rows,
+        frame.snapshot.generation,
       );
       rows.clear();
       return plan;
