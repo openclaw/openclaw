@@ -93,12 +93,14 @@ class WorkboardSessionStatus extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.ownerDocument.addEventListener("scroll", this.onScroll, true);
+    this.ownerDocument.addEventListener("pointerdown", this.onOutsidePointerDown, true);
     this.ownerDocument.addEventListener("keydown", this.onEscape, true);
   }
 
   override disconnectedCallback() {
     this.dismiss();
     this.ownerDocument.removeEventListener("scroll", this.onScroll, true);
+    this.ownerDocument.removeEventListener("pointerdown", this.onOutsidePointerDown, true);
     this.ownerDocument.removeEventListener("keydown", this.onEscape, true);
     super.disconnectedCallback();
   }
@@ -135,6 +137,11 @@ class WorkboardSessionStatus extends LitElement {
     }
     this.open = false;
     this.trigger?.setAttribute("aria-expanded", "false");
+  };
+  private readonly onOutsidePointerDown = (event: Event) => {
+    if (!event.composedPath().includes(this)) {
+      this.dismiss();
+    }
   };
   private readonly onScroll = (event: Event) => {
     // Long explanations remain readable while the hover card itself scrolls.

@@ -2,7 +2,7 @@ import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { render as litRender } from "lit";
+import { render as litRender, type LitElement } from "lit";
 import type { ControlUiComponents } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1616,7 +1616,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
   });
 
-  it("renders a queued linked session without a concurrency claim", () => {
+  it("keeps queued session context readable until an outside pointer dismisses it", async () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
         {
@@ -1637,7 +1637,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     const status = expectDefined(
-      container.querySelector<HTMLElement & { presentation: { label: string } }>(
+      container.querySelector<LitElement & { presentation: { label: string } }>(
         "openclaw-workboard-session-status",
       ),
       "queued session status",
@@ -1650,6 +1650,41 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__session-name")?.textContent?.trim()).toBe(
       "Session",
     );
+
+    await status.updateComplete;
+    const trigger = expectDefined(
+      status.querySelector<HTMLButtonElement>(".workboard-session-status__trigger"),
+      "queued status trigger",
+    );
+    const panel = expectDefined(
+      status.querySelector<HTMLElement>(".workboard-session-status__popover"),
+      "queued status explanation",
+    );
+    if (typeof panel.showPopover !== "function") {
+      Object.defineProperty(panel, "showPopover", { configurable: true, value: vi.fn() });
+    }
+    const removeListener = vi.spyOn(document, "removeEventListener");
+    try {
+      // Pointer activation focuses the button before its click opens the explanation.
+      trigger.focus();
+      trigger.click();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(state.detailCardId).toBeNull();
+      panel.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+      // A nonfocusable outside target must dismiss even if the trigger retains focus.
+      container.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      trigger.click();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      status.remove();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(removeListener).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
+    } finally {
+      removeListener.mockRestore();
+    }
   });
 
   it("uses terminal session lifecycle when cached task status is stale", async () => {
