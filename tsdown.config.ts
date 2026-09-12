@@ -8,6 +8,7 @@ import {
   collectChannelConfigDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
+  createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -278,7 +279,8 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
   };
 }
 
-const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
+const bundledPluginBuildInventory = createBundledPluginBuildInventory();
+const bundledPluginBuildEntries = collectBundledPluginBuildEntries(bundledPluginBuildInventory);
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
@@ -591,9 +593,9 @@ function shouldExternalizeTerminalCoreDependency(id: string): boolean {
 
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
-const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries().filter(
-  ({ isolated }) => !isolated,
-);
+const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries(
+  bundledPluginBuildInventory,
+).filter(({ isolated }) => !isolated);
 const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
   const sourceEntries = plugin.sourceEntries.filter(
     (source) =>
@@ -909,7 +911,7 @@ const configs: UserConfig[] = [
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
       // Keep retained config repairs in their own graph: shared public SDK chunks
       // otherwise pull state-migration exports into these pre-install artifacts.
-      entry: collectChannelConfigDoctorBuildEntries(),
+      entry: collectChannelConfigDoctorBuildEntries(bundledPluginBuildInventory),
       outDir: "dist/config-doctor",
       deps: unifiedDeps,
     },

@@ -2229,7 +2229,7 @@ src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
-src/cli/config-set-input.ts	2
+src/cli/config-set-input.ts	1
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
 src/cli/cron-cli/register.cron-add.ts	1
@@ -2771,7 +2771,7 @@ src/gateway/server-methods/plugin-approval.ts	3
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
-src/gateway/server-methods/send.ts	5
+src/gateway/server-methods/send.ts	2
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-catalog.ts	5
 src/gateway/server-methods/session-create-initial-turn.ts	2

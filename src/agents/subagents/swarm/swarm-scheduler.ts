@@ -290,9 +290,7 @@ export function releaseSwarmRun(runId: string): boolean {
     return false;
   }
   const previouslyFull = location.lane.active.size >= location.lane.limit;
-  if (!location.lane.active.delete(runId)) {
-    return false;
-  }
+  location.lane.active.delete(runId);
   runLocations.delete(runId);
   publishLaneCapacityChange(location.lane, previouslyFull);
   pumpLane(location.lane);
@@ -306,9 +304,6 @@ export function removeQueuedSwarmRun(runId: string): boolean {
     return false;
   }
   const index = location.lane.queue.indexOf(location.item);
-  if (index < 0) {
-    return false;
-  }
   location.lane.queue.splice(index, 1);
   runLocations.delete(runId);
   void finalizeRemovedRun(location.item);

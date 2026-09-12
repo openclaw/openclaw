@@ -9,9 +9,7 @@ import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
 type PayloadLimited = { _maxPayload?: number };
 type GatewayReceiver = PayloadLimited & {
   _allowSynchronousEvents?: boolean;
-  _extensions?: Record<string, PayloadLimited | undefined>;
 };
-const PERMESSAGE_DEFLATE_EXTENSION = "permessage-deflate";
 
 function hasWritablePayloadLimit(target: PayloadLimited | undefined): target is PayloadLimited {
   return (
@@ -20,36 +18,22 @@ function hasWritablePayloadLimit(target: PayloadLimited | undefined): target is 
   );
 }
 
-/**
- * Resolves the ws receiver and every payload limit an authenticated frame passes through.
- * A negotiated permessage-deflate extension checks inflated size against its own copy of
- * the server maxPayload, so raising only the receiver would still reject compressed
- * post-auth frames above the preauth cap. Null when any limit is not writable.
- */
-function gatewayReceiverPayloadLimits(
-  socket: WebSocket,
-): { receiver: GatewayReceiver; limits: PayloadLimited[] } | null {
+function gatewayReceiver(socket: WebSocket): GatewayReceiver | null {
   // SAFETY: ws owns these private per-frame fields; validate each before the handoff.
   const receiver = (socket as WebSocket & { _receiver?: GatewayReceiver })["_receiver"];
   if (!hasWritablePayloadLimit(receiver)) {
     return null;
   }
-  const deflate = receiver["_extensions"]?.[PERMESSAGE_DEFLATE_EXTENSION];
-  if (deflate === undefined) {
-    return { receiver, limits: [receiver] };
-  }
-  return hasWritablePayloadLimit(deflate) ? { receiver, limits: [receiver, deflate] } : null;
+  return receiver;
 }
 
-/** Raises the authenticated frame limit on the receiver and its deflate extension together. */
+/** Raises the authenticated frame limit after the connection is admitted. */
 export function raiseGatewayReceiverPayloadLimit(socket: WebSocket, maxPayload: number): boolean {
-  const resolved = gatewayReceiverPayloadLimits(socket);
-  if (!resolved) {
+  const receiver = gatewayReceiver(socket);
+  if (!receiver) {
     return false;
   }
-  for (const limit of resolved.limits) {
-    limit["_maxPayload"] = maxPayload;
-  }
+  receiver["_maxPayload"] = maxPayload;
   return true;
 }
 
@@ -57,11 +41,10 @@ export function prepareGatewayReceiverHandoff(
   socket: WebSocket,
   role: GatewayRole,
 ): (() => void) | null {
-  const resolved = gatewayReceiverPayloadLimits(socket);
-  if (!resolved) {
+  const receiver = gatewayReceiver(socket);
+  if (!receiver) {
     return null;
   }
-  const { receiver, limits } = resolved;
   if (
     role === "operator" &&
     (typeof receiver["_allowSynchronousEvents"] !== "boolean" ||
@@ -70,9 +53,7 @@ export function prepareGatewayReceiverHandoff(
     return null;
   }
   return () => {
-    for (const limit of limits) {
-      limit["_maxPayload"] = MAX_PAYLOAD_BYTES;
-    }
+    receiver["_maxPayload"] = MAX_PAYLOAD_BYTES;
     if (role === "operator") {
       receiver["_allowSynchronousEvents"] = true;
     }

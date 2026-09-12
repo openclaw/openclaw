@@ -272,6 +272,15 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   250s and co-locate split siblings, provided each original child still fits
   150s. Keep file splits, workers, process isolation and other profiles unchanged.
   Runtime consumers in ordinary bins share preparation only with other consumers;
+  hybrid main runtime-placement observations apply only after file splitting.
+  Whole pinned groups may move between existing compatible serial runtime bins
+  under a 440s budget including the existing 100s build reserve. Preserve runner
+  anchors, all descriptors and invocation/generation counts; no additional jobs,
+  builds, worker limits or test deadlines. Reapply shared admission to both bins;
+  do not bypass a failed budget or count a runtime subset as a complete parent.
+  An unfit optimization keeps the complete runnable plan and its truthful estimate.
+  Compare recipients with the donor job's fixed anchor, not only its group class.
+  Other serial, exclusive, private-QA, dist and hosted policies stay unchanged.
   Affordable generated CLI runtime children may share one preparation in an
   exclusive serial bin within the same 150s budget; fixed stripe families remain
   separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories

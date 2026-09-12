@@ -319,7 +319,8 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    dispatch: async (request, onTransition, authorize) => {
+    dispatch: async (request, onTransition, authorize, callerSignal) => {
+      callerSignal?.throwIfAborted();
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
       );
@@ -327,7 +328,10 @@ export function coordinateWorkerPlacementDispatch(
         if (!isDeepStrictEqual(inFlight.request, request)) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }
-        return await joinOperation(inFlight.operation, authorize);
+        return await racePromiseWithAbortSignal(
+          joinOperation(inFlight.operation, authorize),
+          callerSignal,
+        );
       }
       // Capture predecessors before admission yields. A later Stop awaits this operation
       // and must never become a predecessor of the dispatch it is cancelling.
@@ -335,7 +339,10 @@ export function coordinateWorkerPlacementDispatch(
         (pending) => pending.kind === "reclaim",
       );
       const tracked = trackPlacementOperation(async (report) => {
-        await Promise.allSettled(predecessors.map((pending) => pending.operation));
+        await racePromiseWithAbortSignal(
+          Promise.allSettled(predecessors.map((pending) => pending.operation)),
+          callerSignal,
+        );
         return await admitDispatch(
           request,
           (signal) =>
@@ -344,6 +351,7 @@ export function coordinateWorkerPlacementDispatch(
               signal,
             ),
           authorize,
+          callerSignal,
         );
       }, onTransition);
       const { operation } = tracked;

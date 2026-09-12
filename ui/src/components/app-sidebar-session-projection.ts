@@ -33,6 +33,7 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyGroups: boolean;
+  ownerFiltered: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -204,6 +205,12 @@ export class SidebarSessionProjection {
       }).filter(
         (section) =>
           section.id !== "pinned" &&
+          // Catalog rows have their own projection; these sections are placeholders.
+          !(
+            input.ownerFiltered &&
+            !section.id.startsWith("catalog:") &&
+            section.rows.length === 0
+          ) &&
           !(input.hideEmptyGroups && section.category && section.rows.length === 0),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));

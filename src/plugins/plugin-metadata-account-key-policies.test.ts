@@ -18,9 +18,14 @@ afterEach(() => {
 });
 
 describe("channel account-key metadata ownership", () => {
-  it.each([true, false])(
-    "loadPluginMetadataSnapshot preserves declared owners and selects enabled policy (first enabled: %s)",
-    (firstEnabled) => {
+  it.each([
+    { firstEnabled: true, secondEnabled: true },
+    { firstEnabled: false, secondEnabled: true },
+    { firstEnabled: false, secondEnabled: false },
+  ])(
+    "loadPluginMetadataSnapshot preserves maintenance policy with enabled-owner precedence ($firstEnabled, $secondEnabled)",
+    ({ firstEnabled, secondEnabled }) => {
+      const selectedFirst = firstEnabled || !secondEnabled;
       const rootDir = makeTrackedTempDir("openclaw-account-policy-", tempDirs);
       const plugins = ["first", "second"].map((pluginId) => {
         const pluginRoot = path.join(rootDir, pluginId);
@@ -48,7 +53,7 @@ describe("channel account-key metadata ownership", () => {
           config: {
             plugins: {
               load: { paths: plugins.map((plugin) => plugin.rootDir) },
-              entries: { first: { enabled: firstEnabled }, second: { enabled: true } },
+              entries: { first: { enabled: firstEnabled }, second: { enabled: secondEnabled } },
             },
           },
           env: {
@@ -61,9 +66,9 @@ describe("channel account-key metadata ownership", () => {
         });
         expect(snapshot.owners.channels.get("selected")).toEqual(["first", "second"]);
         expect(snapshot.owners.channelAccountKeyPolicies?.get("selected")).toEqual({
-          canonicalAliasesRequireOwnField: firstEnabled ? "first" : "second",
+          canonicalAliasesRequireOwnField: selectedFirst ? "first" : "second",
         });
-        expect(snapshot.owners.channelAccountKeyPolicies?.has("inherited")).toBe(!firstEnabled);
+        expect(snapshot.owners.channelAccountKeyPolicies?.has("inherited")).toBe(!selectedFirst);
         const projected = projectPluginMetadataSnapshot(snapshot, ["second"]);
         expect(projected.owners.channelAccountKeyPolicies?.get("inherited")).toEqual({
           canonicalAliasesRequireOwnField: "second",

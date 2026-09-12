@@ -22,7 +22,7 @@ type GatewayRunTestApi = {
   resolveGatewayLockErrorExitCode(err: unknown): number;
   resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
-    startLoop: () => Promise<void>;
+    startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
     supervisor: RespawnSupervisor | null;
     port: number;
     healthHost: string;

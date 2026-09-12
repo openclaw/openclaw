@@ -24938,18 +24938,22 @@ public struct SessionsDispatchResult: Codable, Sendable {
 public struct SessionsReclaimParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
+    public let recovertogateway: [String: AnyCodable]?
 
     public init(
         key: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        recovertogateway: [String: AnyCodable]? = nil)
     {
         self.key = key
         self.agentid = agentid
+        self.recovertogateway = recovertogateway
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case recovertogateway = "recoverToGateway"
     }
 }
 

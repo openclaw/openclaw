@@ -22,7 +22,7 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
-const pluginMetadataProcessMemoClears = new Set<() => void>();
+const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
@@ -232,15 +232,21 @@ export function retainGatewayPluginMetadata() {
 
 export type GatewayPluginMetadataOwner = ReturnType<typeof retainGatewayPluginMetadata>;
 
-/** Registers a process-local plugin metadata memo clear hook. */
+/** Registers a metadata clear hook with the lifetime of its facts. */
 export function registerPluginMetadataProcessMemoLifecycleClear(
   clearProcessMemo: () => void,
+  options: { owner: "process" | "operation" } = { owner: "process" },
 ): void {
-  pluginMetadataProcessMemoClears.add(clearProcessMemo);
+  pluginMetadataProcessMemoClears.set(clearProcessMemo, options.owner);
 }
 
 /** Clears plugin metadata snapshots and registered process memo caches. */
 export function clearPluginMetadataLifecycleCaches(): void {
+  for (const [clearMemo, owner] of pluginMetadataProcessMemoClears) {
+    if (owner === "operation") {
+      clearMemo();
+    }
+  }
   // Installs and a sibling Gateway's teardown cannot retire a running inventory.
   // Pre-publication planning remains refreshable until boot metadata is pinned.
   if (
@@ -256,8 +262,10 @@ export function clearPluginMetadataLifecycleCaches(): void {
 
 function clearPluginMetadataCaches(): void {
   clearCurrentPluginMetadataSnapshot();
-  for (const clearProcessMemo of pluginMetadataProcessMemoClears) {
-    clearProcessMemo();
+  for (const [clearProcessMemo, owner] of pluginMetadataProcessMemoClears) {
+    if (owner === "process") {
+      clearProcessMemo();
+    }
   }
   resetPluginCache();
 }

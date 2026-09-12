@@ -103,7 +103,7 @@ export type GatewayService = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  isAbsent?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isAbsent?: (args: GatewayServiceEnvArgs & { strictCommandAbsent?: true }) => Promise<boolean>;
   readDefinitionMutationCapability?: (
     args: GatewayServiceEnvArgs & {
       environment?: GatewayServiceEnv;
@@ -260,39 +260,63 @@ async function readGatewayServiceStateWithBinding(
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? process.env;
   const { timeoutMs, systemdReadBinding } = args;
+  const deadline = performance.now() + (timeoutMs && timeoutMs > 0 ? timeoutMs : 5000);
   systemdReadBinding?.verify();
-  // Native absence is affirmative evidence; failed effective-command inspection is not.
-  if (await service.isAbsent?.({ env: baseEnv, timeoutMs }).catch(() => false)) {
-    args.validateEnvBeforeStatusRead?.(baseEnv);
+  let absent = await service.isAbsent?.({ env: baseEnv, timeoutMs }).catch(() => false);
+  systemdReadBinding?.verify();
+  let commandInspectionReason: ServiceInspectionReason | undefined;
+  const command = absent
+    ? null
+    : args.requireEffective
+      ? await service.readCommand(baseEnv, {
+          timeoutMs,
+          requireEffective: true,
+          ...(systemdReadBinding ? { systemdReadBinding } : {}),
+          ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+          ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
+        })
+      : await service
+          .readCommand(baseEnv, {
+            timeoutMs,
+            onInspectionFailure: (reason) => {
+              commandInspectionReason = reason;
+            },
+          })
+          .catch(() => null);
+  const env = mergeGatewayServiceEnv(baseEnv, command);
+  // Reject persisted selector drift before invoking the native service manager.
+  args.validateEnvBeforeStatusRead?.(env);
+  // Strict user-unit absence still needs the platform owner's system-scope proof.
+  if (
+    !absent &&
+    service.isAbsent &&
+    args.requireEffective &&
+    args.requireLoadedCommand &&
+    command === null
+  ) {
+    systemdReadBinding?.verify();
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      throw new Error("Original systemd read admission deadline expired.");
+    }
+    absent = await service
+      .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
+      .catch(() => false);
+    systemdReadBinding?.verify();
+    if (performance.now() >= deadline) {
+      throw new Error("Original systemd read admission deadline expired.");
+    }
+  }
+  if (absent) {
     return {
       installed: false,
       loadState: { status: "not-loaded" },
       running: false,
-      env: baseEnv,
+      env,
       command: null,
       runtime: { status: "stopped", missingUnit: true },
     };
   }
-  let commandInspectionReason: ServiceInspectionReason | undefined;
-  const command = args.requireEffective
-    ? await service.readCommand(baseEnv, {
-        timeoutMs,
-        requireEffective: true,
-        ...(systemdReadBinding ? { systemdReadBinding } : {}),
-        ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
-        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
-      })
-    : await service
-        .readCommand(baseEnv, {
-          timeoutMs,
-          onInspectionFailure: (reason) => {
-            commandInspectionReason = reason;
-          },
-        })
-        .catch(() => null);
-  const env = mergeGatewayServiceEnv(baseEnv, command);
-  // Reject persisted selector drift before invoking the native service manager.
-  args.validateEnvBeforeStatusRead?.(env);
   const [installed, loadState, runtime, definitionMutationCapability] = await Promise.all([
     command !== null
       ? true
@@ -490,7 +514,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
     isEnabled: isSystemdServiceEnabled,
-    isAbsent: ({ env }) => isSystemdServiceAbsent(env ?? process.env),
+    isAbsent: ({ env, timeoutMs, strictCommandAbsent }) =>
+      isSystemdServiceAbsent(env ?? process.env, { timeoutMs, strictCommandAbsent }),
     hasInstalledDefinition: async ({ env }) =>
       (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readDefinitionMutationCapability: ({

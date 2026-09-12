@@ -1,16 +1,18 @@
 // Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
+import type { Profiler } from "node:inspector";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
 import {
-  controlGatewayHeapProfile,
+  controlGatewayProfile,
+  readGatewayCpuProfile,
   readGatewayHeapProfile,
-} from "../../scripts/lib/gateway-bench-heap.ts";
+} from "../../scripts/lib/gateway-bench-profile.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import { createDeferred } from "../helpers/promise.js";
 
@@ -45,14 +47,14 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
-  it("profiles load allocations after collection without charging startup allocations", async () => {
+  it("writes load CPU and collected allocations before child teardown, excluding startup", async () => {
     await withTempDir("gateway-heap-profile-", async (dir) => {
       const child = spawn(
         process.execPath,
         [
           "--expose-gc",
           "--import",
-          new URL("../../scripts/lib/gateway-bench-heap-preload.ts", import.meta.url).href,
+          new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href,
           "--input-type=module",
           "--eval",
           `process.stdin.resume();
@@ -65,8 +67,13 @@ describe("gateway concurrency benchmark script", () => {
         function loadAllocations() {
           return Array.from({ length: 20000 }, (_, index) => Array(100).fill(index));
         }
+        function loadCpuWork() {
+          const until = performance.now() + 250;
+          while (performance.now() < until) {}
+        }
         process.on("message", (message) => {
           if (message !== "allocate") return;
+          loadCpuWork();
           globalThis.load = loadAllocations();
           globalThis.load = null;
           gc();
@@ -87,11 +94,24 @@ describe("gateway concurrency benchmark script", () => {
         ]);
         expect(ready[0]).toBe("ready");
         const profilePath = `${dir}/load.heapprofile`;
-        await controlGatewayHeapProfile(child, "start", profilePath);
+        const cpuProfilePath = `${dir}/load.cpuprofile`;
+        await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
         const allocated = once(child, "message");
         child.send("allocate");
         expect((await allocated)[0]).toBe("allocated");
-        await controlGatewayHeapProfile(child, "stop", profilePath);
+        await controlGatewayProfile(child, "cpu", "stop", cpuProfilePath);
+        await controlGatewayProfile(child, "heap", "start", profilePath);
+        const heapAllocated = once(child, "message");
+        child.send("allocate");
+        expect((await heapAllocated)[0]).toBe("allocated");
+        await controlGatewayProfile(child, "heap", "stop", profilePath);
+        expect(child.exitCode).toBeNull();
+        const cpuSummary = readGatewayCpuProfile(cpuProfilePath);
+        expect(cpuSummary.sampleCount).toBeGreaterThan(0);
+        const cpu: Profiler.Profile = JSON.parse(await readFile(cpuProfilePath, "utf8"));
+        const functions = cpu.nodes.map((node) => node.callFrame.functionName);
+        expect(functions).toContain("loadCpuWork");
+        expect(functions).not.toContain("startupAllocations");
         const profile = readGatewayHeapProfile(profilePath);
         expect(profile.sampledAllocatedBytes).toBeGreaterThan(1_000_000);
         const stacks = profile.topAllocationSites.flatMap((site) => site.stack).join("\n");
@@ -125,6 +145,8 @@ describe("gateway concurrency benchmark script", () => {
         "/tmp/gateway-heap-profiles",
         "--plugin-count",
         "50",
+        "--probe-rounds",
+        "20",
         "--session-count",
         "120",
         "--control-plane",
@@ -172,6 +194,7 @@ describe("gateway concurrency benchmark script", () => {
       maxHandshakeMs: 2_000,
       output: "concurrency.json",
       pluginCount: 50,
+      probeRounds: 20,
       runs: 2,
       sessionCount: 120,
       sessionUpdateClients: 8,
@@ -189,6 +212,10 @@ describe("gateway concurrency benchmark script", () => {
       "--concurrency must be at most 64",
     );
     expect(testing.parseOptions([]).turnsPerSession).toBe(1);
+    expect(
+      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/gateway-load-cpu-profiles"])
+        .loadCpuProfDir,
+    ).toBe("/tmp/gateway-load-cpu-profiles");
     expect(() => testing.parseOptions(["--turns-per-session", "0"])).toThrow("--turns-per-session");
     expect(() => testing.parseOptions(["--turns-per-session", "101"])).toThrow(
       "--turns-per-session must be at most 100",
@@ -211,6 +238,21 @@ describe("gateway concurrency benchmark script", () => {
       "--session-updates must be at most 100000",
     );
     expect(testing.parseOptions([]).diagnosticsTimeline).toBe(true);
+    expect(testing.parseOptions([]).probeRounds).toBeUndefined();
+    expect(() => testing.parseOptions(["--probe-rounds", "0"])).toThrow();
+    expect(() => testing.parseOptions(["--probe-rounds", "2049"])).toThrow(
+      "--probe-rounds must be at most 2048",
+    );
+    expect(() =>
+      testing.parseOptions([
+        "--probe-rounds",
+        "205",
+        "--history-clients",
+        "2",
+        "--history-burst",
+        "5",
+      ]),
+    ).toThrow("fixed history workload must not exceed 2048 requests per run");
     expect(() =>
       testing.parseOptions(["--session-count", "10000", "--history-messages", "500"]),
     ).toThrow("synthetic history");
@@ -224,6 +266,12 @@ describe("gateway concurrency benchmark script", () => {
         "65536",
       ]),
     ).toThrow("synthetic history");
+  });
+
+  it("rejects overlapping load CPU and heap captures before gateway startup", () => {
+    expect(() =>
+      testing.parseOptions(["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"]),
+    ).toThrow("--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs");
   });
 
   it("summarizes plugin metadata scans captured after startup warmup", () => {
@@ -488,6 +536,124 @@ describe("gateway concurrency benchmark script", () => {
     expect(startedSessions).toEqual(["fast", "slow"]);
     expect(new Set(starts.map((request) => request.idempotencyKey)).size).toBe(4);
     expect(new Set(starts.map((request) => request.message)).size).toBe(4);
+  });
+
+  it("gives each fixed history client its full request budget despite different response times", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const requests: string[][] = [[], []];
+    const finished: number[] = [];
+    try {
+      const jobs = requests.map((clientRequests, client) =>
+        testing
+          .runProbeRounds({
+            rounds: 3,
+            deadlineAt: performance.now() + 60_000,
+            cadenceMs: 10,
+            cadenceFrom: "completion",
+            runFirst: false,
+            shouldContinue: () => false,
+            stopped: () => false,
+            runRound: async (round) => {
+              await Promise.all(
+                Array.from({ length: 2 }, async (_, request) => {
+                  clientRequests.push(`${round}:${request}`);
+                  await new Promise<void>((resolve) => {
+                    setTimeout(resolve, client * 50);
+                  });
+                }),
+              );
+            },
+          })
+          .then((count) => {
+            finished.push(client);
+            return count;
+          }),
+      );
+      await vi.advanceTimersByTimeAsync(35);
+      expect(finished).toEqual([0]);
+      expect(requests.map((items) => items.length)).toEqual([6, 2]);
+      await vi.runAllTimersAsync();
+      expect(await Promise.all(jobs)).toEqual([3, 3]);
+      expect(requests).toEqual([
+        ["0:0", "0:1", "1:0", "1:1", "2:0", "2:1"],
+        ["0:0", "0:1", "1:0", "1:1", "2:0", "2:1"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses the next fixed probe round when the load deadline is exhausted", async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const issued: number[] = [];
+    try {
+      await expect(
+        testing.runProbeRounds({
+          rounds: 2,
+          deadlineAt: 10,
+          cadenceMs: 100,
+          cadenceFrom: "start",
+          runFirst: true,
+          shouldContinue: () => true,
+          stopped: () => false,
+          runRound: async (round) => {
+            issued.push(round);
+            now = 11;
+          },
+        }),
+      ).rejects.toThrow("benchmark timed out while pacing gateway probes");
+      expect(issued).toEqual([0]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([true, false])(
+    "preserves adaptive first-round behavior (runFirst=%s)",
+    async (runFirst) => {
+      const issued: number[] = [];
+      expect(
+        await testing.runProbeRounds({
+          deadlineAt: performance.now() + 60_000,
+          cadenceMs: 100,
+          cadenceFrom: "start",
+          runFirst,
+          shouldContinue: () => false,
+          stopped: () => false,
+          runRound: async (round) => {
+            issued.push(round);
+          },
+        }),
+      ).toBe(runFirst ? 1 : 0);
+      expect(issued).toEqual(runFirst ? [0] : []);
+    },
+  );
+
+  it("joins an admitted fixed round but issues no further work after teardown starts", async () => {
+    const admitted = createDeferred();
+    const release = createDeferred();
+    let stopped = false;
+    const issued: number[] = [];
+    const job = testing.runProbeRounds({
+      rounds: 10,
+      deadlineAt: performance.now() + 60_000,
+      cadenceMs: 100,
+      cadenceFrom: "completion",
+      runFirst: false,
+      shouldContinue: () => true,
+      stopped: () => stopped,
+      runRound: async (round) => {
+        issued.push(round);
+        admitted.resolve();
+        await release.promise;
+      },
+    });
+    await admitted.promise;
+    stopped = true;
+    release.resolve();
+    expect(await job).toBe(1);
+    expect(issued).toEqual([0]);
   });
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {

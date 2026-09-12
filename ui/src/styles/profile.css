@@ -32,21 +32,9 @@
   font-size: 42px;
 }
 
-.profile-hero__avatar-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.profile-hero__avatar-text {
+.profile-hero__avatar > .identity-avatar--agent {
   font-size: 42px;
   line-height: 1;
-}
-
-.profile-hero__avatar-mascot svg {
-  width: 56px;
-  height: 56px;
-  display: block;
 }
 
 .profile-hero__name {

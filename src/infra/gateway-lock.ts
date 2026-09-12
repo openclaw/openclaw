@@ -11,8 +11,10 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { hasErrnoCode } from "./errno.js";
@@ -25,7 +27,10 @@ import {
 } from "./gateway-process-argv.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
+import {
+  acquireGatewayLifecycleCoordinator,
+  StateDatabaseCoordinatorContentionError,
+} from "./state-database-coordinator.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
@@ -33,6 +38,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
 const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
+export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
+const log = createSubsystemLogger("gateway");
 
 type LockPayload = {
   pid: number;
@@ -97,6 +104,7 @@ export function isSameGatewayLockIdentity(
 export type GatewayLockOptions = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  lifecycleDeadlineMs?: number;
   pollIntervalMs?: number;
   staleMs?: number;
   allowInTests?: boolean;
@@ -120,6 +128,14 @@ export class GatewayLockError extends Error {
     super(message);
     this.name = "GatewayLockError";
   }
+}
+
+export function isGatewayLifecycleContentionError(error: unknown): boolean {
+  return (
+    error instanceof GatewayLockError &&
+    error.cause instanceof StateDatabaseCoordinatorContentionError &&
+    error.cause.family === "gateway-lifecycle"
+  );
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
@@ -386,14 +402,55 @@ export async function acquireGatewayLock(
   const role = opts.role ?? "gateway";
   const ownerId = randomUUID();
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
+  const now = opts.now ?? performance.now.bind(performance);
+  const startedAt = now();
+  const timeoutMs = resolveTimerTimeoutMs(
+    opts.timeoutMs,
+    role === "gateway" ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS : 0,
+    0,
+  );
+  const deadlineMs = opts.lifecycleDeadlineMs ?? startedAt + timeoutMs;
+  let waited = false;
   let stateLifecycle: ReturnType<typeof acquireGatewayLifecycleCoordinator>;
   try {
-    stateLifecycle = acquireGatewayLifecycleCoordinator({
-      databasePath: path.join(paths.stateDir, "state", "openclaw.sqlite"),
-      busyTimeoutMs: opts.timeoutMs,
+    stateLifecycle = await acquireWithWait({
+      deadlineMs,
+      pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
+      maxPollIntervalMs: 2000,
+      now,
+      sleep: opts.sleep,
+      acquire: () =>
+        acquireGatewayLifecycleCoordinator({
+          databasePath: path.join(paths.stateDir, "state", "openclaw.sqlite"),
+          busyTimeoutMs: 0,
+        }),
+      shouldRetry: (error) => {
+        if (
+          !(error instanceof StateDatabaseCoordinatorContentionError) ||
+          error.family !== "gateway-lifecycle"
+        ) {
+          return false;
+        }
+        if (!waited && deadlineMs > startedAt && role === "gateway") {
+          log.warn(
+            `waiting for gateway-lifecycle ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
+          );
+        }
+        waited = true;
+        return true;
+      },
     });
   } catch (error) {
-    throw new GatewayLockError("failed to acquire gateway state ownership", error);
+    const waitHint =
+      waited && role === "gateway"
+        ? `; waited ${Math.round(now() - startedAt)}ms for gateway-lifecycle ownership`
+        : "";
+    throw new GatewayLockError(`failed to acquire gateway state ownership${waitHint}`, error);
+  }
+  if (waited && role === "gateway") {
+    log.info(
+      `gateway-lifecycle ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`,
+    );
   }
   let stateLock: Awaited<ReturnType<typeof acquireLockFile>>;
   try {

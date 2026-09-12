@@ -11,7 +11,12 @@ export function createReclaimedPlacementRedispatch(params: {
   dispatch: WorkerPlacementDispatchService["dispatch"];
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
 }) {
-  return async (placement: ReclaimedWorkerPlacement) => {
+  return async (
+    placement: ReclaimedWorkerPlacement,
+    options: { assertCurrent: () => void; signal?: AbortSignal },
+  ) => {
+    options.signal?.throwIfAborted();
+    options.assertCurrent();
     const previousEnvironment = params.environments.get(placement.environmentId);
     if (!previousEnvironment) {
       throw new Error(
@@ -30,21 +35,26 @@ export function createReclaimedPlacementRedispatch(params: {
         executionMode: placement.executionMode,
       });
     }
-    return await params.dispatch({
-      sessionId: placement.sessionId,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      profileId: previousEnvironment.profileId,
-      executionMode: placement.executionMode,
-      ...(devicePlacement ? { devicePlacement } : {}),
-      ...(previousEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-      previousEnvironment.nodeDeviceId
-        ? { deviceId: previousEnvironment.nodeDeviceId }
-        : {}),
-      inheritedProfile: {
-        providerId: previousEnvironment.providerId,
-        profileSnapshot: previousEnvironment.profileSnapshot,
+    return await params.dispatch(
+      {
+        sessionId: placement.sessionId,
+        sessionKey: placement.sessionKey,
+        agentId: placement.agentId,
+        profileId: previousEnvironment.profileId,
+        executionMode: placement.executionMode,
+        ...(devicePlacement ? { devicePlacement } : {}),
+        ...(previousEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+        previousEnvironment.nodeDeviceId
+          ? { deviceId: previousEnvironment.nodeDeviceId }
+          : {}),
+        inheritedProfile: {
+          providerId: previousEnvironment.providerId,
+          profileSnapshot: previousEnvironment.profileSnapshot,
+        },
       },
-    });
+      undefined,
+      options.assertCurrent,
+      options.signal,
+    );
   };
 }

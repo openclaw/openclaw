@@ -19,7 +19,10 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import {
+  inspectSqliteSchemaHeaderInProcess,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
@@ -302,7 +305,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
   return measure();
 }
 
-/** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
+/** Inspect only in the update child: source closes must not release Gateway POSIX locks. */
 export async function readUpdateStateSchemaVersionsInProcess(
   input: StateInput,
 ): Promise<UpdateStateSchemaVersion[]> {
@@ -313,30 +316,38 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {
     const file = discovery.spellings[0];
+    // Missing stores stay explicit so creation is checked and loss blocks rollback.
+    if (!(await fileExists(file))) {
+      inspected.set(identity, { userVersion: null });
+      continue;
+    }
+    if (file !== shared) {
+      // Reuse the native WAL-aware owner inside this child, avoiding both agent
+      // payload copies and a nested worker with a separate cleanup lifetime.
+      const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file);
+      inspected.set(identity, { userVersion });
+      continue;
+    }
     inspected.set(
       identity,
-      (await fileExists(file))
-        ? await withStateDatabaseSnapshot(file, (location) => {
-            const db = openNodeSqliteDatabase(location, { readOnly: true });
-            try {
-              if (file === shared) {
-                collectRegisteredPaths(db, shared, files);
-              }
-              return {
-                userVersion: readSqliteUserVersion(db),
-                ...(file === shared ? { contentVersion: readStateSchemaContentVersion(db) } : {}),
-              };
-            } finally {
-              db.close();
-            }
-          })
-        : { userVersion: null },
+      await withStateDatabaseSnapshot(file, (location) => {
+        const db = openNodeSqliteDatabase(location, { readOnly: true });
+        try {
+          collectRegisteredPaths(db, shared, files);
+          return {
+            userVersion: readSqliteUserVersion(db),
+            contentVersion: readStateSchemaContentVersion(db),
+          };
+        } finally {
+          db.close();
+        }
+      }),
     );
   }
   return publishStateDatabaseVersions(files, inspected);
 }
 
-/** Schema fencing reads private copies in a child under a fixed inspection deadline. */
+/** Fence schema versions in one child under a fixed inspection deadline. */
 export async function readUpdateStateSchemaVersions({
   root,
   nodeRunner = process.execPath,

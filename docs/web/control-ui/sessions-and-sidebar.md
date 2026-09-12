@@ -104,7 +104,7 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 Enable **Hide empty groups** in the same menu to hide custom groups with no sessions in the current sidebar view. It is off by default, and the browser remembers your choice. Collapsed groups with sessions stay visible. Hidden groups keep their membership and order and remain available in **Move to group**; turn the setting off to use their headers as drag targets again.
 
-An active owner filter also hides an empty **Other** section. Clearing the filter restores its normal collaborator and drag-target behavior; **Other** stays visible when it contains matching sessions.
+Selecting a specific owner or **Involving me** automatically hides session sections with no matching sessions, including empty custom groups, **Groups**, and **Other**. Populated sections stay visible even when collapsed. Clearing the filter restores the normal collaborator and drag-target behavior without changing the **Hide empty groups** preference.
 
 Native CLI catalogs with no rows matching the owner filter are hidden unless they have more pages to load or a discovery error to show. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section.
 

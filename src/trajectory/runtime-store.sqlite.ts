@@ -24,7 +24,7 @@ import type { TrajectoryEvent } from "./types.js";
 type SqliteTrajectoryRuntimeDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "trajectory_runtime_events"
->;
+> & { pragma_encoding: { encoding: string } };
 
 const TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
 const TRAJECTORY_RUNTIME_GLOBAL_MAX_BYTES = 512 * 1024 * 1024;
@@ -299,7 +299,22 @@ function trimSqliteTrajectoryRuntimeWindow(
     database.db,
     db
       .selectFrom("trajectory_runtime_events")
-      .select(["seq", "event_json"])
+      .select("seq")
+      .select((eb) => {
+        // octet_length reads stored byte sizes without loading overflow pages. Only
+        // UTF-8 stores match the capture budget; preserve text decoding for UTF-16.
+        const utf8 = eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8");
+        return [
+          eb
+            .case()
+            .when(utf8)
+            .then(eb.fn<number>("octet_length", ["event_json"]))
+            .else(0)
+            .end()
+            .as("event_bytes"),
+          eb.case().when(utf8).then(null).else(eb.ref("event_json")).end().as("event_json"),
+        ];
+      })
       .where("session_id", "=", sessionId)
       .orderBy("seq", "desc"),
   );
@@ -308,7 +323,10 @@ function trimSqliteTrajectoryRuntimeWindow(
   // Retention removes an oldest prefix. Stop once the newest suffix fills the
   // UTF-8 byte budget, then close the iterator before deleting that prefix.
   for (const row of rows) {
-    retainedBytes += Buffer.byteLength(row.event_json, "utf8") + 1;
+    retainedBytes +=
+      (row.event_json === null
+        ? sqliteNumber(row.event_bytes)
+        : Buffer.byteLength(row.event_json, "utf8")) + 1;
     if (!(retainedBytes <= maxRuntimeBytes)) {
       removeThroughSeq = row.seq;
       break;

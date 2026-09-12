@@ -34,7 +34,10 @@ import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { PluginLruCache } from "./plugin-lru-cache.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
-import { resolvePreferredBundledRootArtifact } from "./plugin-runtime-artifact-selection.js";
+import {
+  resolvePluginRuntimeExecutionArtifact,
+  resolvePreferredBundledRootArtifact,
+} from "./plugin-runtime-artifact-selection.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -213,11 +216,13 @@ function resolveLoadableSetupRuntimeSource(
   if (record.origin !== "bundled" || record.sourcePreferred) {
     return { source, rootDir: record.rootDir };
   }
-  return resolvePreferredBundledRootArtifact({
-    source,
-    rootDir: record.rootDir,
-    packageManifest: record.packageManifest,
-  });
+  return resolvePluginRuntimeExecutionArtifact(
+    resolvePreferredBundledRootArtifact({
+      source,
+      rootDir: record.rootDir,
+      packageManifest: record.packageManifest,
+    }),
+  );
 }
 
 function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {

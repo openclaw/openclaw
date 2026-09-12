@@ -34,6 +34,12 @@ openclaw automations create "0 7 * * *" \
   --agent ops
 ```
 
+For agent or command jobs, `--timeout-seconds` accepts non-negative whole seconds.
+Set `--timeout-seconds 0` on `add`/`create` or `edit` to disable the scheduler's
+wall-clock ceiling. Omitting the flag on creation keeps the default timeout;
+omitting it on edit leaves the stored timeout unchanged. Agent/provider timeouts,
+startup watchdogs, and command-runner limits still apply.
+
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
 ```bash

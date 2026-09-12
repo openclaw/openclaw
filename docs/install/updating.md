@@ -52,6 +52,9 @@ results. See
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
+It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
+for policy checks, while using a temporary token and disabling Tailscale identity
+authentication.
 The activated Gateway retains your normal listener settings.
 
 Package updates also check npm availability for enabled configured plugins before
@@ -208,6 +211,13 @@ in that chat as the Gateway observes the recorded milestones:
 2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
+
+External update and restart notices go only to destinations listed in
+`commands.ownerAllowFrom`. Selecting a non-owner chat in the Control UI does not
+authorize notices to that contact. If no owner destination resolves, OpenClaw
+logs the skipped notice and keeps the update outcome in the run record and
+Control UI; it does not redirect the notice to another chat or wake the rejected
+session with diagnostics.
 
 Managed systemd or launchd updates can stop the Gateway before an intermediate
 notice is delivered. The complete four-message sequence is not guaranteed for

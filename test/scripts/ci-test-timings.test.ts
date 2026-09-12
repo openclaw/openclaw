@@ -13,12 +13,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import {
+  type CompactNodeTestShard,
+  type NodeTestShardGroup,
+  createNodeTestShardBundles,
+  isExclusiveCompactShardName,
+} from "../../scripts/lib/ci-node-test-plan.mts";
+import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
 import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
   ciTestTimingsSchema,
   type CiTestTimings,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
-import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import {
+  createCompactSplitTimingGeneration,
+  runtimePlacementTimingKey,
+} from "../../scripts/lib/vitest-shard-metadata.mts";
 
 function uiLog(files: Record<string, number>, overhead = 0.6) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
@@ -58,6 +70,219 @@ const baseline: CiTestTimings = {
 };
 
 const sampleNow = "2026-08-28T12:00:00.000Z";
+
+describe("runtime placement observations", () => {
+  const reader = {
+    configs: ["test/vitest/reader.config.ts"],
+    env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    includePatterns: ["src/reader.test.ts"],
+    pretestBuildMode: "runtime" as const,
+  };
+  const key = runtimePlacementTimingKey(reader)!;
+  function runtimeLog(
+    id: number,
+    overrides: Partial<Omit<typeof reader, "pretestBuildMode">> & {
+      pretestBuildMode?: "runtime" | "private-qa";
+    } = {},
+  ) {
+    const group = { ...reader, ...overrides };
+    const generation = createCompactSplitTimingGeneration({
+      ...group,
+      parentShardName: "fixture-parent",
+      stripes: [group.includePatterns, [`src/ordinary-${id}.test.ts`]],
+    });
+    const descriptor = {
+      ...group,
+      shard_name: `reader-${id}`,
+      timing_key: generation.timingKeys[0]!,
+    };
+    const [begin, end] = compactLog(20, descriptor.timing_key).split("\n");
+    return [
+      `2026-08-27T23:00:00Z   OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+      begin,
+      `2026-08-27T23:00:01Z [shard:${descriptor.shard_name}] [test] preparing ${group.pretestBuildMode} runtime before Vitest workers`,
+      end,
+      compactLog(5, generation.timingKeys[1]!),
+    ].join("\n");
+  }
+  const sample = (id: number, text: string) =>
+    timingRun(id, [
+      {
+        kind: "compact",
+        labels: ["blacksmith-8vcpu-ubuntu-2404"],
+        text,
+      },
+    ]);
+
+  it("retains runtime placement through sibling repartition without changing parent totals", () => {
+    const first = sample(1, runtimeLog(1));
+    const second = sample(
+      2,
+      runtimeLog(2)
+        .split("\n")
+        .map((line) => `job\tstep\t${line}`)
+        .join("\n"),
+    );
+    expect(refitTestTimings([first]).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
+    const result = refitTestTimings([first, second]).timings.compactGroupSeconds.blacksmith;
+    expect(result).toEqual({ "fixture-parent": 25, [key]: 20 });
+    expect(
+      refitTestTimings([{ ...first, logs: [...first.logs, ...first.logs] }]).timings
+        .compactGroupSeconds.blacksmith[key],
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { configs: ["test/vitest/different.config.ts"] },
+    { env: { OPENCLAW_VITEST_MAX_WORKERS: "3" } },
+    { includePatterns: ["src/different.test.ts"] },
+    { pretestBuildMode: "private-qa" as const },
+  ])("does not merge runtime placement with changed ownership %j", (change) => {
+    const result = refitTestTimings([sample(1, runtimeLog(1)), sample(2, runtimeLog(2, change))]);
+    expect(
+      Object.keys(result.timings.compactGroupSeconds.blacksmith).filter((entry) =>
+        entry.startsWith("runtime-placement#"),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each(["failed", "missing readiness", "malformed descriptor"])(
+    "rejects %s runtime placement evidence",
+    (kind) => {
+      const runs = [1, 2].map((id) => {
+        let text = runtimeLog(id);
+        if (kind === "failed") {
+          text = text.replaceAll("end (exit 0)", "end (exit 1)");
+        }
+        if (kind === "missing readiness") {
+          text = text
+            .split("\n")
+            .filter((line) => !line.includes("[test] preparing"))
+            .join("\n");
+        }
+        if (kind === "malformed descriptor") {
+          text = text.replace(/BASE64: \S+/u, "BASE64: invalid");
+        }
+        return sample(id, text);
+      });
+      expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
+    },
+  );
+
+  it("admits runtime placement without changing current groups, slots, builds or runner anchors", () => {
+    const blacksmith = testTimings.readCompactGroupTimings("blacksmith");
+    const withoutPlacement = Object.fromEntries(
+      Object.entries(blacksmith).filter(([entry]) => !entry.startsWith("runtime-placement#")),
+    );
+    const spy = vi.spyOn(testTimings, "readCompactGroupTimings");
+    const options = {
+      compactMode: "push" as const,
+      runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+    };
+    try {
+      spy.mockImplementation((profile) => (profile === "blacksmith" ? withoutPlacement : {}));
+      const before = createNodeTestShardBundles(options);
+      spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : {}));
+      const after = createNodeTestShardBundles(options);
+      const groups = (jobs: typeof before) =>
+        jobs
+          .flatMap((job) => job.groups)
+          .map((group) => JSON.stringify(group))
+          .toSorted();
+      expect(groups(after)).toEqual(groups(before));
+      expect(
+        after.map((job) => [job.checkName, job.runner, job.planConcurrency, job.pretestBuildMode]),
+      ).toEqual(
+        before.map((job) => [job.checkName, job.runner, job.planConcurrency, job.pretestBuildMode]),
+      );
+      const changed = after.filter(
+        (job, index) => JSON.stringify(job.groups) !== JSON.stringify(before[index]!.groups),
+      );
+      expect(changed).toHaveLength(2);
+      for (const job of changed) {
+        expect(job.predictedSeconds).toBeLessThanOrEqual(440);
+        expect(job.planConcurrency).toBe(1);
+        expect(job.groups.every((group) => !isExclusiveCompactShardName(group.shard_name))).toBe(
+          true,
+        );
+      }
+      const crossing = changed.flatMap((job) =>
+        job.groups.filter((group) => group.runner !== job.runner),
+      );
+      expect(crossing.length).toBeGreaterThan(0);
+      expect(crossing.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")).toBe(true);
+      spy.mockImplementation((profile) =>
+        profile === "blacksmith"
+          ? Object.fromEntries(
+              Object.entries(blacksmith).map(([entry, value]) => [
+                entry,
+                entry.startsWith("runtime-placement#") ? 1_000 : value,
+              ]),
+            )
+          : {},
+      );
+      const unfit = createNodeTestShardBundles(options);
+      expect(groups(unfit)).toEqual(groups(before));
+      expect(unfit.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
+        before.map((job) => [job.checkName, job.runner, job.groups]),
+      );
+      expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 440)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["medium", "strong"])(
+    "preserves the runtime placement donor anchor against %s capacity",
+    (recipientRunner) => {
+      const group = (name: string, pinned = false): NodeTestShardGroup => ({
+        shard_name: name,
+        configs: ["test/vitest/reader.config.ts"],
+        includePatterns: [`src/${name}.test.ts`],
+        pretestBuildMode: "runtime",
+        requiresDist: false,
+        runner: "small",
+        ...(pinned ? { env: { OPENCLAW_VITEST_MAX_WORKERS: "2" } } : {}),
+      });
+      const moved = group("moved", true);
+      const retained = group("retained");
+      const spare = group("spare");
+      const job = (
+        name: string,
+        runner: string,
+        groups: NodeTestShardGroup[],
+      ): CompactNodeTestShard => ({
+        checkName: name,
+        shardName: name,
+        runner,
+        groups,
+        requiresDist: false,
+        pretestBuildMode: "runtime",
+        planConcurrency: 1,
+        predictedSeconds: 0,
+      });
+      const jobs = [
+        job("donor", "strong", [moved, retained]),
+        job("recipient", recipientRunner, [spare]),
+      ];
+      const cost = (groups: NodeTestShardGroup[]) =>
+        100 + groups.reduce((sum, entry) => sum + (entry === spare ? 50 : 200), 0);
+      rebalanceRuntimeTestJobs(jobs, {
+        cost,
+        admits: (groups) => groups.length > 0 && cost(groups) <= 440,
+        runnerRank: ({ runner }) => ["small", "medium", "strong"].indexOf(runner),
+      });
+      expect(jobs.map((entry) => entry.runner)).toEqual(["strong", recipientRunner]);
+      expect(jobs.map((entry) => entry.groups)).toEqual(
+        recipientRunner === "strong" ? [[retained], [spare, moved]] : [[moved, retained], [spare]],
+      );
+      expect(jobs.map((entry) => entry.predictedSeconds)).toEqual(
+        recipientRunner === "strong" ? [300, 350] : [500, 150],
+      );
+    },
+  );
+});
 
 function samplerRun(id: number, overrides: Record<string, unknown> = {}) {
   return {

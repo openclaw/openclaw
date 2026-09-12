@@ -161,6 +161,14 @@ vi.mock("./update-command-plugins.js", () => ({
   }),
 }));
 
+// Process fixtures cover runtime generation with real lifecycle ownership.
+vi.mock("./update-command-runtime.js", () => ({
+  completeSourceUpdateRuntime: vi.fn(async () => {
+    record("runtime-completion");
+    return { changed: false };
+  }),
+}));
+
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
   continuePostCoreUpdateInFreshProcess: vi.fn(),
@@ -410,6 +418,12 @@ describe("update plugin lifecycle lease boundaries", () => {
     });
 
     expectLifecycleBoundary("handoff-records");
+    expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
+      mocks.events.indexOf("lease-enter:false"),
+    );
+    expect(mocks.events.indexOf("runtime-completion:true")).toBeLessThan(
+      mocks.events.indexOf("prepare-config:true"),
+    );
     expect(mocks.events).not.toContain("fresh-doctor:false");
     expect(mocks.events).not.toContain("fresh-doctor:true");
     expect(mocks.events).not.toContain("config-snapshot:false");

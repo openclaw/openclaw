@@ -15,8 +15,6 @@
     "../../src/skills/**/*.test.ts",
     "../../src/skills/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
-    "../../src/secrets/**/*.test.tsx",
-    "../../src/plugin-state/**/*.test.ts",
-    "../../src/plugin-state/**/*.test.tsx"
+    "../../src/secrets/**/*.test.tsx"
   ]
 }

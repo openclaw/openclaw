@@ -92,16 +92,13 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
   hookName: "gateway:shutdown" | "gateway:pre-restart";
   timeoutMs: number;
 }): Promise<"completed" | "timeout"> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const hookPromise = params.cleanupWork.track(() => triggerInternalHook(params.event));
   void hookPromise.catch(() => undefined);
+  const timeout = createTimeoutRace(params.timeoutMs, () => "timeout" as const);
   try {
     const result = await Promise.race([
       hookPromise.then(() => "completed" as const),
-      new Promise<"timeout">((resolve) => {
-        timeout = setTimeout(() => resolve("timeout"), params.timeoutMs);
-        timeout.unref?.();
-      }),
+      timeout.promise,
     ]);
     if (result === "timeout") {
       shutdownLog.warn(
@@ -110,9 +107,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
     }
     return result;
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    timeout.clear();
   }
 }
 
@@ -181,20 +176,14 @@ async function waitForHttpClose(params: {
 }): Promise<boolean> {
   const timeout = createTimeoutRace(params.timeoutMs, () => false as const);
   try {
-    return await Promise.race([
-      params.closePromise.then(
-        () => true,
-        (err: unknown) => {
-          throw err;
-        },
-      ),
-      timeout.promise,
-    ]).catch((err: unknown) => {
-      const detail = err instanceof Error ? err.message : String(err);
-      shutdownLog.warn(`${params.label}: ${detail}`);
-      recordShutdownWarning(params.warnings, params.label);
-      return true;
-    });
+    return await Promise.race([params.closePromise.then(() => true), timeout.promise]).catch(
+      (err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        shutdownLog.warn(`${params.label}: ${detail}`);
+        recordShutdownWarning(params.warnings, params.label);
+        return true;
+      },
+    );
   } finally {
     timeout.clear();
   }
@@ -319,59 +308,38 @@ export async function prepareGatewayClose(
   // info, and the completion line below reports duration and outcome.
   shutdownLog.debug(`shutdown started: ${reason}`);
 
-  try {
-    await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
-    await measureCloseStep("config-reloader", () =>
-      shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
-    );
-    await measureCloseStep("gateway-shutdown-hook", () =>
+  const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
+    const hookName = `gateway:${action}` as const;
+    return measureCloseStep(`gateway-${action}-hook`, () =>
       shutdownStep(
-        "gateway:shutdown",
+        hookName,
         async () => {
-          const shutdownEvent = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {
-            reason,
-            restartExpectedMs,
-          });
           const result = await triggerGatewayLifecycleHookWithTimeout({
             cleanupWork,
-            event: shutdownEvent,
-            hookName: "gateway:shutdown",
-            timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+            event: createInternalHookEvent("gateway", action, hookName, {
+              reason,
+              restartExpectedMs,
+            }),
+            hookName,
+            timeoutMs,
           });
           if (result === "timeout") {
-            recordShutdownWarning(warnings, "gateway:shutdown");
+            recordShutdownWarning(warnings, hookName);
           }
         },
         warnings,
       ),
     );
+  };
+
+  try {
+    await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
+    await measureCloseStep("config-reloader", () =>
+      shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
+    );
+    await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     if (restartExpectedMs !== null) {
-      await measureCloseStep("gateway-pre-restart-hook", () =>
-        shutdownStep(
-          "gateway:pre-restart",
-          async () => {
-            const preRestartEvent = createInternalHookEvent(
-              "gateway",
-              "pre-restart",
-              "gateway:pre-restart",
-              {
-                reason,
-                restartExpectedMs,
-              },
-            );
-            const result = await triggerGatewayLifecycleHookWithTimeout({
-              cleanupWork,
-              event: preRestartEvent,
-              hookName: "gateway:pre-restart",
-              timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS,
-            });
-            if (result === "timeout") {
-              recordShutdownWarning(warnings, "gateway:pre-restart");
-            }
-          },
-          warnings,
-        ),
-      );
+      await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
     const drainTimeoutMs =
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)

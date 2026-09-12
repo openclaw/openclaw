@@ -591,6 +591,46 @@ describe("Crabbox durable allocation admission", () => {
     expect(owner.lookupLease(project.id)?.phase).toBe("prepared");
   });
 
+  it("does not publish image demand when a fork completes after project expiry", async () => {
+    const now = Date.now();
+    const expiresAt = now + 60_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const { manager, projectContext } = fixture(false, (argv) => {
+      if (argv[2] === "fork") {
+        clock.mockReturnValue(expiresAt);
+      }
+    });
+    const owner = manager();
+    const source = projectContext("cbx_source");
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    const before = structuredClone(openWarmImageStore().entries()[0]!.value.image);
+    clock.mockReturnValue(now + 1_000);
+    const next = projectContext("cbx_expired");
+    const signal = new AbortController().signal;
+
+    await expect
+      .soft(
+        owner.allocate({
+          ...next,
+          signal,
+          assertCurrent: () => {
+            if (Date.now() >= expiresAt) {
+              throw new Error("project authority expired");
+            }
+          },
+        }),
+      )
+      .rejects.toThrow();
+    expect(signal.aborted).toBe(false);
+    expect(openWarmImageStore().entries()[0]!.value.image).toEqual(before);
+    expect(owner.lookupLease(next.id)).toMatchObject({
+      phase: "pending",
+      choice: { kind: "checkpoint", checkpointId: CHECKPOINT_ID },
+    });
+  });
+
   it("keeps an uncertain project capture fenced before enrollment after restart", async () => {
     const { manager, context, calls } = fixture(true);
     const owner = manager();

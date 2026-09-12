@@ -60,6 +60,7 @@ import { mergeLegacyCronJobs, mergeRuntimeEntryIntoConfigJob } from "./repair-pl
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
   assertCronStateSchemaSupported,
+  assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
 } from "./schema-safety.js";
 import {
@@ -138,7 +139,7 @@ export async function loadLegacyCronRepairState(params: {
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
-  assertCronStateSchemaSupported(params.env);
+  await assertCronStateSchemaSupportedAsync(params.env);
   if (
     params.onlyIfLegacyDetected &&
     !legacyStoreDetected &&

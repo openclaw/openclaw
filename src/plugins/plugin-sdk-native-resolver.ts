@@ -25,18 +25,6 @@ type ResolveFilename = (
 
 type ModuleWithResolver = typeof Module & {
   _resolveFilename?: ResolveFilename;
-  registerHooks?: (options: {
-    resolve?: (
-      specifier: string,
-      context: { parentURL?: string | undefined; conditions: readonly string[] },
-      nextResolve: (
-        specifier: string,
-        context?: { parentURL?: string | undefined },
-      ) => {
-        url: string;
-      },
-    ) => { shortCircuit?: boolean; url: string };
-  }) => { deregister: () => void };
 };
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
@@ -254,13 +242,6 @@ function isWithinRoot(candidate: string, root: string): boolean {
   return isPathInside(root, normalizePathForBoundary(candidate));
 }
 
-function resolveAliasTargetForParent(
-  request: string,
-  parent: NodeJS.Module | undefined,
-): string | undefined {
-  return resolveAliasTargetForParentPath(request, parent?.filename);
-}
-
 function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
@@ -305,10 +286,7 @@ function resolveAliasTargetForParentPath(
   return entries.find((entry) => isWithinRoot(parentFilename, entry.parentRoot))?.target;
 }
 
-function listInternalCorePackageNativeAliases(
-  options: InstallOpenClawPluginSdkNativeResolverOptions,
-  packageRoot = resolveInternalCorePackageHostRoot(resolveLoaderModulePath(options)),
-): Array<{
+function listInternalCorePackageNativeAliases(packageRoot: string): Array<{
   request: string;
   target: string;
   parentRoots: string[];
@@ -378,7 +356,7 @@ function installResolver(): void {
     return;
   }
   moduleWithResolver[nodeResolveFilenameProperty] = ((request, parent, isMain, options) =>
-    resolveAliasTargetForParent(request, parent) ??
+    resolveAliasTargetForParentPath(request, parent?.filename) ??
     previousResolveFilename(request, parent, isMain, options)) satisfies ResolveFilename;
   moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
@@ -457,7 +435,7 @@ function registerInternalCorePackageNativeAliases(
   if (registeredInternalCorePackageHosts.has(packageRoot)) {
     return;
   }
-  for (const alias of listInternalCorePackageNativeAliases(options, packageRoot)) {
+  for (const alias of listInternalCorePackageNativeAliases(packageRoot)) {
     registerNativeAlias(alias);
   }
   registeredInternalCorePackageHosts.add(packageRoot);

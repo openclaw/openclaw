@@ -290,6 +290,8 @@ describe("gateway worker environment startup", () => {
         commands: [],
       };
       const transport: NodeWorkerSupervisorTransport = {
+        getCurrentNode: async (candidateNodeId) =>
+          proof.nodeId === candidateNodeId ? proof : undefined,
         listCurrentNodes: async () => [proof],
         hasCurrentRunner: (candidateNodeId) => candidateNodeId === proof.nodeId,
         isCurrent: () => true,

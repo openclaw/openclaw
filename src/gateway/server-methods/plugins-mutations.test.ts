@@ -90,11 +90,9 @@ const capabilityConsent = {
 
 describe("plugin management Gateway mutation handlers", () => {
   beforeEach(() => {
-    managementMocks.install.mockReset();
-    managementMocks.refreshMetadata.mockReset();
-    managementMocks.reload.mockReset();
-    managementMocks.setEnabled.mockReset();
-    managementMocks.uninstall.mockReset();
+    for (const mock of Object.values(managementMocks)) {
+      mock.mockReset();
+    }
   });
 
   it.each([
@@ -470,13 +468,9 @@ describe("plugin management Gateway mutation handlers", () => {
     });
   });
 
-  it.each([
-    { mode: "off", restartRequired: false },
-    { mode: "restart", restartRequired: false },
-    { mode: "hot", restartRequired: false },
-  ] as const)(
-    "reports restartRequired=$restartRequired for $mode reload mode",
-    async ({ mode, restartRequired }) => {
+  it.each(["off", "restart", "hot"] as const)(
+    "reports restartRequired=false for %s reload mode",
+    async (mode) => {
       managementMocks.setEnabled.mockResolvedValue({
         application,
         plugin: { ...workboard, enabled: true, state: "enabled" },
@@ -489,89 +483,54 @@ describe("plugin management Gateway mutation handlers", () => {
         { gateway: { reload: { mode } } },
       );
 
-      expect(result.response).toMatchObject({ ok: true, restartRequired });
+      expect(result.response).toMatchObject({ ok: true, restartRequired: false });
     },
   );
 
-  it("classifies known enablement policy failures as invalid requests", async () => {
-    managementMocks.setEnabled.mockRejectedValue(
-      new ManagedPluginLifecycleError("Plugin is blocked"),
-    );
-
-    const result = await callHandler("plugins.setEnabled", {
-      pluginId: "workboard",
-      enabled: true,
-    });
-
-    expect(result.error).toMatchObject({
+  it.each([
+    {
+      error: new ManagedPluginLifecycleError("Plugin is blocked"),
       code: "INVALID_REQUEST",
-      message: "Plugin is blocked",
-    });
-  });
-
-  it("classifies unexpected enablement persistence failures as unavailable", async () => {
-    managementMocks.setEnabled.mockRejectedValue(new Error("rename EACCES"));
+    },
+    { error: new Error("rename EACCES"), code: "UNAVAILABLE" },
+  ])("classifies enablement failures as $code", async ({ error, code }) => {
+    const message = error.message;
+    managementMocks.setEnabled.mockRejectedValue(error);
 
     const result = await callHandler("plugins.setEnabled", {
       pluginId: "workboard",
       enabled: true,
     });
 
-    expect(result.error).toMatchObject({
-      code: "UNAVAILABLE",
-      message: "rename EACCES",
-    });
+    expect(result.error).toMatchObject({ code, message });
   });
 
-  it("forwards ClawHub risk acknowledgement and the reviewed-surface token", async () => {
-    managementMocks.install.mockResolvedValue({
-      application,
-      plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
-    });
-
-    await callHandler("plugins.install", {
+  it.each([
+    {
       source: "clawhub",
       packageName: "@openclaw/diffs",
       version: "1.2.3",
       acknowledgeCapabilities: { reviewToken },
-    });
-
-    expect(managementMocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request: {
-          source: "clawhub",
-          packageName: "@openclaw/diffs",
-          version: "1.2.3",
-          acknowledgeCapabilities: { reviewToken },
-        },
-      }),
-    );
-  });
-
-  it("forwards install-policy acknowledgement and the exact reviewed-surface token", async () => {
-    managementMocks.install.mockResolvedValue({
-      application,
-      plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
-    });
-
-    await callHandler("plugins.install", {
+    },
+    {
       source: "official",
       pluginId: "diffs",
       acknowledgeInstallPolicyWarning: true,
       acknowledgeCapabilities: { reviewToken },
-    });
+    },
+  ])(
+    "forwards $source install acknowledgements and the exact reviewed-surface token",
+    async (request) => {
+      managementMocks.install.mockResolvedValue({
+        application,
+        plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
+      });
 
-    expect(managementMocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request: {
-          source: "official",
-          pluginId: "diffs",
-          acknowledgeInstallPolicyWarning: true,
-          acknowledgeCapabilities: { reviewToken },
-        },
-      }),
-    );
-  });
+      await callHandler("plugins.install", structuredClone(request));
+
+      expect(managementMocks.install).toHaveBeenCalledWith(expect.objectContaining({ request }));
+    },
+  );
 
   it("returns tokenless structured install policy warning details", async () => {
     managementMocks.install.mockRejectedValue(

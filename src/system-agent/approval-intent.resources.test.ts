@@ -11,6 +11,7 @@ import {
 } from "../agents/simple-completion-runtime.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -211,7 +212,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                   });
               }),
             );
-            const fetch = globalThis.fetch;
+            const fetch = process.versions.bun ? fetchWithRuntimeDispatcher : globalThis.fetch;
             let wrapped = false;
             spies.push(
               vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {

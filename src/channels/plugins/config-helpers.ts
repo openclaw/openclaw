@@ -84,7 +84,7 @@ export function setAccountEnabledInConfigSection(params: {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  const accountKey = resolveChannelAccountKey(
+  const storedAccountKey = resolveChannelAccountKey(
     base?.accounts,
     accountId,
     params.sectionKey,
@@ -93,18 +93,18 @@ export function setAccountEnabledInConfigSection(params: {
     { allowMissing: true },
   );
   const hasAccounts = Boolean(base?.accounts);
-  if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
+  if (params.allowTopLevel && storedAccountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
     return setTopLevelChannelEnabledInConfigSection(params);
   }
 
   const baseAccounts = base?.accounts ?? {};
-  const existing = baseAccounts[accountKey] ?? {};
+  const existing = baseAccounts[storedAccountKey] ?? {};
   return writeChannelSection(params.cfg, params.sectionKey, {
     ...base,
     accounts: {
       ...baseAccounts,
-      [accountKey]: { ...existing, enabled: params.enabled },
+      [storedAccountKey]: { ...existing, enabled: params.enabled },
     },
   });
 }
@@ -122,7 +122,7 @@ export function deleteAccountFromConfigSection(params: {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  const accountKey = resolveChannelAccountKey(
+  const storedAccountKey = resolveChannelAccountKey(
     base?.accounts,
     accountId,
     params.sectionKey,
@@ -138,8 +138,20 @@ export function deleteAccountFromConfigSection(params: {
     return writeChannelSection(params.cfg, params.sectionKey, undefined);
   }
 
-  if (accountKey !== undefined) {
-    delete accounts[accountKey];
+  if (storedAccountKey !== undefined) {
+    delete accounts[storedAccountKey];
+    const remainingKey = resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.sectionKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    );
+    if (remainingKey !== undefined) {
+      throw new Error(
+        `Cannot delete account "${accountId}": stored keys "${storedAccountKey}" and "${remainingKey}" resolve to the same account. Resolve the collision before deleting.`,
+      );
+    }
   }
   const baseRecord = { ...(base as Record<string, unknown>) };
   if (accountId === DEFAULT_ACCOUNT_ID) {

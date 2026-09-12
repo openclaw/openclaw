@@ -192,35 +192,27 @@ const readHidden = createAttributeReader("hidden");
 const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
 const readEncoding = createAttributeReader("encoding");
+const VISIBILITY_ATTRIBUTE_HINT = /hidden|class|style|type|[\u0080-\uffff]/i;
 
 function shouldRemoveElement(tagName: string, attrs: string): boolean {
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
     return true;
   }
 
-  if (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") {
+  // Only skip plain ASCII attributes; every hint still uses the complete grammar.
+  if (!VISIBILITY_ATTRIBUTE_HINT.test(attrs)) {
+    return false;
+  }
+  if (
+    (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") ||
+    normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true" ||
+    readHidden(attrs) !== undefined ||
+    hasHiddenClass(readClass(attrs) ?? "")
+  ) {
     return true;
   }
-
-  if (normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true") {
-    return true;
-  }
-
-  if (readHidden(attrs) !== undefined) {
-    return true;
-  }
-
-  const className = readClass(attrs) ?? "";
-  if (hasHiddenClass(className)) {
-    return true;
-  }
-
   const style = readStyle(attrs) ?? "";
-  if (style && isStyleHidden(style)) {
-    return true;
-  }
-
-  return false;
+  return style ? isStyleHidden(style) : false;
 }
 
 const LIST_CONTAINERS = new Set(["ul", "ol", "menu"]);

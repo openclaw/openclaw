@@ -22,6 +22,7 @@ import {
   continuePostCoreUpdateInFreshProcess,
   shouldResumePostCoreUpdateInFreshProcess,
 } from "./update-command-post-core.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
@@ -167,7 +168,13 @@ export async function convergeUpdatePlugins(params: {
       }
 
       if (!pluginsUpdatedInFreshProcess) {
-        postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
+        postCorePluginUpdate = await withPluginLifecycleLease({}, async (lease) => {
+          await completeSourceUpdateRuntime({
+            root: postUpdateRoot,
+            timeoutMs: params.updateStepTimeoutMs,
+            lease,
+            beforePersistentEffect: params.beforePersistentEffect,
+          });
           const preparedConfig = await preparePostCorePluginConfig({
             requestedChannel: params.requestedChannel,
             preUpdateConfig,

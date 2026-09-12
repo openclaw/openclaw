@@ -135,7 +135,7 @@ console.log("portable worker syntax highlighting passed");
     }
   });
 
-  it("preserves WebSocket transport and lazy transcription in relocated worker output", async () => {
+  it("preserves WebSocket, desktop, and lazy transcription in relocated worker output", async () => {
     const { build } = await import("tsdown");
     const { default: buildConfigs } = await import("../../tsdown.config.ts");
     const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -156,6 +156,7 @@ console.log("portable worker syntax highlighting passed");
       [
         `export { WebSocket } from ${JSON.stringify(path.resolve("packages/gateway-client/src/websocket.ts"))};`,
         `export { createRealtimeTranscriptionWebSocketSession } from ${JSON.stringify(path.resolve("src/realtime-transcription/websocket-session.ts"))};`,
+        `export { runDesktopWebSocketRuntimeProbe } from ${JSON.stringify(path.resolve("src/gateway/desktop/websocket-runtime.test-support.ts"))};`,
       ].join("\n"),
     );
     const bundles = await build({
@@ -196,7 +197,10 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 const [entry, url] = process.argv.slice(1);
 assert.throws(() => createRequire(pathToFileURL(entry)).resolve("ws/package.json"), { code: "MODULE_NOT_FOUND" });
-const { WebSocket, createRealtimeTranscriptionWebSocketSession } = await import(pathToFileURL(entry).href);
+const { WebSocket, createRealtimeTranscriptionWebSocketSession, runDesktopWebSocketRuntimeProbe } = await import(pathToFileURL(entry).href);
+for (const mode of ["observer-close", "observer-backpressure", "observer-payload", "desktop", "portal"]) {
+  await runDesktopWebSocketRuntimeProbe(mode);
+}
 const socket = new WebSocket(url + "/client", { headers: { "x-worker-proof": "client-header" } });
 await once(socket, "open");
 const message = once(socket, "message");
@@ -353,6 +357,7 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
     expect(transformed).not.toContain('requireUndici("undici/index.js")');
+    expect(transformed).not.toContain("undiciModule");
   });
 
   it("leaves fs-safe native package resolution to the dependency", () => {
@@ -373,10 +378,7 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(() =>
       plugin.transform.call(
         { error: fail },
-        source.replace(
-          'return requireUndici("undici/index.js")',
-          'return changedUndici("undici/index.js")',
-        ),
+        source.replace('requireUndici("undici/index.js")', 'changedUndici("undici/index.js")'),
         dispatcherPath,
       ),
     ).toThrow("undici dispatcher bootstrap changed");

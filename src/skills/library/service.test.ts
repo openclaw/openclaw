@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -127,7 +128,7 @@ describe("profile-owned skill publication and selection", () => {
     const { alice, options, stateDir } = fixture();
     const saved = await saveSkillLibrary(alice, draft(), options);
     const pins = seedSkillLibrarySelection(alice, options);
-    await saveSkillLibrary(
+    const updated = await saveSkillLibrary(
       alice,
       {
         ...draft(),
@@ -137,6 +138,25 @@ describe("profile-owned skill publication and selection", () => {
       },
       options,
     );
+    const originalPin = expectDefined(pins[0], "original selected revision");
+    const mixedRevisions = [
+      { ...originalPin, revision: updated.entry.revision },
+      originalPin,
+      originalPin,
+    ];
+    expect(
+      loadSkillLibrarySelection(mixedRevisions, options).map((entry) => entry.skill.filePath),
+    ).toEqual(
+      mixedRevisions.map((pin) =>
+        path.join(skillLibraryRevisionDir(pin.skillId, pin.revision, options.env), "SKILL.md"),
+      ),
+    );
+    expect(() =>
+      loadSkillLibrarySelection(
+        [originalPin, { ...originalPin, revision: "0".repeat(64) }],
+        options,
+      ),
+    ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
     const { listSkillCommandsForWorkspace } = await import("../discovery/chat-commands.js");
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const cfg = { agents: { defaults: { skills: [] } } };
@@ -724,6 +744,24 @@ describe("library admission and imports", () => {
     const selected = seedSkillLibrarySelection(bob, options);
     expect(library.defaultSelectionNotice).toContain("detach");
     expect(selected).toHaveLength(64);
+    const revisionReads = trackSqliteStatementExecutions(
+      openOpenClawStateDatabase(options).db,
+      ["revisions"],
+      (sql) =>
+        sql.startsWith("select ") && sql.includes('from "skill_library_revisions"')
+          ? "revisions"
+          : null,
+    );
+    try {
+      const ordered = selected.toReversed();
+      expect(loadSkillLibrarySelection(ordered, options).map((entry) => entry.skill.name)).toEqual(
+        ordered.map((pin) => pin.name),
+      );
+      expect(revisionReads.counts.revisions).toBe(1);
+      expect(revisionReads.rowCounts.revisions).toBe(64);
+    } finally {
+      revisionReads.restore();
+    }
     const omitted = library.entries.find(
       (entry) => !selected.some((pin) => pin.skillId === entry.skillId),
     )!;

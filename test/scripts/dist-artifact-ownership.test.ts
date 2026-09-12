@@ -294,6 +294,166 @@ async function runWithProcesses(
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
 describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
+  it.for([
+    { signalName: "SIGINT" as const, exitCode: 130 },
+    { signalName: "SIGTERM" as const, exitCode: 143 },
+  ])(
+    "joins a singleton smoke import before releasing ownership after $signalName",
+    async ({ signalName, exitCode }, { signal }) => {
+      await withProcesses(async ({ checkpoint, waitEvent, start }) => {
+        const root = createCheckout();
+        const smokeScript = write(
+          root,
+          "scripts/test-built-plugin-singleton.mts",
+          fs.readFileSync(path.join(sourceRoot, "scripts/test-built-plugin-singleton.mts"), "utf8"),
+        );
+        for (const entry of [
+          "lib",
+          "process-warning-filter.mts",
+          "stage-bundled-plugin-runtime.mts",
+        ]) {
+          fs.symlinkSync(
+            path.join(sourceRoot, "scripts", entry),
+            path.join(root, "scripts", entry),
+          );
+        }
+        const importJoined = path.join(root, "import-joined");
+        const smokePid = path.join(root, "smoke.pid");
+        write(
+          root,
+          "dist/plugins/build-smoke-entry.js",
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        fs.writeFileSync(${JSON.stringify(smokePid)}, String(process.pid));
+        if (process.listenerCount(${JSON.stringify(signalName)}) > 0) {
+          process.once(${JSON.stringify(signalName)}, () => {
+            ${checkpoint("smoke-signal-received")}
+          });
+        }
+        await new Promise(resolve => {
+          ${checkpoint("smoke-import-ready")}
+          socket.on('close', resolve);
+        });
+        fs.writeFileSync(${JSON.stringify(importJoined)}, 'joined');
+      `,
+        );
+        const smoke = start(root, smokeScript);
+        const importGate = await smoke.event("smoke-import-ready");
+        const pid = Number(fs.readFileSync(smokePid, "utf8"));
+        expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+        const writerStarted = path.join(root, "writer-started");
+        const writerScript = write(
+          root,
+          "writer.mts",
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+        const require = createRequire(import.meta.url);
+        await withDistArtifactOwnership(process.cwd(), () => new Promise(resolve => {
+          fs.writeFileSync(${JSON.stringify(writerStarted)}, 'started');
+          ${checkpoint("smoke-contender-ready")}
+          socket.on('close', resolve);
+        }));
+      `,
+        );
+        const writer = start(root, writerScript);
+        await Promise.race([writer.waiting, writer.event("smoke-contender-ready")]);
+        process.kill(pid, signalName);
+        const acknowledgment = await Promise.race([
+          waitEvent("smoke-signal-received"),
+          smoke.done.then((result) => {
+            throw new Error(`Smoke exited before signal acknowledgment: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        acknowledgment.write("continue");
+        expect(fs.existsSync(importJoined)).toBe(false);
+        expect(
+          fs.existsSync(writerStarted),
+          "cancellation must join the pending artifact reader",
+        ).toBe(false);
+
+        importGate.write("continue");
+        const contenderGate = await writer.event("smoke-contender-ready");
+        expect(fs.readFileSync(importJoined, "utf8")).toBe("joined");
+        const cancelled = await smoke.done;
+        expect(cancelled.code, cancelled.output).toBe(exitCode);
+        expect(fs.existsSync(path.join(root, "dist/extensions/build-smoke-plugin"))).toBe(false);
+        contenderGate.write("continue");
+        expect(await writer.done).toMatchObject({ code: 0 });
+        let reacquired = false;
+        await withDistArtifactOwnership(root, async () => {
+          reacquired = true;
+        });
+        expect(reacquired).toBe(true);
+      }, signal);
+    },
+  );
+
+  it("keeps source-run postbuild behind the shared artifact writer", async ({ signal }) => {
+    await withProcesses(async ({ checkpoint, waitEvent, start }) => {
+      const root = createCheckout();
+      write(root, "dist/entry.js", "export {};\n");
+      write(root, "dist/.buildstamp", JSON.stringify({ head: "fixture-head" }));
+      const marker = path.join(root, "dist/postbuild-finished");
+      const writerScript = write(
+        root,
+        "writer.mjs",
+        `
+        import { createRequire } from 'node:module';
+        import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+        const require = createRequire(import.meta.url);
+        await withDistArtifactOwnership(process.cwd(), () => new Promise(resolve => {
+          ${checkpoint("artifact-writer-ready")}
+          socket.on('close', resolve);
+        }));
+      `,
+      );
+      const writer = start(root, writerScript);
+      const writerGate = await writer.event("artifact-writer-ready");
+      const runnerScript = write(
+        root,
+        "source-runner.mjs",
+        `
+        import ${JSON.stringify(path.join(sourceRoot, "scripts/tsx.mjs"))};
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
+        process.exitCode = await runNodeMain({
+          cwd: process.cwd(), args: ['artifact-fixture'],
+          env: { ...process.env, OPENCLAW_FORCE_BUILD: '0', OPENCLAW_BUILD_PRIVATE_QA: '0' },
+          spawnSync: (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' }),
+          spawn: (_command, args) => {
+            if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
+            return { on: (event, listener) => {
+              if (event === 'exit') queueMicrotask(() => listener(0, null));
+            }};
+          },
+          runRuntimePostBuild: () => new Promise(resolve => {
+            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
+            ${checkpoint("source-postbuild-ready")}
+            socket.on('close', resolve);
+          }),
+        });
+      `,
+      );
+      const runner = start(root, runnerScript);
+      await Promise.race([runner.waiting, waitEvent("source-postbuild-ready"), runner.done]);
+      expect(fs.existsSync(marker), "postbuild must wait for the current artifact writer").toBe(
+        false,
+      );
+      writerGate.write("continue");
+      expect(await writer.done).toMatchObject({ code: 0 });
+      (await runner.event("source-postbuild-ready")).write("continue");
+      const result = await runner.done;
+      expect(result.code, result.output).toBe(0);
+      expect(fs.readFileSync(marker, "utf8")).toBe("complete");
+    }, signal);
+  });
+
   it("releases ownership after a native execFileSync ENOENT error", async () => {
     const root = createCheckout();
     const error = await withDistArtifactOwnership(root, async () =>

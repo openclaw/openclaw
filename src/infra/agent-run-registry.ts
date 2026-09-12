@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
+import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import {
   AgentRunApprovalLeases,
   type AgentRunApprovalClosureReason,
@@ -94,6 +95,14 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
   getAgentRunRegistryState().sequenceResetHandler = handler;
 }
 
+function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
+  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  context.capacityWaits = undefined;
+  context.registeredAt ??= Date.now();
+  getAgentRunRegistryState().contexts.set(runId, context);
+  recordAgentEventRouting(runId, context, predecessor);
+}
+
 /** Registers or merges per-run context used by later agent event emissions. */
 export function registerAgentRunContext(
   runId: string,
@@ -115,13 +124,7 @@ export function registerAgentRunContext(
   }
   const existing = state.contexts.get(runId);
   if (!existing) {
-    state.contexts.set(runId, {
-      ...context,
-      // Scheduler leases belong to this instance, never copied metadata.
-      capacityWaits: undefined,
-      lifecycleGeneration,
-      registeredAt: context.registeredAt ?? Date.now(),
-    });
+    storeRunContext(runId, { ...context, lifecycleGeneration });
     bumpAgentRunIndexVersion();
     return;
   }
@@ -185,6 +188,7 @@ export function registerAgentRunContext(
   if (runIndexChanged) {
     bumpAgentRunIndexVersion();
   }
+  recordAgentEventRouting(runId, existing);
 }
 
 /** Claims a run id for a newly admitted execution, replacing stale ownership. */
@@ -265,12 +269,7 @@ export function claimAgentRunContext(
     }
     return claimId;
   }
-  state.contexts.set(runId, {
-    ...context,
-    capacityWaits: undefined,
-    lifecycleGeneration,
-    registeredAt: context.registeredAt ?? Date.now(),
-  });
+  storeRunContext(runId, { ...context, lifecycleGeneration }, existing);
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
   bumpAgentRunIndexVersion();

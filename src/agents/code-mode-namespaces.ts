@@ -333,9 +333,8 @@ function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
   return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
-function createMcpNamespaceModel(
-  catalog: readonly CodeModeNamespaceCatalogEntry[],
-): McpNamespaceModel | undefined {
+// Prompt preparation needs the same server names without building tool scopes or schema docs.
+function createMcpNamespacePlan(catalog: readonly CodeModeNamespaceCatalogEntry[]) {
   const mcpEntries = catalog
     .filter((entry) => entry.source === "mcp" && entry.id && entry.mcp)
     .toSorted((a, b) => (a.id ?? "").localeCompare(b.id ?? ""));
@@ -360,26 +359,37 @@ function createMcpNamespaceModel(
   }
   const servers = [...serversByKey.values()].toSorted((a, b) => a.key.localeCompare(b.key));
   const assignedServerNames = assignMcpNamespaceServerNames(servers);
-  const serverIdentifiers = new Map<string, string>();
+  const namedServers = new Map<string, McpNamespaceServer & { identifier: string }>();
   const usedServerIdentifiers = new Set<string>();
   for (const server of servers) {
     const safeServerName = assignedServerNames.get(server.key) ?? server.safeServerName;
-    serverIdentifiers.set(
-      server.key,
-      uniqueIdentifier(toIdentifier(safeServerName, "server"), usedServerIdentifiers),
-    );
+    namedServers.set(server.key, {
+      ...server,
+      identifier: uniqueIdentifier(toIdentifier(safeServerName, "server"), usedServerIdentifiers),
+    });
+  }
+  return { entries: mcpEntries, servers: namedServers, usedServerIdentifiers };
+}
+
+function createMcpNamespaceModel(
+  catalog: readonly CodeModeNamespaceCatalogEntry[],
+): McpNamespaceModel | undefined {
+  const plan = createMcpNamespacePlan(catalog);
+  if (!plan) {
+    return undefined;
   }
   const usedToolIdentifiers = new Map<string, Set<string>>();
   const root = Object.create(null) as CodeModeNamespaceScope;
   const serverDocs = new Map<string, McpApiServerDoc>();
-  for (const entry of mcpEntries) {
+  for (const entry of plan.entries) {
     const mcp = entry.mcp;
     if (!mcp || !entry.id) {
       continue;
     }
     const serverKey = mcpNamespaceServerKey(mcp);
     const serverIdentifier =
-      serverIdentifiers.get(serverKey) ?? uniqueIdentifier("server", usedServerIdentifiers);
+      plan.servers.get(serverKey)?.identifier ??
+      uniqueIdentifier("server", plan.usedServerIdentifiers);
     const serverScope = scopeAtPath(root, [serverIdentifier]);
     serverScope.$serverName = mcp.serverName;
     let serverDoc = serverDocs.get(serverIdentifier);
@@ -490,13 +500,16 @@ function createMcpNamespaceEntry(model: McpNamespaceModel): CodeModeNamespaceRun
 function describeMcpNamespaceForPrompt(
   catalog: readonly CodeModeNamespaceCatalogEntry[],
 ): string[] {
-  const model = createMcpNamespaceModel(catalog);
-  if (!model) {
+  const plan = createMcpNamespacePlan(catalog);
+  if (!plan) {
     return [];
   }
-  const servers = model.docs.map(
-    (server) => `${server.identifier}${server.nodeLabel ? ` (node: ${server.nodeLabel})` : ""}`,
-  );
+  const servers = [...plan.servers.values()]
+    .toSorted((a, b) => a.identifier.localeCompare(b.identifier))
+    .map((server) => {
+      const nodeLabel = server.node ? mcpNodeLabel(server.node) : undefined;
+      return `${server.identifier}${nodeLabel ? ` (node: ${nodeLabel})` : ""}`;
+    });
   if (servers.length === 0) {
     return [];
   }

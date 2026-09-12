@@ -35,9 +35,7 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   createServiceConfigIO: vi.fn(),
   readServiceState: vi.fn(),
-  restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
-    async () => "ok",
-  ),
+  restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   stopService:
     vi.fn<
       typeof import("./update-command-service.js").maybeStopManagedServiceBeforeMutableUpdate
@@ -70,16 +68,20 @@ vi.mock("../../commands/doctor-completion.js", async (importOriginal) => ({
   checkShellCompletionStatus: mocks.checkCompletionStatus,
   ensureCompletionCacheExists: mocks.ensureCompletionCache,
 }));
-vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => {
-    mocks.leaseActive = true;
-    try {
-      return await callback();
-    } finally {
-      mocks.leaseActive = false;
-    }
-  },
-}));
+vi.mock("../../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/plugin-lifecycle-lease.js")>();
+  const withPluginLifecycleLease: typeof actual.withPluginLifecycleLease = (params, callback) =>
+    actual.withPluginLifecycleLease(params, async (lease) => {
+      const leaseWasActive = mocks.leaseActive;
+      mocks.leaseActive = true;
+      try {
+        return await callback(lease);
+      } finally {
+        mocks.leaseActive = leaseWasActive;
+      }
+    });
+  return { ...actual, withPluginLifecycleLease };
+});
 vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: mocks.loadPluginRecords,
 }));
@@ -278,13 +280,18 @@ describe("successful update finalization ordering", () => {
         windowsTaskAutoStartRecovery: recovery,
       });
       try {
-        await entered.promise;
-        expect.soft(mocks.restartService).not.toHaveBeenCalled();
-        expect.soft(recovery.restore).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-      }
-      try {
+        try {
+          await Promise.race([
+            entered.promise,
+            finishing.then(() => {
+              throw new Error("Update completed before plugin convergence entered.");
+            }),
+          ]);
+          expect.soft(mocks.restartService).not.toHaveBeenCalled();
+          expect.soft(recovery.restore).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+        }
         await finishing;
       } finally {
         identity.restore();

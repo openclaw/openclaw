@@ -67,10 +67,11 @@ function resolveParsedSessionStoreKey(
 ): { agentId: string; sessionKey: string } {
   const parsedAgentId = normalizeAgentId(parsed.agentId);
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
+  // Only legacy main aliases need the configured roster to resolve ownership.
   if (
     parsedAgentId !== DEFAULT_AGENT_ID ||
-    listAgentIds(cfg).includes(DEFAULT_AGENT_ID) ||
-    (rest !== "main" && rest !== normalizeMainKey(cfg.session?.mainKey))
+    (rest !== "main" && rest !== normalizeMainKey(cfg.session?.mainKey)) ||
+    listAgentIds(cfg).includes(DEFAULT_AGENT_ID)
   ) {
     return {
       agentId: parsedAgentId,
@@ -184,17 +185,19 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
-  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
-  if (
-    !parseAgentSessionKey(raw) &&
-    persistedOwner.kind === "configured" &&
-    persistedOwner.agentId === normalizeAgentId(params.agentId) &&
-    lowered !== "main" &&
-    lowered !== normalizeMainKey(params.cfg.session?.mainKey)
-  ) {
-    return raw;
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed) {
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
+    if (
+      persistedOwner.kind === "configured" &&
+      persistedOwner.agentId === normalizeAgentId(params.agentId) &&
+      lowered !== "main" &&
+      lowered !== normalizeMainKey(params.cfg.session?.mainKey)
+    ) {
+      return raw;
+    }
   }
-  const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
+  const key = parsed ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
   return resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,

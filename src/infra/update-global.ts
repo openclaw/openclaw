@@ -9,6 +9,7 @@ import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { pathExists } from "../utils.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { resolveExecutablePath } from "./executable-path.js";
 import {
   applyNpmFreshnessBypassEnv,
   applyPosixNpmScriptShellEnv,
@@ -648,21 +649,10 @@ function resolveBunGlobalRoot(): string {
 }
 
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
-  const nodeModulesDir = inferGlobalRootFromPackageRoot(pkgRoot);
-  if (!nodeModulesDir) {
-    return null;
-  }
-  const parentDir = path.dirname(nodeModulesDir);
-  if (path.basename(parentDir) === "lib") {
-    return path.dirname(parentDir);
-  }
-  if (
-    process.platform === "win32" &&
-    normalizeLowercaseStringOrEmpty(path.basename(parentDir)) === "npm"
-  ) {
-    return parentDir;
-  }
-  return null;
+  return (
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(inferGlobalRootFromPackageRoot(pkgRoot))?.prefix ??
+    null
+  );
 }
 
 /**
@@ -1263,16 +1253,91 @@ export async function resolveGlobalInstallTarget(params: {
   };
 }
 
-/**
- * Identifies which global package manager owns an existing package root.
- * Command probes are checked first, then pnpm/bun layout fingerprints.
- */
+async function inspectNpmGlobalOwner(
+  runCommand: CommandRunner,
+  pkgRoot: string,
+  timeoutMs: number,
+  diagnostics: string[],
+): Promise<boolean> {
+  const layout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(
+    inferGlobalRootFromPackageRoot(pkgRoot),
+  );
+  if (!layout) {
+    diagnostics.push("npm install layout: no global prefix");
+    return false;
+  }
+  const command = resolvePreferredGlobalManagerCommand("npm", pkgRoot);
+  const executable = resolveExecutablePath(command);
+  const cli = executable
+    ? process.platform === "win32"
+      ? path.join(path.dirname(executable), "node_modules", "npm", "bin", "npm-cli.js")
+      : await tryRealpath(executable)
+    : null;
+  // npm owns npmrc precedence and expansion. Use the Node running this launcher,
+  // even when PATH's npm belongs to a different Node installation.
+  const argv =
+    cli && path.basename(cli) === "npm-cli.js" && (await pathExists(cli))
+      ? [process.execPath, cli, "prefix", "-g"]
+      : [command, "prefix", "-g"];
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  applyPathPrepend(env, [path.dirname(process.execPath)]);
+  const result = await runCommand(argv, { timeoutMs, env }).catch(() => null);
+  const prefix = result?.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
+  diagnostics.push(`${argv.join(" ")}: ${prefix || "unavailable"}`);
+  const pkgReal = await tryRealpath(pkgRoot);
+  if (prefix) {
+    const expected = path.join(
+      resolveNpmGlobalPrefixLayoutFromPrefix(prefix).globalRoot,
+      PRIMARY_PACKAGE_NAME,
+    );
+    if ((await tryRealpath(expected)) === pkgReal) {
+      return true;
+    }
+  }
+
+  diagnostics.push(`npm install prefix: ${layout.prefix}`);
+  const launcher = path.join(
+    layout.binDir,
+    process.platform === "win32" ? "openclaw.cmd" : "openclaw",
+  );
+  diagnostics.push(`npm launcher: ${launcher}`);
+  let target = await fs.realpath(launcher).catch(() => null);
+  if (process.platform === "win32" && target) {
+    const script = await fs.readFile(launcher, "utf8").catch(() => "");
+    // npm shims check the interpreter first; the package entrypoint precedes %*.
+    const relative = /"(?:%dp0%|%~dp0)[\\/]([^"\r\n]+)"[ \t]+%\*/iu.exec(script)?.[1];
+    target = relative
+      ? await fs
+          .realpath(path.resolve(layout.binDir, ...relative.split(/[\\/]/u)))
+          .catch(() => null)
+      : null;
+  }
+  if (!target) {
+    return false;
+  }
+  const relative = path.relative(pkgReal, target);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+/** Identifies a global owner from command probes and installed layout evidence. */
 export async function detectGlobalInstallManagerForRoot(
   runCommand: CommandRunner,
   pkgRoot: string,
   timeoutMs: number,
+  diagnostics: string[] = [],
 ): Promise<GlobalInstallManager | null> {
   const pkgReal = await tryRealpath(pkgRoot);
+  diagnostics.push(`package root: ${pkgRoot} (resolved: ${pkgReal})`);
   const bunOwner = resolveBunGlobalInstallOwner(pkgRoot) ?? resolveBunGlobalInstallOwner(pkgReal);
   if (bunOwner) {
     return (await isPnpmGlobalPackageRoot(pkgRoot)) ? "pnpm" : "bun";
@@ -1288,10 +1353,11 @@ export async function detectGlobalInstallManagerForRoot(
 
   for (const { manager, argv } of candidates) {
     const res = await runCommand(argv, { timeoutMs }).catch(() => null);
+    const globalRoot = res?.code === 0 ? readPackageManagerProbeValue(res.stdout) : "";
+    diagnostics.push(`${argv.join(" ")}: ${globalRoot || "unavailable"}`);
     if (!res || res.code !== 0) {
       continue;
     }
-    const globalRoot = readPackageManagerProbeValue(res.stdout);
     if (!globalRoot) {
       continue;
     }
@@ -1320,7 +1386,7 @@ export async function detectGlobalInstallManagerForRoot(
     return "npm";
   }
 
-  return null;
+  return (await inspectNpmGlobalOwner(runCommand, pkgRoot, timeoutMs, diagnostics)) ? "npm" : null;
 }
 
 /**

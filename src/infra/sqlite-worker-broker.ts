@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deserialize, serialize } from "node:v8";
+import { serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -11,6 +11,10 @@ import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.path
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  decodeSqliteWorkerReplyValue,
+  prepareSqliteWorkerRequest,
+} from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
   DispatchState,
@@ -25,15 +29,9 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerReply,
-  type SqliteWorkerRequest,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "./sqlite-worker-transfer.js";
 
 const MAX_WORKERS = 4;
 const MAX_STORES = 64;
@@ -368,57 +366,13 @@ export class SqliteWorkerBroker {
       }
       let value: unknown;
       try {
-        if (reply.transfer === "start") {
-          // SAFETY: The matching worker emits this private handle; framing validates its records.
-          const handle = deserialize(reply.value) as SqliteWorkerTransferHandle;
-          if (
-            job.request.type !== "execute" ||
-            job.transfer ||
-            handle.kinds.length !== 1 ||
-            handle.kinds[0] !== "result"
-          ) {
-            throw new Error("SQLite worker returned an unexpected result transfer");
-          }
-          const transfer: NonNullable<Job["transfer"]> = {
-            id: handle.id,
-            value: undefined,
-            receiver: createSqliteWorkerTransferReceiver(handle, (record) => {
-              transfer.value = record.value;
-            }),
-          };
-          job.transfer = transfer;
-        } else if (reply.transfer === "frame") {
-          const transfer = job.transfer;
-          if (!transfer) {
-            throw new Error("SQLite worker returned an unexpected result frame");
-          }
-          // SAFETY: The matching worker emits frames; the shared receiver validates their sequence and bounds.
-          const frame = deserialize(reply.value) as SqliteWorkerTransferFrame;
-          const counts = transfer.receiver.accept(frame);
-          if (counts) {
-            if (counts.length !== 1 || counts[0]?.[1] !== 1) {
-              throw new Error("SQLite worker returned an incomplete result transfer");
-            }
-            value = transfer.value;
-            job.transfer = undefined;
-          }
-        } else {
-          if (job.transfer) {
-            throw new Error("SQLite worker ended its result transfer without completion");
-          }
-          value = deserialize(reply.value);
-        }
-        if (job.transfer) {
-          // Continue the current job through drain; enqueueing behind it would deadlock.
-          const continuation: SqliteWorkerRequest = {
-            type: "result-next",
-            id: job.request.id,
-            actor: job.request.actor,
-            transferId: job.transfer.id,
-          };
-          slot.worker.postMessage(continuation, []);
+        const result = decodeSqliteWorkerReplyValue(job, reply);
+        if (result.type === "continue") {
+          // Continuations retain the current job and its reserved transport credits through drain.
+          slot.worker.postMessage(result.request, []);
           return;
         }
+        value = result.value;
       } catch (error) {
         this.fail(slot, error);
         return;
@@ -451,11 +405,14 @@ export class SqliteWorkerBroker {
     if (slot.failed) {
       return Promise.reject(slot.failed);
     }
+    const activeInput = body.type === "execute" && bytes > MAX_QUEUED_BYTES;
+    const reservedBytes = activeInput ? SQLITE_WORKER_MAX_MESSAGE_BYTES : bytes;
     if (
       body.type !== "close" &&
-      (bytes > SQLITE_WORKER_MAX_MESSAGE_BYTES ||
+      ((body.type !== "execute" && bytes > SQLITE_WORKER_MAX_MESSAGE_BYTES) ||
+        (activeInput && (slot.current || slot.queue.length > 0 || slot.pendingOpens > 0)) ||
         this.requests >= MAX_REQUESTS ||
-        this.bytes + this.admissionBytes + bytes > MAX_QUEUED_BYTES)
+        this.bytes + this.admissionBytes + reservedBytes > MAX_QUEUED_BYTES)
     ) {
       return Promise.reject(
         new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded"),
@@ -465,7 +422,7 @@ export class SqliteWorkerBroker {
     const job: Job = {
       dispatchState,
       request: { ...body, id: ++this.nextRequest },
-      bytes,
+      bytes: reservedBytes,
       resolve: result.resolve,
       reject: result.reject,
       detach: () => signal?.removeEventListener("abort", abort),
@@ -479,7 +436,16 @@ export class SqliteWorkerBroker {
       // Once dispatched, retain the Promise until the database outcome is known.
     };
     this.requests += 1;
-    this.bytes += bytes;
+    this.bytes += reservedBytes;
+    if (activeInput) {
+      // A complete oversized value is active-operation memory, never retained in the bounded queue.
+      if (signal?.aborted) {
+        this.finish(job, signal.reason ?? new Error("SQLite worker operation canceled"));
+      } else {
+        this.dispatchJob(slot, job);
+      }
+      return result.promise;
+    }
     slot.queue.push(job);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) {
@@ -498,11 +464,15 @@ export class SqliteWorkerBroker {
       slot.worker.unref();
       return;
     }
+    this.dispatchJob(slot, job);
+  }
+
+  private dispatchJob(slot: Slot, job: Job): void {
     slot.current = job;
     job.detach();
     slot.worker.ref();
     try {
-      slot.worker.postMessage(job.request, []);
+      slot.worker.postMessage(prepareSqliteWorkerRequest(job), []);
       if (job.dispatchState) {
         job.dispatchState.dispatched = true;
       }
@@ -514,6 +484,8 @@ export class SqliteWorkerBroker {
   }
 
   private finish(job: Job, error?: unknown, value?: unknown): void {
+    job.inputTransfer?.producer.cancel();
+    job.inputTransfer = undefined;
     job.transfer = undefined;
     job.detach();
     this.requests -= 1;
@@ -534,6 +506,8 @@ export class SqliteWorkerBroker {
     const current = slot.current;
     slot.current = undefined;
     if (current) {
+      current.inputTransfer?.producer.cancel();
+      current.inputTransfer = undefined;
       current.transfer = undefined;
     }
     const queued = slot.queue.splice(0);

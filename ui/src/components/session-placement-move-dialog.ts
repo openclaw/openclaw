@@ -24,6 +24,7 @@ type Options = {
   mode: "move" | "restart";
   sessionLabel: string;
   activeRun: boolean;
+  gatewayDisabledReason?: string;
   deviceDisabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   loadCatalog: () => Promise<Catalog>;
@@ -135,20 +136,18 @@ export function showSessionPlacementTargetDialog(
                     ? html`<div class="exec-approval-error" role="alert">${loadError}</div>`
                     : html`
                         <div class="new-session-page__picker-root">
-                          ${
-                            restart
-                              ? nothing
-                              : renderSessionMenuItem(
-                                  {
-                                    value: "gateway",
-                                    label: t("newSession.gateway"),
-                                    icon: icons.monitor,
-                                    checked: selectedKey === "gateway",
-                                    onSelect: () => select({ kind: "gateway" }),
-                                  },
-                                  false,
-                                )
-                          }
+                          ${renderSessionMenuItem(
+                            {
+                              value: "gateway",
+                              label: t("newSession.gateway"),
+                              icon: icons.monitor,
+                              checked: selectedKey === "gateway",
+                              disabled: Boolean(options.gatewayDisabledReason),
+                              title: options.gatewayDisabledReason,
+                              onSelect: () => select({ kind: "gateway" }),
+                            },
+                            false,
+                          )}
                           ${
                             catalog.devices.length > 0
                               ? html`

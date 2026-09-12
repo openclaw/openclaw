@@ -143,15 +143,16 @@ describe("update CLI shared helpers", () => {
 
     await expect(
       resolveGlobalManager({
-        root: "/shared/store/openclaw",
+        root: "/shared/lib/node_modules/openclaw",
         installKind: "package",
         timeoutMs: 1_000,
       }),
     ).rejects.toMatchObject({
       name: "UpdatePreMutationError",
-      message: expect.stringContaining("No package changes or Gateway restart were attempted."),
+      message: expect.stringMatching(
+        /No package changes or Gateway restart were attempted\.[\s\S]*Inspected:[\s\S]*\/shared\/lib\/node_modules\/openclaw[\s\S]*npm root -g[\s\S]*pnpm root -g[\s\S]*prefix -g/,
+      ),
     });
-    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
   });
 
   it("publishes a successful fresh clone only after the clone completes", async () => {

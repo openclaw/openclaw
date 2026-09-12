@@ -64,18 +64,18 @@ export function buildPendingInputItems(
       ),
     );
     if (input.state === "queued") {
-      items.push({
-        kind: "notice",
-        key: `pending-input:${input.id}:state`,
-        timestamp: input.acceptedAt,
-        text: t(
-          input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
-            ? workerSetupPending
+      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
+        items.push({
+          kind: "notice",
+          key: `pending-input:${input.id}:state`,
+          timestamp: input.acceptedAt,
+          text: t(
+            workerSetupPending
               ? "chat.pendingInputs.waitingForWorkerSetup"
-              : "chat.pendingInputs.waitingForWorkspaceSync"
-            : "chat.pendingInputs.waitingForAgent",
-        ),
-      });
+              : "chat.pendingInputs.waitingForWorkspaceSync",
+          ),
+        });
+      }
       continue;
     }
     items.push({

@@ -2533,7 +2533,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ["chunks broad shell helper globs after isolated targets", "test/scripts/*.test.ts"],
   ])("%s", (_title, target) => {
     const plans = buildVitestRunPlans([target], process.cwd());
-    expect(plans.slice(0, 4)).toEqual([
+    expect(plans.slice(0, 5)).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.unit-fast.config.ts",
         includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
@@ -2547,6 +2547,12 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ios-release-plan.test.ts",
           "test/scripts/mac-native-fixtures.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/pr-ci-sweeper.reopen-timer.test.ts"],
         watchMode: false,
       },
       {
@@ -2571,7 +2577,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
     const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
     const toolingPlans = plans
-      .slice(4)
+      .slice(5)
       .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
@@ -3527,6 +3533,190 @@ describe("scripts/test-projects changed-target routing", () => {
         });
       },
     );
+  });
+
+  describe("Kova schema selection", () => {
+    const wrapper = "src/config/zod-schema.agent-defaults.ts";
+    const base = "src/config/zod-schema.agent-defaults-base.ts";
+    const sibling = "src/config/zod-schema.agent-defaults.test.ts";
+    const baseConsumer = "src/config/base-consumer.test.ts";
+    const wrapperConsumer = "src/config/wrapper-consumer.test.ts";
+    const unrelated = "src/config/unrelated.ts";
+    const unrelatedTest = "src/config/unrelated.test.ts";
+    const kova = "test/scripts/openclaw-performance-workflow.test.ts";
+    const workflow = ".github/workflows/openclaw-performance.yml";
+    const workflowOwners = [
+      kova,
+      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+      "test/scripts/ci-git-owner.test.ts",
+      "test/scripts/ci-linux-git.test.ts",
+      "test/scripts/ci-platform-checkout.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ];
+    const files = {
+      [base]: "export const defaults = {};\n",
+      [wrapper]: 'export { defaults } from "./zod-schema.agent-defaults-base.js";\n',
+      [sibling]: 'import "./zod-schema.agent-defaults.js";\n',
+      [baseConsumer]: 'import "./zod-schema.agent-defaults-base.js";\n',
+      [wrapperConsumer]: 'import "./zod-schema.agent-defaults.js";\n',
+      [unrelated]: "export const unrelated = true;\n",
+      [unrelatedTest]: 'import "./unrelated.js";\n',
+      [workflow]: "name: performance\n",
+      ...Object.fromEntries(workflowOwners.map((file) => [file, "export {};\n"])),
+    };
+
+    describe("watch compatibility", () => {
+      describe.each(["changed", "explicit"])("%s", (mode) => {
+        it.each([
+          { name: "wrapper", paths: [wrapper], targets: [sibling] },
+          { name: "base", paths: [base], targets: [baseConsumer, sibling, wrapperConsumer] },
+          {
+            name: "both schemas",
+            paths: [wrapper, base],
+            targets: [baseConsumer, sibling, wrapperConsumer],
+          },
+        ])("keeps $name watch coverage in its existing suite", ({ paths, targets }) => {
+          withTinyGitRepo(files, (cwd) => {
+            const args = [
+              "--watch",
+              ...(mode === "explicit" ? paths : ["--changed", "origin/main"]),
+            ];
+            const plans = buildVitestRunPlans(args, cwd, () => paths);
+            expectSingleVitestRunPlan(plans, {
+              config: "test/vitest/vitest.runtime-config.config.ts",
+              includePatterns: expect.arrayContaining(targets),
+              watchMode: true,
+            });
+            expect(plans[0]?.includePatterns).toHaveLength(targets.length);
+            expect(findUnmatchedExplicitTestTargets(args, cwd)).toEqual([]);
+          });
+        });
+
+        it.each([
+          { flags: ["--watch=false"] },
+          { flags: ["--watch", "false"] },
+          { flags: ["--watch", "--no-watch"] },
+        ])("retains Kova for non-watch flags $flags", ({ flags }) => {
+          withTinyGitRepo(files, (cwd) => {
+            const paths = [wrapper, base];
+            const args = [
+              ...flags,
+              ...(mode === "explicit" ? paths : ["--changed", "origin/main"]),
+            ];
+            const plans = buildVitestRunPlans(args, cwd, () => paths);
+            expect(plans.every((plan) => !plan.watchMode)).toBe(true);
+            expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
+              [baseConsumer, sibling, wrapperConsumer, kova].toSorted(),
+            );
+          });
+        });
+      });
+
+      it.each([wrapper, base])("still rejects explicitly mixed watch suites for %s", (schema) => {
+        withTinyGitRepo(files, (cwd) => {
+          expect(() => buildVitestRunPlans(["--watch", schema, kova], cwd)).toThrow(
+            "watch mode with mixed test suites is not supported",
+          );
+        });
+      });
+
+      it.each([wrapper, base])(
+        "does not admit unmatched watch source %s through Kova",
+        (schema) => {
+          withTinyGitRepo(
+            { [schema]: "export const defaults = {};\n", [kova]: "export {};\n" },
+            (cwd) => {
+              expect(findUnmatchedExplicitTestTargets([schema], cwd)).toEqual([]);
+              expect(findUnmatchedExplicitTestTargets(["--watch", schema], cwd)).toEqual([
+                expect.objectContaining({
+                  target: schema,
+                  reason: "target-matched-no-test-files",
+                }),
+              ]);
+            },
+          );
+        },
+      );
+    });
+
+    it("keeps skipped import-graph paths visible with mixed broad changes", () => {
+      withTinyGitRepo(files, (cwd) => {
+        const paths = [base, "unknown/file.txt"];
+        expect(resolveChangedTestTargetPlan(paths, { cwd })).toEqual({
+          mode: "targets",
+          targets: [kova],
+          skippedBroadFallbackPaths: paths,
+        });
+        expect(resolveChangedTestTargetPlan(paths, { cwd, broad: true })).toEqual({
+          mode: "broad",
+          targets: [],
+        });
+      });
+    });
+
+    describe.each(["changed", "explicit", "ci"])("%s", (mode) => {
+      it.each([
+        { name: "wrapper only", paths: [wrapper] },
+        { name: "base only", paths: [base] },
+        { name: "both schemas", paths: [wrapper, base, wrapper] },
+        { name: "mixed workflow", paths: [workflow, wrapper, base] },
+        { name: "already selected owner", paths: [base, kova, kova] },
+        { name: "unrelated source", paths: [unrelated] },
+      ])("$name retains normal coverage and adds only the required owner", ({ paths }) => {
+        withTinyGitRepo(files, (cwd) => {
+          const options =
+            mode === "ci"
+              ? { combineSiblingWithImportGraph: true, forceFullImportGraph: true }
+              : {};
+          const args = mode === "explicit" ? paths : ["--changed", "origin/main"];
+          const plans = buildVitestRunPlans(args, cwd, () => paths, options);
+          const selected = plans.flatMap((plan) => plan.includePatterns ?? []);
+          const hasBase = paths.includes(base);
+          const hasWrapper = paths.includes(wrapper);
+          const hasWorkflow =
+            paths.includes(workflow) || (mode !== "explicit" && paths.includes(kova));
+          const normalTargets = hasBase
+            ? [baseConsumer, wrapperConsumer, sibling]
+            : hasWrapper
+              ? mode === "ci"
+                ? [sibling, wrapperConsumer]
+                : [sibling]
+              : [unrelatedTest];
+
+          // Assert the pre-existing coverage before the missing data dependency.
+          expect(selected).toEqual(expect.arrayContaining(normalTargets));
+          if (!hasBase && hasWrapper && mode !== "ci") {
+            expect(selected).not.toContain(wrapperConsumer);
+          }
+          if (mode !== "explicit") {
+            const targets = resolveChangedTargetArgs(args, cwd, () => paths, options);
+            expect(targets).toEqual(expect.arrayContaining(normalTargets));
+            expect(targets?.length).toBe(new Set(targets).size);
+          }
+          if (hasBase || hasWrapper) {
+            expect(selected).toContain(kova);
+            expect(selected.filter((file) => file === kova)).toHaveLength(1);
+            expect(plans).toContainEqual({
+              config: "test/vitest/vitest.tooling.config.ts",
+              forwardedArgs: [],
+              includePatterns: expect.arrayContaining([kova]),
+              watchMode: false,
+            });
+            expect(selected).not.toContain(unrelatedTest);
+          } else {
+            expect(selected).toEqual([unrelatedTest]);
+          }
+          if (hasWorkflow) {
+            expect(selected).toEqual(expect.arrayContaining(workflowOwners));
+          } else {
+            expect(selected.toSorted()).toEqual(
+              [...normalTargets, ...(hasBase || hasWrapper ? [kova] : [])].toSorted(),
+            );
+          }
+          expect(selected.length).toBe(new Set(selected).size);
+        });
+      });
+    });
   });
 
   it.each(["changed", "explicit"])(

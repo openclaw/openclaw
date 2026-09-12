@@ -298,7 +298,10 @@ it.runIf(process.platform !== "win32")(
     await fs.symlink(symlinkTarget, path.join(source, "link"), "dir");
     const filesystemPath = path.join(source, "external", "x", "openclaw-agent.sqlite");
     const lexicalPath = path.join(source, "x", "openclaw-agent.sqlite");
-    await createDatabase(filesystemPath, "UPDATE evidence SET value = 'filesystem';");
+    await createDatabase(
+      filesystemPath,
+      "UPDATE evidence SET value = 'filesystem'; PRAGMA user_version = 4;",
+    );
     await createDatabase(lexicalPath, "UPDATE evidence SET value = 'lexical';");
     await createDatabase(
       shared,
@@ -310,6 +313,12 @@ it.runIf(process.platform !== "win32")(
     insert.run("lexical", lexicalPath);
     registry.close();
 
+    const versions = await readUpdateStateSchemaVersions({ stateDir: source, config: {} });
+    expect(versions).toContainEqual({
+      path: `${source}${path.sep}link${path.sep}..${path.sep}x${path.sep}openclaw-agent.sqlite`,
+      userVersion: 4,
+    });
+    expect(versions).toContainEqual({ path: lexicalPath, userVersion: 3 });
     await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
 
     const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));

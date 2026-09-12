@@ -22,12 +22,13 @@ type DispatchService = WorkerPlacementDispatchService;
 
 describe("worker placement dispatch coordinator", () => {
   it.each([
-    { kind: "dispatch", blocker: "sweep" },
-    { kind: "move", blocker: "sweep" },
-    { kind: "move", blocker: "dispatch" },
+    { kind: "dispatch", blocker: "sweep", cancellation: "admission" },
+    { kind: "dispatch", blocker: "sweep", cancellation: "caller" },
+    { kind: "move", blocker: "sweep", cancellation: "admission" },
+    { kind: "move", blocker: "dispatch", cancellation: "admission" },
   ] as const)(
-    "cancels queued $kind without releasing the unrelated $blocker fence",
-    async ({ kind, blocker }) => {
+    "$cancellation cancels queued $kind without releasing the unrelated $blocker fence",
+    async ({ kind, blocker, cancellation }) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const admitted = createDeferredCore();
@@ -45,12 +46,12 @@ describe("worker placement dispatch coordinator", () => {
       const move = vi.fn(async () => ({ state: "local" }));
       const coordinated = coordinateWorkerPlacementDispatch(
         { dispatch, move, reconcile: block } as unknown as DispatchService,
-        async (request, run) => {
+        async (request, run, _authorize, signal) => {
           if (request.sessionId !== REQUEST.sessionId) {
             return await run();
           }
           admitted.resolve();
-          return await run(controller.signal);
+          return await run(cancellation === "caller" ? signal : controller.signal);
         },
       );
       const blocking =
@@ -60,7 +61,14 @@ describe("worker placement dispatch coordinator", () => {
       await entered.promise;
       let outcome: unknown;
       const queued = (
-        kind === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST)
+        kind === "dispatch"
+          ? coordinated.dispatch(
+              REQUEST,
+              undefined,
+              undefined,
+              cancellation === "caller" ? controller.signal : undefined,
+            )
+          : coordinated.move(MOVE_REQUEST)
       ).then(
         (result) => {
           outcome = result;

@@ -15,11 +15,11 @@ export function isPlaceTopologyEvent(event: string): boolean {
   return PLACE_TOPOLOGY_EVENTS.has(event);
 }
 
-export function presenceStateSignature(entries: PresenceEntry[]): string {
+export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
   const states = new Map<string, "connected" | "offline">();
   for (const entry of entries) {
     const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
-    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+    if (!id || !entry.roles?.includes("node")) {
       continue;
     }
     states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");

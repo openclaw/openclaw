@@ -683,6 +683,49 @@ describe("run-oxlint", () => {
     ]);
   });
 
+  it.each([
+    { platform: "linux", env: { CI: "true" } },
+    { platform: "darwin", env: {} },
+    { platform: "win32", env: {} },
+  ] as const)(
+    "bounds small-host core Programs without losing targets on $platform",
+    ({ platform, env }) => {
+      const directories = ["alpha", "beta", "delta", "epsilon", "gamma", "zeta"];
+      const cwd = createTempDir("openclaw-oxlint-core-memory-");
+      for (const directory of directories) {
+        mkdirSync(join(cwd, "src", directory), { recursive: true });
+      }
+      writeFileSync(join(cwd, "src", "root.ts"), "");
+      const shards = filterOxlintShards(
+        createOxlintShards({
+          cwd,
+          env,
+          platform,
+          hostResources: CONSTRAINED_HOST,
+        }),
+        new Set(["core"]),
+      );
+
+      expect(shards).toHaveLength(5);
+      expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
+        true,
+      );
+      const targets = shards.flatMap((shard) => shard.args.slice(2));
+      expect(targets.toSorted()).toEqual(
+        [
+          ...directories.map((directory) => `src/${directory}`),
+          "src/root.ts",
+          "ui",
+          "packages",
+        ].toSorted(),
+      );
+      expect(new Set(targets).size).toBe(targets.length);
+      expect(shouldRunOxlintShardsSerial({ env, platform, hostResources: CONSTRAINED_HOST })).toBe(
+        true,
+      );
+    },
+  );
+
   it("parses shard runner flags without forwarding them to oxlint", () => {
     const parsed = parseShardRunnerArgs([
       "--only=core",

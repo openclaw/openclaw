@@ -229,13 +229,19 @@ export function projectDiagnosticValue(
     } catch {
       // Other objects follow the bounded descriptor walk below.
     }
-    const keys = Reflect.ownKeys(value).slice(0, 65);
-    const descriptors = Object.fromEntries(
-      keys.slice(0, 64).flatMap((key) => {
-        const descriptor = typeof key === "string" && Object.getOwnPropertyDescriptor(value, key);
-        return descriptor ? [[key, descriptor]] : [];
-      }),
-    );
+    const keys = Reflect.ownKeys(value);
+    // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
+    const descriptors: PropertyDescriptorMap = Object.create(null);
+    for (let index = 0; index < Math.min(keys.length, 64); index += 1) {
+      const key = keys[index];
+      if (typeof key !== "string") {
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor) {
+        descriptors[key] = descriptor;
+      }
+    }
     state.changed ||= keys.length > 64;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
@@ -245,7 +251,8 @@ export function projectDiagnosticValue(
       keys.length > 64 ||
       (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
     const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
-    for (const [key, descriptor] of Object.entries(descriptors)) {
+    for (const key in descriptors) {
+      const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
       if (
         !("value" in descriptor) ||
         (!descriptor.enumerable &&

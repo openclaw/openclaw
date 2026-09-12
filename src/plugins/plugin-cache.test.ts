@@ -19,6 +19,8 @@ import {
   getPluginCacheSource,
   withPluginCache,
 } from "./plugin-cache.js";
+import { PluginInstance } from "./plugin-instance.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 
@@ -30,6 +32,31 @@ afterEach(() => {
 });
 
 describe("plugin package facts", () => {
+  it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
+    const root = tempDirs.make("plugin-lease-parent-");
+    const filePath = path.join(root, "catalog.json");
+    fs.writeFileSync(filePath, '{"name":"before-install"}');
+    await using cache = createPluginCache();
+    const instance = new PluginInstance("setup-owner");
+    cache.instances.add(instance);
+    const afterWrite = instance.wrap(() => "post-write usable");
+    await withPluginCache(cache, async () => {
+      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+        ok: true,
+        value: { name: "before-install" },
+      });
+      await withPluginLifecycleLease({ path: path.join(root, "state.sqlite") }, async () => {
+        fs.writeFileSync(filePath, '{"name":"after-install"}');
+        clearPluginMetadataLifecycleCaches();
+      });
+      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+        ok: true,
+        value: { name: "after-install" },
+      });
+      expect(afterWrite()).toBe("post-write usable");
+    });
+  });
+
   it.each(["regular", "boundary"] as const)(
     "shares missing %s files across reader policies until the owner changes",
     (firstPolicy) => {

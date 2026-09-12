@@ -238,7 +238,7 @@ export function finishChatDeliveryAdmission(
       routeVisible(current.agentId) &&
       (isChatBusy(host) || hasDirectSessionRun(host)))
   ) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
+    const parked = setState(reconnectSafeQueuedSendState(host));
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return "failed";

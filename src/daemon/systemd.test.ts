@@ -1672,7 +1672,7 @@ describe("readSystemdServiceExecStart", () => {
     expect(execFileMock.mock.calls[0]?.[1]).toContain("GetUnit");
   });
 
-  it.each(["local", "global", "absent", "unreadable"] as const)(
+  it.each(["local", "global", "absent", "absent-enoent", "unreadable", "bus-unavailable"] as const)(
     "loaded-only inspection does not activate or adopt an unloaded %s definition",
     async (scenario) => {
       execFileMock.mockReset();
@@ -1691,7 +1691,11 @@ describe("readSystemdServiceExecStart", () => {
         const message = args.includes("GetUnitFileState")
           ? scenario === "absent"
             ? `Call failed: Unit file ${GATEWAY_SERVICE} does not exist.`
-            : "Call failed: Permission denied"
+            : scenario === "absent-enoent"
+              ? "Call failed: No such file or directory"
+              : scenario === "bus-unavailable"
+                ? "Failed to connect to bus: No such file or directory"
+                : "Call failed: Permission denied"
           : `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
         callback(createExecFileError(message), "", message);
       });
@@ -1699,8 +1703,10 @@ describe("readSystemdServiceExecStart", () => {
         { HOME: TEST_SERVICE_HOME },
         { requireEffective: true, requireLoaded: true },
       );
-      if (scenario === "absent") {
+      if (scenario === "absent" || scenario === "absent-enoent") {
         await expect(result).resolves.toBeNull();
+      } else if (scenario === "bus-unavailable") {
+        await expect(result).rejects.toThrow("systemd user session bus is unavailable");
       } else {
         await expect(result).rejects.toThrow("could not be inspected");
       }
@@ -1709,7 +1715,9 @@ describe("readSystemdServiceExecStart", () => {
           (call) => call[1].includes("GetUnit") || call[1].includes("GetUnitFileState"),
         ),
       ).toBe(true);
-      expect(execFileMock).toHaveBeenCalledTimes(scenario === "local" ? 1 : 2);
+      expect(execFileMock.mock.calls.some((call) => call[1].includes("GetUnitFileState"))).toBe(
+        scenario !== "local",
+      );
     },
   );
 

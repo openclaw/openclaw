@@ -263,12 +263,42 @@ export function deletePluginStateEntry(
   return Number(result.numAffectedRows ?? 0);
 }
 
+const pluginStateExpiryQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQuerySync<number, { expires_at: number | bigint | null }>>
+>();
+
 export function deleteExpiredPluginStateEntries(
   db: DatabaseSync,
   now: number,
   scope?: { pluginId: string; namespace: string },
 ): number {
   const kysely = getPluginStateKysely(db);
+  if (scope) {
+    let query = pluginStateExpiryQueries.get(db);
+    if (!query) {
+      query = prepareSqliteQuerySync<number, { expires_at: number | bigint | null }>(
+        db,
+        (parameter) =>
+          kysely
+            .selectFrom("plugin_state_entries")
+            .select("expires_at")
+            .where("expires_at", "is not", null)
+            .where(
+              "expires_at",
+              "<=",
+              parameter((value) => value),
+            )
+            .limit(1),
+      );
+      pluginStateExpiryQueries.set(db, query);
+    }
+    // The expiry index can prove there is nothing due without scanning the namespace.
+    // Only compilation is retained; expiry is checked in the caller's current transaction.
+    if (query(now).rows.length === 0) {
+      return 0;
+    }
+  }
   let expiredEntries = kysely
     .selectFrom("plugin_state_entries")
     .select(["plugin_id", "namespace", "entry_key"])

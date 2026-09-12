@@ -406,8 +406,10 @@ function visitPluginPackageTargetFiles(params: {
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
   destination: string;
-  capturedRoot: string;
+  /** Absolute normalized root captured by the artifact producer. */
+  readonly capturedRoot: string;
   sourceRoot: string;
+  /** Absolute normalized dependency links; additions remain visible to lookups. */
   links: Set<string>;
   state: PluginPackageCaptureState;
   materialize(entry?: string): void;
@@ -417,17 +419,34 @@ export type PluginPackageCapture = {
 export const isPluginPackageFile = (root: string, file: string) =>
   isPathInside(root, file) && !path.relative(root, file).split(path.sep).includes("node_modules");
 
+function isCapturedPackageFile(root: string, file: string): boolean {
+  if (process.platform === "win32") {
+    return isPluginPackageFile(root, file);
+  }
+  if (file === root) {
+    return true;
+  }
+  if (!file.startsWith(root) || (!root.endsWith("/") && file.charCodeAt(root.length) !== 47)) {
+    return false;
+  }
+  return !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length));
+}
+
 /** Retain the matched lookup root; dependency links need their own source-relative mapping. */
 export function findPluginCapturedPackage(
   packages: Iterable<PluginPackageCapture>,
   filename: string,
 ) {
+  // The artifact producer already normalizes captured roots and dependency links.
+  const file = process.platform === "win32" ? filename : path.resolve(filename);
   for (const owner of packages) {
-    const root = [owner.capturedRoot, ...owner.links].find((candidate) =>
-      isPluginPackageFile(candidate, filename),
-    );
-    if (root) {
-      return { owner, root };
+    if (isCapturedPackageFile(owner.capturedRoot, file)) {
+      return { owner, root: owner.capturedRoot };
+    }
+    for (const root of owner.links) {
+      if (isCapturedPackageFile(root, file)) {
+        return { owner, root };
+      }
     }
   }
   return undefined;

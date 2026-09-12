@@ -14,6 +14,11 @@ without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
 
+On serial hosts with less than 24 GiB of memory, full lint runs core targets in
+five disjoint batches and plugins in smaller chunks. These runs retain the same
+type-aware rules and TypeScript configuration while bounding checker caches.
+Explicit split-core and parallel execution selections remain unchanged.
+
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
 type/value pairs with the same public name. `eslint/no-var` remains enabled

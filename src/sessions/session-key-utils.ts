@@ -67,6 +67,10 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
 ];
 
+const CASE_PRESERVING_PEER_PREFIXES = CASE_PRESERVING_PEERS.map(
+  (descriptor) => `${descriptor.channel}:`,
+);
+
 const CASE_PRESERVING_PEER_PATTERNS = CASE_PRESERVING_PEERS.flatMap((descriptor) =>
   [...descriptor.peerKinds].map((peerKind) => {
     const prefix = `${escapeRegExp(descriptor.channel)}:${escapeRegExp(peerKind)}:`;
@@ -155,7 +159,12 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
 }
 
 function mayContainCasePreservingPeer(folded: string): boolean {
-  return CASE_PRESERVING_PEERS.some((descriptor) => folded.includes(`${descriptor.channel}:`));
+  for (const prefix of CASE_PRESERVING_PEER_PREFIXES) {
+    if (folded.includes(prefix)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

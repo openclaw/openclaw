@@ -120,6 +120,75 @@ on every turn, including follow-ups. The per-run timeout still bounds the whole
 workload. Health/control sampling is capped at 2,048 samples, while heap
 sampling continues until the full workload finishes.
 
+Use `--probe-rounds N` for allocation comparisons with equal probe work. It
+attempts exactly N sampler rounds and N history bursts per configured history
+client, regardless of which finishes first. Each sampler round requests
+`/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
+of `tasks.list`, `cron.list`, and `cron.status`. Enabling `--subscribers` adds
+one subscribe attempt per round and an unsubscribe after each successful
+subscription. History attempts total `N × historyClients × historyBurst`, capped
+at 2048 per run. Slow clients receive the same history budget as fast clients.
+Failed probes remain recorded failures; counts describe attempts, not successes.
+Omitting the flag retains adaptive probing until agent turns and mutations end.
+
+Fixed probes can finish before or after agent turns. Every configured workload
+joins before final memory and allocation capture; an exhausted load deadline
+fails the run instead of reporting a partial fixed workload as complete. Output
+records the mode and requested counts in `probeWorkload`; actual sampler and
+history counts remain in `summary.sampleCount` and `summary.historySampleCount`.
+Peak RSS is sampled during sampler rounds plus the final memory observation. If
+those rounds finish early, a later transient RSS peak can be missed; this is not
+continuous peak-RSS coverage of the entire agent workload.
+Equal request counts do not equalize their overlap with agent turns or the
+Gateway's time-dependent background work.
+
+To measure clicking an existing session in the Control UI sidebar during load,
+build the UI and install Playwright Chromium, then enable the browser probe:
+
+```bash
+pnpm ui:build
+pnpm --dir ui exec playwright install chromium
+pnpm test:gateway:concurrency -- --session-count 1000 --concurrency 16 --turns-per-session 2 --browser-session-clicks 3 --browser-history-messages 80 --timeout-ms 240000 --no-diagnostics-timeline --output .artifacts/gateway-session-clicks.json
+```
+
+`--browser-session-clicks` defaults to 0 and accepts up to 20 first visits,
+followed by one revisit to a recent pane. The probe seeds separate idle click
+targets after the inventory. `--browser-history-messages` defaults to 80 per
+target (maximum 500), independent of `--history-messages`, so a large inventory
+does not require history in every session. `--history-message-chars` also sizes
+the browser targets' synthetic Markdown. The browser uses the built assets in
+`dist/control-ui`; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an installed
+Chromium executable.
+
+`browser.inventory` records requested load and click target counts alongside
+the authoritative unarchived and retained session counts before load, including
+the click targets. Retained counts include archived sessions; normal inventory
+maintenance can reduce the unarchived count during seeding.
+
+Each run's `browser.clicks` records time from the actual browser click event to
+the target pane's visible history, enabled composer, and successful transcript load
+followed by a paint opportunity (`readyMs`). These timings exclude Playwright
+actionability waits. RPC `windowStartMs` offsets begin before that wait;
+`latencyMs` measures the observed request/response round trip. Request records
+include socket identity, method, session key, success, error, and response bytes.
+An `inherited` request began before the click window and has a negative
+`windowStartMs`; its latency includes the earlier wait. Completed click records
+remain unchanged when a later window observes the response. The probe includes
+message subscribe/unsubscribe requests to expose subscription recovery waits.
+`connections` records observed socket, hello, and outer event sequence gaps;
+negative offsets include recent setup events. Close events report observed inbound
+silence, without inferring a close reason. `paneStates` records changes to the selected pane's loading,
+readiness, connection epoch, and rendered history error. A displayed history
+failure retains visible-history/composer timings but fails the click instead of
+counting as ready. Browser `longTasks`
+contains the milliseconds each observed long task overlaps the click-to-ready
+interval, separate from the Gateway's Node CPU, event-loop, and memory
+samples. Pre-load `/new` and initial-session timings stay outside the click
+summary. Compare first visits and cached revisits separately, and check
+`activeLoadAtStart`, `activeLoadAtFinish`, and `samplesOutsideActiveLoad` before
+attributing latency to concurrent work. A recorded click failure makes the benchmark
+exit unsuccessfully after writing its report.
+
 `--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
 after startup, session seeding, and probe warmup. Sampling ends after the load
 and its final memory probe, before profile serialization and teardown. It uses
@@ -139,6 +208,18 @@ Sampling is statistical and adds overhead. Use unprofiled runs for latency
 comparisons. Existing heap/RSS measurements are taken before exporting the
 profile. `--cpu-prof-dir` remains available separately and includes startup;
 the recorded `loadWindow` identifies the measured interval in that CPU profile.
+
+For CPU attribution during concurrent work, including on Windows, add
+`--load-cpu-prof-dir .artifacts/gateway-load-cpu`. This captures the Gateway's
+main V8 isolate at a 1 ms sampling interval after setup and through the final
+memory probe. The private benchmark IPC channel stops the profiler and writes
+the `.cpuprofile` before process teardown, without depending on signal-driven
+profile flushing. Each run's `loadCpuProfile` records its path, duration, and
+sample count; open the raw profile in Chrome DevTools. Worker isolates are not
+included. Profiled runs add overhead, so keep them separate from latency
+comparisons. `--cpu-prof-dir` retains its startup-inclusive native profiling
+behavior. `--load-cpu-prof-dir` and `--heap-prof-dir` require separate runs so
+exporting one profile cannot contaminate the other capture.
 
 </Accordion>
 

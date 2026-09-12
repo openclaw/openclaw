@@ -326,42 +326,24 @@ describe("cron edit command", () => {
     await expectCronEditRejection(args, message);
   });
 
-  it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--best-effort-deliver"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ bestEffortDeliver: true }),
-      {
-        id: "job-1",
-        patch: {
-          delivery: {
-            mode: "announce",
-            bestEffort: true,
-          },
-        },
-      },
-    );
-  });
-
-  it("keeps --no-best-effort-deliver-only edits delivery-only", async () => {
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--no-best-effort-deliver"], { from: "user" });
+  it.each([
+    {
+      flag: "--best-effort-deliver",
+      bestEffort: true,
+      delivery: { mode: "announce", bestEffort: true },
+    },
+    {
+      flag: "--no-best-effort-deliver",
+      bestEffort: false,
+      delivery: { bestEffort: false },
+    },
+  ])("keeps $flag-only edits delivery-only (#83908)", async ({ flag, bestEffort, delivery }) => {
+    await createCronProgram().parseAsync(["edit", "job-1", flag], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "cron.update",
-      expect.objectContaining({ bestEffortDeliver: false }),
-      {
-        id: "job-1",
-        patch: {
-          delivery: {
-            bestEffort: false,
-          },
-        },
-      },
+      expect.objectContaining({ bestEffortDeliver: bestEffort }),
+      { id: "job-1", patch: { delivery } },
     );
   });
 
@@ -480,91 +462,93 @@ describe("cron edit command", () => {
     });
   });
 
-  it.each([
-    {
-      kind: "agentTurn",
-      payload: { kind: "agentTurn", message: "hello" },
-    },
-    {
-      kind: "command",
-      payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-    },
-  ])("preserves $kind payload kind for timeout-only edits", async ({ kind, payload }) => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.get") {
-        return { id: "job-1", payload };
-      }
-      return { ok: true };
-    });
-    const program = createCronProgram();
-
-    await program.parseAsync(["edit", "job-1", "--timeout-seconds", "12"], { from: "user" });
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-      id: "job-1",
-    });
-    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
-      expect.objectContaining({ timeoutSeconds: "12" }),
+  describe.each(["0", "12"])("timeout-only edits with %s seconds", (timeout) => {
+    it.each([
       {
-        id: "job-1",
-        patch: {
-          payload: {
-            kind,
-            timeoutSeconds: 12,
-          },
-        },
+        kind: "agentTurn",
+        payload: { kind: "agentTurn", message: "hello" },
       },
-    );
-  });
-
-  it.each([
-    {
-      kind: "script",
-      payload: { kind: "script", script: "return { notify: 'hello' }", timeoutSeconds: 5 },
-      error: "Use --script-timeout-seconds for script jobs",
-    },
-    {
-      kind: "systemEvent",
-      payload: { kind: "systemEvent", text: "hello" },
-      error: "--timeout-seconds is not supported for systemEvent jobs",
-    },
-    {
-      kind: "heartbeat",
-      payload: { kind: "heartbeat" },
-      error: "--timeout-seconds is not supported for heartbeat jobs",
-    },
-  ])(
-    "rejects timeout-only edits for stored $kind payloads before cron.update",
-    async ({ payload, error }) => {
+      {
+        kind: "command",
+        payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+      },
+    ])("preserves $kind payload kind for timeout-only edits", async ({ kind, payload }) => {
       callGatewayFromCli.mockImplementation(async (method: string) => {
         if (method === "cron.get") {
           return { id: "job-1", payload };
         }
         return { ok: true };
       });
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const program = createCronProgram();
 
-      try {
-        await expect(
-          createCronProgram().parseAsync(["edit", "job-1", "--timeout-seconds", "12"], {
-            from: "user",
-          }),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      await program.parseAsync(["edit", "job-1", "--timeout-seconds", timeout], { from: "user" });
 
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(error));
-        expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.objectContaining({ timeoutSeconds: timeout }),
+        {
           id: "job-1",
+          patch: {
+            payload: {
+              kind,
+              timeoutSeconds: Number(timeout),
+            },
+          },
+        },
+      );
+    });
+
+    it.each([
+      {
+        kind: "script",
+        payload: { kind: "script", script: "return { notify: 'hello' }", timeoutSeconds: 5 },
+        error: "Use --script-timeout-seconds for script jobs",
+      },
+      {
+        kind: "systemEvent",
+        payload: { kind: "systemEvent", text: "hello" },
+        error: "--timeout-seconds is not supported for systemEvent jobs",
+      },
+      {
+        kind: "heartbeat",
+        payload: { kind: "heartbeat" },
+        error: "--timeout-seconds is not supported for heartbeat jobs",
+      },
+    ])(
+      "rejects timeout-only edits for stored $kind payloads before cron.update",
+      async ({ payload, error }) => {
+        callGatewayFromCli.mockImplementation(async (method: string) => {
+          if (method === "cron.get") {
+            return { id: "job-1", payload };
+          }
+          return { ok: true };
         });
-        expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
-          false,
-        );
-      } finally {
-        errorSpy.mockRestore();
-      }
-    },
-  );
+        const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+        try {
+          await expect(
+            createCronProgram().parseAsync(["edit", "job-1", "--timeout-seconds", timeout], {
+              from: "user",
+            }),
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(error));
+          expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+            id: "job-1",
+          });
+          expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+            false,
+          );
+        } finally {
+          errorSpy.mockRestore();
+        }
+      },
+    );
+  });
 
   it("rejects generic timeout combined with an explicit systemEvent before cron.update", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

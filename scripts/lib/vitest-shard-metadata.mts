@@ -9,6 +9,26 @@ export const VITEST_PRETEST_BUILD_SECONDS: Record<VitestPretestBuildMode, number
   "private-qa": 104,
 };
 
+// Placement observations cannot become parent samples or influence file splitting.
+// Configs own this identity: generated stripe names can change around the same readers.
+export function runtimePlacementTimingKey(group: {
+  configs: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  includePatterns?: readonly string[];
+  pretestBuildMode?: VitestPretestBuildMode;
+}): string | undefined {
+  if (!group.pretestBuildMode || !group.includePatterns?.length) {
+    return undefined;
+  }
+  const identity = JSON.stringify({
+    configs: group.configs,
+    env: Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+    includePatterns: group.includePatterns.toSorted(),
+    pretestBuildMode: group.pretestBuildMode,
+  });
+  return `runtime-placement#${createHash("sha1").update(identity).digest("hex")}`;
+}
+
 export type VitestShardTimingSpec = {
   config: string;
   env?: NodeJS.ProcessEnv;

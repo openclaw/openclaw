@@ -135,7 +135,8 @@ describe("shared identity avatar view", () => {
 
     const wrapper = container.querySelector<HTMLElement>(".test-avatar");
     expect(view.pending).toBe(true);
-    expect(wrapper?.classList.contains("is-fallback")).toBe(true);
+    expect(wrapper?.classList.contains("is-pending")).toBe(true);
+    expect(wrapper?.classList.contains("is-fallback")).toBe(false);
 
     const image = await vi.waitFor(() => {
       const element = container.querySelector<HTMLImageElement>(".test-avatar__image");
@@ -153,6 +154,16 @@ describe("shared identity avatar view", () => {
 
     image.dispatchEvent(new Event("load"));
     expect(wrapper?.classList.contains("is-fallback")).toBe(false);
+    renderAvatar(
+      resolveIdentityAvatarView({
+        id: "profile-ada",
+        name: "Ada Lovelace",
+        profileAvatarUrl: "/api/users/profile-ada/avatar?v=7",
+      }),
+      container,
+    );
+    expect(container.querySelector("img")).toBe(image);
+    expect(wrapper?.getAttribute("data-avatar-state")).toBe("loaded");
 
     image.dispatchEvent(new Event("error"));
     expect(wrapper?.classList.contains("is-fallback")).toBe(true);
@@ -161,7 +172,7 @@ describe("shared identity avatar view", () => {
     expect(wrapper?.classList.contains("is-fallback")).toBe(false);
   });
 
-  it("retains its existing image while a newer avatar revision loads", async () => {
+  it("reuses its image element with a neutral placeholder while a newer revision loads", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
@@ -198,7 +209,7 @@ describe("shared identity avatar view", () => {
       }),
       container,
     );
-    expect(container.querySelector(".test-avatar")?.classList.contains("is-fallback")).toBe(true);
+    expect(container.querySelector(".test-avatar")?.classList.contains("is-pending")).toBe(true);
 
     const secondImage = await vi.waitFor(() => {
       const image = container.querySelector<HTMLImageElement>(".test-avatar__image");
@@ -276,6 +287,91 @@ describe("shared identity avatar view", () => {
 });
 
 describe("shared agent avatar view", () => {
+  it.each([false, true])(
+    "hides an existing fallback as soon as an image is configured (authenticated=%s)",
+    async (authenticated) => {
+      const response = createDeferred<Response>();
+      if (authenticated) {
+        setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
+        vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+      }
+      const container = document.createElement("div");
+      render(renderAgentIdentityAvatar({ id: "hydrated", textAvatar: "🦀" }), container);
+      const wrapper = container.querySelector(".identity-avatar--agent")!;
+      expect(wrapper.classList.contains("is-fallback")).toBe(true);
+      render(
+        renderAgentIdentityAvatar({ id: "hydrated", textAvatar: "🦀", avatar: "/avatar/hydrated" }),
+        container,
+      );
+      expect(container.querySelector(".identity-avatar--agent")).toBe(wrapper);
+      expect(wrapper.classList.contains("is-pending")).toBe(true);
+      expect(wrapper.classList.contains("is-fallback")).toBe(false);
+      response.resolve(new Response(null, { status: 404 }));
+      if (authenticated) {
+        await vi.waitFor(() => expect(wrapper.classList.contains("is-fallback")).toBe(true));
+      }
+      render(nothing, container);
+    },
+  );
+
+  it.each([undefined, "🦀"])(
+    "keeps a configured image neutral until it loads (%s)",
+    (textAvatar) => {
+      const container = document.createElement("div");
+      const agent = { id: "pending", avatar: "/avatar/pending?v=1", textAvatar };
+      const update = (className = "") =>
+        render(renderAgentIdentityAvatar(agent, className), container);
+      update();
+      const wrapper = container.querySelector(".identity-avatar--agent")!;
+      const image = container.querySelector("img")!;
+      expect(wrapper.classList.contains("is-pending")).toBe(true);
+      expect(wrapper.classList.contains("is-fallback")).toBe(false);
+      image.dispatchEvent(new Event("load"));
+      update("renamed-surface");
+      expect(container.querySelector("img")).toBe(image);
+      expect(wrapper.classList.contains("is-pending")).toBe(false);
+      expect(wrapper.classList.contains("is-fallback")).toBe(false);
+      agent.avatar = "/avatar/pending?v=2";
+      update("renamed-surface");
+      expect(wrapper.classList.contains("is-pending")).toBe(true);
+      image.dispatchEvent(new Event("error"));
+      update();
+      expect(wrapper.classList.contains("is-pending")).toBe(false);
+      expect(wrapper.classList.contains("is-fallback")).toBe(true);
+      render(nothing, container);
+    },
+  );
+
+  it("recognizes a cached image at mount without waiting for another load event", async () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(32);
+    const container = document.createElement("div");
+    render(renderAgentIdentityAvatar({ id: "cached", avatar: "/avatar/cached" }), container);
+    await Promise.resolve();
+    expect(
+      container.querySelector(".identity-avatar--agent")?.classList.contains("is-pending"),
+    ).toBe(false);
+    expect(
+      container.querySelector(".identity-avatar--agent")?.getAttribute("data-avatar-state"),
+    ).toBe("loaded");
+    render(nothing, container);
+  });
+
+  it("reveals the fallback when authenticated loading fails without an image event", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
+    const response = createDeferred<Response>();
+    vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+    const container = document.createElement("div");
+    render(renderAgentIdentityAvatar({ id: "failure", avatar: "/avatar/failure" }), container);
+    const wrapper = container.querySelector(".identity-avatar--agent")!;
+    expect(wrapper.classList.contains("is-pending")).toBe(true);
+    response.resolve(new Response(null, { status: 404 }));
+    await vi.waitFor(() => expect(wrapper.classList.contains("is-fallback")).toBe(true));
+    expect(wrapper.classList.contains("is-pending")).toBe(false);
+    expect(wrapper.getAttribute("data-avatar-state")).toBe("failed");
+    render(nothing, container);
+  });
+
   it.each(["openclaw", "crestodian"])(
     "keeps the product mark for system agent %s even with a configured avatar or image error",
     async (id) => {
@@ -336,6 +432,9 @@ describe("shared agent avatar view", () => {
   it("uses explicit emoji before the same face used for a missing image", async () => {
     const container = document.createElement("div");
     render(renderAgentIdentityAvatar({ id: "forge", textAvatar: "🛠️" }), container);
+    expect(
+      container.querySelector(".identity-avatar--agent")?.getAttribute("data-avatar-state"),
+    ).toBe("none");
     expect(container.querySelector("img, svg")).toBeNull();
     expect(container.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
       "🛠️",

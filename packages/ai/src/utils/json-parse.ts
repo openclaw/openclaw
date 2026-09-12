@@ -89,14 +89,14 @@ export function repairJson(
         continue;
       }
 
-      if (
-        !preserveValidControlEscapes &&
-        JSON_CONTROL_ESCAPES.has(nextChar) &&
-        looksLikeWindowsPathPrefix(stringValuePrefix)
-      ) {
-        repaired += "\\\\";
-        stringValuePrefix += "\\";
-        continue;
+      if (!preserveValidControlEscapes && JSON_CONTROL_ESCAPES.has(nextChar)) {
+        // Only this suffix can influence the Windows-path heuristic.
+        stringValuePrefix = stringValuePrefix.slice(-160);
+        if (looksLikeWindowsPathPrefix(stringValuePrefix)) {
+          repaired += "\\\\";
+          stringValuePrefix += "\\";
+          continue;
+        }
       }
 
       if (VALID_JSON_ESCAPES.has(nextChar)) {
@@ -123,8 +123,7 @@ export function parseJsonWithRepair(json: string): unknown {
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
-  const tail = prefix.slice(-160);
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
+  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
 /**

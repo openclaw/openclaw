@@ -435,7 +435,7 @@ export function createConfigWriteCoordinator({
         // requests on socket close, so nothing here can hang forever).
         // Remember the uncertain submission for reconnect reconciliation.
         hasInterruptedWrite = true;
-        interruptedWriteRaw = inFlight.submission?.raw ?? null;
+        interruptedWriteRaw = inFlight.submission?.ack ? null : (inFlight.submission?.raw ?? null);
         inFlight = null;
         autoSaveTrailing = false;
       }
@@ -527,7 +527,6 @@ export function createConfigWriteCoordinator({
         flushScheduledDraft: true,
         canDispatch: () => canDispatchConfigMutation("config.patch"),
       }),
-    invalidateConfigLoad,
     cancelAppliedRefresh,
     reconcileAppliedRefresh,
     scheduleAutoSave,
@@ -643,7 +642,7 @@ export function createConfigWriteCoordinator({
       !canDispatchConfigMutation("config.apply")
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
-            async () => {
+            async (onSubmitted) => {
               bindDraftToExplicitSubmit();
               cancelAppliedRefresh();
               // Checked after the drain: a raw draft whose explicit Save is in
@@ -657,7 +656,7 @@ export function createConfigWriteCoordinator({
                 return false;
               }
               try {
-                const applied = await submitConfigDraft(state, "apply", undefined, () => {
+                const applied = await submitConfigDraft(state, "apply", onSubmitted, () => {
                   if (!canDispatchConfigMutation("config.apply")) {
                     return false;
                   }
@@ -732,7 +731,7 @@ export function createConfigWriteCoordinator({
           };
         }
         const result = await afterPendingWritesSettled<RuntimeConfigExternalMutationResult<T>>(
-          () =>
+          (onSubmitted) =>
             executeConfigExternalMutation(
               state,
               mutationClient,
@@ -744,6 +743,7 @@ export function createConfigWriteCoordinator({
                 void trackLoad("config", refresh);
                 return await refresh;
               },
+              onSubmitted,
             ),
           unavailable,
           { flushScheduledDraft: true },
@@ -768,42 +768,38 @@ export function createConfigWriteCoordinator({
       // the isDisposed() guard exits its loop.
       connectionWake?.();
       // SPA teardown right after an edit must not silently drop it: fire one
-      // last save before timers die. Fire-and-forget — the request leaves
-      // synchronously (or chains once behind an in-flight save) and the
-      // stale-epoch guards skip all state mutation once the connection is
-      // invalidated below.
+      // last save before timers die, or chain once behind an in-flight save.
+      // Invalidation retires live callbacks; the retained receipt below still
+      // updates the draft, while dispatch keeps its captured admission checks.
       const client = state.client;
       const canFlush =
-        state.connected &&
-        client !== null &&
-        state.configFormMode === "form" &&
-        !writesSuspended &&
-        canAutoSaveDraft() &&
-        canCallConfigMethod("config.set");
+        state.connected && client !== null && !writesSuspended && canCallConfigMethod("config.set");
       const pendingFlight = inFlight;
       cancelScheduledAutoSave();
       disposeAppliedRefresh();
-      if (canFlush && pendingFlight) {
+      if (client && pendingFlight) {
         void pendingFlight.promise.then(() => {
-          // The settled flight could not update dirty/base state past the
-          // epoch guard; a draft whose bytes differ from that submission is a
-          // newer edit and gets exactly one chained final save — never a
-          // parallel one. The save's canonical acknowledgement supplies both
-          // the document and revision for replaying that newer edit.
+          // Adopt the acknowledged pair even when permission or reconnect
+          // admission prevents a final write. Replay owns dirty/revert intent.
           const submitted = pendingFlight.submission;
           const ack = submitted?.ack ?? null;
-          const submittedRaw = submitted?.raw ?? null;
-          // Bytes-vs-submission is the only trustworthy signal here: the
-          // epoch guard blocked the ack's rebase, so a revert back to the
-          // pre-save value reads configFormDirty=false while the persisted
-          // bytes are still the unreverted submission.
-          if (ack && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, submittedRaw, ack, () =>
-              canCallConfigMethod("config.set"),
+          if (ack && submitted) {
+            teardownFlushConfigDraft(
+              state,
+              client,
+              submitted,
+              ack,
+              () =>
+                canFlush && !autoSaveRequiresExplicitSubmit && canCallConfigMethod("config.set"),
             );
           }
         });
-      } else if (canFlush && state.configFormDirty) {
+      } else if (
+        canFlush &&
+        canAutoSaveDraft() &&
+        state.configFormDirty &&
+        state.configFormMode === "form"
+      ) {
         void submitConfigDraft(state, "auto", undefined, () => canCallConfigMethod("config.set"));
       }
       invalidateConfigConnection(state);

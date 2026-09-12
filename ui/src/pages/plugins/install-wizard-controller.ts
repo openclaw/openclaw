@@ -2,6 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { serializeConfigForm } from "../../lib/config-form-utils.ts";
+import type { ConfigWriteAck } from "../../lib/config/config-draft-model.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import {
@@ -258,12 +259,15 @@ export class InstallWizardController {
             if (!config || !snapshot?.hash) {
               throw new Error(t("pluginsPage.installWizard.configSaveFailed"));
             }
-            return client.request("config.set", {
+            return client.request<ConfigWriteAck>("config.set", {
               raw: serializeConfigForm(buildPluginConfigurationSet(config, configDraft)),
               baseHash: snapshot.hash,
             });
           },
-          { canDispatch: () => this.isCurrent(attempt, state.catalogId) },
+          {
+            canDispatch: () => this.isCurrent(attempt, state.catalogId),
+            configWriteAck: (ack) => ack,
+          },
         )
       : null;
     const saved = mutation === null || mutation.ok;

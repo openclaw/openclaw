@@ -13,6 +13,7 @@ import {
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
   type ModelCostConfig,
@@ -275,6 +276,13 @@ export function buildStoreChildSessionIndex(params: {
   subagentRuns?: SessionListRowContext["subagentRuns"];
   excludedChildKeys?: ReadonlySet<string>;
 }): Map<string, string[]> {
+  return runSynchronousWork(buildStoreChildSessionIndexWork(params));
+}
+
+export function* buildStoreChildSessionIndexWork(
+  params: Parameters<typeof buildStoreChildSessionIndex>[0],
+  shouldYield?: () => boolean,
+): SynchronousWork<Map<string, string[]>> {
   const children = new Map<string, string[]>();
   if (params.keys.length === 0) {
     return children;
@@ -282,6 +290,9 @@ export function buildStoreChildSessionIndex(params: {
   const parents = new Set(params.keys);
   // One store pass discovers both persisted navigation and runtime-only controller links.
   for (const key of Object.keys(params.store)) {
+    if (shouldYield?.()) {
+      yield;
+    }
     const entry = params.store[key];
     if (!entry || params.excludedChildKeys?.has(key)) {
       continue;

@@ -206,11 +206,11 @@ describe("workboard sqlite batch card read", () => {
 
   it.each([
     { fault: "later JSON", expected: "owner_busy", revisionMatches: true, targetOnly: false },
-    { fault: "later integer", expected: "native-error", revisionMatches: true, targetOnly: false },
+    { fault: "later integer", expected: "owner_busy", revisionMatches: true, targetOnly: false },
     { fault: "later integer", expected: "conflict", revisionMatches: false, targetOnly: false },
     { fault: "target integer", expected: "native-error", revisionMatches: true, targetOnly: true },
   ] as const)(
-    "keeps claim precedence for $fault: $expected",
+    "checks the claim revision and target without decoding unrelated children ($fault: $expected)",
     async ({ fault, expected, revisionMatches, targetOnly }) => {
       await withStores(async (dbPath) => {
         const stores = createWorkboardSqliteStores({ dbPath });
@@ -258,6 +258,173 @@ describe("workboard sqlite batch card read", () => {
       });
     },
   );
+
+  it.each([
+    { name: "idle", status: "todo", expected: "updated" },
+    { name: "running", status: "running", expected: "owner_busy" },
+    { name: "another owner", status: "running", agentId: "other", expected: "updated" },
+    { name: "archived", status: "running", archivedAt: 1, expected: "updated" },
+    { name: "zero archive time", status: "running", archivedAt: 0, expected: "owner_busy" },
+    { name: "active review claim", status: "review", expiresAt: 1_000_001, expected: "owner_busy" },
+    { name: "completed claim", status: "done", expiresAt: 1_000_001, expected: "updated" },
+    { name: "running execution", status: "done", execution: true, expected: "owner_busy" },
+    { name: "expired review claim", status: "review", expiresAt: 1_000_000, expected: "updated" },
+    { name: "heartbeat grace", status: "running", expiresAt: 700_000, expected: "owner_busy" },
+    { name: "reclaimable claim", status: "running", expiresAt: 699_999, expected: "updated" },
+    {
+      name: "reclaimable execution",
+      status: "done",
+      execution: true,
+      expiresAt: 699_999,
+      expected: "updated",
+    },
+    {
+      name: "claim owner overrides assignment",
+      status: "running",
+      agentId: "other",
+      expiresAt: 1_000_001,
+      expected: "owner_busy",
+    },
+    {
+      name: "another claim owner",
+      status: "running",
+      claimOwner: "other",
+      expiresAt: 1_000_001,
+      expected: "updated",
+    },
+    {
+      name: "default owner",
+      status: "running",
+      agentId: "",
+      ownerId: "workboard-dispatcher",
+      expected: "owner_busy",
+    },
+    {
+      name: "invalid future expiry",
+      status: "review",
+      expiresAt: Number.MAX_VALUE,
+      expected: "updated",
+    },
+  ])("preserves owner capacity for $name", async (scenario) => {
+    await withStores(async (dbPath) => {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const occupied = fixtureCard(0);
+      const target = fixtureCard(2);
+      occupied.status = scenario.status as WorkboardCard["status"];
+      occupied.agentId = scenario.agentId ?? "slot-owner";
+      occupied.metadata = {
+        ...occupied.metadata,
+        archivedAt: scenario.archivedAt,
+        claim:
+          scenario.expiresAt === undefined
+            ? undefined
+            : {
+                ownerId: scenario.claimOwner ?? "slot-owner",
+                token: "synthetic-claim-token",
+                claimedAt: 1,
+                lastHeartbeatAt: 1,
+                expiresAt: scenario.expiresAt,
+              },
+      };
+      if (scenario.execution) {
+        occupied.execution = {
+          id: "occupied-execution",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "running",
+          startedAt: 1,
+          updatedAt: 1,
+        };
+      }
+      try {
+        await stores.cards.register(occupied.id, { version: 1, card: occupied });
+        await stores.cards.register(target.id, { version: 1, card: target });
+        const next = { ...target, updatedAt: target.updatedAt + 1 };
+        await expect(
+          stores.cards.claimIfOwnerAvailable(
+            target.id,
+            { version: 1, card: next },
+            target.updatedAt,
+            scenario.ownerId ?? "slot-owner",
+            1_000_000,
+          ),
+        ).resolves.toBe(scenario.expected);
+        await expect(stores.cards.lookup(target.id)).resolves.toEqual({
+          version: 1,
+          card: scenario.expected === "updated" ? next : target,
+        });
+      } finally {
+        stores.close();
+      }
+    });
+  });
+
+  it("claims an available owner without reading or replacing unrelated malformed children", async () => {
+    await withStores(async (dbPath) => {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const raw = new DatabaseSync(dbPath);
+      const target = fixtureCard(2);
+      try {
+        await stores.cards.register("card-0", { version: 1, card: fixtureCard(0) });
+        await stores.cards.register(target.id, { version: 1, card: target });
+        raw
+          .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = 'card-0'")
+          .run(9007199254740993n);
+        const next = { ...target, updatedAt: target.updatedAt + 1 };
+        await expect(
+          stores.cards.claimIfOwnerAvailable(
+            target.id,
+            { version: 1, card: next },
+            target.updatedAt,
+            "slot-owner",
+            3000,
+          ),
+        ).resolves.toBe("updated");
+        await expect(stores.cards.lookup(target.id)).resolves.toEqual({ version: 1, card: next });
+        await expect(stores.cards.lookup("card-0")).rejects.toMatchObject({
+          code: "ERR_OUT_OF_RANGE",
+        });
+      } finally {
+        raw.close();
+        stores.close();
+      }
+    });
+  });
+
+  it("rolls back a claim when replacing its child records fails", async () => {
+    await withStores(async (dbPath) => {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const sibling = fixtureCard(0);
+      const target = fixtureCard(2);
+      try {
+        await stores.cards.register(sibling.id, { version: 1, card: sibling });
+        await stores.cards.register(target.id, { version: 1, card: target });
+        const next = {
+          ...target,
+          title: "Claimed",
+          updatedAt: target.updatedAt + 1,
+          labels: ["changed"],
+          metadata: { ...target.metadata, comments: sibling.metadata?.comments },
+        };
+        await expect(
+          stores.cards.claimIfOwnerAvailable(
+            target.id,
+            { version: 1, card: next },
+            target.updatedAt,
+            "slot-owner",
+            3000,
+          ),
+        ).rejects.toThrow("UNIQUE constraint failed");
+        await expect(stores.cards.lookup(target.id)).resolves.toEqual({ version: 1, card: target });
+        await expect(stores.cards.lookup(sibling.id)).resolves.toEqual({
+          version: 1,
+          card: sibling,
+        });
+      } finally {
+        stores.close();
+      }
+    });
+  });
 
   it("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
     await withStores(async (dbPath) => {

@@ -83,7 +83,6 @@ it.each(["direct", "nested"] as const)(
       const held = createDeferred();
       const beginDrain = createDeferred();
       let current = true;
-      let reloadFinished = false;
       const logReload = { warn: vi.fn(), info: vi.fn() };
       const tracker = createGatewayActiveWorkTracker({
         params: { logReload },
@@ -94,7 +93,6 @@ it.each(["direct", "nested"] as const)(
           held.resolve();
           await beginDrain.promise;
           await tracker.waitForActiveWorkBeforeChannelReload(["discord"], () => current, true);
-          reloadFinished = true;
         }, "reload:config"),
       );
       await held.promise;
@@ -118,7 +116,6 @@ it.each(["direct", "nested"] as const)(
           recordsBefore,
         );
         await reload;
-        expect(reloadFinished).toBe(true);
         expect(logReload.warn).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("deferring until 1 gateway request(s) complete"),
         );

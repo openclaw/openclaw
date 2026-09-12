@@ -12,6 +12,8 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -57,8 +59,11 @@ export const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...
 };
 
 async function runHostedWizard(run: (runtime: RuntimeEnv) => Promise<void>): Promise<void> {
+  await using cache = createPluginCache();
   try {
-    await run(createNonExitingRuntime());
+    await runOutsidePluginRuntimeGenerationScope(() =>
+      withPluginCache(cache, () => run(createNonExitingRuntime())),
+    );
   } catch (error) {
     // Hosted wizards share the Gateway process; a successful CLI-style exit
     // must complete only its session, while failures remain session errors.

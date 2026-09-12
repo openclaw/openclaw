@@ -426,7 +426,7 @@ describe("config gateway operations", () => {
     runtimeConfig.dispose();
   });
 
-  it("keeps a concurrent dirty draft on its pre-patch CAS base", async () => {
+  it("config.patch rebases a concurrent form draft onto its acknowledged revision", async () => {
     vi.useFakeTimers();
     const patchGate = deferred<unknown>();
     const request = vi.fn((method: string) => {
@@ -455,8 +455,9 @@ describe("config gateway operations", () => {
     patchGate.resolve({ config: { count: 1, patched: true }, hash: "hash-2" });
     await expect(patch).resolves.toBe(true);
 
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2, patched: true });
     expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
     runtimeConfig.resetDraft();

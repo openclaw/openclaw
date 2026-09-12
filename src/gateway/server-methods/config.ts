@@ -949,8 +949,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        // Additive ack hash: matches the hash config.get would report for the
-        // persisted bytes, so writers can adopt it without a reload.
+        // Writers adopt the committed revision without a reload.
         ...(writeResult.hash
           ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
           : {}),

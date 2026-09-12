@@ -114,6 +114,53 @@ function prepare(
 }
 
 describe("managed plugin public surfaces", () => {
+  it.each(["id", "folder", "channel"] as const)(
+    "selects the unique loaded %s owner before considering lower-priority aliases",
+    (tier) => {
+      const parent = fs.realpathSync(temp.make("openclaw-public-owner-priority-"));
+      const dirName = "runtime-selected";
+      const prepareOwner = (name: string, folder: string, id: string) => {
+        const root = path.join(parent, name, folder);
+        fs.mkdirSync(root, { recursive: true });
+        writeSource(root, name, "js");
+        const active = prepare(root, id, "global", "js");
+        active.record.channelIds.push(dirName);
+        return active;
+      };
+      const winner = prepareOwner(
+        "winner",
+        tier === "folder" ? dirName : "winner-root",
+        tier === "id" ? dirName : "winner",
+      );
+      const first = prepareOwner(
+        "first",
+        tier === "id" || tier === "channel" ? dirName : "first-root",
+        tier === "channel" ? dirName : "first",
+      );
+      const second = prepareOwner("second", tier === "id" ? dirName : "second-root", "second");
+      if (tier === "channel") {
+        first.record.status = "disabled";
+        second.record.status = "disabled";
+      }
+      winner.registry.plugins.unshift(first.record, second.record);
+      winner.publish();
+      const load = () =>
+        loadBundledPluginPublicSurfaceModuleSyncCore<Pick<PublicApi, "read">>({
+          dirName,
+          artifactBasename: "api.js",
+        });
+      expect(load().read()).toBe("winner");
+
+      winner.registry.plugins.push(
+        createPluginRecord({
+          ...winner.record,
+          rootDir: path.join(parent, "duplicate", path.basename(winner.record.rootDir!)),
+        }),
+      );
+      expect(load).toThrow(/ambiguous runtime ownership/);
+    },
+  );
+
   it.each(["global", "bundled"] as const)(
     "resolves native filesystem dist APIs without losing their managed owner (%s)",
     (origin) => {

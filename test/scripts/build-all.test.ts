@@ -215,25 +215,6 @@ describe("resolveBuildAllStep", () => {
     }
   });
 
-  it("keeps node steps on the current node binary", () => {
-    const step = getBuildAllStep("runtime-postbuild");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
-      env: { FOO: "bar" },
-    });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["scripts/runtime-postbuild.mjs"],
-      options: {
-        stdio: "inherit",
-        env: { FOO: "bar" },
-        shell: false,
-      },
-    });
-  });
-
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
     const result = resolveBuildAllStep(
@@ -257,6 +238,11 @@ describe("resolveBuildAllStep", () => {
   });
 
   it.each([
+    {
+      label: "runtime-postbuild",
+      scriptPath: "scripts/runtime-postbuild.mts",
+      expectedEnv: { FOO: "bar" },
+    },
     {
       label: "write-plugin-sdk-entry-dts",
       scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
@@ -928,7 +914,7 @@ describe("resolveBuildAllSteps", () => {
 
   it.each([
     ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
-    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mts"],
   ])("does not stamp qaRuntime after %s fails", async (label, script) => {
     const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const result = await runBuildAllSteps("qaRuntime", {

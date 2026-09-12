@@ -242,7 +242,7 @@ describe("config form collection defaults", () => {
     expect(container.textContent).not.toContain("default-token");
   });
 
-  it("shows a top-level object default without nesting the section", () => {
+  it("shows inherited child defaults without an object JSON summary or nested section", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -272,7 +272,7 @@ describe("config form collection defaults", () => {
       container,
     );
 
-    expect(container.textContent).toContain('Default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain('{"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
 
@@ -295,7 +295,7 @@ describe("config form collection defaults", () => {
       container,
     );
 
-    expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain('{"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLInputElement>("input"), "inherited mode")
@@ -380,7 +380,7 @@ describe("config form collection defaults", () => {
       ),
       "explicit profile object",
     );
-    expect(profile.textContent).toContain('Default: {"enabled":true,"mode":"balanced"}');
+    expect(profile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
     expect(onPatch).not.toHaveBeenCalled();
 
     onRemove.mockClear();
@@ -407,9 +407,7 @@ describe("config form collection defaults", () => {
       ),
       "inherited profile object",
     );
-    expect(inheritedProfile.textContent).toContain(
-      'Using default: {"enabled":true,"mode":"balanced"}',
-    );
+    expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
     const enabledRow = expectElement(
       Array.from(inheritedProfile.querySelectorAll(".settings-row")).find((row) =>
         row.textContent?.includes("Enabled"),

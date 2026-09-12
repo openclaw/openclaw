@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   listAgentIds,
   tryResolveAmbientOwnerAgentId,
@@ -30,7 +29,7 @@ const refusalsByState = new Map<
 >();
 
 function stateKey(options: AdmissionOptions): string {
-  return path.resolve(resolveOpenClawStateSqlitePath(options.env ?? process.env));
+  return resolveOpenClawStateSqlitePath(options.env ?? process.env);
 }
 
 /** Ownership is derived from the inspected file; missing or corrupt metadata keeps normal refusal. */

@@ -86,6 +86,30 @@ Canonical-repo CI keeps Blacksmith as the default runner path for pushes and fir
 
 ## Measured shard weights
 
+Hybrid main runtime bins retain their existing jobs and runner allocations while
+admitting complete measured runtime groups within 440 seconds, including the
+existing 100-second build allowance. This reserves 40 seconds of the eight-minute
+objective for checkout/setup; it does not change test deadlines or guarantee
+elapsed time. Only non-exclusive ordinary-runtime bins participate. A group can
+move to an already-required equal-or-stronger runner only with its own explicit
+worker limit. Both replacement bins must pass the shared family, group-count and
+budget checks. If no transfer fits, CI retains the complete existing plan and
+reports its over-budget estimate; an optimization cannot suppress test coverage.
+Recipient capacity must preserve the donor job's fixed runner anchor, including
+any earlier promotion of that group. Private-QA, dist, exclusive, hosted,
+and ordinary two-slot policies remain unchanged.
+
+The refit records separate runtime-placement observations from the emitted group
+descriptor, successful complete envelope and runtime-readiness marker. Configs,
+group environment, exact include set and prebuild mode define their identity;
+unrelated sibling repartitioning does not erase them. These observations use the
+same independent-run sampling rules but are consumed only after file splitting.
+They cannot reconstruct a parent or create more worker generations. Existing
+parent and exact-child timing keys keep their original meaning. Preparation is
+already included in the envelope; each job's shared runtime build is charged once.
+Unknown groups retain positive fallback costs, and native same-inventory evidence
+must verify latency, actual resources and cleanup before claiming improvement.
+
 `config/ci-test-timings.json` records CI measurements for UI and Gateway E2E files
 and compact Node groups. UI and compact packers prefer these weights over their in-source cold-start
 tables. UI E2E keys are repo-relative paths, including tests under `ui/src/pages/`,

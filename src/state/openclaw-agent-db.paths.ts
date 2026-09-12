@@ -48,5 +48,9 @@ export function isIncognitoOpenClawAgentSqlitePath(
   pathname: string,
   options: Omit<OpenClawAgentSqlitePathOptions, "path">,
 ): boolean {
-  return path.resolve(pathname) === resolveIncognitoOpenClawAgentSqlitePath(options);
+  const resolved = path.resolve(pathname);
+  return (
+    path.basename(resolved) === INCOGNITO_AGENT_SQLITE_BASENAME &&
+    resolved === resolveIncognitoOpenClawAgentSqlitePath(options)
+  );
 }

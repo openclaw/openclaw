@@ -10,10 +10,7 @@ import type {
   PluginsUninstallResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { pluginInstallRequiresLocalHost } from "../../plugins/install-source-plan.js";
-import {
-  capturePluginRuntimeApplications,
-  type PluginRuntimeApplication,
-} from "../../plugins/lifecycle.js";
+import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import {
   installManagedPlugin,
@@ -23,6 +20,7 @@ import {
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
 import {
+  captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
   withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
@@ -51,7 +49,7 @@ function lifecycleHandler<T>(
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
-    let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
+    let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -61,17 +59,7 @@ function lifecycleHandler<T>(
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
       };
-      beforePersistentApply();
-      captured = capturePluginRuntimeApplications((change) => {
-        beforePersistentApply();
-        return applyRuntime({
-          ...change,
-          assertInvokerOwned: () => {
-            beforePersistentApply();
-            change.assertInvokerOwned?.();
-          },
-        });
-      });
+      captured = captureGatewayPluginRuntimeApplications(applyRuntime, beforePersistentApply);
       const lifecycle: PluginLifecycleOptions = {
         applyRuntime: captured.applyRuntime,
         beforePersistentApply,

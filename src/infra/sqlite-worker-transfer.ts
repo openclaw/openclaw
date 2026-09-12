@@ -1,7 +1,8 @@
 import { deserialize, serialize } from "node:v8";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-contract.js";
-
-export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
+import {
+  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
+  type SqliteWorkerTransferHandle,
+} from "./sqlite-worker-contract.js";
 export type SqliteWorkerTransferValue = { kind: string; value: unknown };
 export type SqliteWorkerTransferInput =
   | SqliteWorkerTransferValue

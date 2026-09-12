@@ -28,6 +28,7 @@ import {
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 type ResumePostCoreUpdateParams = {
   root: string;
@@ -91,7 +92,8 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
-  const producedPluginUpdate = await withPluginLifecycleLease({}, async () => {
+  const producedPluginUpdate = await withPluginLifecycleLease({}, async (lease) => {
+    await completeSourceUpdateRuntime({ root: params.root, timeoutMs: params.timeoutMs, lease });
     // The core migration owner committed before activation. This fresh process
     // reads that generation and only owns plugin convergence.
     const preparedConfig = await preparePostCorePluginConfig({

@@ -34,6 +34,27 @@ the agent switcher.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
+## Watch a desktop in Picture-in-Picture
+
+Connect the Desktop viewer, then choose **Open desktop in Picture-in-Picture** in
+its toolbar. The browser opens a view-only, always-on-top window so you can watch
+the remote computer while using other tabs or apps. The same action is available
+in the docked panel, chat side panel, and focused desktop window.
+
+This requires a secure context (HTTPS or localhost) and a desktop browser that
+exposes the Document Picture-in-Picture API, including supported Chrome and
+Firefox versions. The control is disabled when the API is unavailable or the
+desktop is not connected. Browser permissions can still deny the request; check
+those permissions and click the control again to retry. OpenClaw does not replace
+unsupported PiP with an ordinary popup.
+
+PiP mirrors the existing live connection without taking control or opening a
+second desktop connection. Closing PiP leaves the original viewer and remote task
+running. Disconnecting, changing the viewer's source or session, or closing the
+originating viewer closes PiP; it does not stop the remote task. Keep the opener
+tab open. A sleeping computer or a browser that suspends the entire page cannot
+continue streaming.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
@@ -102,7 +123,12 @@ page filtered to that agent. Open **Agents** in the sidebar to return to the ros
 page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
 for group controls and filtering.
 
-Agent names and avatars follow agent and identity updates. Activity and previews on the page and sidebar roster refresh on session events
+Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
+the avatar keeps its tinted background with no face or text. The image appears when ready;
+an emoji or generated face appears only when no image is configured or the image fails to load.
+This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Activity and previews on the page and sidebar roster refresh on session events
 and Gateway reconnects. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions

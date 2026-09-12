@@ -245,7 +245,17 @@ function buildPluginMetadataOwnerMaps(
     NonNullable<PluginManifestRecord["channelAccountKeyPolicies"]>[string]
   >();
   const selectedChannels = new Set<string>();
-  for (const owner of selectInstalledPluginManifestRecords(index, manifestRegistry, null)) {
+  const enabledPluginIds = new Set(
+    index.plugins.filter((plugin) => plugin.enabled).map((plugin) => plugin.pluginId),
+  );
+  // Maintenance can load a disabled owner; active owners retain runtime precedence.
+  const channelOwners = selectInstalledPluginManifestRecords(
+    index,
+    manifestRegistry,
+    null,
+    true,
+  ).toSorted((a, b) => Number(enabledPluginIds.has(b.id)) - Number(enabledPluginIds.has(a.id)));
+  for (const owner of channelOwners) {
     for (const channel of owner.channels) {
       if (selectedChannels.has(channel)) {
         continue;

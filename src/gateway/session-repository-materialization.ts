@@ -22,7 +22,7 @@ import { withSessionRepositoryCheckpoint } from "./worker-environments/session-r
 import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
-/** Called only by an explicit Gateway move, after the source result is accepted. */
+/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;

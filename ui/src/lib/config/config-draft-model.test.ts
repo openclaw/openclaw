@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as json5Runtime from "../json5-runtime.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   deferred,
@@ -12,12 +13,28 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config draft model", () => {
-  it.each(["revert", "delete"] as const)(
-    "config.set replays an in-flight %s while preserving canonical siblings",
-    async (edit) => {
+  it.each([
+    { edit: "revert", dispose: false, unavailable: false },
+    { edit: "delete", dispose: false, unavailable: false },
+    { edit: "revert", dispose: false, unavailable: true },
+    { edit: "revert", dispose: true, unavailable: true },
+  ])(
+    "config.set replays $edit (dispose: $dispose, JSON5 unavailable: $unavailable)",
+    async ({ edit, dispose, unavailable }) => {
       vi.useFakeTimers();
       const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
       const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
+      if (unavailable) {
+        vi.spyOn(json5Runtime, "parseJson5Text").mockImplementation(JSON.parse);
+        vi.spyOn(json5Runtime, "warmJson5").mockRejectedValue(new Error("Chunk unavailable"));
+        request.mockResolvedValueOnce({
+          config: { count: 1 },
+          raw: '// operator comment\n{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
       const { runtimeConfig } = createConfigCapabilityHarness(
         request as GatewayBrowserClient["request"],
       );
@@ -29,6 +46,9 @@ describe("config draft model", () => {
       } else {
         runtimeConfig.removeFormValue(["count"]);
       }
+      if (dispose) {
+        runtimeConfig.dispose();
+      }
       firstSet.resolve({});
       await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
@@ -38,15 +58,19 @@ describe("config draft model", () => {
         { count: 2 },
         { ...(edit === "revert" ? { count: 1 } : {}), ui: canonical.ui },
       ]);
-      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      if (!dispose) {
+        expect(runtimeConfig.state.configFormDirty).toBe(false);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+      }
       runtimeConfig.dispose();
+      vi.restoreAllMocks();
     },
   );
 
   it.each([
     ["comments", "{\n  // Keep this note.\n  count: 2,\n}\n"],
     ["semantic edit", "{ count: 3, /* keep spacing */ }\n"],
-  ])("config.set preserves an in-flight raw %s on its original base", async (_edit, raw) => {
+  ])("config.set adopts its revision and rejects stale raw %s by content", async (_edit, raw) => {
     vi.useFakeTimers();
     const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
     const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
@@ -62,8 +86,10 @@ describe("config draft model", () => {
 
     expect(runtimeConfig.state.configRaw).toBe(raw);
     expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
     expect(runtimeConfig.state.configSnapshot).toMatchObject({ config: canonical, hash: "hash-2" });
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
     expect(submissions).toHaveLength(1);
     runtimeConfig.dispose();
   });

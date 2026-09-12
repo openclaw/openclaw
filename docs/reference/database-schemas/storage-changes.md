@@ -47,6 +47,14 @@ during shutdown. Framing does not paginate or repeat the database query, truncat
 results, or change request and queue budgets. Callers still materialize their
 complete result in memory.
 
+Worker execute inputs also use bounded frames when necessary. Queued commands
+retain their full serialized-byte charge, up to the existing 64 MiB aggregate
+budget. Larger commands require immediate admission to an idle worker and reserve
+a 32 MiB transport window through settlement. Otherwise, admission returns the
+existing overload error without queuing the value or executing any part of it.
+Only complete validated input reaches the backend. The transport queue remains
+bounded; an active complete input or result still requires its materialized memory.
+
 Acquire a connection once for an operation and pass that exact connection
 through its transactional helpers. SQLite write callbacks remain synchronous:
 finish asynchronous planning first, then reread authoritative rows after write

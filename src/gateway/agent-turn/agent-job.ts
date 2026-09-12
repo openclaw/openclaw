@@ -76,6 +76,7 @@ type DedupeObservation =
 
 type AgentJobState = {
   jobs: Map<string, AgentJobRecord>;
+  oldestCachedAt: number;
   runStarts: Map<string, number>;
   pendingErrors: Map<string, PendingAgentRunTerminal>;
   pendingTimeouts: Map<string, PendingAgentRunTerminal>;
@@ -87,6 +88,7 @@ const agentJobState = resolveGlobalSingleton<AgentJobState>(
   Symbol.for("openclaw.agentJobState"),
   () => ({
     jobs: new Map(),
+    oldestCachedAt: Infinity,
     runStarts: new Map(),
     pendingErrors: new Map(),
     pendingTimeouts: new Map(),
@@ -101,6 +103,7 @@ const agentJobState = resolveGlobalSingleton<AgentJobState>(
       clearTimeout(pending.timer);
     }
     state.jobs.clear();
+    state.oldestCachedAt = Infinity;
     state.runStarts.clear();
     state.pendingErrors.clear();
     state.pendingTimeouts.clear();
@@ -124,12 +127,18 @@ function nextAgentRunVersion(): number {
 }
 
 function pruneAgentRunCache(now = Date.now()) {
+  if (now - agentJobState.oldestCachedAt <= AGENT_RUN_CACHE_TTL_MS) {
+    return;
+  }
+  let oldestCachedAt = Infinity;
   for (const [runId, job] of agentJobs) {
     if (now - job.cachedAt <= AGENT_RUN_CACHE_TTL_MS) {
+      oldestCachedAt = Math.min(oldestCachedAt, job.cachedAt);
       continue;
     }
     agentJobs.delete(runId);
   }
+  agentJobState.oldestCachedAt = oldestCachedAt;
 }
 
 function enforceAgentRunCacheMaxEntries() {
@@ -214,6 +223,9 @@ function recordAgentRunSnapshot(
     cachedAt: entry.cachedAt,
     snapshotsBySource,
   });
+  // A lower bound remains safe when a write refreshes or eviction removes the oldest job.
+  // Recompute only once that bound can expire, without changing insertion-order eviction.
+  agentJobState.oldestCachedAt = Math.min(agentJobState.oldestCachedAt, entry.cachedAt);
   enforceAgentRunCacheMaxEntries();
   for (const waiter of agentRunWaiters.get(entry.runId) ?? []) {
     waiter();

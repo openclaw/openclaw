@@ -58,6 +58,11 @@ export async function runTtsConvert(params: {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
       config: getRuntimeConfig(),
     });
+    if (params.output && !isLoopbackHost(new URL(gatewayConnection.url).hostname)) {
+      throw new Error(
+        `--output is not supported for remote gateway TTS yet (gateway target: ${gatewayConnection.url}).`,
+      );
+    }
     const result: {
       audioPath?: string;
       provider?: string;
@@ -76,12 +81,6 @@ export async function runTtsConvert(params: {
     });
     let outputPath = result.audioPath;
     if (params.output && result.audioPath) {
-      const gatewayHost = new URL(gatewayConnection.url).hostname;
-      if (!isLoopbackHost(gatewayHost)) {
-        throw new Error(
-          `--output is not supported for remote gateway TTS yet (gateway target: ${gatewayConnection.url}).`,
-        );
-      }
       const target = path.resolve(params.output);
       await copyTtsOutputAtomically(result.audioPath, target);
       outputPath = target;

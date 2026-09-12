@@ -1,3 +1,5 @@
+export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
+
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
@@ -29,6 +31,8 @@ export type SqliteWorkerRequest = {
       input: Uint8Array;
     }
   | { type: "execute"; input: Uint8Array }
+  | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }
+  | { type: "execute-frame"; input: Uint8Array }
   | { type: "result-next"; transferId: number }
   | { type: "close" }
 );
@@ -36,7 +40,7 @@ export type SqliteWorkerRequest = {
 export type SqliteWorkerReply = {
   id: number;
 } & (
-  | { ok: true; value: Uint8Array; transfer?: "start" | "frame" }
+  | { ok: true; value: Uint8Array; transfer?: "start" | "frame"; input?: "next" }
   | { ok: false; retire?: true; error: { name: string; message: string; code?: string | number } }
 );
 

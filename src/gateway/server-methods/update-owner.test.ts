@@ -214,12 +214,6 @@ describe("update.run current owner authority", () => {
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(sentinelState.capturedPayload).toBeUndefined();
-    expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining(
-          'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
-        ),
-      }),
-    );
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
   });
 });

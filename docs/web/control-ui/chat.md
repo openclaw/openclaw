@@ -70,7 +70,8 @@ If a New Session model lookup does not finish within 30 seconds, the controls
 show **Models unavailable**. Open the model picker to retry; your draft stays
 in place.
 
-When you open an existing session, you can start typing as soon as its identity
+When you open an existing session, the conversation appears before supporting
+panels and pull-request details load. You can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
 composer keeps your draft and focus when the conversation appears. You can send
 ordinary messages and attachments while history loads: the message enters the

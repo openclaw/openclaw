@@ -53,6 +53,7 @@ import {
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -203,6 +204,11 @@ async function updateFinalizeCommandInternal(
     lifecycle.recordWarnings(doctorWarnings);
   };
 
+  if ((await resolveUpdateInstallKind(root)) === "git") {
+    await withPluginLifecycleLease({}, async (lease) => {
+      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins"), lease });
+    });
+  }
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await lifecycle.run("configSnapshot", createUpdateConfigSnapshot);
     await lifecycle.run("doctor", () =>

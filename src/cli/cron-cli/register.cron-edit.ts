@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron edit command registration and patch construction for existing jobs.
 import {
   normalizeOptionalLowercaseString,
@@ -27,6 +26,7 @@ import {
 import {
   getCronChannelOptions,
   handleCronCliError,
+  parseCronIntegerOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
 } from "./shared.js";
@@ -399,13 +399,10 @@ export function registerCronEditCommand(cron: Command) {
           } else if (failureAlertFlag === true || hasFailureAlertFields) {
             const failureAlert: Record<string, unknown> = {};
             if (hasFailureAlertAfter) {
-              const after = parseStrictPositiveInteger(opts.failureAlertAfter);
-              if (after === undefined) {
-                throw new CronCliError(
-                  "Invalid --failure-alert-after (must be a positive integer).",
-                );
-              }
-              failureAlert.after = after;
+              failureAlert.after = parseCronIntegerOption(
+                opts.failureAlertAfter,
+                "--failure-alert-after",
+              );
             }
             if (hasFailureAlertChannel) {
               failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);

@@ -186,13 +186,20 @@ describe("Signal registered account entry points", () => {
         "registered Signal enable writer",
       );
       expect(disabled.channels?.signal?.accounts?.[key]?.enabled).toBe(false);
-      const removed = signalPlugin.config.deleteAccount?.({
-        cfg: disabled,
-        accountId: "work-phone",
-      });
-      expect(removed?.channels?.signal?.accounts?.[key]).toBeUndefined();
       if (collision) {
-        expect(removed?.channels?.signal?.accounts?.["Work Phone"]).toEqual(authored);
+        expect(() =>
+          signalPlugin.config.deleteAccount?.({ cfg: disabled, accountId: "work-phone" }),
+        ).toThrow('stored keys "work-phone" and "Work Phone"');
+        expect(signalPlugin.config.resolveAccount(disabled, "work-phone").config.account).toBe(
+          "+12025550125",
+        );
+      } else {
+        const removed = expectDefined(
+          signalPlugin.config.deleteAccount?.({ cfg: disabled, accountId: "work-phone" }),
+          "registered Signal delete writer",
+        );
+        expect(removed.channels?.signal?.accounts?.[key]).toBeUndefined();
+        expect(signalPlugin.config.resolveAccount(removed, "work-phone").configured).toBe(false);
       }
     },
   );

@@ -34,9 +34,11 @@ stale-data warning. Choose **Retry** to load the list again.
 
 The dashboard and its server-side thread preference follow you when you connect
 to the same Gateway from another device. The active dashboard tab and task
-layout remain per-device UI state. Ordinary task revisits restore the browser's
-saved arrangement for that task; opening a gallery card explicitly focuses the
-dashboard.
+layout remain per-device UI state. The browser retains layout and tab preferences
+for up to 500 sessions, keeping the most recently changed entries when it reaches
+that limit. Ordinary task revisits restore the browser's saved arrangement for
+that task; opening a gallery card explicitly focuses the dashboard. Increasing
+the limit does not recover preferences already evicted by an older version.
 
 The browser keeps the three most recently visited tasks in each pane loaded,
 including their dashboard widgets, while you switch tasks or visit Settings.

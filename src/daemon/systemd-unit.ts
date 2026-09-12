@@ -74,8 +74,10 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
-    "StartLimitBurst=5",
-    "StartLimitIntervalSec=60",
+    // A five-minute lifecycle ownership wait spans this interval. Ten starts
+    // allow surrounding immediate failures while still bounding crash loops.
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=300",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
