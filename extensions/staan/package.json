@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/staan-plugin",
+  "version": "2026.9.3",
+  "description": "OpenClaw Staan plugin.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/staan-plugin",
+      "npmSpec": "@openclaw/staan-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.8"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.3"
+    },
+    "build": {
+      "openclawVersion": "2026.9.3",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

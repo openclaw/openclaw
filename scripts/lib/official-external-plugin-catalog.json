@@ -666,6 +666,48 @@
       }
     },
     {
+      "name": "@openclaw/staan-plugin",
+      "description": "OpenClaw Staan plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "staan",
+          "label": "Staan"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "staan"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "staan",
+            "label": "Staan Search",
+            "hint": "Independent European web index with scored passages and full-page extraction",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Staan API key",
+            "envVars": [
+              "STAAN_API_KEY"
+            ],
+            "placeholder": "stn_...",
+            "signupUrl": "https://staan.ai/",
+            "docsUrl": "https://docs.openclaw.ai/tools/web",
+            "credentialPath": "plugins.entries.staan.config.webSearch.apiKey",
+            "autoDetectOrder": 68
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/staan-plugin",
+          "npmSpec": "@openclaw/staan-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",
