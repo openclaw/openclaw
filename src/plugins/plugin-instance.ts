@@ -118,6 +118,29 @@ export class PluginInstance {
     return this.invoke(run, this.lease(true, registry));
   }
 
+  /** Associates an identity-sensitive public value without replacing it with a view. */
+  adopt<T>(value: T): T {
+    const seen = new WeakSet<object>();
+    const visit = (candidate: unknown) => {
+      if (
+        !candidate ||
+        (typeof candidate !== "object" && typeof candidate !== "function") ||
+        seen.has(candidate)
+      ) {
+        return;
+      }
+      seen.add(candidate);
+      valueInstances.set(candidate, this);
+      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+        if ("value" in descriptor) {
+          visit(descriptor.value);
+        }
+      }
+    };
+    visit(value);
+    return value;
+  }
+
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
     return this.createValueView(<T>(run: () => T) =>
       invoke(() => this.runInRegistry(registry, run)),

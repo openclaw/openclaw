@@ -118,7 +118,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(state.autoDevice).toBe(false);
       expect(state.deviceId).toBe(destination === "device" ? "desktop" : "");
       expect(state.cloudProfileId).toBe(destination === "cloud" ? "aws" : "");
-      expect(browser.popoverOpen("where")).toBe(false);
+      expect(browser.popoverOpen("where")).toBe(destination === "cloud");
     },
   );
 

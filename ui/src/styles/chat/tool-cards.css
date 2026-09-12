@@ -1103,6 +1103,12 @@
   color: inherit;
 }
 
+.chat-activity-group__duration {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
 }
@@ -1458,4 +1464,18 @@ openclaw-tooltip.chat-tasks-status__preview {
   .chat-tool-card__block-content {
     max-height: min(360px, 55vh);
   }
+}
+.chat-tool-failure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px 8px 28px;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.chat-tool-failure__status {
+  flex: none;
+  font-weight: 500;
 }

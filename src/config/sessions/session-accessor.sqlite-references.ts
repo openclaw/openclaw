@@ -40,7 +40,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
 
 /** Retained logical owners protect generations absent from their entry references. */
 export function addRetainedWindowSessionReferences(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: Set<string>,
   excludedSessionKeys: ReadonlySet<string>,
   candidateSessionIds?: readonly string[],

@@ -17,26 +17,26 @@ import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 describe("post-core plugin payload degradation", () => {
   it.each([
-    ["missing-owner", true, "error", "unsafe", "unowned-plugin-payload"],
+    ["missing-owner", true, "warning", "unsafe", "unowned-plugin-payload"],
     ["missing-owner", false, "warning", "unsafe", "unowned-plugin-payload"],
-    ["consent", true, "error", "unsafe", "capability-consent-required"],
-    ["consent", false, "error", "unsafe", "capability-consent-required"],
-    ["integrity", true, "error", "unsafe", "integrity-drift"],
+    ["consent", true, "warning", "unsafe", "capability-consent-required"],
+    ["consent", false, "warning", "unsafe", "capability-consent-required"],
+    ["integrity", true, "warning", "unsafe", "integrity-drift"],
     ["integrity", false, "warning", "unsafe", "integrity-drift"],
-    ["unclassified", true, "error", "unsafe", "convergence-failed"],
+    ["unclassified", true, "ok", "unsafe", "convergence-failed"],
     ["unclassified", false, "ok", "no-payload-repair", undefined],
-    ["unknown-requirement", true, "error", "unsafe", "plugin-requirement-unknown"],
+    ["unknown-requirement", true, "warning", "unsafe", "plugin-requirement-unknown"],
     ["unknown-requirement", false, "warning", "unsafe", "plugin-requirement-unknown"],
-    ["required", true, "error", "unsafe", "required-plugin-unavailable"],
+    ["required", true, "warning", "unsafe", "required-plugin-unavailable"],
     ["required", false, "warning", "unsafe", "required-plugin-unavailable"],
-    ["mixed", true, "error", "unsafe", "unowned-plugin-payload"],
-    ["repaired-advisory", true, "error", "optional-repair-needed", undefined],
-    ["optional", true, "error", "optional-repair-needed", undefined],
+    ["mixed", true, "warning", "unsafe", "unowned-plugin-payload"],
+    ["repaired-advisory", true, "warning", "optional-repair-needed", undefined],
+    ["optional", true, "warning", "optional-repair-needed", undefined],
     ["optional", false, "warning", "optional-repair-needed", undefined],
     ["invalid-config", true, "error", "core-critical", "invalid-config"],
     ["authority", true, undefined, undefined, undefined],
   ] as const)(
-    "classifies %s with convergence errored=%s and legacy status=%s",
+    "classifies %s with convergence errored=%s and update status=%s",
     async (failure, errored, status, kind, reason) => {
       await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
         await state.writeConfig({ plugins: { enabled: false } });
@@ -187,9 +187,9 @@ describe("post-core plugin payload degradation", () => {
 
 describe("failed cohort repair requirement assessment", () => {
   it.each(["required", "unknown", "optional"] as const)(
-    "does not hide a %s payload disabled by the real failed repair",
+    "keeps an unavailable %s payload visible after the real failed repair",
     async (requirement) => {
-      await withOpenClawTestState({ label: `disabled-repair-${requirement}` }, async (state) => {
+      await withOpenClawTestState({ label: `unavailable-repair-${requirement}` }, async (state) => {
         const pluginId = "cohort-broken";
         const installPath = state.path("missing-package");
         const records: Record<string, PluginInstallRecord> = {
@@ -239,13 +239,12 @@ describe("failed cohort repair requirement assessment", () => {
                 expect(result.npm.outcomes).toContainEqual(
                   expect.objectContaining({
                     pluginId,
-                    status: "skipped",
-                    message: expect.stringContaining("after plugin update failure"),
+                    status: "error",
                   }),
                 );
                 const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
                 expect(persisted.plugins.entries[pluginId]).toMatchObject({
-                  enabled: false,
+                  enabled: true,
                   config: { retained: "authored" },
                 });
                 expect(result.reason).toBeUndefined();
@@ -253,15 +252,19 @@ describe("failed cohort repair requirement assessment", () => {
                 expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
                 expect(result).toMatchObject({
                   status: "warning",
-                  assessment: {
-                    kind: "unsafe",
-                    reason:
-                      requirement === "required"
-                        ? "required-plugin-unavailable"
-                        : requirement === "unknown"
-                          ? "plugin-requirement-unknown"
-                          : "plugin-disabled-after-update",
-                  },
+                  assessment:
+                    requirement === "optional"
+                      ? {
+                          kind: "optional-repair-needed",
+                          failures: [expect.objectContaining({ pluginId, installPath })],
+                        }
+                      : {
+                          kind: "unsafe",
+                          reason:
+                            requirement === "required"
+                              ? "required-plugin-unavailable"
+                              : "plugin-requirement-unknown",
+                        },
                 });
               },
             );

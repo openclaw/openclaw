@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -23,7 +24,10 @@ import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { sleep } from "../../utils.js";
-import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  UnavailablePluginHealthSummary,
+} from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
 export type GatewayRestartProbeAuth = {
@@ -37,6 +41,7 @@ export type GatewayReachability = {
   gatewayBootId?: string;
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
+  unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
 };
@@ -215,6 +220,27 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
   return errors;
 }
 
+function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
+  const unavailable = asOptionalRecord(asOptionalRecord(health)?.plugins)?.unavailable;
+  if (!Array.isArray(unavailable)) {
+    return [];
+  }
+  return unavailable.flatMap((entry) => {
+    const plugin = asOptionalRecord(entry);
+    const diagnostic = asOptionalRecord(plugin?.diagnostic);
+    if (
+      typeof plugin?.id !== "string" ||
+      plugin.state !== "configured-unavailable" ||
+      diagnostic?.kind !== "plugin-verification" ||
+      typeof diagnostic.reason !== "string" ||
+      typeof diagnostic.detail !== "string"
+    ) {
+      return [];
+    }
+    return [{ id: plugin.id, reason: diagnostic.reason, detail: diagnostic.detail }];
+  });
+}
+
 export async function confirmGatewayReachable(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
@@ -230,6 +256,7 @@ export async function confirmGatewayReachable(params: {
     gatewayVersion: null,
     gatewayBuildId: undefined,
     activatedPluginErrors: [],
+    unavailablePlugins: [],
     channelProbeErrors: [],
   };
   try {
@@ -271,6 +298,7 @@ export async function confirmGatewayReachable(params: {
     });
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
+    result.unavailablePlugins = readUnavailablePlugins(health);
     result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
     params.signal?.throwIfAborted();

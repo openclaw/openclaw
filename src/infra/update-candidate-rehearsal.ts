@@ -152,6 +152,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
       XDG_STATE_HOME: path.join(tempDir, "state"),
       OPENCLAW_HOME: tempDir,
       OPENCLAW_STATE_DIR: tempDir,
+      // Validation must resolve the candidate SDK, not the source launcher's checkout.
+      OPENCLAW_DEV_SOURCE_ROOT: params.candidateRoot,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_WORKSPACE_DIR: workspaceDir,
       OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),

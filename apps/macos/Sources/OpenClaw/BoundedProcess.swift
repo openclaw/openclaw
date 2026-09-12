@@ -1,5 +1,4 @@
 import Darwin
-import Dispatch
 import Foundation
 import Subprocess
 
@@ -18,97 +17,6 @@ enum BoundedProcess {
     private enum DeadlineOutcome: Sendable {
         case exited
         case timedOut
-    }
-
-    private final class ProcessExitSignal: @unchecked Sendable {
-        private let lock = NSLock()
-        private let processIdentifier: pid_t
-        private let source: DispatchSourceProcess?
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var finished = false
-
-        init(processIdentifier: pid_t) {
-            self.processIdentifier = processIdentifier
-            if Self.hasExited(processIdentifier) {
-                self.source = nil
-                self.finished = true
-                return
-            }
-            let source = DispatchSource.makeProcessSource(
-                identifier: processIdentifier,
-                eventMask: .exit,
-                queue: .global(qos: .utility))
-            self.source = source
-            source.setEventHandler { [weak self] in
-                self?.finish()
-            }
-            source.resume()
-            // The child can exit between the initial waitid probe and kqueue
-            // registration. Recheck after resume so that race cannot consume
-            // the full timeout when no NOTE_EXIT event is delivered.
-            if Self.hasExited(processIdentifier) {
-                self.finish()
-            }
-        }
-
-        func wait() async {
-            await withTaskCancellationHandler {
-                await withCheckedContinuation { continuation in
-                    self.lock.lock()
-                    guard !self.finished else {
-                        self.lock.unlock()
-                        continuation.resume()
-                        return
-                    }
-                    self.continuation = continuation
-                    self.lock.unlock()
-                }
-            } onCancel: {
-                self.finish()
-            }
-        }
-
-        func pollUntilExit() async {
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .milliseconds(50))
-                } catch {
-                    return
-                }
-                if Self.hasExited(self.processIdentifier) {
-                    self.finish()
-                    return
-                }
-            }
-        }
-
-        func hasExited() -> Bool {
-            Self.hasExited(self.processIdentifier)
-        }
-
-        private func finish() {
-            self.lock.lock()
-            guard !self.finished else {
-                self.lock.unlock()
-                return
-            }
-            self.finished = true
-            let continuation = self.continuation
-            self.continuation = nil
-            self.lock.unlock()
-            self.source?.cancel()
-            continuation?.resume()
-        }
-
-        private static func hasExited(_ processIdentifier: pid_t) -> Bool {
-            while true {
-                var info = siginfo_t()
-                if waitid(P_PID, id_t(processIdentifier), &info, WEXITED | WNOHANG | WNOWAIT) == 0 {
-                    return info.si_pid != 0 || info.si_signo != 0
-                }
-                guard errno == EINTR else { return false }
-            }
-        }
     }
 
     static func run(
@@ -141,17 +49,11 @@ enum BoundedProcess {
             output: .bytes(limit: self.outputLimit),
             error: standardError)
         { execution in
-            let exitSignal = ProcessExitSignal(
+            let exitSignal = ChildProcessExit(
                 processIdentifier: pid_t(execution.processIdentifier.value))
             let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
                 group.addTask {
                     await exitSignal.wait()
-                    return .exited
-                }
-                // Keep normal exits event-driven, but recover promptly if
-                // kqueue misses NOTE_EXIT under heavy concurrent spawning.
-                group.addTask {
-                    await exitSignal.pollUntilExit()
                     return .exited
                 }
                 group.addTask {

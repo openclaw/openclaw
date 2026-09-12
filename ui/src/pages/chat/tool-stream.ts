@@ -119,6 +119,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     type: "toolcall",
     name: entry.name,
     arguments: entry.args ?? {},
+    ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
     ...(entry.details !== undefined ? { details: entry.details } : {}),
   });
   // Emit the result block whenever a result landed, even with empty output;
@@ -128,6 +129,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       type: "toolresult",
       name: entry.name,
       text: entry.output ?? "",
+      ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
       ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
       ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
@@ -537,6 +539,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   const args = phase === "start" ? data.args : undefined;
+  const parentToolCallId = toTrimmedString(data.parentToolCallId) ?? undefined;
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)
@@ -569,6 +572,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry = {
       toolCallId,
       runId: payload.runId,
+      ...(parentToolCallId ? { parentToolCallId } : {}),
       sessionKey,
       name,
       args,
@@ -586,6 +590,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
+    entry.parentToolCallId ??= parentToolCallId;
     if (args !== undefined) {
       entry.args = args;
     }

@@ -215,10 +215,6 @@ describe("ClawHub chat recommendations", () => {
         expect(card.querySelector("img")!.hidden).toBe(false);
       } else {
         card.querySelector("img")!.dispatchEvent(new Event("error"));
-        await vi.waitFor(() =>
-          expect(card.querySelector("img")?.getAttribute("src")).toBe("/plugin-art/whatsapp.webp"),
-        );
-        card.querySelector("img")!.dispatchEvent(new Event("error"));
         catalog.resolve("blob:catalog");
         await vi.waitFor(() =>
           expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:catalog"),
@@ -233,16 +229,15 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it("uses bundled first-party WhatsApp artwork before installation without a registry image URL", async () => {
+  it("uses a generic placeholder before installation without a package image", async () => {
     const result = detail(false);
     Object.assign(result.plugin.catalog, { packageName: "@openclaw/whatsapp" });
     const { card } = mount(async () => result);
     await vi.waitFor(() =>
-      expect(card.querySelector("img")?.getAttribute("src")).toBe("/plugin-art/whatsapp.webp"),
+      expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull(),
     );
-    expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
-    card.querySelector("img")!.dispatchEvent(new Event("load"));
-    await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+    expect(card.querySelector(".skeleton")).toBeNull();
+    expect(card.querySelector("img")).toBeNull();
     expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe("Install");
     expect(iconFetch.plugin).not.toHaveBeenCalled();
   });

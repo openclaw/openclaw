@@ -92,9 +92,9 @@ function managedRepairSpawnPreload(root: string): string {
     const spawn = childProcess.spawn;
     const snapshotWorkerArgs = ${JSON.stringify(snapshotWorkerArgs)};
     childProcess.spawn = function(command, args, options) {
-      // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned supervisor workers.
+      // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned repair and supervisor workers.
       if (command === process.execPath && Array.isArray(args) && args.length === 1 &&
-          ${JSON.stringify([runtimeProcessEntrypoints.serviceChildRelay, runtimeProcessEntrypoints.serviceChildGroupAnchor].map((entry) => path.resolve("dist", entry.distWorkerPath)))}.includes(args[0])) {
+          ${JSON.stringify([...[runtimeProcessEntrypoints.serviceChildRelay, runtimeProcessEntrypoints.serviceChildGroupAnchor].map((entry) => path.resolve("dist", entry.distWorkerPath)), path.join(root, "candidate", "dist", runtimeProcessEntrypoints.updateRepair.distWorkerPath)])}.includes(args[0])) {
         args = ["--require", __filename, ...args];
       }
       // Source orchestration consumes the packaged SQLite worker from the completed build.

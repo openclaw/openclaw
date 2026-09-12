@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -112,11 +113,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const {
-    collectOpenAICodexAuthProfileStoreIdMap,
-    maybeMigrateAuthProfileJsonStoresToSqlite,
-    maybeRepairOpenAICodexAuthConfig,
-  } = await import("../commands/doctor-auth-flat-profiles.js");
+  const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
@@ -135,27 +132,25 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
-  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-  });
-  const authConfigCandidate = maybeRepairOpenAICodexAuthConfig(ctx.cfg, {
-    profileIdMap: openAICodexAuthProfileIdMap,
-  }).config;
-  const authProfileMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
-    cfg: authConfigCandidate,
-    prompter: ctx.prompter,
-    openAICodexAuthProfileIdMap,
-    ...(ctx.env ? { env: ctx.env } : {}),
-  });
-  emitDoctorNotes({
-    note,
-    changeNotes: authProfileMigration.changes,
-    warningNotes: authProfileMigration.warnings,
-  });
-  if (authProfileMigration.configOwnerMigrationApplied) {
-    // The candidate is safe only after the migration verifies and archives its source.
-    ctx.cfg = authConfigCandidate;
+  if (ctx.configResult.openAICodexAuthProfileIdMap === undefined) {
+    const authRepair = await repairAuthProfileMigration({
+      cfg: ctx.cfg,
+      env: ctx.env,
+      prompter: ctx.prompter,
+    });
+    emitDoctorNotes({
+      note,
+      changeNotes: authRepair.storeChanges,
+      warningNotes: authRepair.warnings,
+    });
+    ctx.cfg = authRepair.config;
+    ctx.configResult.openAICodexAuthProfileIdMap = authRepair.profileIdMap;
+    if (authRepair.changes.length > 0) {
+      ctx.configResult.pendingChangePanels = [
+        ...(ctx.configResult.pendingChangePanels ?? []),
+        authRepair.changes.join("\n"),
+      ];
+    }
   }
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
@@ -187,7 +182,10 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     runtime: ctx.runtime,
   });
   let authProfileHealthReady = true;
-  if (ctx.configResult.retiredAuthProfileCleanupPlans?.length) {
+  if (
+    ctx.configResult.retiredAuthProfileCleanupPlans?.length ||
+    ctx.configResult.openAICodexAuthProfileIdMap?.size
+  ) {
     const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
       await import("./doctor-health-contribution-runners.config.js");
     await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
@@ -563,7 +561,11 @@ async function runDoctorHealthContributionList(
         return;
       }
     } catch (error) {
-      if (contribution.required || error instanceof DoctorStateMigrationRefusalError) {
+      if (
+        contribution.required ||
+        error instanceof DoctorStateMigrationRefusalError ||
+        error instanceof ConfigWritePostCommitError
+      ) {
         throw error;
       }
       const { note } = await loadNoteModule();

@@ -43,7 +43,7 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
-import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
+import { cronRunReceiptMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
@@ -246,11 +246,19 @@ async function persistUpdatedJob(params: {
   const ownerChanged =
     resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
     resolveEffectiveJobAgentId(nextJob, defaultAgentId);
+  const triggerStateChanged =
+    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
+    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
+      !isDeepStrictEqual(previousJob.payload, nextJob.payload));
   await persistOrRestore(state, snapshot, {
     suppressScheduledJobId: nextJob.id,
-    transactionHooks: ownerChanged
-      ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
-      : undefined,
+    transactionHooks: cronRunReceiptMutationHooks({
+      state,
+      jobId: nextJob.id,
+      ownerChanged,
+      triggerStateChanged,
+    }),
   });
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
@@ -260,12 +268,7 @@ async function persistUpdatedJob(params: {
   if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
     requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
   }
-  if (
-    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
-    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
-    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
-      !isDeepStrictEqual(previousJob.payload, nextJob.payload))
-  ) {
+  if (triggerStateChanged) {
     // Trigger/script definitions and shared-state edits retire the admitted
     // state writer; otherwise an obsolete evaluation or script wins later.
     noteActiveCronJobTriggerMutation(nextJob.id);

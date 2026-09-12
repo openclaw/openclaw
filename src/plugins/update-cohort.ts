@@ -103,7 +103,7 @@ export async function convergePluginReleaseCohort(params: {
       versionBoundPluginIds: params.versionBoundPluginIds,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
-      disableOnFailure: true,
+      retainOnUnavailable: true,
       logger: params.logger,
       onIntegrityDrift: params.onIntegrityDrift,
       onCapabilityConsent: params.onCapabilityConsent,
@@ -129,7 +129,7 @@ export async function convergePluginReleaseCohort(params: {
     versionBoundPluginIds: params.versionBoundPluginIds,
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
-    disableOnFailure: true,
+    retainOnUnavailable: true,
     logger: params.logger,
     onIntegrityDrift: params.onIntegrityDrift,
     onCapabilityConsent: params.onCapabilityConsent,
@@ -173,7 +173,9 @@ export async function convergePluginReleaseCohort(params: {
     missingPayloads,
     repairedMissingPayloadIds,
     repairOutcomes,
-    updateOutcomes: update.outcomes,
+    updateOutcomes: update.outcomes.filter(
+      (outcome) => outcome.status !== "skipped" || !repairedMissingPayloadIds.has(outcome.pluginId),
+    ),
     remainingMissingPayloads: await collectMissingPluginInstallPayloads({
       records: config.plugins?.installs ?? {},
       config,

@@ -61,7 +61,11 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
-import { createConfigValidationFailedError } from "./io.write-errors.js";
+import {
+  ConfigWritePostCommitError,
+  createConfigValidationFailedError,
+  type ConfigWriteRollbackStatus,
+} from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
@@ -454,6 +458,8 @@ export async function writeConfigFileFromContext(
     });
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
+  let committed = false;
+  let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
     const beforeCommit = options.beforeCommit;
     const guardedFs = createGuardedConfigFileSystem(
@@ -512,23 +518,27 @@ export async function writeConfigFileFromContext(
         });
       },
     });
+    committed = true;
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {
       try {
         // A post-publication refusal cannot grant a stale executor compensation.
         sourceGuard?.();
-        await rollbackConfigFileWriteIfUnchanged({
+        const rolledBack = await rollbackConfigFileWriteIfUnchanged({
           configPath,
           previousSnapshot: snapshot,
           committedHash: nextHash,
           fsModule: deps.fs,
           assertCurrent: sourceGuard,
         });
+        rollbackStatus = rolledBack ? "restored" : "not-restored";
       } catch (rollbackError) {
-        throw new ConfigRuntimeRefreshError(
-          `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: error },
+        rollbackStatus = "unknown";
+        throw new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+          { cause: rollbackError },
         );
       }
       throw error;
@@ -620,25 +630,41 @@ export async function writeConfigFileFromContext(
       },
     };
   } catch (error) {
+    let failure = error;
     try {
-      sourceGuard?.();
-    } catch (ownershipError) {
-      if (ownershipError === error) {
+      try {
+        sourceGuard?.();
+      } catch (ownershipError) {
+        if (ownershipError === error) {
+          throw error;
+        }
+        throw new AggregateError(
+          [error, ownershipError],
+          "Config write failed after source ownership changed",
+          { cause: ownershipError },
+        );
+      }
+      try {
+        writeOptions.assertConfigPathForWrite?.();
+      } catch {
+        // Lost path provenance forbids auditing, but does not replace the original failure.
         throw error;
       }
-      throw new AggregateError(
-        [error, ownershipError],
-        "Config write failed after source ownership changed",
-        { cause: ownershipError },
-      );
+      try {
+        await appendWriteAudit("failed", error);
+      } catch (auditError) {
+        throw new AggregateError(
+          [error, auditError],
+          `${formatErrorMessage(error)} Failure auditing failed: ${formatErrorMessage(auditError)}`,
+          { cause: auditError },
+        );
+      }
+    } catch (failureDuringAudit) {
+      failure = failureDuringAudit;
     }
-    try {
-      writeOptions.assertConfigPathForWrite?.();
-    } catch {
-      // Lost path provenance forbids auditing, but does not replace the original failure.
-      throw error;
+    if (!committed) {
+      throw failure;
     }
-    await appendWriteAudit("failed", error);
-    throw error;
+    throw new ConfigWritePostCommitError({ configPath, rollbackStatus, cause: failure });
   }
 }

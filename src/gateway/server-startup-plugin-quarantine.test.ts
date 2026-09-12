@@ -401,8 +401,7 @@ describe("updater plugin degradation with a running source Gateway", () => {
         }),
       );
     const result = await update();
-    // The legacy convergence error remains an error even with optional repair evidence.
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("warning");
     expect(result.reason).toBeUndefined();
     expect(result.assessment).toMatchObject({
       kind: "optional-repair-needed",
@@ -414,7 +413,10 @@ describe("updater plugin degradation with a running source Gateway", () => {
       expect.objectContaining({ pluginId, status: "error" }),
     );
 
-    expect(applyPostPluginConfigValidation(result, false)).toBe(result);
+    expect(applyPostPluginConfigValidation(result, false)).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+    });
     const { loadOpenClawPlugins } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const loadGeneration = () =>

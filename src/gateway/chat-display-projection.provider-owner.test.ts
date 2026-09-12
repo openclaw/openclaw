@@ -37,3 +37,43 @@ it("projects the persisted storage failure with actionable copy", () => {
     ],
   });
 });
+
+it("shows the upstream cache limit in persisted history without proxy metadata", () => {
+  const errorBody = JSON.stringify({
+    error: {
+      message: "All target providers failed.",
+      target_provider_names: ["PRIVATE_ROUTING_NAME"],
+      attempts: [
+        {
+          status: 400,
+          details: {
+            error: {
+              type: "invalid_request_error",
+              message: "A maximum of 4 blocks with cache_control may be provided. Found 5.",
+            },
+          },
+        },
+      ],
+    },
+  });
+  const projected = projectChatDisplayMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorCode: "400",
+    errorMessage: `400: ${errorBody}`,
+    errorBody,
+    content: [],
+  });
+  expect(projected).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "LLM request rejected: provider allows at most 4 cache_control blocks; the request contained 5.",
+      },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_ROUTING_NAME");
+  expect(projected).not.toHaveProperty("errorBody");
+  expect(projected).not.toHaveProperty("errorMessage");
+  expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+});

@@ -130,7 +130,7 @@ export type SessionPreviewItem = {
 
 export type SessionsPreviewEntry = {
   key: string;
-  status: "ok" | "empty" | "missing" | "error";
+  status: "ok" | "empty" | "missing" | "cold" | "error";
   items: SessionPreviewItem[];
 };
 

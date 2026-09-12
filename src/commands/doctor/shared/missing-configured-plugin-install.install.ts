@@ -103,10 +103,11 @@ export async function installCandidate(params: {
     return result;
   } catch (error) {
     consent.rethrowCallbackError();
-    if (
-      !(error instanceof ManagedPluginLifecycleError) &&
-      !(error instanceof NpmChannelResolutionError)
-    ) {
+    if (error instanceof ManagedPluginLifecycleError) {
+      if (error.kind === "invalid-request" && !error.capabilityConsent) {
+        throw error;
+      }
+    } else if (!(error instanceof NpmChannelResolutionError)) {
       throw error;
     }
     return {

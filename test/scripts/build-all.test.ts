@@ -975,6 +975,36 @@ describe("resolveBuildAllSteps", () => {
   });
 
   describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
+      const env = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        OPENCLAW_UPDATE_IN_PROGRESS: marker,
+      };
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.timings.map((timing) => timing.label)).toContain("plugins:assets:build");
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+          marker === "1" ? process.cwd() : "/serving-checkout",
+        );
+      }
+      expect(env).toEqual(originalEnv);
+    });
+
     it.each([
       { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
       {

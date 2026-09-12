@@ -27,8 +27,50 @@ title: "Agent schema history"
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
 | 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
+| 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Cold transcript storage
+
+Agent schema **20** adds `session_transcript_cold_archives`. Session windows
+remain the identity owner; each cold row records the transcript generation,
+immutable archive name, compressed SHA-256, event and byte counts, last
+sequence, and archive time. Archives on disk use `storage: "file"` with no
+database blob. Supported backups embed verified compressed bytes in their
+private copies as `storage: "sqlite"`. Existing reset/deletion archives keep
+their separate table and behavior.
+
+The schema bump protects history semantics: an older reader would mistake
+extracted event rows for an empty transcript even though it could ignore the
+new table. Both `PRAGMA user_version` and `schema_meta.schema_version` advance
+through the existing migration owner. The supported updater runs the target
+build's Doctor phase under maintenance authority; ordinary active readers
+must not perform this migration. Migration creates the schema without
+extracting any transcripts. Extraction is disabled until
+`session.maintenance.coldStorage.enabled` is set.
+
+Take and verify a backup before upgrading. If migration fails, keep writers
+stopped and finish Doctor with the compatible build before restarting. The
+2026.9.2 updater cannot fence an agent schema bump; follow its
+[manual update path](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+Older builds refuse schema 20. Rollback requires the pre-upgrade backup and
+its matching build; do not lower version markers or drop the cold archive
+table. Restoring cold events alone does not make the newer schema a supported
+downgrade.
+
+After an interrupted update, the agent database maintenance lease can remain
+valid for up to 60 seconds. If Doctor reports a maintenance lease timeout,
+keep writers stopped, allow that lease to expire, then run
+[`openclaw update repair`](/cli/update/repair-and-recovery#update-repair)
+from the compatible installation. The package may already have been replaced
+even when the schema transaction rolled back. Do not delete lease records or
+change schema markers to bypass recovery.
+
+See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+for retention, missing-file recovery, and physical space reclamation, and
+[cold transcript backups](/install/backups#cold-transcript-backups) for portable
+restoration without the source archive directory.
 
 ### Creator namespace migration
 

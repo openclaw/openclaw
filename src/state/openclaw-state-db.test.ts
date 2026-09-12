@@ -6186,6 +6186,101 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(database?.walMaintenance.close()).toBe(false);
   });
 
+  it("retains a read-only snapshot until its failed native close succeeds", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+    if (!database) {
+      throw new Error("Expected the existing state snapshot");
+    }
+    const privatePath = database.db.location();
+    if (!privatePath) {
+      throw new Error("Expected a filesystem-backed snapshot");
+    }
+    const privateDirectory = path.dirname(privatePath);
+    const failure = new Error("snapshot native close failed");
+    const close = vi.spyOn(database.db, "close").mockImplementationOnce(() => {
+      throw failure;
+    });
+    try {
+      expect(() => database.walMaintenance.close()).toThrow(failure);
+      expect(database.db.isOpen).toBe(true);
+      expect(fs.existsSync(privateDirectory)).toBe(true);
+      expect(database.walMaintenance.close()).toBe(true);
+      expect(database.db.isOpen).toBe(false);
+      expect(fs.existsSync(privateDirectory)).toBe(false);
+      expect(database.walMaintenance.close()).toBe(false);
+    } finally {
+      close.mockRestore();
+      database.walMaintenance.close();
+    }
+  });
+
+  it("retains refused snapshot cleanup for lifecycle retry without hiding the schema error", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const futureVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    const source = new DatabaseSync(databasePath);
+    source.exec(`PRAGMA user_version = ${futureVersion}`);
+    source.close();
+    const readers = new Set<DatabaseSync>();
+    let privateDirectory: string | undefined;
+    let refuseClose = true;
+    const sqlite = await import("../infra/node-sqlite.js");
+    const openNative = sqlite.openNodeSqliteDatabase;
+    const open = vi
+      .spyOn(sqlite, "openNodeSqliteDatabase")
+      .mockImplementation((location, options) => {
+        const reader = openNative(location, options);
+        const readerPath = reader.location();
+        if (
+          options?.readOnly &&
+          readerPath &&
+          readerPath !== databasePath &&
+          reader.prepare("PRAGMA user_version").get()?.user_version === futureVersion
+        ) {
+          readers.add(reader);
+          privateDirectory = path.dirname(readerPath);
+          const closeNative = reader.close.bind(reader);
+          reader.close = () => {
+            if (refuseClose) {
+              throw new Error("refused snapshot native close failed");
+            }
+            closeNative();
+          };
+        }
+        return reader;
+      });
+    try {
+      await expect(
+        openExistingOpenClawStateDatabaseReadOnly({ path: databasePath }),
+      ).rejects.toMatchObject({ name: "SqliteSchemaVersionError" });
+      const reader = readers.values().next().value;
+      if (!reader || !privateDirectory) {
+        throw new Error("Expected the refused private snapshot reader");
+      }
+      expect(reader.isOpen).toBe(true);
+      expect(fs.existsSync(privateDirectory)).toBe(true);
+      refuseClose = false;
+      closeOpenClawStateDatabaseForTest();
+      expect(reader.isOpen).toBe(false);
+      expect(fs.existsSync(privateDirectory)).toBe(false);
+    } finally {
+      refuseClose = false;
+      open.mockRestore();
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } finally {
+        for (const reader of readers) {
+          if (reader.isOpen) {
+            reader.close();
+          }
+        }
+      }
+    }
+  });
+
   it("reads committed live WAL rows without changing source database content", async () => {
     const stateDir = createTempStateDir();
     const writer = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });

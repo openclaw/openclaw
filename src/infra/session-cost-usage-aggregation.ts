@@ -492,6 +492,9 @@ async function scanSqliteUsageRollup(params: {
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   };
+  const { restoreSessionColdTranscript } =
+    await import("../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(scope);
   const snapshotLastRow = maxSeq > 0 ? readTranscriptEventAtSeqSync(scope, maxSeq) : undefined;
   if (maxSeq > 0 && !snapshotLastRow) {
     throw new Error(`SQLite transcript checkpoint unavailable: ${params.file.filePath}`);
