@@ -162,6 +162,8 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(12);
         expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(0);
         await expectWorkspace();
+        expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(0);
+        expect(await sidebar.locator(".sidebar-agent-roster__filter button").count()).toBe(1);
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
@@ -290,9 +292,55 @@ suite.define(() => {
           .toBe("false");
         await expect.poll(() => sessionRows.count()).toBe(9);
         await expectWorkspace();
-        await sidebar.getByRole("link", { name: "See all", exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "agents-home", pathname: "/agents" });
-        await expect.poll(() => page.locator(".agents-home__card").count()).toBe(4);
+        const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
+        const actions = forgeGroup.locator(".sidebar-agent-roster__actions");
+        await forgeGroup.locator(".sidebar-agent-roster__row").focus();
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => actions.locator("a").evaluate((el) => el === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("Tab");
+        const options = actions.getByRole("button", { name: "Options for Forge" });
+        await expect.poll(() => options.evaluate((el) => el === document.activeElement)).toBe(true);
+        await page.keyboard.press("Space");
+        await actions.getByRole("menuitem", { name: "All sessions", exact: true }).waitFor();
+        expect(await actions.locator("wa-dropdown-item").allTextContents()).toEqual([
+          expect.stringContaining("Open main chat"),
+          expect.stringContaining("All sessions"),
+          expect.stringContaining("Collapse others"),
+        ]);
+        await actions.getByRole("menuitem", { name: "All sessions", exact: true }).click();
+        await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("sessions.list")).map((request) => request.params),
+          )
+          .toEqual(expect.arrayContaining([expect.objectContaining({ agentId: "forge" })]));
+        await expect
+          .poll(() =>
+            page
+              .locator(".agent-scope-control openclaw-agent-select")
+              .evaluate((el: HTMLElement & { value?: string }) => el.value),
+          )
+          .toBe("forge");
+        await options.press("Enter");
+        await actions.getByRole("menuitem", { name: "Collapse others", exact: true }).click();
+        await expect
+          .poll(() => sidebar.locator('[data-agent-collapse][aria-expanded="false"]').count())
+          .toBe(3);
+        expect(
+          await forgeGroup.locator("[data-agent-collapse]").getAttribute("aria-expanded"),
+        ).toBe("true");
+        await page.reload();
+        await expect
+          .poll(() => sidebar.locator('[data-agent-collapse][aria-expanded="false"]').count())
+          .toBe(3);
+        await options.press("Enter");
+        await actions.getByRole("menuitem", { name: "Open main chat", exact: true }).click();
+        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/forge" });
+        await actions.locator("a").press("Space");
+        await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
+        expect(new URL(page.url()).searchParams.get("agent")).toBe("forge");
         await workspace.click();
         await modeToggle.press("Enter");
         await expect.poll(() => headers.count()).toBe(0);

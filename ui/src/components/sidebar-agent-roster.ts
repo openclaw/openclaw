@@ -16,7 +16,7 @@ import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
-import { renderSessionTreeSummary } from "./session-attention-presentation.ts";
+import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import "../styles/sidebar-agent-roster.css";
 
 registerAgentsHomeEnglish();
@@ -65,6 +65,10 @@ class SidebarAgentRoster extends AgentRosterElement {
     if (!collapsed.delete(id)) {
       collapsed.add(id);
     }
+    this.setCollapsedAgents(collapsed);
+  }
+
+  private setCollapsedAgents(collapsed: Set<string>) {
     patchSettings(
       {
         gatewayUrl: this.context.gateway.connection.gatewayUrl,
@@ -80,17 +84,6 @@ class SidebarAgentRoster extends AgentRosterElement {
       const cards = this.cards();
       const error = this.roster.error ?? this.roster.subscriptionError;
       const newSessionAccess = this.host.readNewSessionAccess();
-      const seeAll = html`<a
-        class="sidebar-agent-roster__link"
-        href=${pathForRoute("agents-home", this.host.basePath)}
-        @click=${(event: MouseEvent) => {
-          if (shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            this.host.onNavigate?.("agents-home");
-          }
-        }}
-        >${t("agentsHome.seeAll")}</a
-      >`;
       return renderSessionListFrame(
         this.host,
         html`<div class="sidebar-agent-roster">
@@ -141,16 +134,86 @@ class SidebarAgentRoster extends AgentRosterElement {
                     <span class="sidebar-agent-roster__copy"><span>${card.name}</span></span>
                   </a>
                   <span class="sidebar-agent-roster__signals">
-                    ${renderSessionTreeSummary(summaryRows)}
+                    ${
+                      collapsed
+                        ? renderTeamSessionSlots(
+                            summaryRows,
+                            true,
+                            summaryRows.length,
+                            summaryRows.reduce(
+                              (count, row) => count + (row.workspaceConflictCount ?? 0),
+                              0,
+                            ),
+                          )
+                        : nothing
+                    }
                   </span>
-                  ${renderNewSessionLink({
-                    basePath: this.host.basePath,
-                    agentId: card.id,
-                    className: "sidebar-agent-roster__action sidebar-agent-roster__new",
-                    label: `${t("agentChip.newConversation")}: ${card.name}`,
-                    disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                    onOpen: (id, target) => this.host.requestOpenNewSession(id, target),
-                  })}
+                  <span
+                    class="sidebar-agent-roster__actions"
+                    @keydown=${(event: KeyboardEvent) => {
+                      if (event.key === " " && event.target instanceof HTMLAnchorElement) {
+                        event.preventDefault();
+                        event.target.click();
+                      }
+                    }}
+                  >
+                    ${renderNewSessionLink({
+                      basePath: this.host.basePath,
+                      agentId: card.id,
+                      className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                      label: `${t("agentChip.newConversation")}: ${card.name}`,
+                      disabledReason: newSessionAccess.allowed
+                        ? undefined
+                        : newSessionAccess.reason,
+                      onOpen: (id, target) => this.host.requestOpenNewSession(id, target),
+                    })}
+                    <wa-dropdown
+                      placement="bottom-end"
+                      @wa-show=${() => this.host.dismissTransientMenus()}
+                      @wa-select=${(
+                        event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+                      ) => {
+                        switch (event.detail.item.value) {
+                          case "main":
+                            this.host.openMainSession(card.id);
+                            break;
+                          case "sessions":
+                            this.context.agentSelection.setScope(card.id);
+                            this.host.onNavigate?.("sessions");
+                            break;
+                          case "collapse-others":
+                            this.setCollapsedAgents(
+                              new Set(
+                                cards
+                                  .filter((other) => other.id !== card.id)
+                                  .map((other) => other.id),
+                              ),
+                            );
+                            break;
+                          default:
+                            break;
+                        }
+                      }}
+                    >
+                      <button
+                        slot="trigger"
+                        type="button"
+                        class="sidebar-agent-roster__action"
+                        aria-label=${t("agentsHome.agentOptions", { agent: card.name })}
+                      >
+                        ${icons.moreHorizontal}
+                      </button>
+                      <wa-dropdown-item value="main"
+                        >${t("agentsHome.openMainChat")}</wa-dropdown-item
+                      >
+                      <wa-dropdown-item value="sessions"
+                        >${t("agentsHome.allSessions")}</wa-dropdown-item
+                      >
+                      <wa-dropdown-item value="collapse-others"
+                        >${t("agentsHome.collapseOthers")}</wa-dropdown-item
+                      >
+                    </wa-dropdown>
+                  </span>
                 </div>
                 ${
                   collapsed
@@ -167,7 +230,6 @@ class SidebarAgentRoster extends AgentRosterElement {
             },
           )}
         </div>`,
-        html`${seeAll}${renderSidebarNewSessionMenu(this.host, "sidebar-session-toolbar__button sidebar-new-session")}`,
       );
     });
   }

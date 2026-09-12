@@ -21,7 +21,7 @@ describe("AppSidebar agent roster", () => {
       })),
     ),
   )(
-    "shows each status once for a $parentState parent and queued descendants (mixed=$mixed)",
+    "reserves one prioritized state slot for a $parentState parent and descendants (mixed=$mixed)",
     async ({ mixed, parentState }) => {
       const parent = "agent:working:parent";
       const { sidebar } = await mountRoster(roster, [
@@ -65,13 +65,17 @@ describe("AppSidebar agent roster", () => {
       const row = sidebar.querySelector(`[data-session-key="${parent}"]`)!;
       const runningSelector =
         ".session-run-spinner, .session-glyph__ring:not(.session-glyph__ring--queued)";
-      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      const needsAttention = mixed || parentState === "failed";
+      expect(row.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+        !needsAttention && parentState !== "running" ? 1 : 0,
+      );
       expect(row.querySelectorAll(runningSelector)).toHaveLength(
-        mixed || parentState === "running" ? 1 : 0,
+        !needsAttention && parentState === "running" ? 1 : 0,
       );
       expect(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(row.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
       expect(row.querySelectorAll('[data-session-attention="error"]')).toHaveLength(
-        mixed || parentState === "failed" ? 1 : 0,
+        needsAttention ? 1 : 0,
       );
       sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
       await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:queued-child"));
@@ -89,9 +93,14 @@ describe("AppSidebar agent roster", () => {
       const header = sidebar.querySelector(
         '[data-agent-group="working"] .sidebar-agent-roster__signals',
       );
-      expect(header?.querySelector(".session-glyph__ring--queued")).not.toBeNull();
-      expect(header?.querySelectorAll(".session-run-spinner")).toHaveLength(
-        mixed || parentState === "running" ? 1 : 0,
+      expect(header?.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(
+        !needsAttention && parentState !== "running" ? 1 : 0,
+      );
+      expect(header?.querySelectorAll(runningSelector)).toHaveLength(
+        !needsAttention && parentState === "running" ? 1 : 0,
+      );
+      expect(header?.querySelectorAll('[data-session-attention="error"]')).toHaveLength(
+        needsAttention ? 1 : 0,
       );
     },
   );
@@ -328,7 +337,7 @@ describe("AppSidebar agent roster", () => {
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     await vi.waitFor(() =>
-      expect(sidebar.querySelectorAll("openclaw-sidebar-new-session-menu")).toHaveLength(2),
+      expect(sidebar.querySelectorAll("openclaw-sidebar-new-session-menu")).toHaveLength(1),
     );
     const store = rosterActivityStore(context);
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
@@ -358,147 +367,159 @@ describe("AppSidebar agent roster", () => {
     expect(listCount()).toBe(initial + 2);
   });
 
-  it("keeps independent descendant outcomes and decisions visible without turning the parent into a running session", async () => {
-    const parent = "agent:working:parent";
-    const branch = "agent:working:branch";
-    const key = (name: string) => `agent:working:${name}`;
-    const rows: GatewaySessionRow[] = [
-      session("working", 20, { key: parent, isMain: false, label: "Coordinate implementation" }),
-      session("working", 19, {
-        key: branch,
-        isMain: false,
-        spawnedBy: parent,
-        label: "Regression checks",
-      }),
-      ...(["done", "killed", "failed", "timeout"] as const).map((status, index) =>
-        session("working", 18 - index, {
-          key: key(status),
+  it.each([false, true])(
+    "keeps descendant conflicts separate from the parent state (running=%s)",
+    async (running) => {
+      const parent = "agent:working:parent";
+      const branch = "agent:working:branch";
+      const key = (name: string) => `agent:working:${name}`;
+      const rows: GatewaySessionRow[] = [
+        session("working", 20, {
+          key: parent,
+          isMain: false,
+          label: "Coordinate implementation",
+          hasActiveRun: running,
+        }),
+        session("working", 19, {
+          key: branch,
+          isMain: false,
+          spawnedBy: parent,
+          label: "Regression checks",
+        }),
+        ...(["done", "killed", "failed", "timeout"] as const).map((status, index) =>
+          session("working", 18 - index, {
+            key: key(status),
+            isMain: false,
+            spawnedBy: branch,
+            status,
+            label: status,
+            endedAt: 15,
+            lastRunError: status === "failed" ? "Check failed" : undefined,
+          }),
+        ),
+        session("working", 12, {
+          key: key("running"),
           isMain: false,
           spawnedBy: branch,
-          status,
-          label: status,
-          endedAt: 15,
-          lastRunError: status === "failed" ? "Check failed" : undefined,
+          hasActiveRun: true,
+          status: "running",
+          unread: true,
+          label: "Continue verification",
+          startedAt: Date.now() - 3_000,
         }),
-      ),
-      session("working", 12, {
-        key: key("running"),
-        isMain: false,
-        spawnedBy: branch,
-        hasActiveRun: true,
-        status: "running",
-        unread: true,
-        label: "Continue verification",
-        startedAt: Date.now() - 3_000,
-      }),
-      session("working", 11, {
-        key: key("approve"),
-        isMain: false,
-        spawnedBy: parent,
-        label: "Await permission",
-      }),
-      session("working", 10, {
-        key: key("question"),
-        isMain: false,
-        spawnedBy: parent,
-        label: "Choose next step",
-      }),
-      session("working", 9, {
-        key: key("conflict"),
-        isMain: false,
-        spawnedBy: branch,
-        label: "Reconcile workspace",
-        placement: {
-          state: "reclaimed",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 9,
-          stateChangedAtMs: 9,
-          workspaceResultConflict: {
-            paths: ["ui/layout.css"],
-            totalCount: 1,
-            stagedResultRef: "refs/openclaw/worker-results/test",
+        session("working", 11, {
+          key: key("approve"),
+          isMain: false,
+          spawnedBy: parent,
+          label: "Await permission",
+        }),
+        session("working", 10, {
+          key: key("question"),
+          isMain: false,
+          spawnedBy: parent,
+          label: "Choose next step",
+        }),
+        session("working", 9, {
+          key: key("conflict"),
+          isMain: false,
+          spawnedBy: branch,
+          label: "Reconcile workspace",
+          placement: {
+            state: "reclaimed",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 9,
+            stateChangedAtMs: 9,
+            workspaceResultConflict: {
+              paths: ["ui/layout.css"],
+              totalCount: 1,
+              stagedResultRef: "refs/openclaw/worker-results/test",
+            },
           },
-        },
-      }),
-    ];
-    const { sidebar, gatewayHarness } = await mountRoster(
-      roster,
-      rows,
-      undefined,
-      [],
-      [
-        {
-          id: "approval-stress",
-          kind: "exec",
-          request: { command: "git status", sessionKey: key("approve") },
-          createdAtMs: Date.now(),
-          expiresAtMs: Date.now() + 60_000,
-        },
-      ],
-    );
-    sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain(parent));
-    gatewayHarness.publishEvent("question.requested", {
-      id: "question-stress",
-      agentId: "working",
-      sessionKey: key("question"),
-      questions: [{ questionId: "next", header: "Next", question: "Continue?", options: [] }],
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      status: "pending",
-    });
-    const row = (name: string) => sidebar.querySelector(`[data-session-key="${name}"]`);
-    await vi.waitFor(() => {
-      expect(row(parent)?.querySelector('[data-session-attention="approval"]')).not.toBeNull();
-      expect(row(parent)?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+        }),
+      ];
+      const { sidebar, gatewayHarness } = await mountRoster(
+        roster,
+        rows,
+        undefined,
+        [],
+        [
+          {
+            id: "approval-stress",
+            kind: "exec",
+            request: { command: "git status", sessionKey: key("approve") },
+            createdAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      );
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain(parent));
+      gatewayHarness.publishEvent("question.requested", {
+        id: "question-stress",
+        agentId: "working",
+        sessionKey: key("question"),
+        questions: [{ questionId: "next", header: "Next", question: "Continue?", options: [] }],
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        status: "pending",
+      });
+      const row = (name: string) => sidebar.querySelector(`[data-session-key="${name}"]`);
+      await vi.waitFor(() => {
+        expect(row(parent)?.querySelector('[data-session-attention="approval"]')).not.toBeNull();
+        expect(
+          row(parent)?.querySelectorAll(
+            ".sidebar-session-team-state__status [data-session-attention]",
+          ),
+        ).toHaveLength(1);
+        expect(
+          row(parent)?.querySelector('.sidebar-session-team-state [aria-label="Unread"]'),
+        ).not.toBeNull();
+        expect(row(parent)?.querySelector('[data-workspace-conflicts="1"]')).not.toBeNull();
+      });
       expect(
-        row(parent)?.querySelector(".sidebar-tree-summary .session-run-spinner"),
+        row(parent)?.querySelector(".sidebar-session-team-state .session-glyph__ring"),
+      ).toBeNull();
+      expect(row(parent)?.querySelector(".sidebar-child-session-toggle__count")?.textContent).toBe(
+        "3",
+      );
+      sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
+      await vi.waitFor(() => expect(row(branch)).not.toBeNull());
+      expect(
+        row(parent)?.querySelectorAll(".sidebar-session-team-state__status .session-glyph__ring"),
+      ).toHaveLength(running ? 1 : 0);
+      expect(row(parent)?.querySelector(".sidebar-session-team-state__status svg")).toBeNull();
+      sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${branch}"]`)?.click();
+      await vi.waitFor(() => expect(row(key("running"))).not.toBeNull());
+      for (const status of ["done", "killed", "failed", "timeout"]) {
+        expect(
+          row(key(status))?.querySelector(
+            status === "done" || status === "killed"
+              ? `.sidebar-child-session__status--${status}`
+              : '[data-session-attention="error"]',
+          ),
+        ).not.toBeNull();
+      }
+      expect(
+        row(key("running"))?.querySelector(".sidebar-session-team-state .session-glyph__ring"),
+      ).not.toBeNull();
+      expect(row(key("running"))?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(
+        row(key("running"))?.querySelector(".session-row-trail openclaw-elapsed-time"),
       ).not.toBeNull();
       expect(
-        row(parent)?.querySelector('.sidebar-tree-summary [aria-label="Unread"]'),
-      ).not.toBeNull();
-      expect(row(parent)?.querySelector('[data-workspace-conflicts="1"]')).not.toBeNull();
-    });
-    expect(
-      row(parent)?.querySelector(".sidebar-session-team-state .session-glyph__ring"),
-    ).toBeNull();
-    expect(row(parent)?.querySelector(".sidebar-child-session-toggle__count")?.textContent).toBe(
-      "3",
-    );
-    sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`)?.click();
-    await vi.waitFor(() => expect(row(branch)).not.toBeNull());
-    sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${branch}"]`)?.click();
-    await vi.waitFor(() => expect(row(key("running"))).not.toBeNull());
-    for (const status of ["done", "killed", "failed", "timeout"]) {
-      expect(
-        row(key(status))?.querySelector(
-          status === "done" || status === "killed"
-            ? `.sidebar-child-session__status--${status}`
-            : '[data-session-attention="error"]',
-        ),
-      ).not.toBeNull();
-    }
-    expect(
-      row(key("running"))?.querySelector(".sidebar-session-team-state .session-glyph__ring"),
-    ).not.toBeNull();
-    expect(row(key("running"))?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-    expect(
-      row(key("running"))?.querySelector(".session-row-trail openclaw-elapsed-time"),
-    ).not.toBeNull();
-    expect(
-      row(key("approve"))?.querySelectorAll('[data-session-attention="approval"]'),
-    ).toHaveLength(1);
-    expect(row(key("approve"))?.querySelector(".session-row-badge--approval")).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-    await vi.waitFor(() => expect(row(parent)).toBeNull());
-    const header = sidebar.querySelector(
-      '[data-agent-group="working"] .sidebar-agent-roster__header',
-    );
-    for (const kind of ["approval", "question", "error"]) {
-      expect(header?.querySelector(`[data-session-attention="${kind}"]`)).not.toBeNull();
-    }
-    expect(header?.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(header?.querySelector('[aria-label="Unread"]')).not.toBeNull();
-  });
+        row(key("approve"))?.querySelectorAll('[data-session-attention="approval"]'),
+      ).toHaveLength(1);
+      expect(row(key("approve"))?.querySelector(".session-row-badge--approval")).toBeNull();
+      sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
+      await vi.waitFor(() => expect(row(parent)).toBeNull());
+      const header = sidebar.querySelector(
+        '[data-agent-group="working"] .sidebar-agent-roster__header',
+      );
+      expect(header?.querySelector('[data-session-attention="approval"]')).not.toBeNull();
+      expect(header?.querySelectorAll("[data-session-attention]")).toHaveLength(1);
+      expect(header?.querySelector(".session-glyph__ring")).toBeNull();
+      expect(header?.querySelector('[aria-label="Unread"]')).not.toBeNull();
+    },
+  );
 });

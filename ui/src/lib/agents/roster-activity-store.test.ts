@@ -158,7 +158,7 @@ describe("roster activity lifecycle", () => {
       identityListeners.forEach((notify) => notify());
       expect(store.snapshot.cards.find(({ id }) => id === "new-agent")).toMatchObject({
         name: "New identity",
-        fallback: "🌻",
+        textAvatar: "🌻",
       });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {

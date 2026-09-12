@@ -568,12 +568,13 @@ function renderSessionListBody(params: {
   `;
 }
 
-function renderSessionListToolbar(host: SidebarSessionListHost, extra: unknown = nothing) {
+function renderSessionListToolbar(host: SidebarSessionListHost) {
+  const team = host.sidebarAgentsMode === "roster";
   const newSessionAccess = host.readNewSessionAccess();
   const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
   return html`
-    <div class="sidebar-session-toolbar">
-      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+    <div class=${team ? "sidebar-agent-roster__filter" : "sidebar-session-toolbar"}>
+      ${team ? nothing : html`<span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>`}
       <button
         type="button"
         class="sidebar-session-toolbar__button sidebar-session-sort ${
@@ -588,7 +589,6 @@ function renderSessionListToolbar(host: SidebarSessionListHost, extra: unknown =
       >
         ${icons.listFilter}
       </button>
-      ${extra}
       ${
         host.sidebarAgentsMode === "roster"
           ? nothing
@@ -638,11 +638,7 @@ export function renderSessionList(params: {
   );
 }
 
-export function renderSessionListFrame(
-  host: SidebarSessionListHost,
-  body: unknown,
-  toolbarExtra: unknown = nothing,
-) {
+export function renderSessionListFrame(host: SidebarSessionListHost, body: unknown) {
   const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
@@ -653,7 +649,7 @@ export function renderSessionListFrame(
       @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
-      ${renderSessionListToolbar(host, toolbarExtra)}
+      ${renderSessionListToolbar(host)}
       ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${
         host.sessionData.sessionMutationError

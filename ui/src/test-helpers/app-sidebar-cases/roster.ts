@@ -159,14 +159,14 @@ describe("AppSidebar agent roster", () => {
     expect(context.agentSelection.state.scopeId).toBe("main");
   });
 
-  it("offers new sessions for agents in group order from both team toolbars", async () => {
+  it("offers new sessions for agents in group order from the brand menu", async () => {
     const { sidebar } = await mountRoster();
     const onOpen = vi.fn();
     sidebar.onOpenNewSession = onOpen;
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     const menus = sidebar.querySelectorAll(".sidebar-new-session-menu");
-    expect(menus).toHaveLength(2);
+    expect(menus).toHaveLength(1);
     for (const menu of menus) {
       const options = [...menu.querySelectorAll("wa-dropdown-item")];
       expect(options.map((item) => item.getAttribute("value"))).toEqual(agentIds(sidebar));
@@ -362,7 +362,7 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it("shows every agent beyond six and links from the Sessions toolbar to Agents home", async () => {
+  it("shows every agent beyond six with only a global filter above the groups", async () => {
     const agents: AgentsListResult = {
       ...roster,
       agents: Array.from({ length: 8 }, (_, index) => ({ id: `agent-${index}` })),
@@ -377,11 +377,9 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() =>
       expect(agentIds(sidebar)).toEqual(agents.agents.map((agent) => agent.id)),
     );
-    const link = sidebar.querySelector<HTMLAnchorElement>(
-      '.sidebar-agent-roster__link[href="/agents"]',
-    );
-    expect(link?.textContent?.trim()).toBe("See all");
-    expect(link?.closest(".sidebar-agent-roster")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-session-toolbar")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-agent-roster__filter button")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-agent-roster__filter a")).toBeNull();
   });
 
   it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {

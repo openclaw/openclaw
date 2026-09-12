@@ -167,6 +167,15 @@ suite.define(() => {
                 return {
                   left: title.left,
                   right: state.right,
+                  stateLeft: state.left,
+                  stateWidth: state.width,
+                  titleRight: title.right,
+                  slots: [...row.querySelectorAll(".sidebar-session-team-state > span")].map(
+                    (slot) => ({
+                      left: slot.getBoundingClientRect().left,
+                      width: slot.getBoundingClientRect().width,
+                    }),
+                  ),
                   height: row.getBoundingClientRect().height,
                 };
               });
@@ -186,15 +195,29 @@ suite.define(() => {
           for (const row of beforeFocus.rows) {
             expect(row.right).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
             expect(row.height).toBe(touch ? 44 : 32);
+            expect(row.stateWidth).toBe(52);
+            expect(row.titleRight).toBeLessThanOrEqual(row.stateLeft);
+            expect(row.slots).toEqual(beforeFocus.rows[0]!.slots);
+          }
+          for (const caret of await group
+            .locator(".sidebar-child-session-toggle__icon svg")
+            .all()) {
+            expect(
+              await caret.evaluate((el) => ({
+                width: el.getBoundingClientRect().width,
+                animation: getComputedStyle(el).animationName,
+              })),
+            ).toEqual({ width: 12, animation: "none" });
           }
           const add = group.locator(".sidebar-agent-roster__new");
+          const actions = group.locator(".sidebar-agent-roster__actions");
           await page.mouse.move(1000, 800);
           await page.locator("body").click({ position: { x: 1000, y: 800 } });
-          expect(await add.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+          expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
             touch ? "1" : "0",
           );
           await group.locator(".sidebar-agent-roster__row").focus();
-          expect(await add.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+          expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
           await sidebar.locator(".sidebar-brand .sidebar-new-session-menu button").click();
@@ -209,6 +232,21 @@ suite.define(() => {
             page,
             `agent-first-${mode}-${width}-${touch ? "touch" : "pointer"}.png`,
           );
+          await group.locator('[data-child-session-toggle="agent:main:parent"]').click();
+          await expect
+            .poll(() => group.locator('[data-session-key="agent:main:child"]').count())
+            .toBe(0);
+          const collapsedSlots = parent.locator(".sidebar-session-team-state");
+          expect((await collapsedSlots.boundingBox())?.x).toBeCloseTo(
+            beforeFocus.rows[0]!.stateLeft,
+            1,
+          );
+          expect((await collapsedSlots.boundingBox())?.width).toBe(52);
+          expect(
+            await collapsedSlots.locator(".sidebar-child-session-toggle__count").textContent(),
+          ).toBe("2");
+          expect(await collapsedSlots.locator(".session-unread-dot").count()).toBe(1);
+          expect(await collapsedSlots.locator('[data-session-attention="error"]').count()).toBe(1);
           await group.locator('[data-agent-collapse="main"]').click();
           await expect.poll(() => parent.count()).toBe(0);
           expect(
@@ -217,11 +255,16 @@ suite.define(() => {
               .count(),
           ).toBe(1);
           expect(
-            await group.locator(".sidebar-agent-roster__signals .session-run-spinner").count(),
-          ).toBe(1);
+            await group.locator(".sidebar-agent-roster__signals .session-glyph__ring").count(),
+          ).toBe(0);
           expect(
             await group.locator('.sidebar-agent-roster__signals [aria-label="Unread"]').count(),
           ).toBe(1);
+          const summary = group.locator(
+            ".sidebar-agent-roster__signals .sidebar-session-team-state",
+          );
+          expect((await summary.boundingBox())?.x).toBeCloseTo(beforeFocus.rows[0]!.stateLeft, 1);
+          expect((await summary.boundingBox())?.width).toBe(52);
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
         },
       );

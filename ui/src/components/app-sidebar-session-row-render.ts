@@ -37,11 +37,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import {
-  renderCompactSessionAttention,
-  renderSessionState,
-  renderSessionTreeSummary,
-} from "./session-attention-presentation.ts";
+import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import {
   describeSessionTrailingState,
@@ -290,7 +286,6 @@ function renderSidebarSessionIndicators(
       ${team ? originIndicators : nothing} ${team ? persistentIndicator : nothing}
       ${team && (session.workSession || session.acpSession) && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
       ${team && session.hasAutomation ? html`<span class="session-row-badge" role="img" aria-label=${t("tabs.cron")} title=${t("tabs.cron")}>${icons.clock}</span>` : nothing}
-      ${team && !childrenExpanded && session.childSessionKeys.length > 0 ? html`<span class="sidebar-child-session-toggle__count" aria-hidden="true">${session.childSessionKeys.length}</span>` : nothing}
       ${renderSessionRowBadges({
         isChild: session.isChild,
         incognito: session.incognito,
@@ -309,12 +304,7 @@ function renderSidebarSessionIndicators(
       ${team ? trail : nothing}
       ${
         team
-          ? html`<span class="sidebar-session-team-state">
-              ${!childrenExpanded ? renderSessionTreeSummary([session], true) : nothing}
-              ${renderCompactSessionAttention(ownAttention)}
-              ${session.hasActiveRun || (session.isChild ? ownAttention.kind !== "error" : ownAttention.kind === "none") ? renderSessionState(session) : nothing}
-              ${session.unread && (session.hasActiveRun || session.isChild || ownAttention.kind !== "none") ? html`<span class="session-unread-dot" role="img" aria-label=${t("sessionsView.unread")}></span>` : nothing}
-            </span>`
+          ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
           : nothing
       }
       ${
