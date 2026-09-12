@@ -53,6 +53,7 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -89,7 +90,7 @@ export async function prepareReplyAgentPayloads(state: {
     configuredFallbackModel,
     contextTokensUsed,
     directlySentBlockKeys,
-    directlySentBlockPayloads,
+    directBlockDeliveries,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
@@ -149,7 +150,7 @@ export async function prepareReplyAgentPayloads(state: {
   const successfulTerminalDelivery =
     hasSuccessfulTerminalSourceReplyDelivery({
       blockReplyPipeline,
-      directlySentBlockPayloads,
+      directBlockDeliveries,
     }) || hasCompletedTerminalDeliveryEvidence(runResult);
   // Compaction notices are progress, not a terminal reply. Dispatcher-backed
   // delivery settles after this run returns, so it cannot prove turn completion here.
@@ -180,7 +181,13 @@ export async function prepareReplyAgentPayloads(state: {
           committedMessagingToolSourceReplyDelivery ||
           runResult.didSendDeterministicApprovalPrompt === true,
       });
-  const retryBlockedSourceReply = blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.() === true;
+  const retryBlockedSourceReply =
+    blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.() === true ||
+    directBlockDeliveries?.some(
+      ({ payload, outcome, pending }) =>
+        isReplyPayloadTerminalContent(payload) &&
+        (pending || (outcome !== "delivered" && !shouldRetryReplyDispatch(outcome))),
+    ) === true;
   const emptyInteractiveReplyPayload =
     terminalFailurePayload || retryBlockedSourceReply
       ? undefined
@@ -278,7 +285,7 @@ export async function prepareReplyAgentPayloads(state: {
       blockStreamingEnabled,
       blockReplyPipeline,
       directlySentBlockKeys,
-      directlySentBlockPayloads,
+      directBlockDeliveries,
       replyToMode,
       replyToChannel,
       currentMessageId,

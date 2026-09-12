@@ -601,9 +601,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       markInboundDedupeReplayUnsafe();
                       const delivery = state.sendTrackedBlockReply(normalizedPayload);
                       if (delivery.queued) {
-                        // Capture admission's drain; concurrent or aborted waiters must
-                        // not consume another callback's delivery obligation.
-                        const pending = dispatcher.waitForIdle().then(() => undefined);
+                        // This block's receipt owns its settlement. A turn-wide no-send
+                        // verdict is premature while a recovery final can still arrive.
+                        const pending = (delivery.outcome ?? dispatcher.waitForIdle()).then(
+                          () => undefined,
+                        );
                         void pending.catch(() => undefined);
                         state.progressState.pendingDirectBlockReplyDelivery = pending;
                       }

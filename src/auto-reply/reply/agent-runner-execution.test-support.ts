@@ -349,7 +349,7 @@ export async function getExecuteAgentTurnForTest() {
         didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
         directlySentBlockKeys: outcome.directlySentBlockKeys,
-        directlySentBlockPayloads: outcome.directlySentBlockPayloads,
+        directBlockDeliveries: outcome.directBlockDeliveries,
         terminalFailurePayload: outcome.terminalFailurePayload,
         postCompactionModelFailure: outcome.postCompactionModelFailure,
       };

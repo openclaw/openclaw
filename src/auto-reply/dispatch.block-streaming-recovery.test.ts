@@ -17,6 +17,7 @@ import { dispatchInboundMessageWithBufferedDispatcher } from "./dispatch.js";
 
 const finalText = "```ts\n" + "const answer = 42;\n".repeat(20) + "```";
 const finalMediaUrl = "https://example.test/final.png";
+const mediaCaption = "Here is the generated image.";
 
 it.each([
   "rejected",
@@ -32,17 +33,29 @@ it.each([
   "ambiguous-media",
   "recovery-owned-media",
   "all-ambiguous-media",
+  "direct-ambiguous-media",
+  "direct-recovery-owned-media",
+  "direct-confirmed-media",
+  "direct-rejected-media",
+  "direct-no-delivery",
 ] as const)(
   "dispatchInboundMessageWithBufferedDispatcher settles %s streamed blocks before final suppression",
   async (scenario) => {
     const timesOut = scenario === "timeout" || scenario === "timeout-media";
+    const directMedia =
+      scenario === "direct-ambiguous-media" ||
+      scenario === "direct-recovery-owned-media" ||
+      scenario === "direct-confirmed-media" ||
+      scenario === "direct-rejected-media" ||
+      scenario === "direct-no-delivery";
     const allAmbiguous = scenario === "all-ambiguous" || scenario === "all-ambiguous-media";
     const uncertainMedia =
       scenario === "ambiguous-media" ||
       scenario === "recovery-owned-media" ||
       scenario === "all-ambiguous-media";
-    const responseText =
-      scenario === "timeout-media" || uncertainMedia
+    const responseText = directMedia
+      ? mediaCaption
+      : scenario === "timeout-media" || uncertainMedia
         ? `${finalText}\nMEDIA:${finalMediaUrl}`
         : finalText;
     const state = await createOpenClawTestState({
@@ -50,30 +63,98 @@ it.each([
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
     const requests: Array<{ method?: string; url?: string }> = [];
+    const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const delivered: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const server = createServer((request, response) => {
       requests.push({ method: request.method, url: request.url });
-      request.resume();
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const text of [responseText.slice(0, 180), responseText.slice(180)]) {
-        response.write(
+      const sendResponse = () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (directMedia && requests.length === 1) {
+          response.end(
+            `data: ${JSON.stringify({
+              id: "completion-fixture",
+              object: "chat.completion.chunk",
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "media-call",
+                        type: "function",
+                        function: { name: "fixture_media", arguments: "{}" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+            })}\n\ndata: [DONE]\n\n`,
+          );
+          return;
+        }
+        for (const text of [responseText.slice(0, 180), responseText.slice(180)]) {
+          response.write(
+            `data: ${JSON.stringify({
+              id: "completion-fixture",
+              object: "chat.completion.chunk",
+              choices: [{ index: 0, delta: { role: "assistant", content: text } }],
+            })}\n\n`,
+          );
+        }
+        response.end(
           `data: ${JSON.stringify({
             id: "completion-fixture",
             object: "chat.completion.chunk",
-            choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-          })}\n\n`,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\ndata: [DONE]\n\n`,
         );
+      };
+      if (directMedia) {
+        const chunks: string[] = [];
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          chunks.push(chunk);
+        });
+        request.on("end", () => {
+          toolRequestBodies.push(chunks.join(""));
+          sendResponse();
+        });
+      } else {
+        request.resume();
+        sendResponse();
       }
-      response.end(
-        `data: ${JSON.stringify({
-          id: "completion-fixture",
-          object: "chat.completion.chunk",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        })}\n\ndata: [DONE]\n\n`,
-      );
     });
     try {
+      const toolPluginPath = state.statePath("media-plugin", "index.cjs");
+      if (directMedia) {
+        await state.writeJson("media-plugin/openclaw.plugin.json", {
+          id: "fixture-media",
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          contracts: { tools: ["fixture_media"] },
+        });
+        await state.writeText(
+          "media-plugin/index.cjs",
+          `module.exports = {
+          id: "fixture-media",
+          register(api) {
+            api.registerTool({
+              name: "fixture_media", label: "Fixture media", description: "Generate a fixture image",
+              parameters: { type: "object", properties: {} },
+              async execute() {
+                return {
+                  content: [{ type: "text", text: "Fixture generated image." }],
+                  details: { media: { mediaUrls: [${JSON.stringify(finalMediaUrl)}] } },
+                };
+              },
+            });
+          },
+        };`,
+        );
+      }
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
       });
@@ -91,7 +172,7 @@ it.each([
             heartbeat: { every: "0m" },
             model: { primary: "fixture/answer" },
             models: { "fixture/answer": { agentRuntime: { id: "openclaw" } } },
-            blockStreamingDefault: "on",
+            blockStreamingDefault: directMedia ? "off" : "on",
             blockStreamingChunk: { minChars: 80, maxChars: 160 },
             blockStreamingCoalesce: { minChars: 1, maxChars: 160, idleMs: 0 },
           },
@@ -118,10 +199,13 @@ it.each([
             },
           },
         },
-        channels: { discord: { streaming: { mode: "off", block: { enabled: true } } } },
+        channels: { discord: { streaming: { mode: "off", block: { enabled: !directMedia } } } },
         messages: { visibleReplies: "automatic" },
-        plugins: { slots: { memory: "none" } },
-        tools: { profile: "minimal" },
+        plugins: {
+          slots: { memory: "none" },
+          ...(directMedia ? { allow: ["fixture-media"], load: { paths: [toolPluginPath] } } : {}),
+        },
+        tools: { profile: "minimal", ...(directMedia ? { alsoAllow: ["fixture_media"] } : {}) },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
@@ -166,8 +250,28 @@ it.each([
               ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
             };
             attempted.push(call);
+            if (scenario === "direct-no-delivery" && info.kind === "final") {
+              throw noSend;
+            }
             if (info.kind === "block") {
               blocks++;
+              if (directMedia && payload.mediaUrls?.includes(finalMediaUrl)) {
+                if (scenario === "direct-confirmed-media") {
+                  delivered.push(call);
+                  return { visibleReplySent: true };
+                }
+                if (scenario === "direct-rejected-media" || scenario === "direct-no-delivery") {
+                  throw noSend;
+                }
+                if (scenario === "direct-recovery-owned-media") {
+                  const error = new OutboundDeliveryError("retained for recovery", {
+                    cause: noSend,
+                  });
+                  error.queueCustody = "held";
+                  throw error;
+                }
+                throw new Error("transport response lost after send");
+              }
               if (allAmbiguous) {
                 throw new Error("transport response lost after send");
               }
@@ -244,6 +348,25 @@ it.each([
           await otherDispatch;
         }
       }
+      if (scenario === "direct-no-delivery") {
+        await expect(dispatch).rejects.toBe(noSend);
+        console.log(
+          JSON.stringify({
+            scenario,
+            requests: requests.length,
+            attempted,
+            delivered,
+            outcome: "retryable-no-send",
+          }),
+        );
+        expect(toolRequestBodies[1]).toContain("Fixture generated image.");
+        expect(attempted).toEqual([
+          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
+          { kind: "final", text: mediaCaption },
+        ]);
+        expect(delivered).toEqual([]);
+        return;
+      }
       const result = await dispatch;
       console.log(
         JSON.stringify({
@@ -257,15 +380,41 @@ it.each([
         }),
       );
       expect(requests).toEqual(
-        scenario === "concurrent"
+        scenario === "concurrent" || directMedia
           ? [
               { method: "POST", url: "/v1/chat/completions" },
               { method: "POST", url: "/v1/chat/completions" },
             ]
           : [{ method: "POST", url: "/v1/chat/completions" }],
       );
-      expect(blocks).toBeGreaterThanOrEqual(2);
-      if (uncertainMedia) {
+      expect(blocks).toBeGreaterThanOrEqual(directMedia ? 1 : 2);
+      if (directMedia) {
+        expect(toolRequestBodies[0]).toContain('"fixture_media"');
+        expect(toolRequestBodies[1]).toContain("Fixture generated image.");
+        expect(attempted).toEqual([
+          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
+          ...(scenario === "direct-rejected-media" ? [{ kind: "final", text: mediaCaption }] : []),
+        ]);
+        if (scenario === "direct-confirmed-media") {
+          expect(delivered).toEqual([
+            { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
+          ]);
+        } else if (scenario === "direct-rejected-media") {
+          expect(delivered).toEqual([{ kind: "final", text: mediaCaption }]);
+          expect(result.settledReceipt?.counts.block.failedBeforeSend).toBe(1);
+          expect(result.settledReceipt?.hasPendingDelivery).not.toBe(true);
+        } else {
+          expect(delivered).toEqual([]);
+        }
+        expect(result.settledReceipt?.counts.final.delivered).toBe(
+          scenario === "direct-rejected-media" ? 1 : 0,
+        );
+        if (scenario === "direct-recovery-owned-media") {
+          expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
+        } else if (scenario === "direct-ambiguous-media") {
+          expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(1);
+        }
+      } else if (uncertainMedia) {
         const mediaAttempts = attempted.filter((call) => call.mediaUrls?.includes(finalMediaUrl));
         expect(mediaAttempts).toEqual([
           expect.objectContaining({ kind: "block", mediaUrls: [finalMediaUrl] }),
