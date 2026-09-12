@@ -68,6 +68,26 @@ hello from source
     );
   });
 
+  it("breaks a hardlink before writing the ingested page", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-hardlink-");
+    const inputPath = path.join(rootDir, "meeting-notes.txt");
+    const externalPath = path.join(rootDir, "outside.md");
+    await fs.writeFile(inputPath, "updated source\n", "utf8");
+    await fs.writeFile(externalPath, "keep external content\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+      initialize: true,
+    });
+    const pagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
+    await fs.link(externalPath, pagePath);
+
+    await expect(ingestMemoryWikiSource({ config, inputPath })).resolves.toMatchObject({
+      created: false,
+    });
+    await expect(fs.readFile(externalPath, "utf8")).resolves.toBe("keep external content\n");
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("updated source");
+  });
+
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-lock-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");

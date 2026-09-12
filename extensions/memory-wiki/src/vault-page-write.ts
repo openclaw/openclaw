@@ -47,7 +47,16 @@ export async function writeGuardedVaultPage(params: {
   try {
     await retryAsync(
       async () => {
-        if (isRegularFileStat(params.pageStat) && params.pageStat.nlink > 1) {
+        const currentPageStat = await params.vault.stat(params.pagePath).catch((error: unknown) => {
+          if (
+            error instanceof FsSafeError &&
+            (error.code === "not-found" || error.code === "path-alias")
+          ) {
+            return null;
+          }
+          throw error;
+        });
+        if (isRegularFileStat(currentPageStat) && currentPageStat.nlink > 1) {
           await params.vault.remove(params.pagePath);
         }
         await params.vault.write(params.pagePath, params.content);
