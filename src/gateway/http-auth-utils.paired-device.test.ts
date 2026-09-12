@@ -2,17 +2,25 @@ import { expect, it } from "vitest";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { AUTH_TOKEN, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
+import {
+  AUTH_TOKEN,
+  createRequest,
+  createResponse,
+  dispatchRequest,
+  sendRequest,
+  withGatewayServer,
+} from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 it.each(["operator.admin", "operator.read"])(
-  "createGatewayHttpServer plugin PUT/POST preserves paired %s authority and revocation",
+  "createGatewayHttpServer plugin PUT/POST revalidates paired %s authority after reading the body",
   async (scope) => {
     await withOpenClawTestState({ label: "plugin-device-auth" }, async () => {
       const scopes = [scope];
@@ -35,6 +43,8 @@ it.each(["operator.admin", "operator.read"])(
         },
       });
       expect(token).not.toBeNull();
+      const bodyStarted = Promise.withResolvers<void>();
+      let effects = 0;
       const handlePluginRequest = createGatewayPluginRequestHandler({
         registry: createGatewayTestRegistry({
           httpRoutes: [
@@ -45,9 +55,19 @@ it.each(["operator.admin", "operator.read"])(
               match: "exact",
               auth: "gateway",
               gatewayRuntimeScopeSurface: "trusted-operator",
-              handler: async (_req, res) => {
-                const granted = getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes ?? [];
+              handler: async (req, res) => {
+                const runtime = getPluginRuntimeGatewayRequestScope();
+                const granted = runtime?.client?.connect.scopes ?? [];
+                if (req.headers["content-type"] === "application/json") {
+                  const body = readJsonBodyWithLimit(req, { maxBytes: 1024 });
+                  bodyStarted.resolve();
+                  expect((await body).ok).toBe(true);
+                }
+                await runtime?.revalidate?.();
                 const allowed = authorizeOperatorScopesForMethod("set-heartbeats", granted).allowed;
+                if (allowed) {
+                  effects += 1;
+                }
                 res.statusCode = allowed ? 200 : 403;
                 res.end(JSON.stringify({ scopes: granted }));
                 return true;
@@ -80,7 +100,28 @@ it.each(["operator.admin", "operator.read"])(
                   : ["operator.read"],
             });
           }
+          const pending = createRequest({
+            path: "/profile",
+            method: "PUT",
+            authorization: `Bearer ${token!.token}`,
+            headers: { "content-type": "application/json" },
+          });
+          const response = createResponse();
+          Object.defineProperty(response.res, "writableEnded", {
+            get: () => response.res.writableFinished,
+          });
+          const dispatch = dispatchRequest(server, pending, response.res);
+          await bodyStarted.promise;
+          const previousEffects = effects;
           await revokeDeviceToken({ deviceId: "browser", role: "operator" });
+          pending.emit("data", Buffer.from("{}"));
+          pending.emit("end");
+          await dispatch;
+          expect(response.res.statusCode).toBe(401);
+          expect(JSON.parse(response.getBody())).toEqual({
+            error: { message: "Unauthorized", type: "unauthorized" },
+          });
+          expect(effects).toBe(previousEffects);
           for (const credential of [token!.token, "wrong-token"]) {
             const response = await sendRequest(server, {
               path: "/profile",

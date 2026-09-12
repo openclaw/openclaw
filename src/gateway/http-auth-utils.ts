@@ -38,7 +38,12 @@ import {
   resolveHttpProfile,
   usesSharedSecretGatewayMethod,
 } from "./http-auth-user-profile.js";
-import { sendGatewayAuthFailure, sendJson, sendMissingScopeForbidden } from "./http-common.js";
+import {
+  sendGatewayAuthFailure,
+  sendJson,
+  sendMissingScopeForbidden,
+  sendUnauthorized,
+} from "./http-common.js";
 import {
   prepareGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
@@ -83,6 +88,7 @@ export type AuthorizedGatewayHttpRequest = {
   user?: string;
   trustDeclaredOperatorScopes: boolean;
   deviceOperatorScopes?: string[];
+  revalidate?: () => Promise<void>;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorRoleActor?: { kind: "system" };
@@ -187,6 +193,7 @@ function resolveControlUiReadAuthToken(
 async function verifyHttpOperatorDeviceToken(
   token: string,
   requiredSharedGatewaySessionGeneration: string | undefined,
+  requiredScopes: readonly string[] = [],
 ): Promise<string[] | null> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -204,7 +211,7 @@ async function verifyHttpOperatorDeviceToken(
       role: CONTROL_UI_OPERATOR_ROLE,
       // Verify the whole observed grant so a concurrent scope reduction cannot
       // leave the HTTP request with authority from the earlier pairing snapshot.
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes],
+      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
       requiredSharedGatewaySessionGeneration,
     });
     return verified.ok ? [...operatorToken.scopes] : null;
@@ -237,7 +244,10 @@ type HttpOperatorCredentialResult = {
 };
 
 async function checkHttpOperatorCredentials(
-  params: GatewayHttpRequestAuthCheckParams & { token: string | undefined },
+  params: GatewayHttpRequestAuthCheckParams & {
+    token: string | undefined;
+    requiredDeviceScopes?: readonly string[];
+  },
   authorizeConnect: GatewayHttpConnectAuthorizer,
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
@@ -295,7 +305,11 @@ async function checkHttpOperatorCredentials(
           retryAfterMs: deviceRateCheck.retryAfterMs,
         };
       } else {
-        const verifiedScopes = await verifyHttpOperatorDeviceToken(token, authGeneration);
+        const verifiedScopes = await verifyHttpOperatorDeviceToken(
+          token,
+          authGeneration,
+          params.requiredDeviceScopes,
+        );
         if (verifiedScopes) {
           deviceScopes = verifiedScopes;
           params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
@@ -516,6 +530,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
   req: IncomingMessage;
   res: ServerResponse;
   auth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -541,6 +556,33 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
     authorizeHttpGatewayConnect,
     true,
   );
+  if (requestAuth?.authMethod === "device-token") {
+    const token = getBearerToken(params.req);
+    const requiredDeviceScopes = [...(requestAuth.deviceOperatorScopes ?? [])];
+    requestAuth.revalidate = async () => {
+      if (params.res.writableEnded || params.res.destroyed) {
+        throw new Error("HTTP request authority expired");
+      }
+      const { authResult } = await checkHttpOperatorCredentials(
+        {
+          ...params,
+          auth: params.getResolvedAuth?.() ?? params.auth,
+          token,
+          requiredDeviceScopes,
+          // Admission owns attempt accounting; this checks the same admitted grant.
+          rateLimiter: undefined,
+        },
+        authorizeHttpGatewayConnect,
+      );
+      if (params.res.writableEnded || params.res.destroyed) {
+        throw new Error("HTTP request authority expired");
+      }
+      if (!authResult.ok || authResult.method !== "device-token") {
+        sendUnauthorized(params.res);
+        throw new Error("Unauthorized");
+      }
+    };
+  }
   return requestAuth
     ? { requestAuth, operatorScopes: params.resolveOperatorScopes(params.req, requestAuth) }
     : null;

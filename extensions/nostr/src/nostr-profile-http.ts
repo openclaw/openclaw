@@ -326,6 +326,9 @@ export function createNostrProfileHttpHandler(
       sendJson(res, 405, { ok: false, error: "Method not allowed" });
       return true;
     } catch (err) {
+      if (res.writableEnded) {
+        return true;
+      }
       ctx.log?.error(`Profile HTTP error: ${String(err)}`);
       sendJson(res, 500, { ok: false, error: "Internal server error" });
       return true;
@@ -422,6 +425,8 @@ async function handleUpdateProfile(
     }
   }
 
+  await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+
   // Merge with existing profile to preserve unknown fields
   const existingProfile = ctx.getConfigProfile(accountId) ?? {};
   const mergedProfile: NostrProfile = {
@@ -501,6 +506,7 @@ async function handleImportProfile(
     // Ignore body parse errors - use defaults
   }
 
+  await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
   ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);
 
   // Import from relays
@@ -521,6 +527,7 @@ async function handleImportProfile(
 
   // If autoMerge is requested, merge and save
   if (autoMerge && result.profile) {
+    await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
     const localProfile = ctx.getConfigProfile(accountId);
     const merged = mergeProfiles(localProfile, result.profile);
     await ctx.updateConfigProfile(accountId, merged);

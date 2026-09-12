@@ -650,6 +650,7 @@ export function createGatewayHttpServer(opts: {
               req,
               res,
               ...routeAuth,
+              getResolvedAuth,
               requestPath: scopedRequestPath,
               resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
             });
