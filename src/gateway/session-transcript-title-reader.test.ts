@@ -62,10 +62,7 @@ afterEach(() => {
   envSnapshot.restore();
 });
 
-async function writeTranscript(
-  sessionId: string,
-  events: unknown[],
-): Promise<SessionTranscriptReadScope> {
+async function writeTranscript(sessionId: string, events: unknown[]) {
   const scope = {
     agentId: "main",
     sessionId,

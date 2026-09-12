@@ -75,6 +75,11 @@ the storage unit tests by checking packaged workers, Gateway configuration and
 history requests, filesystem recovery, and a real provider turn; they do not
 repeat a large database stress campaign on every release.
 
+When newer tooling validates an explicitly authorized older frozen target that
+predates cold storage, compatibility preflight records the cold subcases as
+unsupported and the lanes report **NOT RUN** for them. The original checks still
+run, and current targets always require cold-storage coverage.
+
 To prebuild and reuse the shared functional image manually:
 
 ```bash

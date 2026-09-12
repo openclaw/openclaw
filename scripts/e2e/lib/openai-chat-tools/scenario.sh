@@ -59,7 +59,9 @@ entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
 
 node scripts/e2e/lib/openai-chat-tools/write-config.mjs
-node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs seed "$entry" "$COLD_FIXTURE"
+if [ "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" = required ]; then
+  node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs seed "$entry" "$COLD_FIXTURE"
+fi
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 for _ in $(seq 1 360); do
@@ -85,8 +87,12 @@ node "$entry" gateway health \
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
   node scripts/e2e/lib/openai-chat-tools/client.mjs >"$CLIENT_LOG" 2>&1
-PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
-  node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs recall "$entry" "$COLD_FIXTURE" >>"$CLIENT_LOG" 2>&1
+if [ "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" = required ]; then
+  PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
+    node scripts/e2e/lib/openai-chat-tools/cold-recall.mjs recall "$entry" "$COLD_FIXTURE" >>"$CLIENT_LOG" 2>&1
+else
+  echo "NOT RUN: cold transcript recall is unavailable in the selected frozen target" >>"$CLIENT_LOG"
+fi
 
 openclaw_e2e_print_log "$CLIENT_LOG"
-echo "OpenAI Chat Completions tools and cold transcript recall Docker E2E passed"
+echo "OpenAI Chat Completions tools Docker E2E passed"

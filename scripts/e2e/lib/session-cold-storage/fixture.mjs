@@ -137,7 +137,7 @@ export function readTranscriptRows(stateDir, sessionId) {
         "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
       )
       .all(sessionId)
-      .map((row) => ({ ...row })),
+      .map(({ seq, event_json, created_at }) => ({ seq, event_json, created_at })),
   );
 }
 
@@ -152,13 +152,11 @@ export function readColdArchives(stateDir) {
 }
 
 export async function waitForArchives(context, expectedIds, { timeoutMs = 95_000 } = {}) {
+  const expected = JSON.stringify(expectedIds.toSorted((a, b) => a.localeCompare(b)));
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const archives = readColdArchives(context.env.OPENCLAW_STATE_DIR);
-    if (
-      JSON.stringify(archives.map((row) => row.session_id)) ===
-      JSON.stringify([...expectedIds].sort())
-    ) {
+    if (JSON.stringify(archives.map((row) => row.session_id)) === expected) {
       const status = await gatewayCall(context, "sessions.storage.status", {});
       assert.equal(status.maintenance.lastError, null);
       if (!status.maintenance.running) {

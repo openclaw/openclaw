@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+case "${OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE:-required}" in
+  required) ;;
+  unsupported)
+    echo "NOT RUN: cold transcript storage is unavailable in the selected frozen target"
+    exit 0
+    ;;
+  *) echo "invalid frozen session cold-storage mode" >&2; exit 2 ;;
+esac
 source scripts/lib/openclaw-e2e-instance.sh
 
 proof_dir="$(mktemp -d /tmp/openclaw-cold-storage-e2e.XXXXXX)"
