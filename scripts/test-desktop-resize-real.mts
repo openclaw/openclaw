@@ -511,6 +511,14 @@ async function main() {
       { mode: 0o600 },
     );
     // Ubuntu compiles this privsep path; direct sshd does not create the service runtime directory.
+    await run("sshd-runtime-directory", "sudo", [
+      "-n",
+      "/bin/mkdir",
+      "-p",
+      "-m",
+      "0755",
+      "/run/sshd",
+    ]);
     receipt.preinstalledSsh.runtimeDirectory =
       await inspectDesktopSshdRuntimeDirectory("/run/sshd");
     await run("sshd-config", "sudo", ["-n", "/usr/sbin/sshd", "-t", "-f", config]);
