@@ -228,6 +228,55 @@ describe("worker session placement moves", () => {
     expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
+  it("permits draining an active placement with a pending workspace result when abandoning source", () => {
+    const active = advanceToActive();
+    seedAttachedEnvironment({
+      environmentId: active.environmentId,
+      sessionId: active.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      claimId: "pending-claim",
+      runId: "pending-run",
+    });
+    store.markWorkspaceResultPending(claim);
+    expect(store.listPendingWorkspaceResults()).toHaveLength(1);
+
+    const source = {
+      generation: active.generation,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    };
+
+    expect(() =>
+      store.beginPlacementMove({
+        sessionId: active.sessionId,
+        source,
+        target: { kind: "gateway" },
+      }),
+    ).toThrow(`Cannot drain session ${active.sessionId} with a pending cloud workspace result`);
+
+    const begun = store.beginPlacementMove({
+      sessionId: active.sessionId,
+      source,
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+
+    expect(begun).toMatchObject({
+      joined: false,
+      placement: { state: "draining" },
+      intent: { abandonSource: true },
+    });
+    expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
+  });
+
   it.each([undefined, "os-a"])(
     "persists profile choices with OS %s and joins only the exact target",
     (targetOs) => {
