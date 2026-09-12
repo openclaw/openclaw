@@ -36,25 +36,22 @@ export type MarkdownLinkSpan = {
 // Every span transform must use copyMarkdownLinkSpan so the private fact survives.
 const autoLinkedMarkdownLinks = new WeakSet<MarkdownLinkSpan>();
 
+/** Callers supply a fresh span; transforms copy before attaching provenance. */
 export function createMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  options: { autoLinked?: boolean } = {},
+  autoLinked: boolean,
 ): MarkdownLinkSpan {
-  const created = { ...span };
-  if (options.autoLinked) {
-    autoLinkedMarkdownLinks.add(created);
+  if (autoLinked) {
+    autoLinkedMarkdownLinks.add(span);
   }
-  return created;
+  return span;
 }
 
 export function copyMarkdownLinkSpan(
   span: MarkdownLinkSpan,
-  overrides: Partial<MarkdownLinkSpan> = {},
+  overrides?: Partial<MarkdownLinkSpan>,
 ): MarkdownLinkSpan {
-  return createMarkdownLinkSpan(
-    { ...span, ...overrides },
-    { autoLinked: autoLinkedMarkdownLinks.has(span) },
-  );
+  return createMarkdownLinkSpan({ ...span, ...overrides }, autoLinkedMarkdownLinks.has(span));
 }
 
 export function isAutoLinkedMarkdownLink(span: MarkdownLinkSpan): boolean {
