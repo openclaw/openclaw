@@ -351,6 +351,7 @@ export async function inspectGatewayPortHealth(params: {
   config?: OpenClawConfig;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   expectedListenerPid?: number;
+  includePluginHealth?: boolean;
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
@@ -371,16 +372,35 @@ export async function inspectGatewayPortHealth(params: {
     return { portUsage, healthy: false };
   }
   const expectedListenerPid = params.expectedListenerPid;
-  const listenerOwnershipVerified =
-    expectedListenerPid !== undefined &&
+  const listenerOwnershipAccepted =
+    expectedListenerPid === undefined ||
     allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
-  const { reachable, probeError } = await confirmGatewayReachable({
+  const reachability = await confirmGatewayReachable({
     port: params.port,
     auth: params.auth,
     ...(params.config ? { config: params.config } : {}),
     ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
     env: process.env,
-    allowDeviceIdentityRequired: listenerOwnershipVerified,
+    allowDeviceIdentityRequired: expectedListenerPid !== undefined && listenerOwnershipAccepted,
   });
-  return { portUsage, healthy: reachable, ...(probeError ? { probeError } : {}) };
+  // Unverified plugin failures must keep polling, but cannot identify the replacement.
+  const pluginOwnershipAccepted = expectedListenerPid !== undefined && listenerOwnershipAccepted;
+  const pluginUnavailable =
+    params.includePluginHealth === true &&
+    (reachability.activatedPluginErrors.length > 0 || reachability.unavailablePlugins.length > 0);
+  return {
+    portUsage,
+    healthy: listenerOwnershipAccepted && reachability.reachable && !pluginUnavailable,
+    ...(reachability.probeError ? { probeError: reachability.probeError } : {}),
+    ...(pluginOwnershipAccepted &&
+    params.includePluginHealth === true &&
+    reachability.activatedPluginErrors.length > 0
+      ? { activatedPluginErrors: reachability.activatedPluginErrors }
+      : {}),
+    ...(pluginOwnershipAccepted &&
+    params.includePluginHealth === true &&
+    reachability.unavailablePlugins.length > 0
+      ? { unavailablePlugins: reachability.unavailablePlugins }
+      : {}),
+  };
 }

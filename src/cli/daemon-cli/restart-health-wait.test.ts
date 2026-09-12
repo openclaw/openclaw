@@ -235,6 +235,78 @@ describe("restart health", () => {
     expect(callGateway).toHaveBeenCalledTimes(reachable.length);
   });
 
+  it.each([
+    {
+      name: "recovers after a transitional plugin failure",
+      boots: ["old", "new", "new", "new"],
+      failures: [true, false, false, false],
+      outcome: "healthy",
+      elapsedMs: 1500,
+    },
+    {
+      name: "settles a persistent plugin failure",
+      boots: ["new", "new", "new"],
+      failures: [true, true, true],
+      outcome: "plugin-unavailable",
+      elapsedMs: 1000,
+    },
+    {
+      name: "restarts plugin failure settlement when the boot changes",
+      boots: ["old", "old", "new", "new", "new"],
+      failures: [true, true, true, true, true],
+      outcome: "plugin-unavailable",
+      elapsedMs: 2000,
+    },
+  ])("$name", async ({ boots, failures, outcome, elapsedMs }) => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    for (const [index, failed] of failures.entries()) {
+      callGateway.mockImplementationOnce(
+        gatewayHealthResponse({
+          server: { version: "2026.9.4", bootId: boots[index] },
+          health: {
+            ok: true,
+            plugins: {
+              errors: [],
+              unavailable: failed
+                ? [
+                    {
+                      id: "discord",
+                      state: "configured-unavailable",
+                      diagnostic: {
+                        kind: "plugin-verification",
+                        reason: "missing-openclaw-peer-link",
+                        detail: "plugin failed during restart",
+                      },
+                    },
+                  ]
+                : [],
+            },
+          },
+        }),
+      );
+    }
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      requireRunningService: true,
+      includePluginHealth: true,
+      includeChannelHealth: false,
+      attempts: 6,
+      delayMs: 500,
+      settle: { probes: 3 },
+    });
+    expect(snapshot.waitOutcome).toBe(outcome);
+    expect(snapshot.healthy).toBe(outcome === "healthy");
+    expect(snapshot.elapsedMs).toBe(elapsedMs);
+    expect(callGateway).toHaveBeenCalledTimes(failures.length);
+  });
+
   it("waits for the managed service when running service proof is required", async () => {
     callGateway.mockImplementation(
       gatewayHealthResponse({
@@ -297,6 +369,80 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("timeout");
     expect(sleep).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    {
+      name: "stopped",
+      runtime: { status: "stopped" } as const,
+      observedPlugin: "discord",
+      mixed: false,
+    },
+    {
+      name: "running under a different pid",
+      runtime: { status: "running", pid: 8000 } as const,
+      observedPlugin: undefined,
+      mixed: false,
+    },
+    {
+      name: "running alongside a foreign listener",
+      runtime: { status: "running", pid: 8000 } as const,
+      observedPlugin: "discord",
+      mixed: true,
+    },
+  ])(
+    "does not attribute stale-listener plugin failures when the managed service is $name",
+    async ({ runtime, observedPlugin, mixed }) => {
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.4.24", connId: "stale" },
+          health: {
+            ok: true,
+            plugins: {
+              errors: [],
+              unavailable: [
+                {
+                  id: "discord",
+                  state: "configured-unavailable",
+                  diagnostic: {
+                    kind: "plugin-verification",
+                    reason: "missing-openclaw-peer-link",
+                    detail: "stale listener plugin failure",
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      );
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [
+          { pid: 5151, commandLine: "openclaw-gateway" },
+          ...(mixed ? [{ pid: 8000, commandLine: "openclaw-gateway" }] : []),
+        ],
+        hints: [],
+      });
+
+      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService(runtime),
+        port: 18789,
+        includePluginHealth: true,
+        includeChannelHealth: false,
+        requireRunningService: true,
+        attempts: 2,
+        delayMs: 1,
+      });
+
+      expect(snapshot.waitOutcome).toBe("timeout");
+      expect(snapshot.unavailablePlugins?.[0]?.id).toBe(observedPlugin);
+      const { renderRestartDiagnostics } = await import("./restart-health.js");
+      expect(renderRestartDiagnostics(snapshot).join("\n")).not.toContain(
+        "stale listener plugin failure",
+      );
+    },
+  );
 
   it("waits through a healthy long-running startup migration", async () => {
     let inspections = 0;

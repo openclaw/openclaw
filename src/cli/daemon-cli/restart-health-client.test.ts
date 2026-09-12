@@ -28,13 +28,14 @@ import { waitForGatewayHealthyRestart } from "./restart-health.js";
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
 describe("restart verifier local control identity", () => {
   it.each([
-    { mode: "token", requirePluginHealth: true },
-    { mode: "password", requirePluginHealth: true },
-    { mode: "none", requirePluginHealth: true },
-    { mode: "token", requirePluginHealth: false },
+    { mode: "token", requirePluginHealth: true, includePluginHealth: false },
+    { mode: "password", requirePluginHealth: true, includePluginHealth: false },
+    { mode: "none", requirePluginHealth: true, includePluginHealth: false },
+    { mode: "token", requirePluginHealth: false, includePluginHealth: false },
+    { mode: "token", requirePluginHealth: false, includePluginHealth: true },
   ] as const)(
-    "reads health with $mode auth without creating device state (requirePluginHealth=$requirePluginHealth)",
-    async ({ mode, requirePluginHealth }) => {
+    "reads health with $mode auth without creating device state (requirePluginHealth=$requirePluginHealth, includePluginHealth=$includePluginHealth)",
+    async ({ mode, requirePluginHealth, includePluginHealth }) => {
       await withOpenClawTestState(
         {
           env: {
@@ -171,6 +172,7 @@ describe("restart verifier local control identity", () => {
               expectedVersion: "2026.8.1",
               expectedBuildId: "fixture-build",
               requirePluginHealth,
+              includePluginHealth,
               attempts: 0,
               delayMs: 1,
             });
