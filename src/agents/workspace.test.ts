@@ -1018,6 +1018,46 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
+  it("does not abort setup or reseed when the workspace dir becomes unlistable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-unlistable-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "user memory", "utf8");
+
+      // Phase 1: real setup records existing state (skip-bootstrap).
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+      const before = await fs.readdir(workspaceDir);
+
+      // Phase 2: the dir becomes unlistable (readdir EACCES, but known files
+      // still open). Setup must not abort from the exact-entry/listing lookup
+      // and must not mistake the unreadable workspace for an empty one.
+      await fs.chmod(workspaceDir, 0o100);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false }),
+        ).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+
+      // Phase 3: existing content and setup state survived (no reseed/clear).
+      const after = await fs.readdir(workspaceDir);
+      expect(after.sort()).toEqual(before.sort());
+      expect(await fs.readFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "utf8")).toBe(
+        "user memory",
+      );
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;

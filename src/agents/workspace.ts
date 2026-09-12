@@ -416,10 +416,21 @@ async function hasWorkspaceUserContentEvidence(
       // continue
     }
   }
-  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
+  // The exact-entry lookup distinguishes an absent optional file from one that
+  // exists but cannot be listed/read. When any lookup fails operationally
+  // (EACCES/EIO on the workspace dir or a skills dir), setup must not abort and
+  // must not mistake an unreadable workspace for an empty one (which could
+  // trigger brand-new detection and reseed/clear existing setup). Treat the
+  // workspace as having user content so setup preserves existing state; the
+  // diagnostics surface separately through the bootstrap loader's guarded reads.
+  try {
+    if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
+      return true;
+    }
+    return await hasWorkspaceSkillEvidence(dir);
+  } catch {
     return true;
   }
-  return await hasWorkspaceSkillEvidence(dir);
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
@@ -462,9 +473,14 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
     }
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
+    if (anyErr.code === "ENOENT") {
+      return false;
     }
+    // An operational listing failure (EACCES/EIO) means we cannot tell whether
+    // the workspace has content. Treat it as having content so setup preserves
+    // the workspace instead of aborting or mistaking an unreadable dir for an
+    // empty one (which could trigger brand-new detection and reseed/clear).
+    return true;
   }
   return false;
 }
