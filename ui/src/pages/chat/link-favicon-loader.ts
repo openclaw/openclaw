@@ -1,5 +1,4 @@
 import { fetchLinkFaviconBlobUrl } from "../plugins/icon-loader.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 
 const LINK_FAVICON_BROWSER_TIMEOUT_MS = 15_000;
 
@@ -14,10 +13,12 @@ function createLinkFaviconFetcher(params: {
 }
 
 export function resolveChatLinkFaviconFetcher(
-  state: Pick<
-    ChatPageHost,
-    "automaticallyFetchFavicons" | "hello" | "settings" | "password" | "resourceBasePath" | "client"
-  >,
+  state: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"] & {
+    automaticallyFetchFavicons: boolean;
+    resourceBasePath: string;
+    settings: { gatewayUrl: string };
+    client: { gatewayUrl: string } | null;
+  },
 ): LinkFaviconFetcher | undefined {
   return state.automaticallyFetchFavicons
     ? createLinkFaviconFetcher({

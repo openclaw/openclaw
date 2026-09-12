@@ -57,7 +57,13 @@ describe("readLinkFavicon", () => {
     const fetcher = vi.fn<LinkFaviconFetcher>(
       (_hostname, signal) =>
         new Promise((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            {
+              once: true,
+            },
+          );
         }),
     );
     const onSettled = vi.fn();

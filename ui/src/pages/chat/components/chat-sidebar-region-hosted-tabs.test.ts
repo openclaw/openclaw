@@ -74,7 +74,9 @@ function labels(shell: HTMLElement) {
 }
 
 afterEach(() => {
-  for (const shell of shells.splice(0)) shell.remove();
+  for (const shell of shells.splice(0)) {
+    shell.remove();
+  }
 });
 
 describe("chat sidebar hosted Browser tabs", () => {
@@ -198,7 +200,12 @@ describe("chat sidebar hosted Browser tabs", () => {
   it("keeps remote and native fallback icons when no favicon is available", async () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue(null);
     const { shell, region } = await mount({
-      tabs: tabs.map((tab) => ({ ...tab, url: "https://favicon-missing.example/" })),
+      tabs: tabs.map(({ id, label, kind }) => ({
+        id,
+        label,
+        kind,
+        url: "https://favicon-missing.example/",
+      })),
       fetchFavicon,
     });
     await vi.waitFor(() => expect(fetchFavicon).toHaveBeenCalledOnce());
@@ -220,8 +227,9 @@ describe("chat sidebar hosted Browser tabs", () => {
     const fetchFavicon = vi.fn<LinkFaviconFetcher>();
     await mount({
       tabs: ["", "not a url", "about:blank"].map((url, index) => ({
-        ...firstTab,
         id: String(index),
+        label: firstTab.label,
+        kind: firstTab.kind,
         url,
       })),
       fetchFavicon,
