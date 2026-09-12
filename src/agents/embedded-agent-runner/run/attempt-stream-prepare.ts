@@ -39,6 +39,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
+  createTimeoutAbortReason,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -504,7 +505,9 @@ export function prepareEmbeddedAttemptStream(input: {
   };
 
   let externalAbortAccepted = false;
-  const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+  const abortActiveRunExternally = (
+    reason?: "user_abort" | "restart" | "superseded" | "cron_timeout",
+  ) => {
     // Reply cancellation can synchronously re-enter through this same backend.
     // Latch before callbacks so the first reason owns every abort side effect.
     if (externalAbortAccepted) {
@@ -512,6 +515,12 @@ export function prepareEmbeddedAttemptStream(input: {
     }
     externalAbortAccepted = true;
     input.markExternalAbort();
+    if (reason === "cron_timeout") {
+      input.abortRun(true, createTimeoutAbortReason());
+      attempt.onDeferredLifecycleAbort?.(reason);
+      attempt.onAttemptAbort?.();
+      return;
+    }
     attempt.onDeferredLifecycleAbort?.(reason);
     attempt.onAttemptAbort?.();
     const abortReason =

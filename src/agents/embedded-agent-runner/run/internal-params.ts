@@ -58,7 +58,9 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
-  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  onDeferredLifecycleAbort?: (
+    reason?: "user_abort" | "restart" | "superseded" | "cron_timeout",
+  ) => void;
   /** Protects an admitted provider wait through the retained logical-turn owner. */
   onRetryWait?: (
     deadlineAtMs: number,

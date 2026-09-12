@@ -51,6 +51,7 @@ vi.mock("../../embedded-agent-subscribe.js", () => ({
 }));
 vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
+  markActiveEmbeddedRunAbandoned: vi.fn(),
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
@@ -83,6 +84,9 @@ function prepareCatalogExecutor(
     sessionKey?: string;
     replyOperation?: ReplyOperation;
     onAttemptAbort?: () => void;
+    onDeferredLifecycleAbort?: (
+      reason?: "user_abort" | "restart" | "superseded" | "cron_timeout",
+    ) => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
     toolProgressDetail?: "explain" | "raw";
@@ -98,6 +102,7 @@ function prepareCatalogExecutor(
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
+      onDeferredLifecycleAbort: options?.onDeferredLifecycleAbort,
       toolProgressDetail: options?.toolProgressDetail,
       onAgentEvent: options?.onAgentEvent,
       ...options?.attempt,
@@ -729,6 +734,88 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(abortRun).toHaveBeenCalledOnce();
     expect(abortRun.mock.calls[0]?.[0]).toBe(false);
     expect(isAgentRunRestartAbortReason(abortRun.mock.calls[0]?.[1])).toBe(true);
+  });
+
+  it("processes cron_timeout abort through external-abort sequence as a timeout", () => {
+    const order: string[] = [];
+    const markExternalAbort = vi.fn(() => {
+      order.push("markExternalAbort");
+    });
+    const onDeferredLifecycleAbort = vi.fn((reason?: string) => {
+      order.push(`onDeferredLifecycleAbort:${reason}`);
+    });
+    const onAttemptAbort = vi.fn(() => {
+      order.push("onAttemptAbort");
+    });
+    const abortRun = vi.fn((_isTimeout?: boolean, _abortReason?: unknown) => {
+      order.push("abortRun");
+    });
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onDeferredLifecycleAbort,
+      onAttemptAbort,
+      abortRun,
+    });
+
+    prepared.queueHandle.abort("cron_timeout");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledOnce();
+    expect(onDeferredLifecycleAbort).toHaveBeenCalledWith("cron_timeout");
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(order).toEqual([
+      "markExternalAbort",
+      "abortRun",
+      "onDeferredLifecycleAbort:cron_timeout",
+      "onAttemptAbort",
+    ]);
+    const call = abortRun.mock.calls[0];
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toBeInstanceOf(Error);
+    if (call?.[1] instanceof Error) {
+      expect(call[1].name).toBe("TimeoutError");
+    }
+  });
+
+  it("preserves timeout classification when onAttemptAbort synchronously triggers re-entrant generic abort", () => {
+    const runAbortController = new AbortController();
+    const abortState: Parameters<typeof createEmbeddedAttemptRunAbort>[0]["state"] = {
+      terminal: { kind: "ok" },
+    };
+    const abortRunHolder: { current?: ReturnType<typeof createEmbeddedAttemptRunAbort> } = {};
+    const onAttemptAbort = vi.fn(() => {
+      // Simulates lane controller: synchronous re-entrant abort with generic reason
+      abortRunHolder.current?.(false, new Error("generic abort"));
+    });
+    const markExternalAbort = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onAttemptAbort,
+      abortRun: (isTimeout, reason) => abortRunHolder.current?.(isTimeout, reason),
+    });
+    abortRunHolder.current = createEmbeddedAttemptRunAbort({
+      abortActiveSession: vi.fn(async () => {}),
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        runId: "run-cron-timeout-reentrant",
+        sessionFile: "agent:main:main",
+        sessionId: "session-cron-timeout",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => prepared.queueHandle,
+      isProbeSession: true,
+      log: { warn: vi.fn() },
+      runAbortController,
+      state: abortState,
+    });
+
+    prepared.queueHandle.abort("cron_timeout");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(runAbortController.signal.aborted).toBe(true);
+    expect((runAbortController.signal.reason as Error)?.name).toBe("TimeoutError");
+    expect(abortState.terminal).toMatchObject({ kind: "timeout" });
   });
 
   it("runs attempt cleanup once when reply cancellation re-enters through its abort signal", () => {

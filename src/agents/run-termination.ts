@@ -45,6 +45,12 @@ export function createAgentRunDirectAbortError(): Error {
   return error;
 }
 
+export function createTimeoutAbortReason(detail?: string): Error {
+  const error = new Error(detail ?? "embedded run timed out");
+  error.name = "TimeoutError";
+  return error;
+}
+
 function hasAgentRunAbortCode(value: unknown, code: string): boolean {
   try {
     return value instanceof Error && "code" in value && value.code === code;

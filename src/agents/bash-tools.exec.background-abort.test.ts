@@ -305,3 +305,51 @@ test("yieldMs exec without explicit timeout applies default timeout", async () =
     expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
 });
+
+test("background exec is killed when tool signal aborts with TimeoutError", async () => {
+  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+  const abortController = new AbortController();
+  const result = await tool.execute(
+    "toolcall",
+    { command: BACKGROUND_HOLD_CMD, background: true },
+    abortController.signal,
+  );
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+
+  const timeoutError = new Error("timeout");
+  timeoutError.name = "TimeoutError";
+  abortController.abort(timeoutError);
+
+  const finished = await waitForFinishedSession(sessionId);
+  try {
+    expect(supervisorMockState.cancelReasons).toContain("manual-cancel");
+    expect(finished?.terminalStatus).toBe("failed");
+  } finally {
+    cleanupRunningSession(sessionId);
+  }
+});
+
+test("yielded background exec is killed when tool signal aborts with TimeoutError", async () => {
+  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 10 });
+  const abortController = new AbortController();
+  const result = await tool.execute(
+    "toolcall",
+    { command: BACKGROUND_HOLD_CMD, yieldMs: 5 },
+    abortController.signal,
+  );
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+
+  const timeoutError = new Error("timeout");
+  timeoutError.name = "TimeoutError";
+  abortController.abort(timeoutError);
+
+  const finished = await waitForFinishedSession(sessionId);
+  try {
+    expect(supervisorMockState.cancelReasons).toContain("manual-cancel");
+    expect(finished?.terminalStatus).toBe("failed");
+  } finally {
+    cleanupRunningSession(sessionId);
+  }
+});

@@ -51,7 +51,6 @@ import {
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
-  buildExecRuntimeErrorOutcome,
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
@@ -62,6 +61,7 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
+  buildUnavailableWorkdirResult,
   createExecHostResolver,
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
@@ -76,8 +76,9 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
-import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { isSignalTimeoutReason } from "./failover-error.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -91,13 +92,16 @@ function createExecProcessSettlement() {
   const settlement: {
     outcome: ExecProcessOutcome | null;
     backgroundTask: BackgroundExecTaskHandle | null;
+    onSettled?: () => void;
     settle: (outcome: ExecProcessOutcome) => void;
   } = {
     outcome: null,
     backgroundTask: null,
+    onSettled: undefined,
     settle(outcome: ExecProcessOutcome) {
       settlement.outcome = outcome;
       finalizeBackgroundExecTask({ handle: settlement.backgroundTask, outcome });
+      settlement.onSettled?.();
     },
   };
   return settlement;
@@ -173,20 +177,6 @@ export function createExecTool(
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
   const resolveHostForParams = createExecHostResolver(defaults);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -636,7 +626,7 @@ export function createExecTool(
         // tool_execution_update events even for backgrounded sessions (which
         // retrieve output via process poll/log instead of onUpdate callbacks).
         run.disableUpdates();
-        if (yielded || run.session.backgrounded) {
+        if ((yielded || run.session.backgrounded) && !isSignalTimeoutReason(signal?.reason)) {
           return;
         }
         // Cancellation must win over foreground-to-background promotion while
@@ -649,10 +639,16 @@ export function createExecTool(
         run.kill();
       };
 
-      const cleanupToolRunListeners = () => {
-        run.disableUpdates();
+      const detachAbortListener = () => {
         registeredAbortSignal?.removeEventListener("abort", onAbortSignal);
         registeredAbortSignal = null;
+      };
+      settlement.onSettled = detachAbortListener;
+      const cleanupToolRunListeners = () => {
+        run.disableUpdates();
+        if (!run.session.backgrounded || settlement.outcome) {
+          detachAbortListener();
+        }
         if (yieldTimer) {
           clearTimeout(yieldTimer);
           yieldTimer = null;

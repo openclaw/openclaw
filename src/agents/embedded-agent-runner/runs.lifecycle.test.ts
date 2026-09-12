@@ -33,7 +33,7 @@ type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
   overrides: {
-    abort?: () => void;
+    abort?: RunHandle["abort"];
     isAbortable?: boolean;
     isAborted?: () => boolean;
     isCompacting?: boolean;
@@ -103,6 +103,34 @@ describe("embedded-agent runner run lifecycle", () => {
       expect(abortRun).toHaveBeenCalledTimes(1);
       expect(isEmbeddedAgentRunHandleActive("session-stuck")).toBe(false);
       expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards cron_timeout reason to abortEmbeddedAgentRun", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortRun = vi.fn();
+      setActiveEmbeddedRun(
+        "session-cron-abort",
+        createRunHandle({ abort: abortRun }),
+        "agent:main:cron",
+      );
+
+      const resultPromise = abortAndDrainEmbeddedAgentRun({
+        sessionId: "session-cron-abort",
+        sessionKey: "agent:main:cron",
+        settleMs: 100,
+        forceClear: true,
+        reason: "cron_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await resultPromise;
+
+      expect(result.aborted).toBe(true);
+      expect(abortRun).toHaveBeenCalledWith("cron_timeout");
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

@@ -9,6 +9,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
+  createTimeoutAbortReason,
 } from "../../run-termination.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../run-state.js";
@@ -124,7 +125,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
 
 export type DeferredEmbeddedRunLifecycleManager = {
   signal: AbortSignal;
-  abort: (reason?: "user_abort" | "restart" | "superseded") => void;
+  abort: (reason?: "user_abort" | "restart" | "superseded" | "cron_timeout") => void;
   adopt: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   beginRetryWait: (
     deadlineAtMs: number,
@@ -147,7 +148,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     ? AbortSignal.any([params.abortSignal, controller.signal])
     : controller.signal;
   let current: DeferredEmbeddedRunLifecycleOwner | undefined;
-  const abort = (reason?: "user_abort" | "restart" | "superseded") => {
+  const abort = (reason?: "user_abort" | "restart" | "superseded" | "cron_timeout") => {
     if (controller.signal.aborted) {
       return;
     }
@@ -156,7 +157,9 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
         ? createAgentRunRestartAbortError()
         : reason === "superseded"
           ? createAgentRunSupersededAbortError()
-          : createAgentRunDirectAbortError(),
+          : reason === "cron_timeout"
+            ? createTimeoutAbortReason()
+            : createAgentRunDirectAbortError(),
     );
   };
   let cliOwner: EmbeddedAgentQueueHandle | undefined;

@@ -222,7 +222,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  onDeferredLifecycleAbort?: (
+    reason?: "user_abort" | "restart" | "superseded" | "cron_timeout",
+  ) => void;
   /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */
   pluginRuntimeRefreshPending?: () => boolean;
   /** Registers the exact attempt owner able to stop before another model request. */

@@ -8,6 +8,7 @@ import {
 import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
+  createTimeoutAbortReason,
 } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import {
@@ -59,13 +60,15 @@ export function createWorkerTurnRunOwner(params: {
     sessionKey,
     runId: claim.runId,
   });
-  const cancel = (reason?: "user_abort" | "restart" | "superseded") => {
+  const cancel = (reason?: "user_abort" | "restart" | "superseded" | "cron_timeout") => {
     controller.abort(
       reason === "restart"
         ? createAgentRunRestartAbortError()
         : reason === "superseded"
           ? createAgentRunSupersededAbortError()
-          : undefined,
+          : reason === "cron_timeout"
+            ? createTimeoutAbortReason()
+            : undefined,
     );
   };
   const owner: WorkerRunOwner = {

@@ -1037,7 +1037,7 @@ describe("exec backgrounded onUpdate suppression", () => {
     expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
   });
 
-  it("removes the abort listener when an exec process is backgrounded", async () => {
+  it("removes the abort listener when an exec process is backgrounded and exits", async () => {
     const abortController = new AbortController();
     const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
     const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
@@ -1053,6 +1053,16 @@ describe("exec backgrounded onUpdate suppression", () => {
     expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
     const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
     expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).not.toHaveBeenCalled();
+
+    const sessionId = requireSessionId(result.details as { sessionId?: string });
+    await expect
+      .poll(() => {
+        const finished = getFinishedSession(sessionId);
+        return Boolean(finished);
+      }, BACKGROUND_POLL_OPTIONS)
+      .toBe(true);
+
     expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
   });
 
