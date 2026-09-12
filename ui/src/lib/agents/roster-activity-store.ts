@@ -1,5 +1,5 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { AgentsListResult, SessionsListResult } from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -39,7 +39,7 @@ const emptySnapshot: RosterActivitySnapshot = {
 };
 const stores = new WeakMap<ApplicationGateway, RosterActivityStore>();
 
-/** One activity window per Gateway, alive only while a roster is mounted. */
+/** One activity window per Gateway, retained only by visible roster consumers. */
 export function rosterActivityStore(context: RosterContext): RosterActivityStore {
   let store = stores.get(context.gateway);
   if (!store) {
@@ -55,7 +55,6 @@ class RosterActivityStore {
   private readonly lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   private abort: AbortController | null = null;
   private cleanup: (() => void) | null = null;
-  private agents: AgentsListResult | undefined;
   private involvingMe = false;
   private readonly events = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => this.lifecycle.isCurrent(scope),
@@ -81,9 +80,17 @@ class RosterActivityStore {
       const { gateway } = this.context;
       const stopGateway = gateway.subscribe((snapshot) => this.applyGateway(snapshot));
       const stopEvents = gateway.subscribeEvents((event) => this.applyEvent(event));
+      const stopAgents = this.context.agents.subscribe(() =>
+        this.publishResult(this.current.result),
+      );
+      const stopIdentities = this.context.agentIdentity.subscribe(() =>
+        this.publishResult(this.current.result),
+      );
       this.cleanup = () => {
         stopGateway();
         stopEvents();
+        stopAgents();
+        stopIdentities();
       };
       this.applyGateway(gateway.snapshot);
     }
@@ -110,7 +117,7 @@ class RosterActivityStore {
       ...this.current,
       result,
       cards: agentRosterCards(
-        this.agents,
+        this.context.agents.state.agentsList ?? undefined,
         result?.sessions.filter((row) => row.archived !== true) ?? [],
         (id) => this.context.agentIdentity.get(id),
       ),
@@ -158,7 +165,6 @@ class RosterActivityStore {
     this.abort = null;
     this.events.reset();
     this.refreshEvents.reset();
-    this.agents = undefined;
     this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
   }
 
@@ -216,7 +222,6 @@ class RosterActivityStore {
         }
         offset = next.nextOffset ?? offset + next.sessions.length;
       }
-      this.agents = agents;
       this.publishResult(result);
       this.publish({
         ...this.current,
@@ -224,10 +229,10 @@ class RosterActivityStore {
       });
     } catch (error) {
       if (!signal.aborted) {
+        // Activity failure must not retire otherwise usable agent navigation.
+        this.publishResult(this.current.result);
         this.publish({
           ...this.current,
-          cards: [],
-          result: null,
           loading: false,
           error: formatUiError(error, t("agentsHome.loadFailed")),
         });

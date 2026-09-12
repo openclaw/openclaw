@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -7,6 +8,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
 
 export abstract class AgentRosterElement extends OpenClawLightDomElement {
+  @property({ attribute: false }) active = true;
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ApplicationContext;
 
@@ -14,7 +16,7 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   constructor() {
     super();
     new SubscriptionsController(this).watch(
-      () => this.context && rosterActivityStore(this.context),
+      () => (this.active && this.context ? rosterActivityStore(this.context) : undefined),
       (store, notify) => store.subscribe(notify),
     );
   }

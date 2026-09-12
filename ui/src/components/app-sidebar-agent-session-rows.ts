@@ -5,9 +5,11 @@ import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/s
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
+  normalizeDefaultMainSessionAliasForUi,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
@@ -186,7 +188,43 @@ export function projectSidebarAgentSessionRows({
       }
     }
   }
-  const sessionCandidateRows = [...visibleRowsByKey.values()].filter(inScope);
+  const currentRootKeys = new Set(
+    [
+      ...rowsByKey.keys(),
+      ...scopedRootRows.map((row) => row.key),
+      ...(selectedFallback ? [selectedFallback.key] : []),
+      ...(lineageRoot &&
+      areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey)
+        ? [lineageRoot.key]
+        : []),
+    ].map(normalizeDefaultMainSessionAliasForUi),
+  );
+  const parentKeys = new Map(
+    [...visibleRowsByKey.values()].map((row) => [
+      normalizeDefaultMainSessionAliasForUi(row.key),
+      normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(row)),
+    ]),
+  );
+  const sessionCandidateRows = [...visibleRowsByKey.values()].filter((row) => {
+    if (!inScope(row)) {
+      return false;
+    }
+    if (!grouped) {
+      return true;
+    }
+    // Detail caches supplement the current forest, not every main/category root
+    // ever visited in chip mode. Use the tree's canonical parent/key owners.
+    let key = normalizeDefaultMainSessionAliasForUi(row.key);
+    const visited = new Set<string>();
+    while (key && !visited.has(key)) {
+      if (currentRootKeys.has(key)) {
+        return true;
+      }
+      visited.add(key);
+      key = parentKeys.get(key) ?? "";
+    }
+    return false;
+  });
   const categorizedChildRows = collectCategorizedChildRootRows({
     rows: sessionCandidateRows,
     scopedRoots: scopedRootRows,

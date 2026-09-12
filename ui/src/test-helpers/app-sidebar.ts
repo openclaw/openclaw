@@ -69,6 +69,7 @@ export type SidebarLifecycleState = HTMLElement & {
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
   sidebarAgentsMode: "chip" | "roster";
+  navigationVisible: boolean;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];

@@ -1,7 +1,10 @@
 import type { AgentIdentityResult, AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../avatar.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import { buildAgentMainSessionKey, resolveUiSessionRowAgentId } from "../sessions/session-key.ts";
+import {
+  resolveUiConversationIdentity,
+  resolveUiSessionRowAgentId,
+} from "../sessions/session-key.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar, selectableAgentsList } from "./display.ts";
 
 /** Shared identity, main-chat preview, and activity ordering for agent rosters. */
@@ -17,7 +20,11 @@ export function agentRosterCards(
     .agents.map((agent) => {
       const identity = identityFor(agent.id);
       const name = normalizeAgentLabel(agent, identity);
-      const mainKey = buildAgentMainSessionKey({ agentId: agent.id, mainKey: roster?.mainKey });
+      const mainKey = resolveUiConversationIdentity(
+        { agentsList: roster },
+        roster.mainKey,
+        agent.id,
+      ).sessionKey;
       const sessions = rows.filter(
         (row) => resolveUiSessionRowAgentId(row, roster.defaultId) === agent.id,
       );
@@ -33,6 +40,7 @@ export function agentRosterCards(
         role: agent.identity?.theme,
         model: agent.model?.primary,
         avatar: resolveAgentAvatarUrl(agent, identity),
+        textAvatar: resolveAgentTextAvatar(agent, identity),
         fallback: resolveAgentTextAvatar(agent, identity) ?? deriveAvatarInitial(name),
         mainKey,
         activeNow: sessions.some(isSessionRunActive),

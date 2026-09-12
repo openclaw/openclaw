@@ -45,6 +45,7 @@ export function renderSessionLeadingState(
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
   avatarAuth?: SessionAvatarAuth,
+  trailingState = false,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -56,9 +57,10 @@ export function renderSessionLeadingState(
   // the collapsed child toggle and must never read as the parent's execution.
   const running = session.hasActiveRun;
   const queued = session.hasActiveRun && session.status === "queued";
+  const glyphRunning = running && !trailingState;
   const trailingIndicator = session.isChild || running ? nothing : renderSessionState(session);
   // Transient attention always outranks the persistent decorative icon.
-  if (session.isChild) {
+  if (session.isChild && !trailingState) {
     if (session.attention.kind !== "none") {
       return {
         running,
@@ -108,12 +110,12 @@ export function renderSessionLeadingState(
     };
   }
 
-  if (session.attention.kind !== "none") {
+  if (session.attention.kind !== "none" && !trailingState) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention, true),
-        running,
+        running: glyphRunning,
         queued,
       }),
       trailingIndicator,
@@ -124,7 +126,7 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderPersistentSessionIcon(session.icon),
-        running,
+        running: glyphRunning,
         queued,
       }),
       trailingIndicator,
@@ -153,7 +155,7 @@ export function renderSessionLeadingState(
           .authReady=${avatarAuth?.authReady ?? false}
           .fallback=${ownerChip ?? nothing}
         ></openclaw-channel-avatar>`,
-        running,
+        running: glyphRunning,
         queued,
         circular: true,
       }),
@@ -165,7 +167,7 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: ownerChip,
-        running,
+        running: glyphRunning,
         queued,
         circular: true,
       }),
@@ -181,7 +183,9 @@ export function renderSessionLeadingState(
   }
   return {
     running,
-    leadingIndicator: running ? renderSessionGlyph({ content: nothing, running, queued }) : nothing,
+    leadingIndicator: glyphRunning
+      ? renderSessionGlyph({ content: nothing, running, queued })
+      : nothing,
     trailingIndicator,
   };
 }

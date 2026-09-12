@@ -170,7 +170,7 @@ suite.define(() => {
           ]);
           expect(
             await group
-              .getByRole("link", { name: "New session", exact: true })
+              .getByRole("link", { name: `New session: ${agent.name}`, exact: true })
               .getAttribute("href"),
           ).toBe(`/new?agent=${agent.id}`);
           expect(await group.locator(".sidebar-agent-roster__row").getAttribute("href")).toBe(
@@ -179,12 +179,12 @@ suite.define(() => {
         }
         expect(
           await sidebar
-            .locator('[data-agent-id="scout"] .sidebar-agent-roster__unread')
-            .textContent(),
-        ).toBe("1");
-        expect(await headers.first().textContent()).toContain(
-          "Working: Preparing the sample dashboard.",
-        );
+            .locator('[data-session-key="agent:scout:notes"] .session-unread-dot')
+            .count(),
+        ).toBe(1);
+        expect(
+          (await headers.first().locator(".sidebar-agent-roster__copy").textContent())?.trim(),
+        ).toBe("Forge");
         await captureSidebarUiProof(suite, page, "sidebar-roster-after.png");
 
         await workspace.focus();

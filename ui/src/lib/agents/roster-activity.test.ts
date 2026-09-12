@@ -3,6 +3,22 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it("uses the canonical global main stream rather than a synthesized agent key", () => {
+    const cards = agentRosterCards(
+      { defaultId: "main", mainKey: "main", scope: "global", agents: [{ id: "main" }] },
+      [
+        { key: "global", kind: "global", updatedAt: 1, lastMessagePreview: "Main stream" },
+        {
+          key: "agent:main:other",
+          kind: "direct",
+          updatedAt: 2,
+          lastMessagePreview: "Other conversation",
+        },
+      ],
+    );
+    expect(cards[0]).toMatchObject({ mainKey: "global", preview: "Main stream" });
+  });
+
   it("aggregates work across sessions while keeping the main preview and identity", () => {
     const roster: AgentsListResult = {
       defaultId: "harbor",

@@ -81,6 +81,13 @@ export function projectSessionTree(params: {
       projectedRunningChildCount,
       row.hasActiveSubagentRun ? 1 : 0,
     );
+    const queuedChildCount = children.reduce(
+      (count, child) =>
+        count +
+        Number(child.hasActiveRun && child.status === "queued") +
+        (child.queuedChildCount ?? 0),
+      0,
+    );
     const failedChildCount = children.reduce(
       (count, child) =>
         count +
@@ -106,7 +113,28 @@ export function projectSessionTree(params: {
           : current,
       SIDEBAR_SESSION_NO_ATTENTION,
     );
-    // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
+    const childAttention = [
+      ...new Map(
+        [
+          ...children.flatMap((child) => [
+            child.ownAttention ?? child.attention,
+            ...(child.childAttention ?? []),
+          ]),
+          ...knownSessionAttention
+            .filter((entry) =>
+              unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)),
+            )
+            .map((entry) => entry.attention),
+        ]
+          .filter((value) => value.kind !== "none")
+          .map((value) => [JSON.stringify(value), value]),
+      ).values(),
+    ];
+    const unreadChildCount = children.reduce(
+      (count, child) => count + Number(child.unread) + (child.unreadChildCount ?? 0),
+      0,
+    );
+    // Unloaded terminal outcomes require the existing child-detail loader.
     // Child attention is transitive just like live-run counts: a collapsed
     // ancestor remains actionable even when the blocked descendant is hidden.
     const attention = children.reduce(
@@ -122,6 +150,10 @@ export function projectSessionTree(params: {
     );
     return {
       ...projected,
+      ownAttention: projected.attention,
+      childAttention,
+      unreadChildCount,
+      queuedChildCount,
       attention,
       childSessionKeys,
       children,

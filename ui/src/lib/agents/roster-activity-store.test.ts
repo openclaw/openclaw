@@ -57,6 +57,7 @@ function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
   });
   return {
     store: rosterActivityStore(context),
+    context,
     request,
     emit: (event: Parameters<GatewayEventListener>[0]) => {
       for (const listener of listeners) {
@@ -67,6 +68,106 @@ function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
 }
 
 describe("roster activity lifecycle", () => {
+  it.each([false, true])(
+    "does not admit unknown active events into the shared window (involvingMe=%s)",
+    async (involvingMe) => {
+      const load = vi.fn(async () => result("Listed session"));
+      const { store, emit } = createStore(load);
+      store.setInvolvingMe(involvingMe);
+      const detach = store.subscribe(() => {});
+      try {
+        await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
+        const window = store.snapshot.result;
+        emit({
+          type: "event",
+          event: "session.message",
+          payload: {
+            agentId: "ember",
+            session: {
+              key: "agent:ember:unlisted",
+              kind: "direct",
+              updatedAt: 10,
+              hasActiveRun: true,
+              status: "running",
+            },
+          },
+        });
+        expect(store.snapshot.result).toBe(window);
+        expect(store.snapshot.cards.find((card) => card.id === "ember")?.activeNow).toBe(false);
+        expect(load).toHaveBeenCalledTimes(1);
+      } finally {
+        detach();
+      }
+    },
+  );
+
+  it("retains usable agent identities and the last activity window when an activity refresh fails", async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Activity temporarily unavailable"))
+      .mockResolvedValueOnce(result("Recovered activity"))
+      .mockRejectedValueOnce(new Error("Refresh failed"));
+    const { store } = createStore(load);
+    const detach = store.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(store.snapshot.error).toBe("Activity temporarily unavailable"));
+      expect(store.snapshot.cards.map((card) => card.id)).toEqual(["main", "ember"]);
+      expect(store.snapshot.result).toBeNull();
+      await store.refresh();
+      expect(store.snapshot.error).toBeNull();
+      expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
+      const previous = store.snapshot.result;
+      await store.refresh();
+      expect(store.snapshot.error).toBe("Refresh failed");
+      expect(store.snapshot.result).toBe(previous);
+      expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
+    } finally {
+      detach();
+    }
+  });
+
+  it("follows agent and identity changes without a session event or a second activity load", async () => {
+    const load = vi.fn(async () => result("Existing activity"));
+    const { store, context } = createStore(load);
+    const agentListeners = new Set<() => void>();
+    const identityListeners = new Set<() => void>();
+    context.agents.subscribe = (listener) => {
+      const notify = () => listener(context.agents.state);
+      agentListeners.add(notify);
+      return () => agentListeners.delete(notify);
+    };
+    context.agentIdentity.subscribe = (listener) => {
+      identityListeners.add(listener);
+      return () => identityListeners.delete(listener);
+    };
+    const detach = store.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
+      await vi.waitFor(() => expect(store.snapshot.cards).toHaveLength(2));
+      context.agents.state.agentsList = {
+        ...context.agents.state.agentsList!,
+        agents: [{ id: "main", name: "Renamed" }, { id: "new-agent" }],
+      };
+      agentListeners.forEach((notify) => notify());
+      expect(store.snapshot.cards.map(({ id, name }) => ({ id, name }))).toEqual([
+        { id: "main", name: "Renamed" },
+        { id: "new-agent", name: "new-agent" },
+      ]);
+      context.agentIdentity.get = (id) =>
+        id === "new-agent" ? { agentId: id, name: "New identity", emoji: "🌻", avatar: "" } : null;
+      identityListeners.forEach((notify) => notify());
+      expect(store.snapshot.cards.find(({ id }) => id === "new-agent")).toMatchObject({
+        name: "New identity",
+        fallback: "🌻",
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+    expect(agentListeners.size).toBe(0);
+    expect(identityListeners.size).toBe(0);
+  });
+
   it("shares cross-agent rows and reconciles activity, unread, and new membership", async () => {
     let rows: GatewaySessionRow[] = [
       { key: "agent:main:pinned", kind: "direct", pinned: true, updatedAt: 1 },

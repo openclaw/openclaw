@@ -66,9 +66,9 @@ name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent
 links. Sessions appear under collapsible agent headers, with working agents
 first and then the most recently active. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The top **+** opens an agent menu with avatars, names, and working indicators in
+The top **+** opens an agent menu with avatars and names in
 the same order as the groups; choosing an agent opens New session for that agent.
-Each group's **+** does this directly. Selecting a session switches the active
+Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
 agent for chat. Choose **Show one agent** in the workspace menu to restore the
 agent chip, Home row, and direct New session button.
 
@@ -89,7 +89,7 @@ the conversation's agent.
 [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation) for
 group controls and filtering.
 
-Activity and previews on the page and sidebar roster refresh on session events
+Agent names and avatars follow agent and identity updates. Activity and previews on the page and sidebar roster refresh on session events
 and Gateway reconnects. When both are visible, they share one activity window and
 one refresh, so opening **See all** does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions

@@ -1,164 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import {
-  createGateway,
-  createSessionsHarness,
-  mountSidebar,
-  type SidebarLifecycleState,
-} from "../app-sidebar.ts";
-import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
-
-const roster: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [
-    { id: "main", name: "Harbor", identity: { emoji: "⚓" } },
-    { id: "recent", name: "Scout" },
-    { id: "working", name: "Forge" },
-    { id: "system", name: "System helper", kind: "system" },
-  ],
-};
-const owners = [
-  { type: "human", id: "profile-ada", label: "Ada" },
-  { type: "human", id: "profile-sam", label: "Sam" },
-] as const;
-
-function session(agentId: string, updatedAt: number, extra: Partial<GatewaySessionRow> = {}) {
-  return {
-    key: `agent:${agentId}:main`,
-    agentId,
-    isMain: true,
-    kind: "direct",
-    updatedAt,
-    ...extra,
-  } satisfies GatewaySessionRow;
-}
-
-async function mountRoster(
-  agents = roster,
-  rows?: GatewaySessionRow[],
-  gatewayUrl = "ws://gateway.test",
-  lineageRows: GatewaySessionRow[] = [],
-) {
-  const now = Date.now();
-  const fixtureRows =
-    rows ??
-    agents.agents.flatMap((agent, index) => {
-      const updatedAt = now - (index + 1) * 60_000;
-      return [
-        session(agent.id, updatedAt - 300_000, {
-          lastMessagePreview: "Preparing the project summary.",
-        }),
-        session(agent.id, updatedAt, {
-          key: `agent:${agent.id}:pinned`,
-          label: `${agent.name} project`,
-          isMain: false,
-          pinned: true,
-          pinnedAt: updatedAt,
-          owner: { actor: owners[0] },
-          hasActiveRun: agent.id === "working" || agent.kind === "system",
-          lastMessagePreview: "Preparing the project summary.",
-        }),
-        session(agent.id, updatedAt - 1_000, {
-          key: `agent:${agent.id}:recent`,
-          label: `${agent.name} notes`,
-          isMain: false,
-          owner: { actor: owners[1] },
-          unread: agent.id === "main",
-        }),
-        session(agent.id, updatedAt - 2_000, {
-          key: `agent:${agent.id}:archived`,
-          label: `${agent.name} archive`,
-          isMain: false,
-          archived: true,
-          unread: true,
-          owner: { actor: owners[0] },
-        }),
-      ];
-    });
-  const result: SessionsListResult = {
-    ts: now,
-    path: "",
-    count: fixtureRows.length,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-    owners: [...owners],
-    sessions: fixtureRows,
-  };
-  const request = createGatewayRequestMock(async (method, params) => {
-    if (method === "sessions.list") {
-      return result;
-    }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (
-      method === "sessions.get" &&
-      typeof params === "object" &&
-      params !== null &&
-      "key" in params
-    ) {
-      const key = params.key;
-      const row = lineageRows.find((entry) => entry.key === key);
-      if (row) {
-        return { session: row };
-      }
-    }
-    throw new Error(`Unexpected RPC: ${method}`);
-  });
-  const gateway = createGateway(createTestGatewayClient(request));
-  gateway.connection.gatewayUrl = gatewayUrl;
-  patchSettings({ gatewayUrl });
-  const sessions = createSessionsHarness("main", ["agent:main:main"]);
-  const mainRows = fixtureRows.filter((row) => row.agentId === "main");
-  sessions.publish({ result: { ...result, count: mainRows.length, sessions: mainRows } });
-  const mounted = await mountSidebar(gateway, sessions.sessions, "panel", agents);
-  mounted.sidebar.connected = true;
-  await mounted.sidebar.updateComplete;
-  return { ...mounted, sessions };
-}
-
-function agentIds(sidebar: HTMLElement) {
-  return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-roster__row")].map(
-    (row) => row.dataset.agentId,
-  );
-}
-
-function sessionKeys(sidebar: HTMLElement) {
-  return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session")].map(
-    (row) => row.dataset.sessionKey,
-  );
-}
-
-async function toggleRoster(sidebar: HTMLElement) {
-  const trigger = sidebar.querySelector<HTMLButtonElement>(
-    ".sidebar-agent-card__main, .sidebar-workspace-header__main",
-  );
-  if (!trigger) {
-    throw new Error("Missing agent switch control");
-  }
-  trigger.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector('[value="command:sidebar-agents"]')).not.toBeNull();
-  });
-  const item = sidebar.querySelector('[value="command:sidebar-agents"]');
-  sidebar
-    .querySelector(".sidebar-agent-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
-}
-
-async function selectFilter(sidebar: SidebarLifecycleState, value: string) {
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
-  });
-  sidebar
-    .querySelector(".sidebar-session-sort-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } }, bubbles: true }));
-  await sidebar.updateComplete;
-}
+  agentIds,
+  mountRoster,
+  roster,
+  selectFilter,
+  session,
+  sessionKeys,
+  toggleRoster,
+} from "./roster.test-support.ts";
 
 describe("AppSidebar agent roster", () => {
   it.each([undefined, "Studio workspace", "   "])(
@@ -240,18 +92,17 @@ describe("AppSidebar agent roster", () => {
         `/chat/${id}`,
       );
     }
-    expect(sidebar.querySelector('[data-agent-id="working"]')?.textContent).toContain(
-      "Working: Preparing the project summary.",
-    );
+    expect(sidebar.querySelector('[data-agent-id="working"]')?.textContent?.trim()).toBe("Forge");
+    expect(sidebar.querySelector(".sidebar-agent-roster__status")).toBeNull();
+    expect(sidebar.querySelector('[data-agent-id="recent"]')?.textContent?.trim()).toBe("Scout");
     expect(
-      sidebar.querySelectorAll(
-        '.sidebar-agent-roster .sidebar-agent-roster__status[data-working="true"]',
+      sidebar.querySelector(
+        '[data-session-key="agent:working:pinned"] .sidebar-session-team-state .session-glyph__ring',
       ),
-    ).toHaveLength(1);
-    expect(sidebar.querySelector('[data-agent-id="recent"]')?.textContent).toMatch(/Active /);
+    ).not.toBeNull();
     expect(
-      sidebar.querySelector('[data-agent-id="main"] .sidebar-agent-roster__unread')?.textContent,
-    ).toBe("1");
+      sidebar.querySelector('[data-session-key="agent:main:recent"] .session-unread-dot'),
+    ).not.toBeNull();
     expect(sidebar.querySelector("openclaw-sidebar-agent-card")).toBeNull();
   });
 
@@ -310,7 +161,7 @@ describe("AppSidebar agent roster", () => {
         agentIds(sidebar).map((id) => `/new?agent=${id}`),
       );
       expect(options[0]?.textContent).toContain("Forge");
-      expect(options[0]?.querySelector('[data-working="true"]')).not.toBeNull();
+      expect(options[0]?.querySelector(".identity-avatar__agent-face")).not.toBeNull();
     }
     menus[0]?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -342,14 +193,15 @@ describe("AppSidebar agent roster", () => {
         expect(agentIds(sidebar)).toHaveLength(3);
         expect(sessionKeys(sidebar)).toContain("agent:working:task");
         expect(
-          sidebar
-            .querySelector('[data-agent-id="main"] .sidebar-agent-roster__status')
-            ?.getAttribute("data-working"),
-        ).toBe("true");
+          sidebar.querySelector(
+            '[data-session-key="legacy-task"] .sidebar-session-team-state .session-glyph__ring',
+          ),
+        ).not.toBeNull();
         expect(
-          sidebar.querySelector('[data-agent-id="main"] .sidebar-agent-roster__unread')
-            ?.textContent,
-        ).toBe("1");
+          sidebar.querySelector(
+            '[data-session-key="legacy-task"] .sidebar-session-team-state .session-unread-dot',
+          ),
+        ).not.toBeNull();
       });
       sidebar
         .querySelector<HTMLAnchorElement>(

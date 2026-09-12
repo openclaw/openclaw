@@ -99,3 +99,78 @@ export function renderSessionState(session: SidebarRecentSession) {
       >`
     : nothing;
 }
+
+/** Keep each attention fact accessible once when its text moves out of the row. */
+export function renderCompactSessionAttention(attention: SidebarSessionAttention) {
+  if (attention.kind === "none") {
+    return nothing;
+  }
+  if (attention.kind === "question") {
+    return renderSessionAttentionIcon(attention, true);
+  }
+  const label = sessionAttentionSubtitle(attention);
+  return html`<openclaw-tooltip .content=${label}
+    ><span role="img" aria-label=${label}
+      >${renderSessionAttentionIcon(attention)}</span
+    ></openclaw-tooltip
+  >`;
+}
+
+/** Render the existing tree projection without conflating an agent/parent's own run with descendants. */
+export function renderSessionTreeSummary(
+  rows: readonly SidebarRecentSession[],
+  descendantsOnly = false,
+) {
+  const attention = [
+    ...new Map(
+      rows
+        .flatMap((row) => [
+          ...(descendantsOnly ? [] : [row.ownAttention ?? row.attention]),
+          ...(row.childAttention ?? []),
+        ])
+        .filter((value) => value.kind !== "none")
+        .map((value) => [value.kind, value]),
+    ).values(),
+  ];
+  const active = rows.reduce(
+    (n, row) => n + (descendantsOnly ? 0 : Number(row.hasActiveRun)) + row.runningChildCount,
+    0,
+  );
+  const queued = rows.reduce(
+    (n, row) =>
+      n +
+      (descendantsOnly ? 0 : Number(row.hasActiveRun && row.status === "queued")) +
+      (row.queuedChildCount ?? 0),
+    0,
+  );
+  const running = Math.max(0, active - queued);
+  const unread = rows.reduce(
+    (n, row) => n + (descendantsOnly ? 0 : Number(row.unread)) + (row.unreadChildCount ?? 0),
+    0,
+  );
+  const failed = rows.reduce(
+    (n, row) =>
+      n +
+      (descendantsOnly ? 0 : Number(row.status === "failed" || row.status === "timeout")) +
+      row.failedChildCount,
+    0,
+  );
+  const conflicts = descendantsOnly
+    ? 0
+    : rows.reduce((n, row) => n + (row.workspaceConflictCount ?? 0), 0);
+  if (attention.length === 0 && !active && !unread && !failed && !conflicts) {
+    return nothing;
+  }
+  return html`<span
+    class="sidebar-tree-summary"
+    role="group"
+    aria-label=${descendantsOnly ? t("sessionsView.childSessions") : t("chat.sidebar.threads")}
+  >
+    ${attention.map(renderCompactSessionAttention)}
+    ${failed > 0 && !attention.some((value) => value.kind === "error") ? html`<span class="sidebar-child-session__status--failed" role="img" aria-label=${t("sessionsView.statusFailed")} title=${t("sessionsView.statusFailed")}>${icons.alertTriangle}</span>` : nothing}
+    ${conflicts > 0 ? html`<span role="img" aria-label=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(conflicts) })} title=${t("sessionsView.cloudWorkerDescendantConflicts", { count: String(conflicts) })}>${icons.globe}</span>` : nothing}
+    ${running > 0 ? html`<span class="session-run-spinner" role="img" aria-label=${t("sessionsView.activeRun")} title=${t("sessionsView.activeRun")}></span>` : nothing}
+    ${queued > 0 ? renderSessionGlyph({ content: nothing, running: true, queued: true }) : nothing}
+    ${unread > 0 ? html`<span class="sidebar-agent-roster__unread" role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread}</span>` : nothing}
+  </span>`;
+}

@@ -1,0 +1,212 @@
+import { expect, it } from "vitest";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
+
+const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
+const agentsList: AgentsListResult = {
+  defaultId: "main",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [
+    { id: "main", name: "Engineering" },
+    { id: "research", name: "Research", identity: { emoji: "🔬" } },
+    { id: "writing", name: "Writing", identity: { avatarUrl: "/favicon.svg" } },
+  ],
+};
+const row = (
+  id: string,
+  label: string,
+  extra: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow => ({
+  key: `agent:main:${id}`,
+  kind: "direct",
+  agentId: "main",
+  label,
+  updatedAt: 100,
+  ...extra,
+});
+const rows = [
+  row("parent", "Implement the navigation sidebar without losing independent outcomes"),
+  row("child", "Check rendering", { spawnedBy: "agent:main:parent" }),
+  row("grandchild", "Compare deeply nested layouts with long labels", {
+    spawnedBy: "agent:main:child",
+    hasActiveRun: true,
+    status: "running",
+    unread: true,
+    startedAt: Date.now() - 3_000,
+  }),
+  row("failure", "Review failed checks", {
+    spawnedBy: "agent:main:parent",
+    status: "failed",
+    endedAt: 100,
+    lastRunError: "Geometry mismatch",
+  }),
+  row("queued", "Queued follow-up", { hasActiveRun: true, status: "queued" }),
+  row("private", "Private planning", { incognito: true }),
+  row("automation", "Daily review", { hasAutomation: true }),
+];
+const sessions: SessionsListResult = {
+  ts: 100,
+  path: "",
+  count: rows.length,
+  defaults: { model: null, modelProvider: null, contextTokens: null },
+  sessions: rows,
+};
+
+suite.define(() => {
+  it.each([
+    { mode: "light", width: 334, touch: false },
+    { mode: "dark", width: 286, touch: false },
+    { mode: "light", width: 334, touch: true },
+  ] as const)(
+    "keeps recursive trailing columns aligned in $mode at $width px (touch=$touch)",
+    async ({ mode, width, touch }) => {
+      await suite.withPage(
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { width: 1280, height: 900 },
+          colorScheme: mode,
+          hasTouch: touch,
+        },
+        async ({ page }) => {
+          await page.addInitScript(
+            ({ key, prefs }) => {
+              localStorage.setItem(key, JSON.stringify(prefs));
+              localStorage.setItem(
+                "openclaw:control-ui:community-invite",
+                JSON.stringify({ dismissedAtMs: Date.now() }),
+              );
+            },
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              prefs: { sidebarAgentsMode: "roster", navWidth: width, themeMode: mode },
+            },
+          );
+          await installMockGateway(page, {
+            sessions: rows,
+            methodResponses: {
+              "agents.list": agentsList,
+              "agent.identity.get": {
+                cases: agentsList.agents.map((agent) => ({
+                  match: { agentId: agent.id },
+                  response: {
+                    agentId: agent.id,
+                    name: agent.name,
+                    emoji: agent.identity?.emoji,
+                    avatar: agent.identity?.avatarUrl ?? "",
+                  },
+                })),
+              },
+              "chat.startup": {
+                agentsList,
+                messages: [],
+                metadata: { models: [] },
+                sessionId: "main-session",
+                thinkingLevel: null,
+              },
+              "sessions.list": sessions,
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await waitForControlUiRoute(page, { routeId: "chat" });
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const group = sidebar.locator('[data-agent-group="main"]');
+          const parent = group.locator('[data-session-key="agent:main:parent"]');
+          await parent.waitFor({ state: "visible" });
+          await group.locator('[data-child-session-toggle="agent:main:parent"]').click();
+          await group.locator('[data-child-session-toggle="agent:main:child"]').click();
+          await group
+            .locator('[data-session-key="agent:main:grandchild"]')
+            .waitFor({ state: "visible" });
+          expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(touch);
+          expect(await group.locator(".identity-avatar__agent-face").count()).toBe(1);
+          expect(
+            await sidebar
+              .locator('[data-agent-group="research"] .sidebar-agent-roster__avatar')
+              .textContent(),
+          ).toContain("🔬");
+          expect(
+            await sidebar
+              .locator('[data-agent-group="writing"] .sidebar-agent-roster__avatar img')
+              .getAttribute("src"),
+          ).toBe("/favicon.svg");
+          const geometry = () =>
+            group.evaluate((element) => {
+              const avatar = element
+                .querySelector(".sidebar-agent-roster__avatar")!
+                .getBoundingClientRect();
+              const header = element
+                .querySelector(".sidebar-agent-roster__header")!
+                .getBoundingClientRect();
+              const rows = ["parent", "child", "grandchild"].map((id) => {
+                const row = element.querySelector(`[data-session-key="agent:main:${id}"]`)!;
+                const title = row
+                  .querySelector(".sidebar-recent-session__name")!
+                  .getBoundingClientRect();
+                const state = row
+                  .querySelector(".sidebar-session-team-state")!
+                  .getBoundingClientRect();
+                return {
+                  left: title.left,
+                  right: state.right,
+                  height: row.getBoundingClientRect().height,
+                };
+              });
+              return {
+                avatarLeft: avatar.left,
+                avatarWidth: avatar.width,
+                headerHeight: header.height,
+                rows,
+              };
+            });
+          const beforeFocus = await geometry();
+          expect(beforeFocus.avatarWidth).toBe(36);
+          expect(beforeFocus.headerHeight).toBe(48);
+          expect(beforeFocus.rows[0]!.left).toBeCloseTo(beforeFocus.avatarLeft, 1);
+          expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
+          expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
+          for (const row of beforeFocus.rows) {
+            expect(row.right).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
+            expect(row.height).toBe(touch ? 44 : 32);
+          }
+          const add = group.locator(".sidebar-agent-roster__new");
+          await page.mouse.move(1000, 800);
+          await page.locator("body").click({ position: { x: 1000, y: 800 } });
+          expect(await add.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+            touch ? "1" : "0",
+          );
+          await group.locator(".sidebar-agent-roster__row").focus();
+          expect(await add.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+          expect(await geometry()).toEqual(beforeFocus);
+          expect(await add.getAttribute("href")).toBe("/new?agent=main");
+          await captureSidebarUiProof(
+            suite,
+            page,
+            `agent-first-${mode}-${width}-${touch ? "touch" : "pointer"}.png`,
+          );
+          await group.locator('[data-agent-collapse="main"]').click();
+          await expect.poll(() => parent.count()).toBe(0);
+          expect(
+            await group
+              .locator('.sidebar-agent-roster__signals [data-session-attention="error"]')
+              .count(),
+          ).toBe(1);
+          expect(
+            await group.locator(".sidebar-agent-roster__signals .session-run-spinner").count(),
+          ).toBe(1);
+          expect(
+            await group.locator('.sidebar-agent-roster__signals [aria-label="Unread"]').count(),
+          ).toBe(1);
+          await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);
+        },
+      );
+    },
+  );
+});
