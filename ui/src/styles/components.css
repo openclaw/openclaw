@@ -2214,13 +2214,12 @@ select.input {
 
 /* Pending routes reserve the content layout without exposing transient panel text. */
 .lazy-view-state--loading {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  place-items: center;
   min-width: 0;
   min-height: min(50dvh, 360px);
   width: 100%;
-  margin: auto;
+  margin: 0;
 }
 
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
