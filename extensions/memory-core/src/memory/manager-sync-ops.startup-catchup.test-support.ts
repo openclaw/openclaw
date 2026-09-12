@@ -360,8 +360,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected override listSessionCorpusEntries() {
-    const work = super.listSessionCorpusEntries().then(async (entries) => {
+  protected override listSessionCorpusEntries(options?: { includeContentRevision?: boolean }) {
+    const work = super.listSessionCorpusEntries(options).then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;
