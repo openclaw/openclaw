@@ -1061,6 +1061,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Play audio" to R.string.native_33b31bc65885eb0d,
     "Play video" to R.string.native_43e3c3b1379bb838,
     "Please enable \${labels.joinToString(\", \")} in Android Settings to continue." to R.string.native_1150ece524fd42ec,
+    "Plugins" to R.string.native_9514b7ff4860ead7,
     "Policy" to R.string.native_c611981fab983bc6,
     "Policy default" to R.string.native_dfea46e31d6c472c,
     "Port" to R.string.native_72e9a59f5a1d6289,
