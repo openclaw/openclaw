@@ -55,9 +55,11 @@ encoding in `payloadJSON`):
 1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
 has no load average; hosts omit the field when all three readings are zero.
 Memory and disk values are non-negative integer bytes, with free or available
-bytes no greater than their total. Disk fields appear together only when the
-host can read capacity for the volume containing its home directory, independent
-of the worker's current directory.
+bytes no greater than their total. On macOS, `memoryFreeBytes` includes
+reclaimable host memory, so idle file cache is not reported as used; other
+platforms retain host-wide free-memory readings. Disk fields appear together only
+when the host can read capacity for the volume containing its home directory,
+independent of the worker's current directory.
 
 The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
