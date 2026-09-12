@@ -1015,7 +1015,7 @@ describe("Where chip", () => {
       reason,
       label,
     }) => {
-      const state = resolveWhereChip({
+      const container = renderPicker(true, undefined, {
         environments: [
           {
             id: "node:runner",
@@ -1041,33 +1041,6 @@ describe("Where chip", () => {
         deviceId: "",
         devicePlacement,
       });
-      const container = document.createElement("div");
-      render(
-        renderWhereChip({
-          state,
-          gatewayName: "",
-          environmentQuery: "",
-          onEnvironmentQueryInput: vi.fn(),
-          cloudProfileId: "",
-          deviceId: "",
-          worktreeAvailable: true,
-          submitting: false,
-          pendingPlacement: false,
-          popoverOpen: true,
-          popoverHiding: false,
-          isAdmin: true,
-          onGuardTransition: vi.fn(),
-          onPopoverShow: vi.fn(),
-          onPopoverHide: vi.fn(),
-          onPopoverAfterHide: vi.fn(),
-          onSelectDevice: vi.fn(),
-          onSelectAutoDevice: vi.fn(),
-          onSelectCloudProfile: vi.fn(),
-          onConnectMachine: vi.fn(),
-          onManageCloudWorkers: () => undefined,
-        }),
-        container,
-      );
 
       const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
       expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
