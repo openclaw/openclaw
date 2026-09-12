@@ -125,7 +125,7 @@ openclaw automations create "0 * * * *" \
   --announce
 ```
 
-Use `--script <file|->` to read JavaScript from a file or stdin. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
+Use `--script <file|->` to read JavaScript from a file or stdin. The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
 
 The script may return an object with these optional fields:
 

@@ -9,6 +9,7 @@ import {
   createMemoryTestAddon as addon,
   createMemoryTestDeferred as deferred,
   createMemoryTestEngine as engine,
+  createMemoryTestMutationResult as committed,
   addonStatus,
   addonSwitch,
   createMemoryPage as createPage,
@@ -223,33 +224,40 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("drops a catalog completion from a superseded connection", async () => {
-    const first = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const second = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-    const { element, setPhase } = createPage({
-      configObject: {},
-      listCatalog: (call) => (call === 0 ? first.promise : second.promise),
-    });
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      // Same client object survives the drop and the reconnect, so only the
-      // per-connection request generation can tell the two loads apart.
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Loading…"));
+  it.each(["connection", "plugin publication"])(
+    "drops a catalog completion superseded by %s",
+    async (change) => {
+      const first = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+      const second = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+      const { element, setPhase, publishPluginGeneration } = createPage({
+        configObject: {},
+        listCatalog: (call) => (call === 0 ? first.promise : second.promise),
+      });
+      document.body.append(element);
+      try {
+        await element.updateComplete;
+        // Same client object survives the drop and the reconnect, so only the
+        // per-connection request generation can tell the two loads apart.
+        if (change === "connection") {
+          setPhase("disconnected");
+          setPhase("connected");
+        } else {
+          publishPluginGeneration(1);
+        }
+        await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Loading…"));
 
-      second.resolve({ plugins: [addon("active-memory", true)] });
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+        second.resolve({ plugins: [addon("active-memory", true)] });
+        await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
 
-      first.resolve({ plugins: [addon("active-memory", false)] });
-      await first.promise;
-      await element.updateComplete;
-      expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
-    } finally {
-      element.remove();
-    }
-  });
+        first.resolve({ plugins: [addon("active-memory", false)] });
+        await first.promise;
+        await element.updateComplete;
+        expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+      } finally {
+        element.remove();
+      }
+    },
+  );
 
   it("marks add-ons unknown while disconnected", async () => {
     const { element, setPhase } = createPage({
@@ -408,7 +416,7 @@ describe("MemorySettingsPage catalog state", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
 
-      mutation.resolve({});
+      mutation.resolve(committed("active-memory", false));
       await waitForFast(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
@@ -446,56 +454,45 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("surfaces restart-required outcomes from add-on mutations", async () => {
+  it("retains runtime warnings through same-boot reconnects and publications, then clears a new boot", async () => {
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", true), addon("memory-wiki", true)];
+    const warning = "Review memory-wiki settings.";
     let mutations = 0;
-    const { element, request, setPhase } = createPage({
+    const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
       configObject: {},
       listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
-      setEnabled: (_pluginId, enabled) =>
+      setEnabled: (pluginId, enabled) =>
         mutations++ === 0
-          ? Promise.resolve({
-              ok: true,
-              plugin: addon("memory-wiki", enabled),
-              restartRequired: true,
-            })
+          ? Promise.resolve(committed(pluginId, enabled, [warning]))
           : Promise.reject(new Error("follow-up rejected")),
-      processInstanceIds: [undefined, "process-a", "process-a", "process-a", "process-b"],
     });
     document.body.append(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(false));
       toggleAddon(element, "Memory wiki", true);
+      await waitForFast(() => expect(element.textContent).toContain(warning));
+      expect(element.textContent).toContain("Needs attention");
+      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
 
-      await waitForFast(() => expect(element.textContent).toContain("Needs attention"));
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+      await waitForFast(() =>
+        expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false),
       );
-      expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
-
       toggleAddon(element, "Memory wiki", false);
       await waitForFast(() => expect(element.textContent).toContain("follow-up rejected"));
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-      );
+      expect(element.textContent).toContain(warning);
 
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() =>
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(4),
-      );
-      expect(element.textContent).toContain(
-        "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-      );
+      await waitForFast(() => expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true));
+      expect(element.textContent).toContain(warning);
+      publishPluginGeneration(2);
+      await element.updateComplete;
+      expect(element.textContent).toContain(warning);
+      expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
 
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForFast(() =>
-        expect(element.textContent).not.toContain(
-          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
-        ),
-      );
+      setBootId("memory-boot-b");
+      await waitForFast(() => expect(element.textContent).not.toContain(warning));
     } finally {
       element.remove();
     }
@@ -517,7 +514,7 @@ describe("MemorySettingsPage catalog state", () => {
         expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true),
       );
       expect(addonSwitch(element, "Memory wiki")?.hasAttribute("disabled")).toBe(false);
-      pending.resolve({});
+      pending.resolve(committed("active-memory", false));
     } finally {
       element.remove();
     }
@@ -543,7 +540,7 @@ describe("MemorySettingsPage catalog state", () => {
 
       toggleAddon(element, "Active memory", false);
       await waitForFast(() => expect(element.textContent).not.toContain("enablement rejected"));
-      retry.resolve({});
+      retry.resolve(committed("active-memory", false));
     } finally {
       element.remove();
     }
@@ -811,6 +808,49 @@ describe("MemorySettingsPage tab routing", () => {
     }
   });
 
+  it("refreshes the current Overview after a same-connection plugin publication", async () => {
+    const first = deferred<DoctorMemoryStatusPayload>();
+    const second = deferred<DoctorMemoryStatusPayload>();
+    const memoryStatus = vi.fn().mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
+    const { element, publishPluginGeneration } = createPage({ configObject: {}, memoryStatus });
+    element.routeData = memoryTabRoute("overview");
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledOnce());
+      publishPluginGeneration(1);
+      await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
+      second.resolve({
+        agentId: "main",
+        provider: "local",
+        embedding: { ok: false, checked: true, error: "current embedding status" },
+      });
+      await waitForFast(() => expect(element.textContent).toContain("current embedding status"));
+      first.resolve({
+        agentId: "main",
+        provider: "local",
+        embedding: { ok: false, checked: true, error: "obsolete embedding status" },
+      });
+      await first.promise;
+      await element.updateComplete;
+      expect(element.textContent).not.toContain("obsolete embedding status");
+      publishPluginGeneration(1);
+      await element.updateComplete;
+      expect(memoryStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      first.resolve({
+        agentId: "main",
+        provider: "none",
+        embedding: { ok: false, checked: false },
+      });
+      second.resolve({
+        agentId: "main",
+        provider: "none",
+        embedding: { ok: false, checked: false },
+      });
+      element.remove();
+    }
+  });
+
   it("shows the offline state when Overview is activated after disconnecting elsewhere", async () => {
     const { element, setPhase } = createPage({ configObject: {} });
     document.body.append(element);
@@ -855,29 +895,41 @@ describe("MemorySettingsPage dreaming support", () => {
     }
   });
 
-  it("re-probes after reconnect and drops the abandoned capability result", async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
-    const { element, lookupSchemaPath, setPhase } = createPage({
-      configObject: {},
-      lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
+  it.each(["reconnect", "plugin publication"])(
+    "re-probes after %s and drops the abandoned capability result",
+    async (change) => {
+      const first = deferred<unknown>();
+      const second = deferred<unknown>();
+      const { element, lookupSchemaPath, setPhase, publishPluginGeneration } = createPage({
+        configObject: {},
+        lookupSchemaPath: (call) => (call === 0 ? first.promise : second.promise),
+      });
+      document.body.append(element);
+      try {
+        await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(1));
 
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
+        if (change === "reconnect") {
+          setPhase("disconnected");
+          setPhase("connected");
+        } else {
+          publishPluginGeneration(1);
+        }
+        await waitForFast(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
 
-      first.resolve({ type: "object", additionalProperties: false, properties: {} });
-      await first.promise;
-      await element.updateComplete;
-      expect(element.textContent).not.toContain("Not available for this engine");
+        first.resolve({ type: "object", additionalProperties: false, properties: {} });
+        await first.promise;
+        await element.updateComplete;
+        expect(element.textContent).not.toContain("Not available for this engine");
 
-      second.resolve({ type: "object" });
-    } finally {
-      element.remove();
-    }
-  });
+        second.resolve({ type: "object" });
+        await second.promise;
+        await element.updateComplete;
+        expect(element.textContent).not.toContain("Not available for this engine");
+      } finally {
+        first.resolve({ type: "object" });
+        second.resolve({ type: "object" });
+        element.remove();
+      }
+    },
+  );
 });

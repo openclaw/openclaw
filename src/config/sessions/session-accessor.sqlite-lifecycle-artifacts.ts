@@ -217,7 +217,7 @@ export function planSessionLifecycleArtifactCleanup(
       database.db,
       db
         .selectFrom("session_nodes")
-        .select(["entry_json", "session_key", "current_session_id", "updated_at"])
+        .select(["session_key", "current_session_id", "updated_at"])
         .orderBy("session_key", "asc"),
     ).rows;
 

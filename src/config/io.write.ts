@@ -620,6 +620,7 @@ export async function writeConfigFileFromContext(
     return {
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
+      persistedSourceConfig: sourceConfigForPreflight,
       [configWritePostCommitRollback]: (assertCurrent) => {
         assertCurrent();
         restoreConfigSnapshotAuditRecord({

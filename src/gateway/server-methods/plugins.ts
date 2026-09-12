@@ -1,4 +1,4 @@
-// Gateway handlers for plugin inventory, metadata refresh and catalog search.
+// Gateway handlers for plugin inventory, runtime state and catalog search.
 import {
   ErrorCodes,
   errorShape,
@@ -7,7 +7,6 @@ import {
   validatePluginsCatalogCategoriesParams,
   validatePluginsCatalogGetParams,
   validatePluginsListParams,
-  validatePluginsRefreshParams,
   validatePluginsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -30,54 +29,54 @@ import {
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import {
-  inspectManagedPlugin,
-  listManagedPlugins,
-  refreshManagedPluginMetadata,
-} from "../../plugins/management-service.js";
+import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
+import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const pluginsHandlers: GatewayRequestHandlers = {
-  "plugins.refresh": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsRefreshParams, "plugins.refresh", respond)) {
-      return;
-    }
-    try {
-      refreshManagedPluginMetadata({ config: context.getRuntimeConfig() });
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin inventory refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to load updated plugins.`,
-          { details: { restartRequired: true } },
-        ),
-      );
-      return;
-    } finally {
-      context.notifyPluginMetadataChanged();
-    }
-    respond(true, { ok: true, restartRequired: true }, undefined);
-  },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
       return;
     }
     try {
-      const result = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const registry = getPluginRegistryForContext();
+      // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
+      const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
+      const failures = new Map(
+        registry
+          ? listPluginServiceHealthFailures(registry).map((failure) => [failure.pluginId, failure])
+          : [],
+      );
       respond(
         true,
         {
-          ...result,
-          plugins: result.plugins.map((plugin) =>
-            plugin.clawhubPackage
-              ? Object.assign({}, plugin, {
-                  catalogId: encodePluginDiscoveryId(plugin.clawhubPackage),
-                })
-              : plugin,
-          ),
+          ...catalog,
+          generation: getPluginRegistryVersion(registry),
+          plugins: catalog.plugins.map((plugin) => {
+            const record = records.get(plugin.id);
+            const failure = failures.get(plugin.id);
+            const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
+            return Object.assign({}, plugin, {
+              ...(plugin.clawhubPackage
+                ? { catalogId: encodePluginDiscoveryId(plugin.clawhubPackage) }
+                : {}),
+              runtime: {
+                state:
+                  record?.status === "loaded"
+                    ? failure
+                      ? "service-failed"
+                      : "active"
+                    : record?.status === "disabled"
+                      ? "disabled"
+                      : "unloaded",
+                ...(error ? { error: error.slice(0, 2000) } : {}),
+              },
+            });
+          }),
         },
         undefined,
       );

@@ -5,10 +5,13 @@ import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/schema/system-info.ts";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
@@ -66,11 +69,12 @@ type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["clie
 type CatalogConnection = {
   client: GatewayClient | null;
   connected: boolean;
+  bootId: string | undefined;
 };
 
 type MemoryAddonNotice = {
   message: string;
-  processInstanceId: string | null;
+  bootId: string | undefined;
 };
 
 type MemoryPageProps = {
@@ -106,6 +110,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private support: DreamingConfigPathSupport = "unknown";
 
   private connection: CatalogConnection | null = null;
+  private pluginGeneration: number | undefined;
   private catalogRequest = 0;
   private overviewRequest: {
     connection: CatalogConnection;
@@ -121,8 +126,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
-      (gateway) =>
-        this.syncGateway(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
+      (gateway) => this.syncGateway(gateway.snapshot),
     )
     .watch(
       () => this.context?.runtimeConfig,
@@ -204,11 +208,24 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     context.replace("memory", canonical);
   }
 
-  private syncGateway(client: GatewayClient | null, connected: boolean) {
-    if (this.connection?.client === client && this.connection.connected === connected) {
+  private syncGateway(snapshot: ApplicationGatewaySnapshot) {
+    const { client } = snapshot;
+    const connected = snapshot.phase === "connected";
+    const bootId = snapshot.hello?.server?.bootId;
+    const generation = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged = generation !== this.pluginGeneration;
+    this.pluginGeneration = generation;
+    if (
+      this.connection?.client === client &&
+      this.connection.connected === connected &&
+      this.connection.bootId === bootId
+    ) {
+      if (pluginsChanged && client && connected) {
+        this.refreshPluginReads(client, this.connection);
+      }
       return;
     }
-    const connection: CatalogConnection = { client, connected };
+    const connection: CatalogConnection = { client, connected, bootId };
     this.connection = connection;
     this.engineBusy = false;
     this.engineOutcome = null;
@@ -227,45 +244,21 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       return;
     }
     this.catalog = { kind: "loading" };
+    this.addonNotices = new Map(
+      [...this.addonNotices].filter(([, notice]) => notice.bootId && notice.bootId === bootId),
+    );
+    this.refreshPluginReads(client, connection);
+  }
+
+  private refreshPluginReads(client: GatewayClient, connection: CatalogConnection) {
+    // Publication supersedes reads, not the connection or a mutation waiting on its receipt.
+    this.overviewRequest = null;
+    this.probingEmbeddings = false;
+    this.supportPluginId = null;
+    this.supportProbe = null;
+    this.syncSupport(this.context.runtimeConfig);
     void this.loadCatalog(client, connection);
-    void this.reconcileAddonNotices(client, connection);
     void this.loadOverviewStatus();
-  }
-
-  private async readProcessInstanceId(client: GatewayClient): Promise<string | null> {
-    if (!isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info")) {
-      return null;
-    }
-    try {
-      const info = await client.request<SystemInfoResult>("system.info", {});
-      return info.processInstanceId ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async reconcileAddonNotices(client: GatewayClient, connection: CatalogConnection) {
-    if (this.addonNotices.size === 0) {
-      return;
-    }
-    const processInstanceId = await this.readProcessInstanceId(client);
-    if (!processInstanceId || !this.isConnected || this.connection !== connection) {
-      return;
-    }
-    const notices = new Map<string, MemoryAddonNotice>();
-    for (const [pluginId, notice] of this.addonNotices) {
-      if (notice.processInstanceId === null) {
-        notices.set(pluginId, { ...notice, processInstanceId });
-      } else if (notice.processInstanceId === processInstanceId) {
-        notices.set(pluginId, notice);
-      }
-    }
-    if (
-      notices.size !== this.addonNotices.size ||
-      [...notices].some(([pluginId, notice]) => this.addonNotices.get(pluginId) !== notice)
-    ) {
-      this.addonNotices = notices;
-    }
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
@@ -441,43 +434,30 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.context.runtimeConfig,
         client,
         async (current) => {
-          const processInstanceId = this.readProcessInstanceId(current);
+          const bootId = this.context.gateway.snapshot.hello?.server?.bootId;
           return {
             result: await setPluginEnabled(current, pluginId, enabled),
-            processInstanceId,
+            bootId,
           };
         },
+        { canDispatch: () => this.canDispatchPluginMutation(connection) },
       );
-      const { result, processInstanceId } = mutation.value;
-      const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
+      const { result, bootId } = mutation.value;
       const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-      const notice = [
-        result.restartRequired ? t(key, { name: result.plugin.name }) : null,
-        ...warnings,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      const notice = warnings.join(" ");
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
         this.applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
-        const noticeProcessInstanceId = notice ? await processInstanceId : null;
-        if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
-          const notices = new Map(this.addonNotices);
-          if (notice) {
-            notices.set(pluginId, {
-              message: notice,
-              processInstanceId: noticeProcessInstanceId,
-            });
-          } else {
-            notices.delete(pluginId);
-          }
-          this.addonNotices = notices;
-          if (notice) {
-            const noticeConnection = this.connection;
-            if (noticeConnection?.connected && noticeConnection.client) {
-              void this.reconcileAddonNotices(noticeConnection.client, noticeConnection);
-            }
-          }
+        const notices = new Map(this.addonNotices);
+        const currentBootId = this.context.gateway.snapshot.hello?.server?.bootId;
+        if (
+          notice &&
+          (bootId && currentBootId ? bootId === currentBootId : this.connection === connection)
+        ) {
+          notices.set(pluginId, { message: notice, bootId });
+        } else {
+          notices.delete(pluginId);
         }
+        this.addonNotices = notices;
       }
       const currentConnection = this.connection;
       if (currentConnection?.connected && currentConnection.client) {
@@ -497,6 +477,15 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.addonBusy = busy;
       }
     }
+  }
+
+  private canDispatchPluginMutation(connection: CatalogConnection) {
+    return (
+      this.connection === connection &&
+      !this.mutationDisabled &&
+      (this.catalog.kind !== "ready" || this.catalog.mutationAllowed) &&
+      readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin
+    );
   }
 
   private async changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
@@ -528,6 +517,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.context.runtimeConfig,
         client,
         (current) => setPluginEnabled(current, engineId, true),
+        { canDispatch: () => this.canDispatchPluginMutation(connection) },
       );
       this.applyPluginRefreshOutcome(connection, mutation.refreshError);
       const currentConnection = this.connection;

@@ -2155,7 +2155,6 @@ src/channels/plugins/config-helpers.ts	7
 src/channels/plugins/config-schema.ts	12
 src/channels/plugins/config-write-policy-shared.ts	1
 src/channels/plugins/config-writes.ts	1
-src/channels/plugins/configured-binding-compiler.ts	1
 src/channels/plugins/configured-binding-match.ts	1
 src/channels/plugins/contracts/outbound-payload-testkit.ts	4
 src/channels/plugins/contracts/trace/delivery-trace.ts	1
@@ -2356,7 +2355,7 @@ src/commands/doctor-auth-flat-profiles.ts	3
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
 src/commands/doctor-config-analysis.ts	3
-src/commands/doctor-config-flow.ts	3
+src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-db-bloat.ts	1
 src/commands/doctor-gateway-services.ts	1
@@ -3267,7 +3266,6 @@ src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
 src/plugins/contracts/tts-contract-suites.ts	19
 src/plugins/conversation-binding.ts	1
-src/plugins/current-plugin-metadata-snapshot.ts	1
 src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
@@ -3330,7 +3328,7 @@ src/plugins/plugin-command-runtime.ts	3
 src/plugins/plugin-config-trust.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-package-update.ts	1
-src/plugins/plugin-peer-link.ts	4
+src/plugins/plugin-peer-link.ts	3
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-api-key-auth.ts	2
@@ -3558,7 +3556,6 @@ src/tasks/task-registry-query.ts	4
 src/tasks/task-registry-state.ts	3
 src/tasks/task-registry.process-state.ts	1
 src/tasks/task-registry.sqlite.shared.ts	1
-src/tasks/task-registry.store.sqlite.ts	1
 src/tasks/task-registry.ts	1
 src/tasks/task-registry.types.ts	2
 src/tasks/task-status.ts	1
@@ -3630,7 +3627,7 @@ src/worker/worker-process.ts	2
 src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
-ui/src/app-navigation.ts	2
+ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2

@@ -1,13 +1,20 @@
 ---
-summary: "What `plugins uninstall` removes, and how `plugins update` resolves sources, channels, pins, and integrity drift"
+summary: "What `plugins uninstall` removes, how `plugins update` resolves sources, channels, pins, and integrity drift, and reloading edited plugins"
 title: "Uninstall and update plugins"
 read_when:
   - You want to remove a plugin and know exactly what uninstall touches
   - You want to update a plugin and understand pin, channel, and integrity rules
+  - You want to reload an edited plugin without restarting the Gateway
 ---
 
-This page covers the two commands that change an existing install:
-`openclaw plugins uninstall` and `openclaw plugins update`.
+This page covers removing and updating installed plugins, and reloading edited
+plugin code without restarting the Gateway.
+
+With a running Gateway, ordinary uninstall waits for the package runtime owners
+to stop before removing files, and update refreshes the Gateway after the local
+package operation finishes. Without a running Gateway, these commands save changes
+for its next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+for the separate CLI installation flow.
 
 ## Uninstall
 
@@ -20,7 +27,7 @@ openclaw plugins uninstall <id> --force
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
-Matching load-path references are removed before package files so symlink aliases cannot leave invalid config; if file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
+Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -88,3 +95,40 @@ On source installations, a selected plugin built with the host stays in use. Nam
     Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Review outcomes are printed informationally and continue; blocked releases remain non-installable. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
   </Accordion>
 </AccordionGroup>
+
+## Reload
+
+```bash
+openclaw plugins reload <plugin-id>
+openclaw plugins reload <plugin-id> --json
+```
+
+Reload a discovered plugin after editing its TypeScript source, imported helpers,
+or manifest, including plugins selected through `plugins.load.paths`. The command
+requires a running Gateway and waits for the replacement to finish without
+restarting it. Configured enablement is preserved, and unchanged
+plugins keep their runtime instances. JSON output includes `pluginIds`,
+`restartRequired: false`, and the applied runtime receipt with its generation
+and source digests when available. The CLI still takes one plugin ID; the Gateway
+request uses the same target-array envelope as a multi-plugin reload.
+
+Cleanup is best effort. A successful replacement can return `warnings` when an
+old service or cleanup hook could not stop. Modules and native libraries may
+remain loaded after their registrations are removed. Inspect the warning before
+retrying; restart the Gateway if residual plugin behavior causes problems.
+
+Bundled plugins can reload while preserving their enabled or disabled policy.
+Reload does not rebuild compiled bundled code; changed compiled code still needs
+a build and Gateway restart. Reloading a discovered source does not create an
+install record or grant permission to install, replace, or remove its files.
+
+Reload also works with externally managed config (`OPENCLAW_CONFIG_READONLY=1`)
+and in Nix mode (`OPENCLAW_NIX_MODE=1`), including config composed with `$include`.
+It preserves config and installation state. If changed capabilities need new
+consent, record that acceptance through the deployment owner before reloading.
+
+Changed declared capabilities may require another review. Interactive callers are
+prompted; use `--accept-capabilities` only after reviewing the change. If preparation
+fails, the error reports whether a replacement was published. A failure after
+publication can leave the new generation active; inspect the reported state before
+retrying.

@@ -33,7 +33,7 @@ import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantReplyContent,
   combineNonStreamingReplyParts,
-  extractAssistantDisplayTextFromContent,
+  extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
   sanitizeAssistantDisplayText,
@@ -257,7 +257,7 @@ export function createChatSendReplyDispatch(params: {
     }
     const transcriptReply =
       mediaMessage?.transcriptText ??
-      extractAssistantDisplayTextFromContent(assistantContent) ??
+      extractAssistantDisplayText(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(

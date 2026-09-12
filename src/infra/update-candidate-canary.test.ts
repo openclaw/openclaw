@@ -488,6 +488,7 @@ describe("update candidate canary", () => {
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: path.join(root, "live-result.json"),
         [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: path.join(root, "live-config.json"),
         OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: path.join(root, "live-doctor-result.json"),
         OPENCLAW_SYSTEMD_UNIT: "source-gateway.service",
         CUSTOM_PROVIDER_KEY: "synthetic-provider-credential",
       },
@@ -529,6 +530,7 @@ describe("update candidate canary", () => {
       POST_CORE_UPDATE_RESULT_PATH_ENV,
       POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
       "OPENCLAW_UPDATE_RUN_HANDOFF",
+      "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
       "OPENCLAW_SYSTEMD_UNIT",
     ]) {
       expect(childEnv[key]).toBeUndefined();

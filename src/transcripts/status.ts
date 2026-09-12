@@ -4,7 +4,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
@@ -25,7 +25,7 @@ export async function readTranscriptLibraryStatus(
     config: cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  const registry = getActivePluginRegistry();
+  const registry = getPluginRegistryForContext();
   const providers = new Map<string, ProviderStatus>();
   const installed = new Map(metadata?.index.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const runtime = new Map(registry?.plugins.map((plugin) => [plugin.id, plugin]));

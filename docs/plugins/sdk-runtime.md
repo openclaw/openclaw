@@ -129,6 +129,10 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+Context engines selected by an admitted turn remain owned through that turn's
+commit and engine disposal. Reload can report their cleanup as deferred; starting
+engine disposal closes normal engine callbacks while cleanup finishes.
+
 Managed instances expose `api.lifecycle.signal` and
 `api.lifecycle.onDispose(cleanup)`. The signal aborts when disposal reaches
 explicit cleanup. `onDispose` accepts a synchronous or asynchronous callback and
@@ -152,12 +156,6 @@ Opaque values returned by a plugin can be passed back directly or in data-only
 records and arrays. Caller-owned objects with methods or accessors are passed
 unchanged, including any handles inside them.
 
-Memory runtimes can implement `prepareReload` to fence and drain managers that
-use retiring embedding adapters. For older runtimes, OpenClaw calls the existing
-`closeAllMemorySearchManagers` method, when provided, if the runtime or an embedding
-adapter retires. This fallback closes all of that runtime's managers as best-effort
-cleanup; it cannot identify dependencies or prevent concurrent manager acquisition.
-
 `createPluginRuntimeStore` resolves its slot from the invoking managed instance.
 Preparing another instance does not overwrite that instance's runtime. Calls
 outside managed instance scope retain the store's existing standalone behavior.
@@ -165,6 +163,23 @@ outside managed instance scope retain the store's existing standalone behavior.
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
+
+### Memory runtime replacement
+
+Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`
+and return `drain()` and `resume()`. Preparation synchronously fences affected
+manager acquisition, including lazy and fallback work. Match the exact acquired
+adapter objects rather than provider IDs. Drain removes affected managers from
+reuse before attempting to close them. It may return `{ errors }` to report
+cleanup failures. Resume reopens admission after cancellation, or after publication
+when the runtime is retained, even if old cleanup remains unfinished. Retiring
+managers must not publish late results into a replacement manager's caches.
+
+Preparing an unused runtime must leave its manager engine unloaded. For runtimes
+without this hook, OpenClaw calls the existing `closeAllMemorySearchManagers`
+method, when provided, if the runtime or an embedding adapter retires. This closes
+all of that runtime's managers as best-effort cleanup; it cannot identify dependent
+managers or prevent concurrent manager acquisition.
 
 ## Other top-level `api` fields
 
@@ -177,7 +192,10 @@ Beyond `api.runtime`, the API object also provides:
   Plugin display name.
 </ParamField>
 <ParamField path="api.config" type="OpenClawConfig">
-  Current config snapshot (active in-memory runtime snapshot when available).
+  Config snapshot supplied when this instance registers. A retained instance keeps
+  that snapshot across other config changes. In long-lived callbacks, prefer the
+  supplied `cfg`, or use `api.runtime.config.current()` when no config is passed.
+  Explicitly reload the plugin to rerun registration with the latest config.
 </ParamField>
 <ParamField path="api.pluginConfig" type="Record<string, unknown>">
   Plugin-specific config from `plugins.entries.<id>.config`.

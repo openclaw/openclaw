@@ -4,10 +4,77 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { resolveModelRuntimePolicy as resolveModelRuntimePolicyBase } from "./model-runtime-policy.js";
+import {
+  resolveModelRouteIntent,
+  resolveModelRuntimePolicy as resolveModelRuntimePolicyBase,
+} from "./model-runtime-policy.js";
 
 const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
 const ORIGINAL_QA_FORCE_RUNTIME = process.env.OPENCLAW_QA_FORCE_RUNTIME;
+
+describe("model route intent", () => {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: {
+        assistant: {},
+        billing: { models: { "openai/gpt-5.4-mini": { agentRuntime: { id: "openclaw" } } } },
+      },
+      defaults: {
+        model: "openai/gpt-5.5",
+        models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+      },
+    },
+  };
+
+  it("inherits only the selected agent's same-provider primary route", () => {
+    expect(
+      resolveModelRouteIntent({
+        config,
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        agentId: "assistant",
+      }),
+    ).toEqual({ runtimeId: "codex", source: "inherited" });
+    expect(
+      resolveModelRouteIntent({
+        config,
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        agentId: "assistant",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a consumer's explicit runtime ahead of the default route", () => {
+    expect(
+      resolveModelRouteIntent({
+        config,
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        agentId: "billing",
+      }),
+    ).toEqual({ runtimeId: "openclaw", source: "explicit" });
+  });
+
+  it("preserves an inherited billing pin without equating Codex with OAuth", () => {
+    const pinnedConfig: OpenClawConfig = {
+      ...config,
+      auth: { profiles: { "openai:metered": { provider: "openai", mode: "api_key" } } },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, model: "openai/gpt-5.5@openai:metered" },
+      },
+    };
+    expect(
+      resolveModelRouteIntent({
+        config: pinnedConfig,
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        agentId: "assistant",
+      }),
+    ).toEqual({ runtimeId: "codex", authRequirement: "api-key", source: "inherited" });
+  });
+});
 
 function resolveModelRuntimePolicy(
   params: Parameters<typeof resolveModelRuntimePolicyBase>[0],

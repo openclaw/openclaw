@@ -213,6 +213,8 @@ describe("worker detached model-context branch parity", () => {
       throw new Error("prior worker fixture remains unjoined; retained state must not be replaced");
     }
     await setupWorkerTurnLauncherTest();
+    // Source-worker initialization belongs to setup, outside the launch observation budget.
+    await SessionManager.openModelContextAsync(sessionTarget);
   });
   afterEach(async () => {
     if (!hasUnjoinedOwner) {

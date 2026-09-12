@@ -997,7 +997,11 @@ describe("config mutate helpers", () => {
       hash: "hash-persisted",
       sourceConfig: { gateway: { auth: { mode: "token" } } },
     });
+    const persistedSourceConfig = {
+      gateway: { auth: { mode: "token" as const, token: "${TOKEN}" } },
+    };
     ioMocks.writeConfigFile.mockResolvedValue({
+      persistedSourceConfig,
       persistedHash: "hash-after",
       persistedConfig: {
         gateway: { auth: { mode: "token", token: "minted" } },
@@ -1013,6 +1017,7 @@ describe("config mutate helpers", () => {
     });
 
     expect(result.persistedHash).toBe("hash-after");
+    expect(result.persistedSourceConfig).toBe(persistedSourceConfig);
     expect(result.nextConfig).toEqual({
       gateway: { auth: { mode: "token", token: "minted" } },
       meta: { lastTouchedVersion: "test" },
