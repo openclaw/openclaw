@@ -416,7 +416,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       sectionOrder: this.knownSectionOrder(),
       catalogIds: catalogs.map((catalog) => catalog.id),
       collapsedSections,
-      hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
+      hideEmptyGroups: this.sessionsHideEmptyGroups,
+      ownerFiltered: this.sessionOwnerFilterActive || this.sessionInvolvingMeFilterActive,
       visibleSessionLimits: roster
         ? this.rosterVisibleSessionLimits
         : this.sessionData.visibleSessionLimits,
