@@ -249,8 +249,8 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       reject(createAbortError(signal?.reason));
     };
+    // An active poll must outlive the child's last handle so one-shot callers receive its result.
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
