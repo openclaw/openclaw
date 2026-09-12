@@ -153,13 +153,14 @@ export type SlackMonitorContext = {
   ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
   resolveUserAvatar: (userId: string, eventScope?: SlackEventScope) => string | undefined;
+  /** True means Slack accepted the status write, not that every client rendered it. */
   setSlackSessionStatus: (params: {
     channelId: string;
     threadTs?: string;
     status: "processing" | "active" | "suspended";
     title?: string;
     eventScope?: SlackEventScope;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   recordSlackSessionTitle: (params: {
     channelId: string;
     threadTs: string;
@@ -431,12 +432,12 @@ export function createSlackMonitorContext(params: {
       runtime: params.runtime,
     });
     if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
-      return;
+      return updated.ok;
     }
     const title = truncateUtf16Safe(p.title, 200);
     // A user rename received while the status request was in flight wins.
     if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
-      return;
+      return true;
     }
     // setStatus only names newly created sessions. Rename existing sessions once
     // per display-name change; inbound user renames update this same cache.
@@ -455,6 +456,7 @@ export function createSlackMonitorContext(params: {
         recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
       }
     }
+    return true;
   };
 
   const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>

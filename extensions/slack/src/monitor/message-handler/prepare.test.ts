@@ -5190,7 +5190,7 @@ describe("prepareSlackMessage sender prefix", () => {
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
       resolveUserName: async () => ({ name: "Alice" }),
-      setSlackSessionStatus: async () => undefined,
+      setSlackSessionStatus: async () => true,
     } as unknown as SlackMonitorContext;
   }
 

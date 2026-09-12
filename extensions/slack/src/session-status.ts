@@ -58,10 +58,15 @@ export async function setSlackSessionStatus(params: {
         ),
       );
     }
+    if (!response.ok) {
+      logVerbose(
+        `slack status update returned ok=false for channel ${params.channelId} (${params.status})`,
+      );
+    }
     return response.ok ? { ok: true, title: response.title } : { ok: false };
   } catch (error) {
     logVerbose(
-      `slack status update failed for channel ${params.channelId}: ${formatSlackError(error)}`,
+      `slack status update failed for channel ${params.channelId} (${params.status}): ${formatSlackError(error)}`,
     );
     return { ok: false };
   }
