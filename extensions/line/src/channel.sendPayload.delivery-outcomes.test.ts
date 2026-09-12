@@ -1,9 +1,12 @@
 import { HTTPFetchError } from "@line/bot-sdk";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createPendingLineResponse,
@@ -12,9 +15,18 @@ import {
 } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
 });
 
 describe("line outbound delivery outcomes", () => {
@@ -176,7 +188,7 @@ describe("line outbound delivery outcomes", () => {
     }
   });
 
-  it("keeps accepted media receipts without reading quota for a later text refusal", async () => {
+  it("keeps accepted media receipts without reading quota for a later batch refusal", async () => {
     const { runtime, mocks } = createRuntime();
     const rejection = new HTTPFetchError("429 - provider rejection", {
       status: 429,
@@ -184,14 +196,10 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: "provider rejection",
     });
-    const events: string[] = [];
-    const onDeliveryResult = vi.fn(() => {
-      events.push("media-receipt");
-    });
-    mocks.pushTextMessageWithQuickReplies.mockImplementationOnce(async () => {
-      events.push("text-refused");
-      throw rejection;
-    });
+    const onDeliveryResult = vi.fn();
+    mocks.pushMessagesLine
+      .mockResolvedValueOnce(lineResult("m-media"))
+      .mockRejectedValueOnce(rejection);
     const fetchMock = stubLineApiFetch(
       Response.json({ type: "limited", value: 200 }),
       Response.json({ totalUsage: 200 }),
@@ -204,7 +212,10 @@ describe("line outbound delivery outcomes", () => {
         text: "Caption",
         payload: {
           text: "Caption",
-          mediaUrl: "https://example.com/image.jpg",
+          mediaUrls: Array.from(
+            { length: 5 },
+            (_, index) => `https://example.com/image-${index}.jpg`,
+          ),
           channelData: { line: { quickReplies: ["Continue"] } },
         },
         ...LINE_QUOTA_ACCOUNT,
@@ -212,9 +223,9 @@ describe("line outbound delivery outcomes", () => {
       }),
     ).rejects.toBe(rejection);
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-    expect(events).toEqual(["media-receipt", "text-refused"]);
+    expect(mocks.pushMessagesLine).toHaveBeenCalledTimes(2);
+    expect(mocks.sendMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "line",
@@ -249,5 +260,176 @@ describe("line outbound delivery outcomes", () => {
         cfg: { channels: { line: {} } } as OpenClawConfig,
       }),
     ).rejects.toBe(partial);
+  });
+
+  it("preserves valid mixed parts when media preparation fails", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    let caught: unknown;
+    try {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:media-failure",
+        text: "Caption",
+        payload: {
+          text: "Caption",
+          mediaUrl: "http://example.com/image.jpg",
+          channelData: {
+            line: {
+              flexMessage: { altText: "Card", contents: { type: "bubble" } },
+            },
+          },
+        },
+        accountId: "default",
+        cfg,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:media-failure",
+      [
+        { type: "flex", altText: "Card", contents: { type: "bubble" } },
+        { type: "text", text: "Caption" },
+      ],
+      expect.any(Object),
+    );
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["m-batch"],
+      visibleReplySent: true,
+    });
+  });
+
+  it("recovers text after a definitive mixed-batch rejection", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const rejection = new HTTPFetchError("400 - invalid rich message", {
+      status: 400,
+      statusText: "Bad Request",
+      headers: new Headers(),
+      body: "invalid rich message",
+    });
+    mocks.pushMessagesLine
+      .mockRejectedValueOnce(rejection)
+      .mockResolvedValueOnce(lineResult("m-text-recovered"));
+
+    let caught: unknown;
+    try {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:rejected-batch",
+        text: "Caption",
+        payload: {
+          text: "Caption",
+          channelData: {
+            line: {
+              flexMessage: { altText: "Invalid card", contents: { type: "bubble" } },
+            },
+          },
+        },
+        accountId: "default",
+        cfg,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(mocks.pushMessagesLine).toHaveBeenNthCalledWith(
+      1,
+      "line:user:rejected-batch",
+      [
+        { type: "flex", altText: "Invalid card", contents: { type: "bubble" } },
+        { type: "text", text: "Caption" },
+      ],
+      expect.any(Object),
+    );
+    expect(mocks.pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:rejected-batch",
+      [{ type: "text", text: "Caption" }],
+      expect.any(Object),
+    );
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["m-text-recovered"],
+      visibleReplySent: true,
+    });
+  });
+
+  it("preserves accepted fallback evidence when its receipt is unreadable", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const rejection = new HTTPFetchError("400 - invalid rich message", {
+      status: 400,
+      statusText: "Bad Request",
+      headers: new Headers(),
+      body: "invalid rich message",
+    });
+    const fallbackAccepted = createChannelPartialDeliveryError(
+      new Error("accepted response body could not be parsed"),
+      { messageIds: ["m-text-accepted"], visibleReplySent: true },
+    );
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection).mockRejectedValueOnce(fallbackAccepted);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:accepted-fallback",
+        text: "Caption",
+        payload: {
+          text: "Caption",
+          channelData: {
+            line: {
+              flexMessage: { altText: "Invalid card", contents: { type: "bubble" } },
+            },
+          },
+        },
+        accountId: "default",
+        cfg,
+      }),
+    ).rejects.toBe(fallbackAccepted);
+  });
+
+  it("preserves an ambiguous fallback transport failure", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const rejection = new HTTPFetchError("400 - invalid rich message", {
+      status: 400,
+      statusText: "Bad Request",
+      headers: new Headers(),
+      body: "invalid rich message",
+    });
+    const fallbackAmbiguous = new Error("connection closed after fallback request");
+    mocks.pushMessagesLine
+      .mockRejectedValueOnce(rejection)
+      .mockRejectedValueOnce(fallbackAmbiguous);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:ambiguous-fallback",
+        text: "Caption",
+        payload: {
+          text: "Caption",
+          channelData: {
+            line: {
+              flexMessage: { altText: "Invalid card", contents: { type: "bubble" } },
+            },
+          },
+        },
+        accountId: "default",
+        cfg,
+      }),
+    ).rejects.toBe(fallbackAmbiguous);
   });
 });
