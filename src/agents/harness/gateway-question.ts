@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type {
   QuestionAnswers,
   QuestionRequestQuestion,
@@ -105,6 +106,19 @@ function readQuestionRejection(error: unknown): { code: unknown; reason?: string
 function isTerminalAgentQuestionError(error: unknown): boolean {
   const reason = readQuestionRejection(error)?.reason;
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
+}
+
+/**
+ * Resolve rejections for malformed or incomplete answers leave the question
+ * pending, so the same source can submit a corrected answer. Reply owners
+ * surface this rejection instead of failing the whole channel dispatch.
+ */
+export function isQuestionAnswerValidationError(
+  error: unknown,
+): error is GatewayClientRequestError {
+  // The name marker below is the runtime check for this class across the
+  // gateway protocol boundary, where instanceof is not reliable.
+  return readQuestionRejection(error)?.reason === "QUESTION_INVALID_ANSWER";
 }
 
 type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
