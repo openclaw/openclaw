@@ -1,9 +1,12 @@
 import { HTTPFetchError } from "@line/bot-sdk";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createPendingLineResponse,
@@ -29,7 +32,7 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: "provider rejection",
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
     setLineRuntime(runtime);
 
     await expect(
@@ -107,7 +110,7 @@ describe("line outbound delivery outcomes", () => {
       headers: new Headers(),
       body: JSON.stringify({ message: "You have reached your monthly limit." }),
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+    mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
     const fetchMock = stubLineApiFetch(
       quota ? Response.json(quota) : Response.json({ message: "unavailable" }, { status: 503 }),
       ...(used === undefined ? [] : [Response.json({ totalUsage: used })]),
@@ -124,7 +127,7 @@ describe("line outbound delivery outcomes", () => {
       name: "PlatformMessageNotDispatchedError",
       cause: rejection,
     });
-    expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls.map(([input]) => resolveRequestUrl(input))[0]).toBe(
       "https://api.line.me/v2/bot/message/quota",
     );
@@ -151,7 +154,7 @@ describe("line outbound delivery outcomes", () => {
         headers: new Headers(),
         body: JSON.stringify({ message: "You have reached your monthly limit." }),
       });
-      mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+      mocks.pushMessagesLine.mockRejectedValueOnce(rejection);
       setLineRuntime(runtime);
 
       delivered = lineOutboundAdapter.sendPayload!({
@@ -176,7 +179,7 @@ describe("line outbound delivery outcomes", () => {
     }
   });
 
-  it("keeps accepted media receipts without reading quota for a later text refusal", async () => {
+  it("keeps an accepted batch receipt without reading quota for a later refusal", async () => {
     const { runtime, mocks } = createRuntime();
     const rejection = new HTTPFetchError("429 - provider rejection", {
       status: 429,
@@ -186,10 +189,11 @@ describe("line outbound delivery outcomes", () => {
     });
     const events: string[] = [];
     const onDeliveryResult = vi.fn(() => {
-      events.push("media-receipt");
+      events.push("batch-receipt");
     });
-    mocks.pushTextMessageWithQuickReplies.mockImplementationOnce(async () => {
-      events.push("text-refused");
+    mocks.pushMessagesLine.mockImplementationOnce(async () => lineResult("m-first-batch"));
+    mocks.pushMessagesLine.mockImplementationOnce(async () => {
+      events.push("batch-refused");
       throw rejection;
     });
     const fetchMock = stubLineApiFetch(
@@ -197,29 +201,41 @@ describe("line outbound delivery outcomes", () => {
       Response.json({ totalUsage: 200 }),
     );
     setLineRuntime(runtime);
+    const card = ["```js", "card()", "```"].join("\n");
 
-    await expect(
-      lineOutboundAdapter.sendPayload!({
-        to: "line:user:U123",
-        text: "Caption",
-        payload: {
-          text: "Caption",
-          mediaUrl: "https://example.com/image.jpg",
-          channelData: { line: { quickReplies: ["Continue"] } },
-        },
-        ...LINE_QUOTA_ACCOUNT,
-        onDeliveryResult,
-      }),
-    ).rejects.toBe(rejection);
+    // Six cards need a second request; the first one's receipt is already
+    // accepted, so its refusal must not wait on a quota lookup.
+    const failure = await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: Array.from({ length: 6 }, () => card).join("\n\n"),
+      payload: { text: Array.from({ length: 6 }, () => card).join("\n\n") },
+      ...LINE_QUOTA_ACCOUNT,
+      onDeliveryResult,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const cause = failure instanceof Error ? failure.cause : undefined;
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-    expect(events).toEqual(["media-receipt", "text-refused"]);
+    // Five messages are already in the chat, so the refusal of the second
+    // request has to carry them rather than read as a send that never started.
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(failure.deliveryResult).toMatchObject({
+      messageIds: ["m-first-batch"],
+      visibleReplySent: true,
+    });
+    expect(cause).toBe(rejection);
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["batch-receipt", "batch-refused"]);
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "line",
-        messageId: "m-media",
-        receipt: expect.objectContaining({ platformMessageIds: ["m-media"] }),
+        messageId: "m-first-batch",
+        receipt: expect.objectContaining({ platformMessageIds: ["m-first-batch"] }),
       }),
     );
     expect(fetchMock).not.toHaveBeenCalled();
@@ -237,7 +253,7 @@ describe("line outbound delivery outcomes", () => {
       messageIds: ["accepted-first"],
       visibleReplySent: true,
     });
-    mocks.pushMessageLine.mockRejectedValueOnce(partial);
+    mocks.pushMessagesLine.mockRejectedValueOnce(partial);
     setLineRuntime(runtime);
 
     await expect(
