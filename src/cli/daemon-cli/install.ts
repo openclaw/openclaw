@@ -32,6 +32,7 @@ import {
 } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
+import { renderSystemdErrorHints } from "../../daemon/systemd-hints.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
@@ -196,8 +197,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
     existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
-  } catch {
-    fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
+  } catch (error) {
+    fail(
+      "SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.",
+      await renderSystemdErrorHints(error),
+    );
     return;
   }
   const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);

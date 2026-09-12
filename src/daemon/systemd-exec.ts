@@ -10,7 +10,6 @@ import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
-  isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
 
@@ -67,10 +66,13 @@ export function systemdInspectionError(
 }
 
 export function isSystemctlMissing(result: ExecResult): boolean {
+  // A missing user bus reports the same ENOENT wording as a missing binary, so only
+  // the classifier's precedence and a launch failure prove the binary is unreachable.
+  const kind = classifySystemdUnavailableDetail(readSystemctlDetail(result));
   return (
     result.errorCode === "ENOENT" ||
     result.errorCode === "EACCES" ||
-    (result.termination === "exit" && isSystemctlMissingDetail(readSystemctlDetail(result)))
+    (result.termination === "exit" && kind === "missing_systemctl")
   );
 }
 
@@ -310,19 +312,33 @@ async function execSystemdUserCommand(
   }
 
   const detail = readSystemctlDetail(directResult);
-  if (
-    directResult.termination !== "exit" ||
-    !machineUser ||
-    !shouldFallbackToMachineUserScope(detail)
-  ) {
-    return directResult;
-  }
-
-  const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
+  const machineScopeArgs =
+    directResult.termination === "exit" && machineUser && shouldFallbackToMachineUserScope(detail)
+      ? resolveSystemctlMachineUserScopeArgs(machineUser)
+      : [];
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await run(machineScopeArgs);
+  const machineResult = await run(machineScopeArgs);
+  // A manager reached through machine scope answers with authority: a degraded
+  // `status`, an absent unit, or an already-inactive unit all exit nonzero and
+  // callers match that stderr exactly. Only a retry that never reached a manager
+  // keeps the direct --user stderr, which alone names the real user-bus failure.
+  if (machineResult.code === 0 || !isSystemdBusConnectFailure(machineResult)) {
+    return machineResult;
+  }
+  return { ...machineResult, stderr: `${directResult.stderr}\n${machineResult.stderr}`.trim() };
+}
+
+function isSystemdBusConnectFailure(result: ExecResult): boolean {
+  if (result.termination !== "exit") {
+    return true;
+  }
+  // systemd prints its bus connect errors on stderr as "Failed to connect to bus: ..."
+  // or "Failed to connect to <scope> scope bus via <transport> transport: ...".
+  // stdout stays out of this decision: a unit's journal excerpt may quote the same words.
+  const normalized = normalizeLowercaseStringOrEmpty(result.stderr);
+  return normalized.includes("failed to connect to") && normalized.includes("bus");
 }
 
 export async function execSystemctlUser(

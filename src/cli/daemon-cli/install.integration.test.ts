@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
@@ -685,6 +686,20 @@ describe("runDaemonInstall integration", () => {
       expect(runtimeLogs.join("\n")).not.toContain(secret);
     },
   );
+
+  it("names the systemd user-bus repair when the definition cannot be inspected", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    serviceMock.isLoaded.mockResolvedValue(true);
+    serviceMock.readCommand.mockRejectedValueOnce(
+      new ServiceInspectionError("systemd-user-bus-unavailable"),
+    );
+
+    await expect(runDaemonInstall({ json: true })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("SERVICE_DEFINITION_UNKNOWN");
+    expect(runtimeLogs.join("\n")).toContain("dbus-user-session");
+  });
 
   it.each([undefined, "26.8.1", "24.15.0"])(
     "keeps an already-installed service read-only with Node %s",
