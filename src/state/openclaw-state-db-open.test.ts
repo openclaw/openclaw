@@ -8,7 +8,11 @@ import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as busyTimeout from "../infra/sqlite-busy-timeout.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseHandleExclusion,
+  resolveStateDatabaseCoordinatorPath,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -96,6 +100,27 @@ describe("unpublished state database acquisition", () => {
     }
     expect(maintenanceTimerCount()).toBe(0);
   }
+
+  it("keeps the admitted coordinator directory for delayed maintenance", () => {
+    const { params, open } = acquisitionFixture();
+    const runtimeDirectory = tempDirs.make("openclaw-maintenance-scope-");
+    const database = withStateDatabaseCoordinatorRuntimeDirectory(runtimeDirectory, () =>
+      openUnpublishedStateDatabase(params),
+    );
+    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+      databasePath: params.pathname,
+      runtimeDirectory,
+      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+    });
+    try {
+      open.mockClear();
+      vi.advanceTimersByTime(30 * 60 * 1000);
+      expect(open.mock.calls.map(([location]) => location)).toContain(coordinatorPath);
+    } finally {
+      database.walMaintenance.close();
+      closeTrackedStateDatabase(database.db);
+    }
+  });
 
   it.each([
     "statement cache",

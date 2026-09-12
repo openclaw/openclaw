@@ -1,5 +1,4 @@
-import { captureOpenClawStateDatabaseReadAdmission } from "../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   mapTaskFlowDetail,
   mapTaskRunAggregateSummary,
@@ -30,20 +29,19 @@ function bind(params: Binding) {
 }
 
 async function readStore(includeTasks: boolean, includeFlows: boolean) {
-  const databasePath = resolveOpenClawStateSqlitePath();
-  const context = captureOpenClawStateDatabaseReadAdmission(databasePath);
+  const context = captureOpenClawStateWorkerContext();
   // Cold restore retains canonical schema admission and failure semantics. Only
   // this first admission uses main-thread SQLite; warmed queries run in the worker.
   if (includeFlows) {
-    context.assertCurrent();
+    context.admission.assertCurrent();
     ensureTaskFlowRegistryReady();
   }
   if (includeTasks) {
-    context.assertCurrent();
+    context.admission.assertCurrent();
     ensureTaskRegistryReady();
   }
   const store = await import("../../state/openclaw-state-worker-store.js");
-  context.assertCurrent();
+  context.admission.assertCurrent();
   return { store, context };
 }
 
@@ -127,11 +125,14 @@ function bindFlows(params: Binding): BoundAsyncTaskFlowsRuntime {
   const binding = bind(params);
   const read = async (lookup: "id" | "latest" | "resolve", token?: string) => {
     const { store, context } = await readStore(true, true);
-    const result = await store.executeOpenClawStateWorker(context, {
-      type: "flows.detail",
-      input: { ownerKey: binding.sessionKey, lookup, token },
+    return store.runOpenClawStateWorkerOperation(context, async (scope) => {
+      const result = await scope.execute({
+        type: "flows.detail",
+        input: { ownerKey: binding.sessionKey, lookup, token },
+      });
+      context.admission.assertCurrent();
+      return result ? mapTaskFlowDetail(result) : undefined;
     });
-    return result ? mapTaskFlowDetail(result) : undefined;
   };
   return {
     ...binding,

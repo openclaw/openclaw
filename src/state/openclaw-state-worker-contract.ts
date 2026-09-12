@@ -1,3 +1,4 @@
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
@@ -41,4 +42,9 @@ export type OpenClawStateWorkerOperations = {
     input: TaskFlowReadQuery;
     output: TaskFlowRead | undefined;
   };
+};
+
+/** Internal inspection cannot open canonical state or execute a domain command. */
+export type OpenClawStateWorkerInspectionOperations = {
+  "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
 };

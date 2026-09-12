@@ -10,19 +10,29 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
+import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   type SqliteWorkerReply,
 } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  openSharedStateSqliteWorkerStore,
+  closeUnclaimedSharedStateSqliteWorkers,
+  hasUnclaimedSharedStateSqliteCleanup,
+  openSqliteWorkerStore,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
+import * as coordinatorOwner from "./state-database-coordinator.js";
 
 const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -72,6 +82,34 @@ function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
 
 function read(store: SqliteWorkerStore<FixtureOperations>) {
   return store.execute({ type: "read", input: undefined });
+}
+
+async function openWithGateway(file: string) {
+  const root = path.dirname(file);
+  const gateway = coordinatorOwner.acquireGatewayLifecycleCoordinator({
+    databasePath: file,
+    runtimeDirectory: root,
+  });
+  try {
+    const store = await openSharedStateSqliteWorkerStore<FixtureOperations>(
+      {
+        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: file,
+      },
+      {
+        environment: { OPENCLAW_STATE_DIR: root },
+        coordinatorRuntime: { directory: root, keepAlive: false },
+      },
+    );
+    if (!store) {
+      throw new Error("Fixture shared-state worker did not open");
+    }
+    stores.add(store);
+    return { store, gateway };
+  } catch (error) {
+    gateway.release();
+    throw error;
+  }
 }
 
 const nodeIt = process.versions.bun ? it.skip : it;
@@ -179,6 +217,184 @@ describe("SQLite worker store", () => {
       }
     },
   );
+
+  it("retains failed-factory custody for explicit cleanup when no Store escapes", async () => {
+    const file = databasePath();
+    const root = path.dirname(file);
+    const modulePath = path.join(root, "failed-open.mjs");
+    await writeFile(
+      modulePath,
+      `
+      import { DatabaseSync } from "node:sqlite";
+      export function createSqliteWorkerBackend(_input, context) {
+        const database = new DatabaseSync(context.databasePath);
+        database.close();
+        throw new Error("Fixture factory failed after creating its database");
+      }
+    `,
+    );
+    const unrelatedPath = databasePath();
+    const unrelated = await openWithGateway(unrelatedPath);
+    const { result: gateway, database } = captureCoordinatorDatabase(() =>
+      coordinatorOwner.acquireGatewayLifecycleCoordinator({
+        databasePath: file,
+        runtimeDirectory: root,
+      }),
+    );
+    const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+      throw new Error("Fixture native close remains open");
+    });
+    let requests = vi.spyOn(Worker.prototype, "postMessage").mockImplementationOnce(function (
+      this: Worker,
+      ...args
+    ) {
+      requests.mockRestore();
+      const result = this.postMessage(...args);
+      gateway.release();
+      return result;
+    });
+    try {
+      await expect(
+        openSharedStateSqliteWorkerStore(
+          {
+            moduleUrl: pathToFileURL(modulePath),
+            databasePath: file,
+          },
+          {
+            environment: { OPENCLAW_STATE_DIR: root },
+            coordinatorRuntime: { directory: root, keepAlive: false },
+          },
+        ),
+      ).rejects.toThrow();
+      expect(database.isOpen).toBe(true);
+      expect(hasUnclaimedSharedStateSqliteCleanup(file)).toBe(true);
+      await expect(open(file)).rejects.toThrow("close the existing store first");
+      requests = vi.spyOn(Worker.prototype, "postMessage");
+      await closeUnclaimedSharedStateSqliteWorkers(file);
+      await closeUnclaimedSharedStateSqliteWorkers(unrelatedPath);
+      expect(requests).not.toHaveBeenCalled();
+      expect(database.isOpen).toBe(false);
+      expect(hasUnclaimedSharedStateSqliteCleanup(file)).toBe(false);
+      expect(close).toHaveBeenCalledTimes(2);
+      await expect(append(unrelated.store, "unrelated actor remains open")).resolves.toMatchObject({
+        writes: 1,
+      });
+      await expect(append(await open(file), "after orphan cleanup")).resolves.toMatchObject({
+        writes: 1,
+      });
+    } finally {
+      requests.mockRestore();
+      close.mockRestore();
+      await closeUnclaimedSharedStateSqliteWorkers(file);
+      gateway.release();
+      unrelated.gateway.release();
+    }
+  });
+
+  it.each(["store", "host"] as const)(
+    "retries an open native Gateway pin through explicit %s cleanup after worker exit",
+    async (owner) => {
+      const file = databasePath();
+      const { result, database } = captureCoordinatorDatabase(() => openWithGateway(file));
+      const { store, gateway } = await result;
+      gateway.release();
+      const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+        throw new Error("Fixture native close remains open");
+      });
+      const cleanup = () =>
+        owner === "store" ? store.close() : drainGlobalSingletonLifecycleState();
+      const requests = vi.spyOn(Worker.prototype, "postMessage");
+      try {
+        await expect(cleanup()).rejects.toThrow();
+        expect(database.isOpen).toBe(true);
+        expect(close).toHaveBeenCalledTimes(1);
+        await expect(read(store)).rejects.toMatchObject({ code: "closed" });
+        await expect(open(file)).rejects.toThrow("cleanup is pending");
+        requests.mockClear();
+        await expect(cleanup()).resolves.toBeUndefined();
+        expect(database.isOpen).toBe(false);
+        expect(close).toHaveBeenCalledTimes(2);
+        expect(requests).not.toHaveBeenCalled();
+        await expect(store.close()).resolves.toBeUndefined();
+        const recovered = await open(file);
+        await expect(append(recovered, "after cleanup retry")).resolves.toMatchObject({
+          writes: 1,
+        });
+      } finally {
+        requests.mockRestore();
+        close.mockRestore();
+        await Promise.allSettled([cleanup(), store.close()]);
+        stores.delete(store);
+        gateway.release();
+      }
+    },
+  );
+
+  it("releases delegated Gateway pins when a rejected async command retires its worker", async () => {
+    const file = databasePath();
+    const { store, gateway } = await openWithGateway(file);
+    gateway.release();
+    try {
+      const failed = store.execute({
+        type: "illegalAsync",
+        input: { value: "unused", gatePath: file, reject: true },
+      });
+      const queued = read(store);
+      expect(await Promise.allSettled([failed, queued])).toEqual([
+        { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
+        { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
+      ]);
+      const next = tryAcquireExclusiveSqliteCoordinator(gateway.path);
+      expect(next).not.toBeNull();
+      next?.release();
+    } finally {
+      await Promise.allSettled([store.close()]);
+      stores.delete(store);
+      gateway.release();
+    }
+  });
+
+  it("retires an empty worker even when its Gateway pin reports a cleanup failure", async () => {
+    const createDelegate = coordinatorOwner.tryCreateGatewaySchemaFenceDelegate;
+    const delegation = vi
+      .spyOn(coordinatorOwner, "tryCreateGatewaySchemaFenceDelegate")
+      .mockImplementationOnce((params) => {
+        const original = createDelegate(params);
+        if (!original) {
+          throw new Error("Fixture Gateway delegate was not acquired");
+        }
+        return {
+          port: original.port,
+          get closed() {
+            return original.closed;
+          },
+          release() {
+            original.release();
+            throw new Error("Fixture Gateway pin cleanup failed");
+          },
+        };
+      });
+    const file = databasePath();
+    const { store, gateway } = await openWithGateway(file);
+    gateway.release();
+    const events = vi.spyOn(Worker.prototype, "emit");
+    try {
+      await expect(store.close()).rejects.toThrow("Fixture Gateway pin cleanup failed");
+      expect(events.mock.calls.some(([event]) => event === "exit")).toBe(true);
+      await expect(store.close()).resolves.toBeUndefined();
+      await expect(append(await open(file), "after completed cleanup")).resolves.toMatchObject({
+        writes: 1,
+      });
+    } finally {
+      const worker = events.mock.contexts.find((context) => context instanceof Worker);
+      await worker?.terminate();
+      events.mockRestore();
+      delegation.mockRestore();
+      await Promise.allSettled([store.close()]);
+      stores.delete(store);
+      gateway.release();
+    }
+  });
 
   it.each(["memory", "absolute memory", "memory URI", "incognito", "empty"] as const)(
     "rejects a %s locator before creating a file or dispatching a worker request",

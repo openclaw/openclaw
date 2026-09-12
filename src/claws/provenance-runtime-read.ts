@@ -97,6 +97,9 @@ function isOwnershipUnknown(snapshot: ClawInstallSchemaVersionSnapshot | undefin
 }
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind === "failure-cleared") {
+    return;
+  }
   const previous = snapshotsByPath.get(event.kind === "opened" ? event.database.path : event.path);
   if (event.kind === "opened") {
     const snapshot = readSchemaVersions(event.database.db);
@@ -110,7 +113,7 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
           }
         : snapshot,
     );
-  } else if (event.kind === "open-error") {
+  } else if (event.kind === "open-error" || event.kind === "terminal-failure") {
     snapshotsByPath.set(event.path, {
       kind: "state-error",
       error: event.error,

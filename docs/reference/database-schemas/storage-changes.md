@@ -36,8 +36,16 @@ kernels. Their existing facades retain global connection acquisition, cache and
 close behavior, and write transaction admission. Compound subagent and cron
 operations call the kernels on their already-admitted connection. Task status
 classification stays with the pure record types, so decoding does not load
-provider or plugin runtime ownership. These operations and their transaction
-callbacks remain synchronous; this separation does not move SQL to a worker.
+provider or plugin runtime ownership. Kernels and their transaction callbacks
+remain synchronous. The asynchronous task and flow read facade runs these read
+kernels in the shared-state worker.
+
+The host captures the database path, state environment, and current admission
+before awaited work. The shared worker owns its canonical connection and schema
+opening, with Gateway schema authority delegated by its live coordinator owner.
+Classified database errors survive transport, and canonical close joins worker
+operations and native cleanup. Cold registry restoration and runtime-configuration
+preparation still retain their existing main-thread behavior.
 
 SQLite worker transport preserves complete result values. Results within the
 64 MiB inline reply budget keep their existing reply path; larger results are

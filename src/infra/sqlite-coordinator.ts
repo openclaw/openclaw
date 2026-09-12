@@ -17,6 +17,12 @@ export class SqliteCoordinatorError extends Error {
   }
 }
 
+export type SqliteCoordinatorLease = {
+  /** This lease has relinquished custody, either to the pool or by native close. */
+  readonly closed: boolean;
+  release: (options?: { keepAlive?: false }) => void;
+};
+
 export function createSqliteLifecycleAggregateError(
   errors: unknown[],
   message: string,
@@ -227,7 +233,7 @@ function tryAcquireSqliteCoordinator(
   location: string,
   mode: "shared" | "exclusive",
   options: { busyTimeoutMs?: number; keepAlive?: boolean },
-): { release: (options?: { keepAlive?: false }) => void } | null {
+): SqliteCoordinatorLease | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const reusableLocation =
     location !== "" && location !== ":memory:" && !location.startsWith("file:")
@@ -277,19 +283,25 @@ function tryAcquireSqliteCoordinator(
   }
   let released = false;
   return {
+    get closed() {
+      return released || !database.isOpen;
+    },
     release: (releaseOptions) => {
-      if (released) {
+      if (released || !database.isOpen) {
         return;
       }
-      released = true;
       const errors: unknown[] = [];
-      try {
-        database.exec("ROLLBACK");
-        if (poolLocation && database.isTransaction) {
-          throw new SqliteCoordinatorError("SQLite coordinator rollback left its transaction open");
+      if (database.isTransaction) {
+        try {
+          database.exec("ROLLBACK");
+          if (poolLocation && database.isTransaction) {
+            throw new SqliteCoordinatorError(
+              "SQLite coordinator rollback left its transaction open",
+            );
+          }
+        } catch (error) {
+          errors.push(error);
         }
-      } catch (error) {
-        errors.push(error);
       }
       let retained = false;
       if (
@@ -297,7 +309,8 @@ function tryAcquireSqliteCoordinator(
         options.keepAlive &&
         releaseOptions?.keepAlive !== false &&
         poolLocation &&
-        identity
+        identity &&
+        !failedIdleCloses.has(database)
       ) {
         try {
           retained = retainIdleCoordinator(poolLocation, database, identity);
@@ -305,7 +318,7 @@ function tryAcquireSqliteCoordinator(
           errors.push(error);
         }
       }
-      if (!retained) {
+      if (!retained && database.isOpen) {
         try {
           if (poolLocation) {
             closeIdleCoordinatorDatabase(database);
@@ -316,6 +329,8 @@ function tryAcquireSqliteCoordinator(
           errors.push(error);
         }
       }
+      // Pool handoff ends this lease; a later borrower owns the still-open handle.
+      released = retained || !database.isOpen;
       if (errors.length === 1) {
         throw errors[0];
       }
@@ -330,7 +345,7 @@ function tryAcquireSqliteCoordinator(
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
   options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
-): { release: (options?: { keepAlive?: false }) => void } | null {
+): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "exclusive", options);
 }
 
@@ -338,6 +353,6 @@ export function tryAcquireExclusiveSqliteCoordinator(
 export function tryAcquireSharedSqliteCoordinator(
   location: string,
   options: { busyTimeoutMs?: number } = {},
-): { release: () => void } | null {
+): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "shared", options);
 }

@@ -62,7 +62,9 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     generation: 0,
     failures: new Map(),
     leases: new Map(),
-    terminal: createSqliteTerminalOpenLatch({ closeByPath: closeOpenClawAgentDatabaseByPath }),
+    terminal: createSqliteTerminalOpenLatch({
+      closeByPath: (pathname) => closeOpenClawAgentDatabaseByPath(pathname),
+    }),
     unregisterExitClose: null,
     pending: new Map(),
     activePending: new Set(),

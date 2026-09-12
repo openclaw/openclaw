@@ -53,7 +53,7 @@ export class OpenClawStateOwnershipMetadataError extends OpenClawStateOwnershipE
   }
 }
 
-class OpenClawStateExternalOwnershipError extends OpenClawStateOwnershipError {
+export class OpenClawStateExternalOwnershipError extends OpenClawStateOwnershipError {
   constructor(
     readonly databasePath: string,
     readonly managerId: string,

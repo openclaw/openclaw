@@ -1,7 +1,9 @@
 import { deserialize, serialize } from "node:v8";
+import { decodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
   type SqliteWorkerTransferHandle,
@@ -112,4 +114,36 @@ export function decodeSqliteWorkerReplyValue(
         },
       }
     : { type: "complete", value };
+}
+
+export function decodeSqliteWorkerReplyError(
+  job: Job,
+  error: Extract<SqliteWorkerReply, { ok: false }>["error"],
+): Error {
+  const decoded =
+    job.request.stateContext && error.code !== "outcome-unknown"
+      ? decodeOpenClawStateWorkerError(error.sharedState)
+      : undefined;
+  const failure =
+    decoded ??
+    Object.assign(new Error(error.message), {
+      name: error.name,
+      ...(error.code === undefined ? {} : { code: error.code }),
+    });
+  return failure;
+}
+
+/** Keep the original failure and outcome classification when retirement also fails. */
+export function withSqliteWorkerCleanupFailure(failure: Error, cleanupError: unknown): Error {
+  if (cleanupError === undefined) {
+    return failure;
+  }
+  const combined = new AggregateError(
+    [failure, cleanupError],
+    "SQLite worker failure and cleanup failed",
+    { cause: failure },
+  );
+  return failure instanceof SqliteWorkerError
+    ? Object.assign(combined, { code: failure.code })
+    : combined;
 }
