@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { SelectQueryBuilder } from "kysely";
-import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import type {
+  SkillLibraryEntry,
+  SkillLibrarySelection,
+} from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { authorizeOperatorScopesForRequiredScope } from "../../gateway/method-scopes.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
@@ -220,6 +223,33 @@ export function selectSkillLibraryRevisionMetadata(
     db,
     skillLibraryRevisionQuery(db, skillId, revision).select("description"),
   );
+}
+
+/** Resolve a bounded session selection in its original order, including repeated pins. */
+export function selectSkillLibraryRevisionMetadataBatch(
+  db: DatabaseSync,
+  selections: readonly Pick<SkillLibrarySelection, "skillId" | "revision">[],
+) {
+  const rows = executeSqliteQuerySync(
+    db,
+    skillLibraryDb(db)
+      .selectFrom("skill_library_revisions")
+      .select(["skill_id", "revision", "description"])
+      .where((eb) =>
+        eb.or(
+          selections.map((pin) =>
+            eb.and([eb("skill_id", "=", pin.skillId), eb("revision", "=", pin.revision)]),
+          ),
+        ),
+      ),
+  ).rows;
+  const metadata = new Map(
+    rows.map((row) => [
+      JSON.stringify([row.skill_id, row.revision]),
+      { description: row.description },
+    ]),
+  );
+  return selections.map((pin) => metadata.get(JSON.stringify([pin.skillId, pin.revision])));
 }
 
 export function selectSkillLibraryOwner(db: DatabaseSync, profileId: string) {
