@@ -205,9 +205,6 @@ export function flushChatQueueAfterIdleSessionReconciliation(
   previousSessionsResult: SessionsListResult | null | undefined,
   flushQueue: () => void,
 ) {
-  if (host.chatQueue.length === 0) {
-    return;
-  }
   void Promise.allSettled([historyRefresh, sessionsRefresh]).then((results) => {
     const historyRefreshSettled = results[0];
     const sessionsRefreshSettled = results[1];
