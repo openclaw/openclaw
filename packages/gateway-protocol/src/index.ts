@@ -1,6 +1,7 @@
 export * from "./error-details.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
+export type { ModelsSnapshotEvent } from "./model-catalog-publication.js";
 export * from "./terminal-validators.js";
 export {
   validateApprovalGetResult,

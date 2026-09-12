@@ -270,6 +270,7 @@ export type GatewayClientOptions = {
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
+  modelCatalogAgentId?: string;
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
@@ -831,6 +832,9 @@ export class GatewayClient {
         auth,
         role,
         scopes,
+        modelCatalogAgentId: useLegacyNodeProtocolEnvelope
+          ? undefined
+          : this.opts.modelCatalogAgentId?.trim() || undefined,
         device: this.buildDeviceConnectParams({
           nonce,
           role,

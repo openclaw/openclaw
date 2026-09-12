@@ -1,11 +1,19 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
-import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ModelsListParams,
+  ModelsSnapshotEvent,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import {
   invalidateModelCatalogCache,
   modelCatalogCache,
+  modelCatalogKey,
+  modelCatalogParams,
+  publishModelCatalogResult,
+  trimModelCatalogCache,
+  type ModelCatalogReadScope,
   type ModelCatalogClient,
   type ModelCatalogEntry,
   type ModelCatalogRequest,
@@ -52,33 +60,6 @@ export function modelCatalogRefreshError(
             : "chat.modelControls.modelsUnavailable",
         ))
     : null;
-}
-
-const MAX_CACHED_MODEL_CATALOGS = 64;
-
-function trimModelCatalogCache(cache: Map<string, ModelCatalogEntry>): void {
-  for (const [key, entry] of cache) {
-    if (cache.size <= MAX_CACHED_MODEL_CATALOGS) {
-      return;
-    }
-    if (entry.pending.size === 0) {
-      cache.delete(key);
-    }
-  }
-}
-
-function modelCatalogParams(options: ModelsListParams): ModelsListParams {
-  const { agentId, view = "configured", ...params } = options;
-  return { view, ...params, ...(agentId === undefined ? {} : { agentId: agentId.trim() }) };
-}
-
-function modelCatalogKey(params: ModelsListParams): string {
-  const { refresh: _refresh, ...projection } = params;
-  return JSON.stringify(
-    Object.entries(projection)
-      .filter(([, value]) => value !== undefined)
-      .toSorted(([a], [b]) => a.localeCompare(b)),
-  );
 }
 
 /** A synchronous display read; the Gateway remains the authority for sending and mutations. */
@@ -160,12 +141,7 @@ export async function loadModelCatalog(
             cache.clear();
             cache.set(key, entry);
           }
-          entry.result = result;
-          // Cooldown expiry changes readiness without publishing a new Gateway generation.
-          entry.expiresAt = result.models.reduce(
-            (expiresAt, model) => Math.min(expiresAt, model.unavailableUntil ?? Infinity),
-            Infinity,
-          );
+          publishModelCatalogResult(entry, result);
           trimModelCatalogCache(cache);
         }
         return result;
@@ -194,10 +170,19 @@ export async function loadModelCatalog(
 export function subscribeModelCatalogChanges(
   gateway: ApplicationGateway,
   listener: () => void,
+  scope?: ModelCatalogReadScope,
 ): () => void {
   return gateway.subscribeEvents((event) => {
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       listener();
+    } else if (event.event === "models.snapshot" && scope) {
+      const publication = event.payload as ModelsSnapshotEvent;
+      if (
+        modelCatalogKey(modelCatalogParams(scope)) ===
+        modelCatalogKey(modelCatalogParams({ agentId: publication.agentId }))
+      ) {
+        listener();
+      }
     }
   });
 }

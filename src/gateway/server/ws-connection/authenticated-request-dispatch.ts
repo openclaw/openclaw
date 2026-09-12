@@ -2,7 +2,11 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
-import type { ConnectParams, ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ConnectParams,
+  ErrorShape,
+  ResponseFrame,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import {
   ErrorCodes,
   errorShape,
@@ -83,6 +87,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     client: GatewayWsClient,
     frameBytes: number,
     admission?: "continuation",
+    sendResponse: (frame: ResponseFrame) => ReturnType<typeof send> = send,
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
@@ -136,13 +141,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       try {
         let responseOk = ok;
         let responseError = error;
-        let sendResult = send({ type: "res", id: req.id, ok, payload, error });
+        let sendResult = sendResponse({ type: "res", id: req.id, ok, payload, error });
         if (sendResult.kind === "serialization") {
           const detail = formatForLog(sendResult.error);
           logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
           responseOk = false;
           responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
-          sendResult = send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+          sendResult = sendResponse({
+            type: "res",
+            id: req.id,
+            ok: responseOk,
+            error: responseError,
+          });
         }
         diagnostics?.response(
           sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",

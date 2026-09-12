@@ -54,6 +54,8 @@ export const ConnectParamsSchema = closedObject({
   pathEnv: Type.Optional(Type.String()),
   role: Type.Optional(NonEmptyString),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
+  /** Initial catalog read target; method authorization still owns access. */
+  modelCatalogAgentId: Type.Optional(NonEmptyString),
   device: Type.Optional(
     closedObject({
       id: NonEmptyString,

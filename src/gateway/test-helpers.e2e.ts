@@ -47,6 +47,7 @@ export async function connectGatewayClient(params: {
   deviceToken?: string;
   origin?: string;
   clientName?: GatewayClientName;
+  modelCatalogAgentId?: string;
   clientDisplayName?: string;
   clientVersion?: string;
   mode?: GatewayClientMode;
@@ -102,6 +103,7 @@ export async function connectGatewayClient(params: {
       minProtocol: params.minProtocol,
       maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
+      modelCatalogAgentId: params.modelCatalogAgentId,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
       platform,
@@ -277,6 +279,7 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientName?: GatewayClientName;
+  modelCatalogAgentId?: string;
   mode?: GatewayClientMode;
   origin?: string;
   clientDisplayName?: string;
@@ -308,6 +311,7 @@ export async function startGatewayWithClient(params: {
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
       clientName: params.clientName,
+      modelCatalogAgentId: params.modelCatalogAgentId,
       mode: params.mode,
       origin: params.origin,
       clientDisplayName: params.clientDisplayName,

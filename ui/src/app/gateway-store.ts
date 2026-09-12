@@ -80,6 +80,7 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    getModelCatalogAgentId?: (gatewayUrl: string) => string | undefined;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
@@ -452,6 +453,9 @@ export function createApplicationGateway(
       mode: options.clientOptions?.mode ?? "webchat",
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
+      get modelCatalogAgentId() {
+        return options.getModelCatalogAgentId?.(nextConnection.gatewayUrl);
+      },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;

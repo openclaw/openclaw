@@ -37,6 +37,7 @@ import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
+import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -171,6 +172,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     {
       persistDefaultConnectionSettings: documentMode === null,
       resourceBasePath,
+      getModelCatalogAgentId: () => {
+        const location = history.location();
+        return routeIdFromPath(location.pathname, basePath) === "new-session"
+          ? newSessionLocationFromSearch(location.search).agentId || undefined
+          : undefined;
+      },
       ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),

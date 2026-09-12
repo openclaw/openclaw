@@ -138,6 +138,7 @@ export type GatewayBrowserClientOptions = {
   mode?: GatewayClientMode;
   instanceId?: string;
   scopes?: string[];
+  modelCatalogAgentId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -471,6 +472,7 @@ export class GatewayBrowserClient {
         client,
         role,
         scopes,
+        modelCatalogAgentId: this.opts.modelCatalogAgentId?.trim() || undefined,
         device,
         // Tests bind these compact wire literals to the canonical capability registry.
         caps: [

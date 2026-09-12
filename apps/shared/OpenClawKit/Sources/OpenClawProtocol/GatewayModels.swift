@@ -4615,6 +4615,7 @@ public struct ConnectParams: Codable, Sendable {
     public let pathenv: String?
     public let role: String?
     public let scopes: [String]?
+    public let modelcatalogagentid: String?
     public let device: [String: AnyCodable]?
     public let auth: [String: AnyCodable]?
     public let locale: String?
@@ -4632,6 +4633,7 @@ public struct ConnectParams: Codable, Sendable {
         pathenv: String? = nil,
         role: String? = nil,
         scopes: [String]? = nil,
+        modelcatalogagentid: String? = nil,
         device: [String: AnyCodable]? = nil,
         auth: [String: AnyCodable]? = nil,
         locale: String? = nil,
@@ -4648,6 +4650,7 @@ public struct ConnectParams: Codable, Sendable {
         self.pathenv = pathenv
         self.role = role
         self.scopes = scopes
+        self.modelcatalogagentid = modelcatalogagentid
         self.device = device
         self.auth = auth
         self.locale = locale
@@ -4666,6 +4669,7 @@ public struct ConnectParams: Codable, Sendable {
         case pathenv = "pathEnv"
         case role
         case scopes
+        case modelcatalogagentid = "modelCatalogAgentId"
         case device
         case auth
         case locale
