@@ -3102,7 +3102,7 @@ src/logging/log-file-shared.ts	1
 src/logging/logger.ts	11
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
-src/logging/redact.ts	3
+src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
 src/logging/subsystem.ts	4

@@ -2,7 +2,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { readLoggingConfig } from "./config.js";
 import type { LogLevel } from "./levels.js";
-import { redactSensitiveText } from "./redact.js";
+import { redactLogRecordForTransport } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 
@@ -19,12 +19,7 @@ export function formatJsonConsoleLine(params: {
     ...(params.subsystem ? { subsystem: params.subsystem } : {}),
     message: params.message,
   };
-  const serialized = JSON.stringify(envelope, function (this: unknown, key, value: unknown) {
-    const isStructuralField = this === envelope && (key === "time" || key === "level");
-    return typeof value === "string" && !isStructuralField ? redactSensitiveText(value) : value;
-  });
-  // Retain serialized-object redaction for secret-bearing field names and other structured forms.
-  return redactSensitiveText(serialized);
+  return JSON.stringify(redactLogRecordForTransport(envelope));
 }
 
 /** Formats diagnostics that must bypass console capture without bypassing JSON console style. */

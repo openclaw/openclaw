@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { replacePatternBounded } from "./redact-bounded.js";
 import {
   DEFAULT_REDACT_STRING_PATTERNS,
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
@@ -43,42 +42,6 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
-});
-
-describe("bounded replacement output", () => {
-  it.each<[RegExp, string, string]>([
-    [/aaaa/g, "blue", "bluebbbbcccc"],
-    [/bbbb/g, "blue", "aaaabluecccc"],
-    [/cccc/g, "blue", "aaaabbbbblue"],
-    [/none/g, "blue", "aaaabbbbcccc"],
-    [/aaaa/g, "", "bbbbcccc"],
-  ])("preserves complete output for %s", (pattern, replacement, expected) => {
-    expect(
-      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
-        chunkThreshold: 4,
-        chunkSize: 4,
-      }),
-    ).toBe(expected);
-  });
-
-  it("keeps calling a stateful replacer after unchanged results", () => {
-    const calls: Array<{ match: string; offset: number; input: string }> = [];
-    const output = replacePatternBounded(
-      "red red red",
-      /red/g,
-      (match, offset, input) => {
-        calls.push({ match, offset, input });
-        return calls.length === 3 ? "blue" : match;
-      },
-      { chunkThreshold: 4, chunkSize: 4 },
-    );
-    expect(output).toBe("red red blue");
-    expect(calls).toEqual([
-      { match: "red", offset: 0, input: "red " },
-      { match: "red", offset: 0, input: "red " },
-      { match: "red", offset: 0, input: "red" },
-    ]);
-  });
 });
 
 describe("default redact pattern ownership", () => {
@@ -531,7 +494,7 @@ describe("redactSensitiveText", () => {
         "DISCORD_BOT_TOKEN",
         "${DISCORD_BOT_TOKEN:-discordliteral1234567890}",
       ),
-    ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
+    ).toBe("${DISCORD_BOT_TOKEN:-***}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
   });
 
@@ -1795,9 +1758,7 @@ describe("redactSensitiveText", () => {
   });
 
   it("does not corrupt large data URLs across chunked replacement boundaries", () => {
-    // replacePatternBounded slices 32 KiB+ inputs into 16 KiB chunks; a chunk start must not
-    // satisfy the pure-base64 prefix boundary (`^`) or hide the `;base64,` container from its
-    // lookbehind, so the boundary patterns run unchunked.
+    // Long base64 payloads must retain their original token boundaries.
     const prefix = "data:application/octet-stream;base64,";
     const chunkSize = 16_384;
     const pad = "A".repeat(chunkSize * 2 - prefix.length);

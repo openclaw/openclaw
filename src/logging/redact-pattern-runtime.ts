@@ -9,7 +9,7 @@ export function parseRedactPatternSource(raw: string): [source: string, flags: s
   return [source, flags.includes("g") ? flags : `${flags}g`];
 }
 
-export function readRedactMatch(args: unknown[]) {
+function readRedactMatch(args: unknown[]) {
   const hasNamedGroups =
     args.length > 0 && typeof args[args.length - 1] === "object" && args[args.length - 1] !== null;
   const inputIndex = hasNamedGroups ? args.length - 2 : args.length - 1;

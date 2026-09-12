@@ -516,7 +516,7 @@ describe("sanitizeToolArgs", () => {
     };
     expect(sanitized.DISCORD_BOT_TOKEN).toBe("${DISCORD_BOT_TOKEN:-}");
     expect(sanitized.nested.apiKey).toBe("${OPEN…Y:-}");
-    expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-liter…890}");
+    expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-***}");
   });
 
   it("passes through null/undefined and non-string primitives unchanged", () => {
