@@ -24,6 +24,7 @@ import {
   getTrustedChannelPluginCatalogEntry,
   listTrustedChannelPluginCatalogEntries,
 } from "../commands/channel-setup/trusted-catalog.js";
+import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import { createConfigIO } from "../config/io.factory.js";
@@ -45,6 +46,7 @@ import {
 } from "./channel-setup-navigation.js";
 import {
   formatAccountLabel,
+  maybeConfigureCommandOwner,
   maybeConfigureDmPolicies,
   promptConfiguredAction,
   promptRemovalAccountId,
@@ -350,17 +352,18 @@ export async function setupChannels(
     return undefined;
   };
 
-  const resolveDisabledHint = (channel: ChannelChoice): string | undefined => {
-    const configDisabledHint = resolveConfigDisabledHint(channel);
-    if (configDisabledHint || deferStatusUntilSelection) {
-      return configDisabledHint;
-    }
+  const resolveAccountDisabledHint = (
+    channel: ChannelChoice,
+    accountId?: string,
+  ): string | undefined => {
     const plugin = getVisibleChannelPlugin(channel);
     if (!plugin) {
       return undefined;
     }
-    const accountId = resolveChannelDefaultAccountId({ plugin, cfg: next });
-    const account = plugin.config.resolveAccount(next, accountId);
+    const account = plugin.config.resolveAccount(
+      next,
+      accountId ?? resolveChannelDefaultAccountId({ plugin, cfg: next }),
+    );
     let enabled: boolean | undefined;
     if (plugin.config.isEnabled) {
       enabled = plugin.config.isEnabled(account, next);
@@ -368,6 +371,12 @@ export async function setupChannels(
       enabled = (account as { enabled?: boolean }).enabled;
     }
     return enabled === false ? "disabled" : undefined;
+  };
+  const resolveDisabledHint = (channel: ChannelChoice): string | undefined => {
+    const configDisabledHint = resolveConfigDisabledHint(channel);
+    return configDisabledHint || deferStatusUntilSelection
+      ? configDisabledHint
+      : resolveAccountDisabledHint(channel);
   };
 
   const getChannelEntries = () => {
@@ -419,10 +428,11 @@ export async function setupChannels(
   const refreshStatus = async (channel: ChannelChoice) => {
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
-      return;
+      return undefined;
     }
     const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
     statusByChannel.set(channel, status);
+    return status;
   };
 
   const enableBundledPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
@@ -1059,6 +1069,30 @@ export async function setupChannels(
     });
   }
 
-  return next;
+  if (hasConfiguredCommandOwners(next)) {
+    return next;
+  }
+  const ownerChannels: Array<{ id: ChannelChoice; label: string }> = [];
+  for (const id of selection) {
+    try {
+      if (
+        resolveConfigDisabledHint(id) ||
+        resolveAccountDisabledHint(id, accountIdsByChannel.get(id))
+      ) {
+        continue;
+      }
+      // A later setup action can remove or disable an earlier selection.
+      const status = await refreshStatus(id);
+      if (status?.configured) {
+        ownerChannels.push({ id, label: getVisibleChannelPlugin(id)?.meta.label ?? id });
+      }
+    } catch (error) {
+      await prompter.note(
+        `Status unavailable (${sanitizeTerminalText(formatErrorMessage(error))}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${id}`)}`,
+        t("wizard.channels.statusTitle"),
+      );
+    }
+  }
+  return await maybeConfigureCommandOwner({ cfg: next, channels: ownerChannels, prompter });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

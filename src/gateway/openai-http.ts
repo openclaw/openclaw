@@ -43,6 +43,7 @@ import {
   resolveAssistantResultText,
   resolveAssistantTextCompletion,
   resolveAssistantTextInput,
+  resolveAssistantTextStreamDelta,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import {
@@ -1128,8 +1129,8 @@ export async function handleOpenAiHttpRequest(
   setSseHeaders(res);
 
   let wroteStopChunk = false;
-  let streamedAssistantText = "";
   let assistantText: AssistantTextSnapshot = { text: "" };
+  let streamedAssistantText = assistantText;
   let pendingAssistantText: AssistantTextSnapshot | undefined;
   let finalResultText: string | undefined;
   let finalFinishReason: "stop" | "length" = "stop";
@@ -1168,21 +1169,20 @@ export async function handleOpenAiHttpRequest(
         assistantText,
         pending: pendingAssistantText,
         resultText: finalResultText,
-        streamedText: streamedAssistantText,
+        streamedText: streamedAssistantText.text,
         fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
       });
-      if (!text.startsWith(streamedAssistantText)) {
+      if (!text.startsWith(streamedAssistantText.text)) {
         finishStreamWithError({
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         });
         return;
       }
-      const content = text.slice(streamedAssistantText.length);
+      const content = text.slice(streamedAssistantText.text.length);
       if (content) {
         writeAssistantContentChunk(res, { ...streamIdentity, content });
       }
-      streamedAssistantText = text;
       if (finalToolCalls) {
         writeAssistantToolCallsIncrementalChunks(res, {
           ...streamIdentity,
@@ -1234,24 +1234,26 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      assistantText = mergeAssistantText(assistantText, input, "append-only");
+      const previous = assistantText;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      assistantText = merged;
       // Hold prose until the run proves the requested client-tool call exists.
       if (toolChoiceConstraint) {
         return;
       }
       // SSE cannot retract bytes already delivered, even for an item correction.
-      if (!assistantText.text.startsWith(streamedAssistantText)) {
+      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
+      if (content === undefined) {
         terminalStreamError ??= {
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         };
         return;
       }
-      const content = assistantText.text.slice(streamedAssistantText.length);
+      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
-      streamedAssistantText = assistantText.text;
       writeAssistantContentChunk(res, { ...streamIdentity, content });
       return;
     }

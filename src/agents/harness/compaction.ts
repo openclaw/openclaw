@@ -223,6 +223,7 @@ async function resolveHarnessCompactApiKey(params: {
       modelApi: model.api,
       modelBaseUrl: model.baseUrl,
       config: compactParams.config,
+      agentId: params.agentId,
       env: process.env,
       agentDir,
       workspaceDir,

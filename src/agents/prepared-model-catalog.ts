@@ -85,6 +85,7 @@ async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
   refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
+  providerIds?: readonly string[],
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
@@ -96,13 +97,17 @@ async function materializeRequestedModelCatalog(
       refreshFullCatalog === true
         ? await refreshPreparedModelRuntimeCatalog(snapshot, {
             refresh: readOnly !== true,
+            ...(providerIds ? { providerIds } : {}),
           })
         : undefined;
     modelCatalog =
       inventoryCatalog ??
       (readOnly === true
         ? snapshot.readFullModelCatalog?.()
-        : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+        : await snapshot.loadFullModelCatalog({
+            refresh: refreshFullCatalog === true,
+            ...(providerIds ? { providerIds } : {}),
+          }));
   } catch (error) {
     if (
       error instanceof PreparedModelCatalogGenerationMismatchError &&
@@ -374,6 +379,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
             snapshot,
             request.readOnly,
             request.refreshFullCatalog,
+            request.providerDiscoveryProviderIds,
           );
     // Projection must finish before releasing the selected generation's resources.
     return await read(owner);

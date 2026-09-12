@@ -89,12 +89,15 @@ Other selection rules:
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
-and native apps. Ordinary CLI and chat browsing do not start provider discovery,
-including after a restart. Use **Refresh** in Models or
-`openclaw models list --refresh` to discover provider models. The Models page also
-requests discovery the first time you open a default-model picker for its current
-page data; later opens read the published catalog. If the catalog is not ready,
-retry after Gateway startup or the current refresh finishes.
+and native apps. Ordinary browsing and opening or reopening a model picker read
+the published catalog without starting provider discovery.
+
+After sign-in, starter models are available immediately. The provider shows
+“checking models…” while the Gateway discovers account models, then updates the
+open picker when discovery completes. Gateway startup and credential changes
+also refresh the affected catalog. Use **Refresh** in Models or
+`openclaw models list --refresh` to request another refresh, including newly
+released models. **Retry** requests discovery again after a failure.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its

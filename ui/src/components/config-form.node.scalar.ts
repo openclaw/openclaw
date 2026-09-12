@@ -4,6 +4,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
 import {
+  configValuesEqual,
   isSupportedConfigValueValid,
   normalizeNumericValue,
   numericInputConstraints,
@@ -636,9 +637,7 @@ export function renderSelect(
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
-  const currentIndex = options.findIndex(
-    (option) => option === resolvedValue || String(option) === String(resolvedValue),
-  );
+  const currentIndex = options.findIndex((option) => configValuesEqual(option, resolvedValue));
   const unset = "__unset__";
   const nullValue = "__null__";
   const canSelectNull = schema.nullable && schema.enumIncludesNull;

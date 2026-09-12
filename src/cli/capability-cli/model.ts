@@ -38,8 +38,8 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
-import { prepareLocalModelRunAccountSecrets } from "./model-local-secrets.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
   providerHasGenericConfig,
@@ -200,7 +200,7 @@ async function runModelRun(params: {
     const trackOwner = captureAsyncWorkTracker();
     // Command completion can precede response callbacks and cancellation drainage.
     void trackOwner(async () => {
-      await prepareLocalModelRunAccountSecrets({ cfg, agentId });
+      await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
       const prepared = await acquireSimpleCompletionModelForAgent({
         cfg,
         agentId,

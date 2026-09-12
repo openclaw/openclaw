@@ -26,7 +26,10 @@ import {
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -72,6 +75,113 @@ afterEach(() => {
 });
 
 describe("update run ledger", () => {
+  it("bounds Doctor evidence before ledger validation without changing full messages", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const changes: NonNullable<UpdateStepResult["configChanges"]> = [
+      { kind: "key", key: "k".repeat(2048) },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        kind: "migration" as const,
+        message: `${index}: ${"🤖".repeat(2000)}`,
+      })),
+    ];
+    const original = structuredClone(changes);
+    const steps = updateRunStepsFromResultStep({
+      name: "openclaw doctor",
+      exitCode: 1,
+      configChanges: changes,
+      configWriteRefusal: {
+        reason: "r".repeat(2048),
+        message: "m".repeat(2048),
+        keys: Array.from({ length: 40 }, (_, index) => `${index}:${"k".repeat(2048)}`),
+      },
+    });
+    expect(steps.filter((step) => step.configChange)).toHaveLength(32);
+    for (const step of steps) {
+      expect(step.detail?.length ?? 0).toBeLessThanOrEqual(1024);
+      if (step.configChange) {
+        expect(
+          (step.configChange.kind === "key" ? step.configChange.key : step.configChange.message)
+            .length,
+        ).toBeLessThanOrEqual(1024);
+      }
+      if (step.configWriteRefusal) {
+        expect(step.configWriteRefusal.keys).toHaveLength(32);
+        expect(step.configWriteRefusal.message.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.reason.length).toBeLessThanOrEqual(1024);
+        expect(step.configWriteRefusal.keys.every((key) => key.length <= 1024)).toBe(true);
+      }
+      expect(() => recordUpdateRunStep(run.runId, step, options)).not.toThrow();
+    }
+    expect(changes).toEqual(original);
+  });
+  it.each(["committed", "refused"] as const)(
+    "retains typed Doctor config evidence in the terminal summary (%s)",
+    (outcome) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const keys = ["meta", "plugins", "wizard"];
+      recordUpdateRunRepairAttempt(
+        run.runId,
+        { attempt: 1, status: "succeeded", startedAtMs: 1, reason: "Candidate validation passed." },
+        options,
+      );
+      const migration = "Enabled the configured provider plugin.";
+      const step: UpdateStepResult = {
+        name: "openclaw doctor",
+        command: "doctor --fix",
+        cwd: "/synthetic",
+        durationMs: 1,
+        exitCode: outcome === "committed" ? 0 : 1,
+        ...(outcome === "committed"
+          ? {
+              configChanges: [
+                ...keys.map((key) => ({ kind: "key" as const, key })),
+                { kind: "migration" as const, message: migration },
+              ],
+            }
+          : {
+              configWriteRefusal: {
+                keys,
+                reason: "config-input-changed",
+                message: "An operator saved the config before publication.",
+              },
+            }),
+      };
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, entry, options);
+      }
+      finishUpdateRun(
+        run.runId,
+        {
+          status: outcome === "committed" ? "succeeded" : "failed",
+          ...(outcome === "refused" ? { reason: "repair-requires-config-change" } : {}),
+        },
+        options,
+      );
+      const retained = getUpdateRun(run.runId, options);
+      expect(retained).toBeDefined();
+      if (!retained) {
+        throw new Error("Missing retained update run");
+      }
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(keys.join(", "));
+      if (outcome === "committed") {
+        expect(
+          retained.steps.flatMap((entry) => (entry.configChange ? [entry.configChange] : [])),
+        ).toEqual(step.configChanges);
+        expect(report).toContain(migration);
+        expect(report).not.toContain("repair-requires-config-change");
+      } else {
+        expect(
+          retained.steps.find((entry) => entry.step === step.name)?.configWriteRefusal,
+        ).toEqual(step.configWriteRefusal);
+        expect(report).toContain("config-input-changed");
+        expect(report).toContain("An operator saved the config before publication.");
+        expect(report).toContain("Doctor could not promote config changes.");
+      }
+    },
+  );
   it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
     "keeps a terminal %s result unchanged for running-only boot observations",
     (status) => {

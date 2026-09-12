@@ -67,7 +67,7 @@ beforeEach(() => {
       const owner = {
         ...baseOwner,
         metadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: ["anthropic", "xai"].map((id) => ({
+          plugins: ["anthropic", "xai", "refresh", "access", "cancel", "choice"].map((id) => ({
             id,
             providerAuthChoices: [
               {
@@ -280,75 +280,81 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
 
-  it.each([
-    {
-      reason: "missing-auth",
-      catalog: "known",
-      label: "Sign-in needed",
-      recovery: "Connect with /login anthropic.",
-    },
-    {
-      reason: "missing-auth",
-      catalog: "missing",
-      label: "Sign-in needed",
-      recovery: "Connect with /login anthropic.",
-    },
-    {
-      reason: "auth-failed",
-      catalog: "known",
-      label: "Sign-in failed",
-      recovery: "Sign in again with /login anthropic.",
-    },
-    {
-      reason: "cooldown",
-      catalog: "known",
-      label: "Temporarily unavailable",
-      recovery: "Try again later or choose another model.",
-    },
-  ] as const)(
-    "explains a retained primary with $reason and $catalog catalog entry",
-    async ({ reason, catalog, label, recovery }) => {
-      modelProviderAuthMocks.authenticatedProviders.delete("anthropic");
-      modelProviderAuthMocks.unavailableReason = reason;
-      if (catalog === "missing") {
-        modelCatalogMocks.loadModelCatalog.mockReturnValue([]);
-      }
-      const params = buildParams("/models");
-      params.ctx.Surface = "telegram";
-      params.command.channel = "telegram";
-      params.command.surface = "telegram";
-
-      const menu = await handleModelsCommand(params, true);
-      expect(menu?.reply?.text).toContain(`anthropic: ${label}. ${recovery}`);
-      expect(menu?.reply?.channelData).toMatchObject({
-        telegram: {
-          buttons: expect.arrayContaining([
-            [{ text: "anthropic", callback_data: "models:anthropic" }],
-          ]),
+  describe.each(["anthropic", "refresh", "access", "cancel", "choice"])(
+    "model login guidance for %s",
+    (provider) => {
+      const model = { primary: `${provider}/claude-opus-4-5` };
+      const command = provider === "anthropic" ? "/login anthropic" : "/login";
+      it.each([
+        {
+          reason: "missing-auth",
+          catalog: "known",
+          label: "Sign-in needed",
+          recovery: `Connect with ${command}.`,
         },
-      });
+        {
+          reason: "missing-auth",
+          catalog: "missing",
+          label: "Sign-in needed",
+          recovery: `Connect with ${command}.`,
+        },
+        {
+          reason: "auth-failed",
+          catalog: "known",
+          label: "Sign-in failed",
+          recovery: `Sign in again with ${command}.`,
+        },
+        {
+          reason: "cooldown",
+          catalog: "known",
+          label: "Temporarily unavailable",
+          recovery: "Try again later or choose another model.",
+        },
+      ] as const)(
+        "explains a retained primary with $reason and $catalog catalog entry",
+        async ({ reason, catalog, label, recovery }) => {
+          modelProviderAuthMocks.authenticatedProviders.delete(provider);
+          modelProviderAuthMocks.unavailableReason = reason;
+          const entry = { provider, id: "claude-opus-4-5", name: "Claude Opus" };
+          modelCatalogMocks.loadModelCatalog.mockReturnValue(catalog === "missing" ? [] : [entry]);
+          const params = buildParams("/models", { agents: { defaults: { model } } });
+          params.ctx.Surface = "telegram";
+          params.command.channel = "telegram";
+          params.command.surface = "telegram";
 
-      params.command.commandBodyNormalized = "/models anthropic";
-      const page = await handleModelsCommand(params, true);
-      expect(page?.reply?.text).toContain(
-        `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
+          const menu = await handleModelsCommand(params, true);
+          expect(menu?.reply?.text).toContain(`${provider}: ${label}. ${recovery}`);
+          expect(menu?.reply?.channelData).toMatchObject({
+            telegram: {
+              buttons: expect.arrayContaining([
+                [{ text: provider, callback_data: `models:${provider}` }],
+              ]),
+            },
+          });
+
+          params.command.commandBodyNormalized = `/models ${provider}`;
+          const page = await handleModelsCommand(params, true);
+          expect(page?.reply?.text).toContain(
+            `${label} — ${catalog === "known" ? "Claude Opus" : "claude-opus-4-5"}`,
+          );
+          expect(page?.reply?.text).toContain(recovery);
+          if (reason === "cooldown") {
+            expect(page?.reply?.text).not.toContain("/login");
+          }
+        },
       );
-      expect(page?.reply?.text).toContain(recovery);
-      if (reason === "cooldown") {
-        expect(page?.reply?.text).not.toContain("/login");
-      }
+
+      it("offers a connection action when first-run readiness is unconfirmed", async () => {
+        modelProviderAuthMocks.authenticatedProviders.clear();
+        modelProviderAuthMocks.availabilityUnknown = true;
+        const params = buildParams(`/models ${provider}`, { agents: { defaults: { model } } });
+        const result = await handleModelsCommand(params, true);
+        expect(result?.reply?.text).toContain("Connection not confirmed");
+        expect(result?.reply?.text).toContain(`Connect with ${command}, or choose another model.`);
+        expect(result?.reply?.text).not.toContain("Sign-in failed");
+      });
     },
   );
-
-  it("offers a connection action when first-run readiness is unconfirmed", async () => {
-    modelProviderAuthMocks.authenticatedProviders.clear();
-    modelProviderAuthMocks.availabilityUnknown = true;
-    const params = buildParams("/models anthropic");
-    const result = await handleModelsCommand(params, true);
-    expect(result?.reply?.text).toContain("Connection not confirmed");
-    expect(result?.reply?.text).toContain("Connect with /login anthropic");
-    expect(result?.reply?.text).not.toContain("Sign-in failed");
-  });
 
   it.each([
     { reason: "missing-auth", label: "Sign-in needed" },

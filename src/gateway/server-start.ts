@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import {
@@ -118,28 +119,35 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost.run(async () => {
-          const prelude = beginClosePrelude(optsLocal);
-          clearTimeout(postReadyWorkTimer);
-          releasePostReadyWork();
-          await prelude;
-          const close = await prepareClose(optsLocal);
-          await runGatewayCloseSteps({
-            owner: gatewayKernel,
-            close,
-            disposeTerminalSessions: () => terminalSessions.disposeAll(),
-            runStopHooks: async () => {
-              await shutdownRuntime.runGlobalGatewayStopSafely({
-                registry: gatewayKernel.pluginRuntime.registry,
-                event: { reason: optsLocal?.reason ?? "gateway stopping" },
-                ctx: { port },
-                onError: (error) =>
-                  log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
-              });
-            },
-            onError: (message) => log.error(message),
+        closePromise = sdkResourceHost
+          .run(async () => {
+            const prelude = beginClosePrelude(optsLocal);
+            clearTimeout(postReadyWorkTimer);
+            releasePostReadyWork();
+            await prelude;
+            const close = await prepareClose(optsLocal);
+            await runGatewayCloseSteps({
+              owner: gatewayKernel,
+              close,
+              disposeTerminalSessions: () => terminalSessions.disposeAll(),
+              runStopHooks: async () => {
+                await shutdownRuntime.runGlobalGatewayStopSafely({
+                  registry: gatewayKernel.pluginRuntime.registry,
+                  event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                  ctx: { port },
+                  onError: (error) =>
+                    log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+                });
+              },
+              onError: (message) => log.error(message),
+            });
+          })
+          .catch((error: unknown) => {
+            if (hasRetainedPluginRuntimeCloseError(error)) {
+              closePromise = undefined;
+            }
+            throw error;
           });
-        });
       }
       return closePromise;
     },

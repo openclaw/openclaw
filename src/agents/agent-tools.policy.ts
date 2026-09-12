@@ -315,6 +315,16 @@ function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): strin
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
 
+function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[]): boolean {
+  const policy = resolveToolProfilePolicy(profile);
+  if (!policy?.allow || policy.allow.includes("*")) {
+    return true;
+  }
+  // Limited profiles expose updates; configuration reads still require an explicit grant.
+  const allow = normalizeUniqueSingleOrTrimmedStringList(alsoAllow);
+  return allow.length > 0 && createToolPolicyMatcher({ allow })("gateway");
+}
+
 function hasExplicitToolSection(section: unknown): boolean {
   return section !== undefined && section !== null;
 }
@@ -420,6 +430,13 @@ export function resolveEffectiveToolPolicy(params: {
         : undefined,
   };
 
+  const gatewayConfigReadAllowed =
+    profileAllowsGatewayConfigReads(profile, effectivePolicy.profileAlsoAllow) &&
+    profileAllowsGatewayConfigReads(
+      effectivePolicy.providerProfile,
+      effectivePolicy.providerProfileAlsoAllow,
+    );
+
   // Recommend removed implicit grants only when adding them to the profile
   // can work: every other static policy layer must permit the tool.
   if (profile) {
@@ -466,7 +483,7 @@ export function resolveEffectiveToolPolicy(params: {
     }
   }
 
-  return effectivePolicy;
+  return { ...effectivePolicy, gatewayConfigReadAllowed };
 }
 
 function denyAllToolPolicy(): SandboxToolPolicy {

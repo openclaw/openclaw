@@ -7,9 +7,10 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import type {
+  UpdateDoctorInput,
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
-} from "../cli/update-cli/update-command-migrated.js";
+} from "../cli/update-cli/update-command-migrated-types.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
 import {
   formatUpdateFinalizationError,
@@ -17,11 +18,20 @@ import {
 } from "../cli/update-cli/update-command-result.js";
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
+import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
+import {
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  recordUpdateDoctorConfigWriteRefusal,
+  writeUpdatePostInstallDoctorResult,
+} from "./update-doctor-result.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  UpdateRequesterRevokedError,
+} from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
@@ -35,6 +45,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        doctorConfigWrites: "pid-start-v1",
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -49,9 +60,13 @@ async function finalizeMigratedUpdate(): Promise<void> {
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const input = JSON.parse(
-    Buffer.concat(chunks).toString("utf8"),
-  ) as MigratedUpdateFinalizationInput; // SAFETY: Only the typed parent continuation serializes this private input.
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (process.argv[2] === "--doctor") {
+    // SAFETY: The typed parent sends this private input only after binding this child.
+    return await runDelegatedDoctor(JSON.parse(text) as UpdateDoctorInput);
+  }
+  // SAFETY: Only the typed parent continuation serializes this private input.
+  const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
   if (input.recoveryHandoff) {
     throw new Error(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
@@ -88,6 +103,67 @@ async function finalizeMigratedUpdate(): Promise<void> {
       await finalizeInput(input, fence);
     });
   }
+}
+
+async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
+  const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+  if (!resultPath || !input.executor) {
+    throw new Error("Update Doctor requires its delegated executor and result path.");
+  }
+  await withDelegatedUpdateCommandExecutor(
+    input.executor,
+    input.runId,
+    input.root,
+    async (fence) => {
+      const requester = input.requester
+        ? await createManagedUpdateRequesterAuthority(input.requester)
+        : undefined;
+      const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
+      const assertCurrent = () => {
+        try {
+          fence.assertCurrent();
+          if (requester?.isCurrent() === false) {
+            throw new UpdateRequesterRevokedError();
+          }
+        } catch (error) {
+          recordUpdateDoctorConfigWriteRefusal({
+            reason:
+              error instanceof UpdateRequesterRevokedError ? error.code : "authority-check-failed",
+            message: formatUpdateFinalizationError(error),
+            keys: [],
+          });
+          throw error;
+        }
+      };
+      try {
+        assertCurrent();
+      } catch (error) {
+        if (!(error instanceof UpdateRequesterRevokedError)) {
+          throw error;
+        }
+        fence.assertCurrent();
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: {
+            status: "error",
+            configWriteRefusal: { reason: error.code, message: error.message, keys: [] },
+          },
+        });
+        process.exitCode = 1;
+        return;
+      }
+      await runDoctorHealthFlow(
+        {
+          ...defaultRuntime,
+          exit: (code) => {
+            process.exitCode = code;
+          },
+        },
+        { repair: input.repair, nonInteractive: true },
+        { inputHash: input.configInputHash, assertCurrent },
+      );
+    },
+  );
 }
 
 async function finalizeInput(

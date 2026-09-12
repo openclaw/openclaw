@@ -559,7 +559,7 @@ describe("Provider model discovery auth preparation", () => {
           ),
           providerOutcomes: outcomes,
         },
-        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        previous,
         auth,
         (provider) => provider,
       );

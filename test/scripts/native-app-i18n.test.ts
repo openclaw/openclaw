@@ -666,7 +666,7 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+          "Use the credential for this destination. Leave both fields empty only if this route already has device pairing or does not require a shared credential. Changing the destination clears this form's saved credentials.",
       ),
     ).toBe(true);
     expect(
@@ -687,16 +687,16 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+          "A setup code supplies the address and available certificate information automatically. For token or password authentication, enter the ordinary Gateway credential below.",
       ),
     ).toBe(true);
     expect(
       entries.some((entry) =>
         [
-          "The current gateway.remote.token value is not plain text. ",
+          "Use the credential for this destination. Leave both fields empty only if this route ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
-          "Paste the token configured on the gateway host. ",
+          "A setup code supplies the address and available certificate information automatically. ",
         ].includes(entry.source),
       ),
     ).toBe(false);

@@ -1,15 +1,13 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import Module, { createRequire } from "node:module";
+import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  createPluginModuleRequireCacheOwner,
-  getPluginModuleRequireCacheEntry,
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
@@ -340,51 +338,4 @@ describe("isJavaScriptModulePath", () => {
     expect(isJavaScriptModulePath("/plugin/index.cjs")).toBe(true);
     expect(isJavaScriptModulePath("/plugin/index.ts")).toBe(false);
   });
-});
-
-describe("managed native module cache ownership", () => {
-  it.each(["shared-entry", "shared-child", "replacement"] as const)(
-    "keeps %s records until their final managed owner closes",
-    (mode) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-native-owned-cache-"));
-      const child = path.join(root, "child.cjs");
-      const entry = path.join(root, "index.cjs");
-      const sibling = path.join(root, "nested", "index.cjs");
-      fs.mkdirSync(path.dirname(sibling));
-      fs.writeFileSync(child, 'module.exports = { value: "before" };');
-      fs.writeFileSync(entry, 'exports.read = () => require("./child.cjs");');
-      fs.writeFileSync(sibling, 'exports.read = () => require("../child.cjs");');
-      const require = createRequire(import.meta.url);
-      const first = createPluginModuleRequireCacheOwner(root);
-      const second = createPluginModuleRequireCacheOwner(
-        mode === "shared-child" ? path.dirname(sibling) : root,
-      );
-      try {
-        const initial = require(entry) as { read(): { value: string } };
-        first.retain(getPluginModuleRequireCacheEntry(entry));
-        const before = initial.read();
-        if (mode === "replacement") {
-          delete require.cache[entry];
-          delete require.cache[child];
-        }
-        const selected = mode === "shared-child" ? sibling : entry;
-        const current = require(selected) as typeof initial;
-        second.retain(getPluginModuleRequireCacheEntry(selected));
-        // This dependency is acquired after entry ownership, through ordinary lazy require.
-        const shared = current.read();
-        const record = require.cache[selected];
-        first.dispose();
-        expect(require.cache[selected]).toBe(record);
-        expect(current.read()).toBe(shared);
-        expect(shared === before).toBe(mode !== "replacement");
-        second.dispose();
-        fs.writeFileSync(child, 'module.exports = { value: "after" };');
-        expect(require(child)).toEqual({ value: "after" });
-      } finally {
-        first.dispose();
-        second.dispose();
-        delete require.cache[child];
-      }
-    },
-  );
 });

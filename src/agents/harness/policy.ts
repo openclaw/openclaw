@@ -52,6 +52,7 @@ export function resolveAgentHarnessPolicy(
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
     ...params,
+    runtimePolicy: configured,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
   });

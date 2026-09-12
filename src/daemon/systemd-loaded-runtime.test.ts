@@ -551,3 +551,44 @@ describe("bounded owned runtime inspection", () => {
     },
   );
 });
+
+describe("retained original-manager transport", () => {
+  it.each([false, true])(
+    "reads through the retained peer and rejects replacement=%s without another bus lookup",
+    async (replaced) => {
+      busctl.mockResolvedValue({
+        code: 1,
+        termination: "exit",
+        stdout: "",
+        stderr: "Failed to connect to bus",
+      });
+      const binding = {
+        unit: unitName,
+        managerUid: 2001,
+        destination: ":1.42",
+        verify: vi.fn(() => {
+          if (replaced) {
+            throw new Error("original manager replaced");
+          }
+        }),
+        close: vi.fn(async () => {}),
+        query: vi.fn(async (args: string[]) =>
+          managerReply(args)
+            .stdout.split("\n")
+            .map((line) => JSON.parse(line).data as unknown),
+        ),
+      };
+      const runtime = await readSystemdServiceRuntime(
+        { ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/unavailable-authored-bus" },
+        { requireLoaded: true, timeoutMs: 1000, systemdReadBinding: binding },
+      );
+      expect(runtime.status).toBe(replaced ? "unknown" : "running");
+      if (!replaced) {
+        expect(runtime.systemd).toMatchObject({ unit: unitName, managerUid: 2001 });
+      }
+      expect(busctl).not.toHaveBeenCalled();
+      expect(systemctl).not.toHaveBeenCalled();
+      expect(binding.close).not.toHaveBeenCalled();
+    },
+  );
+});

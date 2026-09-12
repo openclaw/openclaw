@@ -7,7 +7,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 
 describe("models.authRefresh learned catalog", () => {
-  it("retains discovery on same-account renewal and replaces it for another account", async () => {
+  it("models.authRefresh retains same-account rows while renewing and discovers a replacement account", async () => {
     const state = await createOpenClawTestState({
       label: "models-auth-refresh-catalog",
       env: {
@@ -21,6 +21,8 @@ describe("models.authRefresh learned catalog", () => {
     });
     const provider = "renewal-fixture";
     const requests: string[] = [];
+    let holdDiscovery = false;
+    const heldResponses: Array<() => void> = [];
     const accounts = new Map([
       ["Bearer account-one-original", "account-one"],
       ["Bearer account-one-renewed", "account-one"],
@@ -35,7 +37,13 @@ describe("models.authRefresh learned catalog", () => {
         return;
       }
       response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify([{ id: `${account}-learned`, name: `${account} learned` }]));
+      const reply = () =>
+        response.end(JSON.stringify([{ id: `${account}-learned`, name: `${account} learned` }]));
+      if (holdDiscovery) {
+        heldResponses.push(reply);
+      } else {
+        reply();
+      }
     });
     const saveAccount = async (accountId: string, access: string) => {
       const store: AuthProfileStore = {
@@ -137,28 +145,49 @@ describe("models.authRefresh learned catalog", () => {
           requests.every((authorization) => authorization === "Bearer account-one-original"),
         ).toBe(true);
         const initialRequests = requests.length;
-
+        const renewalRequest = once(discovery, "request");
+        const renewalStarted = Date.now();
         await saveAccount("account-one", "account-one-renewed");
         await expect(
           client.request("models.authRefresh", { agentId: "main", operation: "update" }),
         ).resolves.toEqual({ refreshed: true });
         expect((await list()).map((model) => model.id)).toEqual(["account-one-learned"]);
-        expect(requests).toHaveLength(initialRequests);
-
-        // An explicit refresh proves that the renewed bearer is now used.
-        await list(true);
+        console.log(
+          "RENEWAL_PENDING",
+          await client.request("models.list", { agentId: "main", view: "all" }),
+        );
+        await renewalRequest;
+        console.log("RENEWAL_REQUEST_MS", Date.now() - renewalStarted);
         expect(requests.slice(initialRequests)).toEqual(["Bearer account-one-renewed"]);
         const renewedRequests = requests.length;
+        const replacementRequest = once(discovery, "request");
         await saveAccount("account-two", "account-two-original");
         await client.request("models.authRefresh", { agentId: "main", operation: "login" });
         expect((await list()).map((model) => model.id)).not.toContain("account-one-learned");
-        expect(requests).toHaveLength(renewedRequests);
-        expect((await list(true)).map((model) => model.id)).toEqual(["account-two-learned"]);
+        await replacementRequest;
+        await expect
+          .poll(async () => (await list()).map((model) => model.id))
+          .toEqual(["account-two-learned"]);
         expect(requests.slice(renewedRequests)).toEqual(["Bearer account-two-original"]);
 
+        holdDiscovery = true;
+        const heldRequest = once(discovery, "request");
+        const refreshSettled = Promise.allSettled([
+          client.request("models.list", { agentId: "main", provider, refresh: true }),
+        ]);
+        await heldRequest;
         await state.writeAuthProfiles({ version: 1, profiles: {} });
+        const logoutStarted = Date.now();
         await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
+        const logoutMs = Date.now() - logoutStarted;
+        console.log("LOGOUT_DURING_DISCOVERY_MS", logoutMs);
+        expect(logoutMs).toBeLessThan(1_000);
+        for (const reply of heldResponses) {
+          reply();
+        }
+        await refreshSettled;
         expect((await list()).filter((model) => model.available)).toEqual([]);
+        expect((await list()).map((model) => model.id)).not.toContain("account-two-learned");
       } finally {
         await disconnectGatewayClient(client);
         await server.close();

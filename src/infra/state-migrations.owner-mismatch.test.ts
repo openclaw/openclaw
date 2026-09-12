@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-startup.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -200,5 +201,16 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
     expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow(
       "Independent state repairs were run",
     );
+    await expect(
+      assertDoctorPreflightMigrationsComplete({
+        cfg,
+        stepReceipts: result.stepReceipts,
+        report: () => {},
+      }),
+    ).resolves.toBeUndefined();
+    expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")?.outcome).toBe(
+      "warning",
+    );
+    expect(fs.readFileSync(target)).toEqual(original);
   });
 });

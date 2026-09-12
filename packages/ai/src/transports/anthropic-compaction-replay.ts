@@ -207,10 +207,11 @@ export function isAnthropicReplayRejection(error: unknown): boolean {
     record.error && typeof record.error === "object" && !Array.isArray(record.error)
       ? (record.error as Record<string, unknown>)
       : undefined;
-  const text = [record.message, record.code, nested?.message, nested?.code]
+  const text = [record.errorMessage, record.message, record.code, nested?.message, nested?.code]
     .filter((value): value is string => typeof value === "string")
     .join(" ")
     .toLowerCase();
-  const isBadRequest = record.status === 400 || text.startsWith("http 400:");
+  const isBadRequest =
+    record.status === 400 || record.errorCode === "400" || text.startsWith("http 400:");
   return isBadRequest && (text.includes("compaction") || text.includes("context_management"));
 }

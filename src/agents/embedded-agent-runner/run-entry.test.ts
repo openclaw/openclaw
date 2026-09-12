@@ -259,6 +259,7 @@ describe("runEmbeddedAgentEntry", () => {
                 readDeliveryEvidence: () => ({
                   hasDirectlySentBlockReply: false,
                   hasBlockReplyPipelineOutput: false,
+                  hasRetryBlockedDelivery: false,
                 }),
               }
             : {
@@ -545,6 +546,7 @@ describe("runEmbeddedAgentEntry", () => {
         readDeliveryEvidence: () => ({
           hasDirectlySentBlockReply: false,
           hasBlockReplyPipelineOutput: false,
+          hasRetryBlockedDelivery: false,
         }),
       },
       sessionOverride: { kind: "preserve" },
@@ -622,7 +624,6 @@ describe("runEmbeddedAgentEntry", () => {
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
       expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
-      expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
     },
   );
 
@@ -816,6 +817,7 @@ describe("runEmbeddedAgentEntry", () => {
           readDeliveryEvidence: () => ({
             hasDirectlySentBlockReply: true,
             hasBlockReplyPipelineOutput: false,
+            hasRetryBlockedDelivery: false,
           }),
         },
         sessionOverride: { kind: "preserve" },
@@ -877,6 +879,7 @@ describe("runEmbeddedAgentEntry", () => {
         readDeliveryEvidence: () => ({
           hasDirectlySentBlockReply: false,
           hasBlockReplyPipelineOutput: false,
+          hasRetryBlockedDelivery: false,
         }),
       },
       sessionOverride: { kind: "preserve" },

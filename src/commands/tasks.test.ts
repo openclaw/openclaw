@@ -964,6 +964,7 @@ describe("tasks commands", () => {
         const deleteFlow = vi.fn();
         configureTaskFlowRegistryRuntime({
           store: {
+            ...createInMemoryTaskFlowRegistryStore(),
             loadSnapshot,
             upsertFlow,
             deleteFlow,

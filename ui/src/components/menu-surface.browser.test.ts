@@ -1,5 +1,6 @@
 import { html, render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
@@ -25,8 +26,10 @@ const originalTheme = document.documentElement.getAttribute("data-theme");
 const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
 const originalClasses = document.documentElement.className;
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  vi.unstubAllGlobals();
   if (originalTheme === null) {
     document.documentElement.removeAttribute("data-theme");
   } else {
@@ -101,6 +104,21 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 
   it("paints a plain menu hosted in openclaw-menu-surface above the resizer divider", async () => {
     await useDesktopViewport();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
+    const nearby: boolean[] = [];
+    const distant: boolean[] = [];
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => nearby.push(occluded),
+        () => new DOMRect(300, 100, 200, 400),
+      ),
+    );
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => distant.push(occluded),
+        () => new DOMRect(900, 100, 300, 400),
+      ),
+    );
     const { nav, divider } = mountShell();
     const surface = document.createElement("openclaw-menu-surface");
     const menu = createSortMenu();
@@ -111,6 +129,13 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     const hit = hitTestOnDivider(menu, divider);
     expect(hit).not.toBeNull();
     expect(menu.contains(hit)).toBe(true);
+    expect(surface.getBoundingClientRect().width).toBe(0);
+    menu.style.left = "250px";
+    await expect.poll(() => nearby).toEqual([false, true]);
+    expect(distant).toEqual([false]);
+    menu.style.left = "850px";
+    await expect.poll(() => nearby).toEqual([false, true, false]);
+    await expect.poll(() => distant).toEqual([false, true]);
   });
 
   it("paints a Web Awesome dropdown above the divider through its own popover", async () => {

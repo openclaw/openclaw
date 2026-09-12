@@ -220,6 +220,14 @@ export function registerDoctorConfigReceiptTests(
               ? postInstallAdvisory
               : { status: outcome === "error" ? "error" : "ok" }),
             configHash: expectedHash,
+            ...(outcome === "unchanged"
+              ? {}
+              : {
+                  configChanges: [
+                    { kind: "key", key: "gateway" },
+                    { kind: "key", key: "meta" },
+                  ],
+                }),
             ...(outcome === "unchanged" || outcome === "interleaved"
               ? {}
               : { configInputHash: expectedInputHash }),

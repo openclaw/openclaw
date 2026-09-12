@@ -115,7 +115,7 @@ Author watchers around **actionable state**, not only success: a watcher that go
 Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
-Create a watcher from a local script file (`-` reads the script from stdin):
+Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
 
 ```bash
 openclaw automations add \

@@ -9,6 +9,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -247,7 +248,7 @@ export async function completePostCorePluginUpdate(params: {
       if (!entryPath) {
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
-      if (params.freshDoctorRequired) {
+      if (params.freshDoctorRequired || hasDeferredUpdateModelRetirement()) {
         await params.beforeDoctor?.();
         await runUpdateFinalizationDoctorInFreshProcess({
           ...params,

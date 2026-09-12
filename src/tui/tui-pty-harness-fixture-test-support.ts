@@ -18,7 +18,7 @@ import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
 import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
-import { startPty, type PtyRun } from "./tui-pty-test-support.js";
+import { startRuntimePty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
 
@@ -42,19 +42,23 @@ export async function startTuiFixture(
     ? path.join(tempDir, "startup-history.release")
     : undefined;
   const execPath = opts.execPath ?? process.execPath;
-  const run = startPty(execPath, resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath), {
-    activeRuns,
-    cwd: process.cwd(),
-    env: {
-      OPENCLAW_THEME: "dark",
-      OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-      NO_COLOR: undefined,
-      ...opts.env,
-      OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: startupHistoryReleasePath,
+  const run = await startRuntimePty(
+    execPath,
+    resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath),
+    {
+      activeRuns,
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_THEME: "dark",
+        OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+        NO_COLOR: undefined,
+        ...opts.env,
+        OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: startupHistoryReleasePath,
+      },
+      exitTimeoutMs: EXIT_TIMEOUT_MS,
+      outputTimeoutMs: OUTPUT_TIMEOUT_MS,
     },
-    exitTimeoutMs: EXIT_TIMEOUT_MS,
-    outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-  });
+  );
 
   let releaseStartupHistoryPromise: Promise<void> | undefined;
   const releaseStartupHistory = () => {

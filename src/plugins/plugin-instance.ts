@@ -33,6 +33,7 @@ export class PluginInstance {
   readonly lifecycle: PluginInstanceLifecycle;
   toolRegistrationComplete = false;
   controlPlaneInitialized = false;
+  sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private moduleSourceExists?: (source: string) => boolean;
   private accepting = true;
@@ -116,6 +117,29 @@ export class PluginInstance {
       throw new Error(`Plugin ${this.pluginId} was reloaded or disabled; use its current tools.`);
     }
     return this.invoke(run, this.lease(true, registry));
+  }
+
+  /** Associates an identity-sensitive public value without replacing it with a view. */
+  adopt<T>(value: T): T {
+    const seen = new WeakSet<object>();
+    const visit = (candidate: unknown) => {
+      if (
+        !candidate ||
+        (typeof candidate !== "object" && typeof candidate !== "function") ||
+        seen.has(candidate)
+      ) {
+        return;
+      }
+      seen.add(candidate);
+      valueInstances.set(candidate, this);
+      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+        if ("value" in descriptor) {
+          visit(descriptor.value);
+        }
+      }
+    };
+    visit(value);
+    return value;
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
@@ -403,8 +427,7 @@ export class PluginInstance {
       }
     }
     const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
-    const reason = new Error(`Plugin ${this.pluginId} is retiring`);
-    this.controller.abort(reason);
+    this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`));
     for (const cleanup of Array.from(this.cleanups).toReversed()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

@@ -20,15 +20,31 @@ export function resolveRuntimeAccountSnapshot(params: {
   return fallback?.accountId === params.accountId ? fallback : undefined;
 }
 
-export function resolveChannelGatewayAccountId(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string {
-  // Runtime operations use the same account precedence as channel setup:
-  // explicit request, plugin default, first configured account, then fallback.
+export function resolveChannelGatewayAccountId(
+  params: {
+    plugin: ChannelPlugin;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  },
+  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot,
+): string {
+  const explicit = normalizeOptionalString(params.accountId);
+  if (explicit) {
+    return explicit;
+  }
+  const channelId = params.plugin.id;
+  // Explicit account controls must not inspect unrelated configured accounts.
+  const runtime = getRuntimeSnapshot?.();
+  // Paused controls use recorded selection without entering a quiesced plugin.
+  if (runtime?.reloadingChannels?.has(channelId)) {
+    return (
+      runtime.reloadingChannels.get(channelId) ||
+      Object.keys(runtime.channelAccounts[channelId] ?? {})[0] ||
+      DEFAULT_ACCOUNT_ID
+    );
+  }
+  // Outside reload, preserve setup's default-account precedence.
   return (
-    normalizeOptionalString(params.accountId) ||
     params.plugin.config.defaultAccountId?.(params.cfg) ||
     params.plugin.config.listAccountIds(params.cfg)[0] ||
     DEFAULT_ACCOUNT_ID

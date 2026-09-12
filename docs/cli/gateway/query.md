@@ -308,6 +308,12 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 
 Low-level RPC helper.
 
+Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
+without changing URL selection or authentication. The CLI compares the exact
+resolved URL before connecting and fails if the destination changed. Automation
+can obtain the endpoint from `gateway.url` in `openclaw status --json`; a redacted
+URL cannot serve as an exact endpoint assertion.
+
 ```bash
 openclaw gateway call status
 openclaw gateway call health --port 18999

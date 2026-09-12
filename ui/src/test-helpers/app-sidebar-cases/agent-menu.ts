@@ -222,7 +222,13 @@ describe("AppSidebar agent chip", () => {
       [...(menu?.querySelectorAll("wa-dropdown-item") ?? [])].map((element) =>
         element.getAttribute("value"),
       ),
-    ).toEqual(["agent:main", "agent:research", "command:capabilities", "command:agent-settings"]);
+    ).toEqual([
+      "agent:main",
+      "agent:research",
+      "command:all-agents",
+      "command:capabilities",
+      "command:agent-settings",
+    ]);
 
     const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
     expect(agentRows).toHaveLength(2);
@@ -461,7 +467,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it.each([0, 1])("keeps only the two agent actions with %i configured agents", async (count) => {
+  it.each([0, 1])("keeps only the three agent actions with %i configured agents", async (count) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -488,10 +494,13 @@ describe("AppSidebar agent chip", () => {
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:capabilities", "command:agent-settings"]);
+    ).toEqual(["command:all-agents", "command:capabilities", "command:agent-settings"]);
   });
 
-  it("navigates to the agents settings page with the active agent preselected", async () => {
+  it.each([
+    { label: "All agents", navigation: ["agents-home", undefined] },
+    { label: "Agent settings", navigation: ["agents", { pathname: "/settings/agents/main" }] },
+  ])("navigates to $label and closes the agent menu", async ({ label, navigation }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -506,13 +515,13 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const settingsRow = [
+    const actionRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
-    ].find((row) => row.textContent?.includes("Agent settings"));
-    expect(settingsRow).toBeDefined();
-    settingsRow?.click();
+    ].find((row) => row.textContent?.includes(label));
+    expect(actionRow).toBeDefined();
+    actionRow?.click();
     await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("agents", { pathname: "/settings/agents/main" });
+    expect(onNavigate).toHaveBeenCalledWith(...navigation);
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 

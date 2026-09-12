@@ -107,7 +107,7 @@ describe("telegram stickers", () => {
         }),
       );
 
-      getCachedStickerSpy.mockReturnValue({
+      getCachedStickerSpy.mockResolvedValue({
         fileId: "old_file_id",
         fileUniqueId: "sticker_unique_456",
         emoji: "😴",

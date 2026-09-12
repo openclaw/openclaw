@@ -77,7 +77,7 @@ function createEventlessResponseFixture(
 describe("realtime voice session harness", () => {
   it.each(["text", "greeting", "default-greeting", "ready-greeting"] as const)(
     "settles an eventless provider's zero-audio response to %s",
-    (request) => {
+    async (request) => {
       const { harness, session, callbacks, dispatch, onResponseDone } =
         createEventlessResponseFixture({ autoGreeting: request === "ready-greeting" });
       try {
@@ -98,7 +98,7 @@ describe("realtime voice session harness", () => {
           harness.talk.recentEvents.filter((event) => event.type === "turn.ended"),
         ).toHaveLength(1);
       } finally {
-        session.close();
+        await session.close();
         harness.close();
       }
     },
@@ -106,12 +106,12 @@ describe("realtime voice session harness", () => {
 
   it.each(["unsupported", "blank-text", "local-close", "provider-close"] as const)(
     "does not admit or dispatch %s requests",
-    (reason) => {
+    async (reason) => {
       const { harness, session, callbacks, dispatch, onResponseDone } =
         createEventlessResponseFixture({ supported: reason !== "unsupported" });
       try {
         if (reason === "local-close") {
-          session.close();
+          void session.close();
         } else if (reason === "provider-close") {
           callbacks.onClose?.("completed");
         }
@@ -126,7 +126,7 @@ describe("realtime voice session harness", () => {
           [],
         );
       } finally {
-        session.close();
+        await session.close();
         harness.close();
       }
     },

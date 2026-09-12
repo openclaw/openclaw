@@ -8,38 +8,23 @@ import type {
   RouterHistory,
 } from "@openclaw/uirouter";
 import {
-  activityPersonFromPath,
   agentRouteFromPath,
   canonicalPluginTabLocation,
-  INTERNAL_ACTIVITY_PATH_PARAM,
-  INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_MEMORY_PATH_PARAM,
-  INTERNAL_PLUGIN_PATH_PARAM,
-  INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
-  INTERNAL_PLUGINS_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
-  INTERNAL_TERMINAL_PATH_PARAM,
-  INTERNAL_WORKBOARD_PATH_PARAM,
-  isLegacyPluginsDiscoveryPath,
+  dynamicRouteFromPath,
   isSessionRouteId,
-  memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
-  pluginCatalogIdFromPath,
-  pluginSettingsIdFromPath,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
-  sessionRouteNamespaceFromPath,
   setPluginTabSlugs,
-  workboardBoardIdFromPath,
-  terminalSessionIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
+import { page as agentsHomePage } from "./pages/agents-home/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
@@ -107,6 +92,7 @@ const APP_ROUTE_TREE = [
   dashboardsPage,
   appsPage,
   portalsPage,
+  agentsHomePage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -183,43 +169,6 @@ export function createApplicationRouter(): ApplicationRouter {
       ),
     routeIdFromPath,
   };
-}
-
-type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
-
-function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
-  if (terminalSessionIdFromPath(pathname, basePath)) {
-    return ["terminal", INTERNAL_TERMINAL_PATH_PARAM, pathname];
-  }
-  if (pluginTabSlugFromPath(pathname, basePath)) {
-    return ["plugin", INTERNAL_PLUGIN_PATH_PARAM, pathname];
-  }
-  if (activityPersonFromPath(pathname, basePath)) {
-    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
-  }
-  const agentRoute = agentRouteFromPath(pathname, basePath);
-  if (agentRoute) {
-    return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];
-  }
-  const boardId = workboardBoardIdFromPath(pathname, basePath);
-  if (boardId) {
-    return ["workboard", INTERNAL_WORKBOARD_PATH_PARAM, pathname];
-  }
-  const memoryTab = memoryTabFromPath(pathname, basePath);
-  if (memoryTab && memoryTab !== "overview") {
-    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
-  }
-  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginCatalogIdFromPath(pathname, basePath)) {
-    return ["plugins", INTERNAL_PLUGINS_PATH_PARAM, pathname];
-  }
-  if (pluginSettingsIdFromPath(pathname, basePath)) {
-    return ["plugin-settings", INTERNAL_PLUGIN_SETTINGS_PATH_PARAM, pathname];
-  }
-  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
-  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
 }
 
 function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {

@@ -1,7 +1,6 @@
 // Inspects gateway port listeners and connection state.
 import net from "node:net";
 import os from "node:os";
-import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
@@ -152,53 +151,42 @@ function parseLsofConnectionFieldOutput(output: string, port: number): PortConne
   return connections;
 }
 
-function parseSsConnectionEndpoint(raw: string): string | null {
-  if (raw.startsWith("users:")) {
-    return null;
+function* parseSsRows(output: string) {
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    // The quoted users field can contain whitespace, colons, and state names.
+    const processIndex = line.indexOf("users:");
+    const socketFields = (processIndex < 0 ? line : line.slice(0, processIndex))
+      .trim()
+      .split(/\s+/);
+    const [local, remote] = socketFields.slice(-2);
+    if (!local || !remote) {
+      continue;
+    }
+    const processText = processIndex < 0 ? "" : line.slice(processIndex);
+    const pid = Number.parseInt(processText.match(/pid=(\d+)/)?.[1] ?? "", 10);
+    const command = processText.match(/users:\(\("([^"]+)"/)?.[1];
+    yield {
+      local,
+      remote,
+      listening: socketFields.includes("LISTEN"),
+      process: {
+        ...(Number.isFinite(pid) ? { pid } : {}),
+        ...(command ? { command } : {}),
+      },
+    };
   }
-  if (raw.includes(":")) {
-    return raw;
-  }
-  return null;
 }
 
 function parseSsConnections(output: string, port: number): PortConnection[] {
   const connections: PortConnection[] = [];
   const localAddresses = resolveLocalNetworkAddresses();
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    const endpoints = line
-      .split(/\s+/)
-      .map(parseSsConnectionEndpoint)
-      .filter((endpoint): endpoint is string => Boolean(endpoint));
-    if (endpoints.length < 2) {
-      continue;
-    }
-    const [local, remote] = endpoints.slice(-2);
-    const address = `TCP ${local}->${remote} (ESTABLISHED)`;
+  for (const row of parseSsRows(output)) {
+    const address = `TCP ${row.local}->${row.remote} (ESTABLISHED)`;
     const direction = resolveGatewayConnectionDirection(address, port, localAddresses);
-    if (!direction) {
-      continue;
+    if (direction) {
+      connections.push({ ...row.process, address, direction });
     }
-    const connection: PortConnection = {
-      address,
-      direction,
-    };
-    const pidMatch = line.match(/pid=(\d+)/);
-    if (pidMatch) {
-      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
-      if (Number.isFinite(pid)) {
-        connection.pid = pid;
-      }
-    }
-    const commandMatch = line.match(/users:\(\("([^"]+)"/);
-    if (commandMatch?.[1]) {
-      connection.command = commandMatch[1];
-    }
-    connections.push(connection);
   }
   return connections;
 }
@@ -302,32 +290,11 @@ async function resolveUnixProcessInfo(
 }
 
 function parseSsListeners(output: string, port: number): PortListener[] {
-  const lines = output.split(/\r?\n/).map((line) => line.trim());
   const listeners: PortListener[] = [];
-  for (const line of lines) {
-    if (!line || !line.includes("LISTEN")) {
-      continue;
+  for (const row of parseSsRows(output)) {
+    if (row.listening && parseTcpEndpoint(row.local)?.port === port) {
+      listeners.push({ ...row.process, address: row.local });
     }
-    const parts = line.split(/\s+/);
-    const localAddress = parts.find((part) => parseTcpEndpoint(part)?.port === port);
-    if (!localAddress) {
-      continue;
-    }
-    const listener: PortListener = {
-      address: localAddress,
-    };
-    const pidMatch = line.match(/pid=(\d+)/);
-    if (pidMatch) {
-      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
-      if (Number.isFinite(pid)) {
-        listener.pid = pid;
-      }
-    }
-    const commandMatch = line.match(/users:\(\("([^"]+)"/);
-    if (commandMatch?.[1]) {
-      listener.command = commandMatch[1];
-    }
-    listeners.push(listener);
   }
   return listeners;
 }

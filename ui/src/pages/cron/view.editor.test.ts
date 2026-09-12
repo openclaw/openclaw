@@ -89,7 +89,6 @@ describe("cron view editor", () => {
       option.getAttribute("data-value"),
     );
     expect(optionValues).toContain("retired-channel");
-    expect(channel.querySelector('[role="option"][data-value="telegram"] img')).not.toBeNull();
     const telegramOption = channel.querySelector<HTMLElement & { label?: string }>(
       '[role="option"][data-value="telegram"]',
     );

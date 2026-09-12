@@ -169,12 +169,12 @@ describe("renderPluginCatalogResults", () => {
     expected: string | undefined;
   }>([
     {
-      name: "uninstalled first-party artwork",
+      name: "uninstalled first-party placeholder",
       packageName: "@openclaw/whatsapp",
       pluginId: undefined,
       pluginIconUrls: {},
       iconUrls: {},
-      expected: "/plugin-art/whatsapp.webp",
+      expected: undefined,
     },
     {
       name: "third-party identity without first-party artwork",
@@ -203,13 +203,13 @@ describe("renderPluginCatalogResults", () => {
       expected: "blob:package-icon",
     },
     {
-      name: "trusted bundled artwork before catalog imagery",
+      name: "published package icon before installation",
       packageName: "@openclaw/whatsapp",
       pluginId: undefined,
       imageUrl: "https://example.com/icon.png",
       pluginIconUrls: {},
       iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
-      expected: "/plugin-art/whatsapp.webp",
+      expected: "blob:catalog-icon",
     },
   ])(
     "renders $name",
@@ -243,6 +243,40 @@ describe("renderPluginCatalogResults", () => {
       );
     },
   );
+
+  it("shows the generic placeholder when a package icon cannot decode, then accepts a new icon", async () => {
+    const entry = plugin("slack", {
+      catalog: {
+        name: "Slack",
+        categories: ["channels"],
+        official: true,
+        imageUrl: "https://example.com/icon.png",
+      },
+    });
+    const props = baseProps({
+      query: "slack",
+      result: { items: [entry] },
+      iconUrls: { "https://example.com/icon.png": "blob:broken" },
+    });
+    const container = mount(props);
+    container.querySelector(".plugin-catalog-card__art img")!.dispatchEvent(new Event("error"));
+    await vi.waitFor(() =>
+      expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull(),
+    );
+    expect(container.querySelector(".plugin-catalog-card__art svg")).not.toBeNull();
+    render(renderPluginCatalogResults(props), container);
+    expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull();
+    render(
+      renderPluginCatalogResults({
+        ...props,
+        iconUrls: { "https://example.com/icon.png": "blob:repaired" },
+      }),
+      container,
+    );
+    expect(container.querySelector(".plugin-catalog-card__art img")?.getAttribute("src")).toBe(
+      "blob:repaired",
+    );
+  });
 
   it("caps grouped sections at two desktop rows and opens the selected category", () => {
     const onCategoryChange = vi.fn();

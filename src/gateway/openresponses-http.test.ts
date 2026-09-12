@@ -484,7 +484,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       events: [
         { itemId: "answer-1", text: "First." },
         { itemId: "answer-2", delta: "\n" },
-        { itemId: "answer-2", delta: "\nSecond." },
+        { itemId: "answer-2", delta: "\n" },
+        { itemId: "answer-2", delta: "Se" },
+        { itemId: "answer-2", delta: "cond." },
         { itemId: "answer-2", text: "\n\nSecond." },
       ],
       expected: "First.\n\nSecond.",
@@ -548,6 +550,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each([
     { name: "rewritten", replacementText: "final answer" },
     { name: "shortened", replacementText: "dra" },
+    { name: "rewritten then extended by a delta", replacementText: "other answer", tailDelta: "!" },
     { name: "cleared", replacementText: "" },
     {
       name: "replaced by a held provisional item",
@@ -591,6 +594,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       resultText,
       noResultText,
       terminalEcho,
+      tailDelta,
     }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -620,6 +624,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
         });
         if (terminalEcho) {
           emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
+        }
+        if (tailDelta) {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: tailDelta } });
         }
         emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
         return {

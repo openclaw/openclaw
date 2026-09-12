@@ -15,7 +15,6 @@ type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
   channelLabel: (channelId: string) => string;
   channelIconUrl?: (channelId: string) => string | undefined;
-  channelHasPluginIcon?: (channelId: string) => boolean;
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
@@ -260,7 +259,6 @@ export function renderChannelWizard(
             channel
               ? renderChannelIcon(channel, label, "tile", {
                   pluginIconUrl: props.channelIconUrl?.(channel),
-                  preferPluginIcon: props.channelHasPluginIcon?.(channel),
                 })
               : nothing
           }

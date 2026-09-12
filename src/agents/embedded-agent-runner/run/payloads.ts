@@ -214,6 +214,7 @@ export function buildEmbeddedRunPayloads(params: {
     : undefined;
   const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
   const providerLoginRecovery = buildProviderLoginRecovery({
+    provider: oauthRefreshFailure?.provider ?? params.provider,
     oauthReason: oauthRefreshFailure?.reason,
   });
   const errorText =

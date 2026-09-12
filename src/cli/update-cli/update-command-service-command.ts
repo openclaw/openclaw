@@ -67,6 +67,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
           "install",
           "--update-executor",
           "check",
+          "--json",
         ],
         {
           input: "",

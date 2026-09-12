@@ -50,6 +50,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderChannelLoginChoice } from "../../plugins/provider-login-options.js";
+import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -80,6 +81,7 @@ type ModelsCommandSessionEntry = Partial<
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
+  pendingProviders?: readonly string[];
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
@@ -425,6 +427,19 @@ async function projectPreparedModelsProviderData(
   }
   addModelConfigEntries();
 
+  const pendingProviders = decisions.snapshot.pendingProviders?.filter(
+    (provider) =>
+      isModelsBrowseVisibleProvider(provider) &&
+      (options.view === "all" ||
+        visibilityPolicy.allowAny ||
+        [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
+  );
+  for (const provider of pendingProviders ?? []) {
+    if (!byProvider.has(provider)) {
+      byProvider.set(provider, new Set());
+    }
+  }
+
   const providers = [...byProvider.keys()].toSorted();
   const loginProviders = new Set(
     providers.filter(
@@ -489,6 +504,7 @@ async function projectPreparedModelsProviderData(
 
   return {
     byProvider,
+    pendingProviders,
     providers,
     resolvedDefault,
     modelNames,
@@ -622,6 +638,7 @@ function buildModelsMenu(data: {
     const notices = new Set<string>();
     let available = 0;
     const loginSupported = data.loginProviders.has(id);
+    const loginCommand = formatProviderLoginCommand(id);
     for (const model of models) {
       const key = `${id}/${model}`;
       const state = data.modelAvailability.get(key)!;
@@ -634,12 +651,12 @@ function buildModelsMenu(data: {
       switch (state.unavailableReason) {
         case "missing-auth":
           label = "Sign-in needed";
-          recovery = loginSupported ? `Connect with /login ${id}.` : CUSTOM_MODEL_SETUP_GUIDANCE;
+          recovery = loginSupported ? `Connect with ${loginCommand}.` : CUSTOM_MODEL_SETUP_GUIDANCE;
           break;
         case "auth-failed":
           label = "Sign-in failed";
           recovery = loginSupported
-            ? `Sign in again with /login ${id}.`
+            ? `Sign in again with ${loginCommand}.`
             : CUSTOM_MODEL_SETUP_GUIDANCE;
           break;
         case "cooldown":
@@ -652,7 +669,7 @@ function buildModelsMenu(data: {
             state.availability === false
               ? "Run /models again or choose another model."
               : loginSupported
-                ? `Connect with /login ${id}, or choose another model.`
+                ? `Connect with ${loginCommand}, or choose another model.`
                 : CUSTOM_MODEL_SETUP_GUIDANCE;
       }
       modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
@@ -785,7 +802,13 @@ function buildModelsCommandReply(
           .map((provider) => provider.notice)
           .filter(Boolean)
           .join("\n");
-  const withAvailability = (text: string) => [text, notice].filter(Boolean).join("\n\n");
+  const checking = data.pendingProviders
+    ?.filter(
+      (provider) => parsed.action !== "list" || !parsed.provider || parsed.provider === provider,
+    )
+    .map((provider) => `${provider}: checking models…`)
+    .join("\n");
+  const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
 
@@ -846,6 +869,9 @@ function buildModelsCommandReply(
   const total = models.length;
 
   if (total === 0) {
+    if (checking) {
+      return { text: checking };
+    }
     const emptyProviderLabel = resolveProviderLabel({
       provider,
       cfg: params.cfg,

@@ -557,6 +557,10 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: storeSessionKey,
         })?.acp?.runtimeSessionName,
       ).toBe("codex-normalized");
+      expect(
+        readAcpSessionMeta({ cfg, databasePath, sessionKey: `  ${rawSessionKey}  ` })
+          ?.runtimeSessionName,
+      ).toBe("codex-normalized");
       expect(fs.existsSync(storePath)).toBe(false);
       const legacyEmbeddedEntry = readStoredAcpSessionEntry({
         storePath,
@@ -734,6 +738,7 @@ describe("ACP session metadata SQLite store", () => {
       });
 
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
+      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey })).toBeUndefined();
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(0);
 
       writeAcpSessionMetaForMigration({

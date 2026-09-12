@@ -1,14 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  GATEWAY_UPDATE_EXECUTOR_CONTRACT,
-  withGatewayServiceUpdateAuthority,
-} from "../../daemon/service-update-authority.js";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../update-cli/update-command-executor.js";
+import { writeGatewayServiceUpdateCapability } from "./update-capability.js";
 
 type NativeUpdateAction = "install" | "restart" | "stop";
 
@@ -24,9 +22,7 @@ export async function runGatewayServiceUpdateCommand(
     return;
   }
   if (mode === "check") {
-    process.stdout.write(
-      JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
-    );
+    writeGatewayServiceUpdateCapability();
     return;
   }
   if (mode !== "run") {

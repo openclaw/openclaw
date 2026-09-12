@@ -1226,15 +1226,102 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
+  flex: 0 0 auto;
+}
+
+.sidebar-session-filter-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  cursor: default;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-filter-summary:hover,
+.sidebar-session-filter-summary:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+/* The lead slot stacks the filter glyph (owner avatar or archive mark) under the
+   clear icon; hover swaps them so the summary spends no width on a second control. */
+.sidebar-session-filter-summary__lead {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-filter-summary__lead > * {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-session-filter-summary__clear,
+.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__glyph {
+  opacity: 0;
+}
+
+.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__clear {
+  opacity: 1;
+}
+
+.sidebar-session-filter-summary__lead svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-session-filter-summary .viewer-avatar {
+  width: 14px;
+  height: 14px;
+  border-color: var(--bg-elevated);
+}
+
+.sidebar-session-filter-summary__label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-session-filter-summary__sep {
+  margin: 0 4px;
+}
+
 .sidebar-session-toolbar__button.sidebar-session-sort {
   margin-left: auto;
 }
 
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
+.sidebar-session-toolbar__button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+}
+
+/* The filter summary names the active filter; the funnel only keeps its dot. */
+.sidebar-session-toolbar__button:hover,
+.sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-expanded="true"],
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
 }
@@ -1621,6 +1708,10 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-session-person-filter {
+  position: relative;
+}
+
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
@@ -1694,6 +1785,15 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (hover: none), (pointer: coarse) {
+  /* No hover on touch: the clear icon is the resting lead glyph. */
+  .sidebar-session-filter-summary__glyph {
+    opacity: 0;
+  }
+
+  .sidebar-session-filter-summary__clear {
+    opacity: 0.55;
+  }
+
   /* Touch has no hover, so the chevron must be the resting state or
      catalog collapsibility becomes undiscoverable. */
   .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
@@ -4575,7 +4675,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
    Responsive - Tablet
    =========================================== */
 
-@media (max-width: 1100px) {
+@media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
     --shell-pad: 12px;
     --shell-gap: 12px;

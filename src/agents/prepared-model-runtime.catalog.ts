@@ -8,6 +8,7 @@ import {
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
+import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
 
 export function advancePreparedModelRuntimeOwnersConfig(
   owners: Iterable<PreparedModelRuntimeOwner>,
@@ -24,7 +25,7 @@ export function advancePreparedModelRuntimeOwnersConfig(
 export async function refreshPreparedModelRuntimeOwnerCatalog(
   owners: Map<string, PreparedModelRuntimeOwner>,
   snapshot: PreparedModelRuntimeSnapshot,
-  options: { refresh?: boolean } = {},
+  options: PreparedModelCatalogRefreshOptions = {},
 ): Promise<ModelCatalogSnapshot | undefined> {
   const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
   if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
@@ -32,13 +33,19 @@ export async function refreshPreparedModelRuntimeOwnerCatalog(
   }
   const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
   const refresh = options.refresh === true || owner.catalogStale;
-  if (!refresh && isPreparedModelCatalogFull(currentCatalog)) {
+  if (
+    !refresh &&
+    !options.providerIds &&
+    !options.changedOnly &&
+    isPreparedModelCatalogFull(currentCatalog)
+  ) {
     return undefined;
   }
   const generation = owner.generation;
-  const catalog = await snapshot.loadFullModelCatalog({ refresh });
+  const catalog = await snapshot.loadFullModelCatalog({ ...options, refresh });
   if (
     owner.catalogStale &&
+    !catalog.pendingProviders?.length &&
     owner.generation === generation &&
     owners.get(ownerKey(owner.input)) === owner
   ) {

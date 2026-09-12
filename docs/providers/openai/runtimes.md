@@ -43,8 +43,22 @@ OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harnes
 unsupported routes/auth fail closed, except that authored request overrides may
 use Codex's declared exact-request OpenClaw fallback before execution. Inspect
 the completed result's actual harness when a recipe depends on native execution.
-Runtime selection does not change credential type or billing: Platform API-key
+Runtime compatibility does not establish credential type or billing: Platform API-key
 auth and ChatGPT/Codex subscription auth remain distinct.
+
+An official Completions adapter alone does not pin a supported model to metered
+billing: older configurations used that adapter with Codex subscription auth.
+When both credential kinds are eligible, automatic selection prefers the
+subscription route. That preference does not change the implicit runtime or
+require installing Codex for an API-only configuration. A literal provider
+`apiKey` without an `auth` override remains a fallback after eligible profiles.
+Required profile bindings, provider auth settings, configured secret references,
+and explicit auth order still take precedence. An authored OpenClaw runtime choice
+prefers the API route when both kinds are eligible; runtime compatibility is
+checked independently. Unpinned heartbeat and subagent models inherit their
+default model's route intent. Doctor reports a resolved billing-route change
+after saving a model-reference migration, including the consumer and old/new
+models, routes, and profiles.
 
 `openclaw doctor --fix` migrates legacy `codex/*` and `openai-codex/*` model
 refs, legacy Codex auth profile ids, and legacy Codex auth-order entries to the

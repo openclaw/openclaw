@@ -42,8 +42,11 @@ export function resolveClaudeThinkingProfile(
 ): ProviderThinkingProfile {
   const ref = { id: modelId, params };
   const canonicalModelId = resolveClaudeModelIdentity(ref);
-  if (resolveClaudeFable5ModelIdentity(ref) || resolveClaudeMythos5ModelIdentity(ref)) {
+  if (resolveClaudeFable5ModelIdentity(ref)) {
     return CLAUDE_FABLE_5_THINKING_PROFILE;
+  }
+  if (resolveClaudeMythos5ModelIdentity(ref)) {
+    return { ...CLAUDE_FABLE_5_THINKING_PROFILE, defaultLevel: "high" };
   }
   // Before the generic xhigh branch: Opus 5 defaults thinking on ("high"),
   // unlike Opus 4.7/4.8 whose omitted-thinking default is off.

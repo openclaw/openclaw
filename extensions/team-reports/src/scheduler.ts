@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginServiceContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
 import { DAY_MS, describePeriod } from "./periods.js";
 import {
@@ -13,6 +10,7 @@ import {
   type ResolvedTeamReportsConfig,
 } from "./run.js";
 import type { TeamReportsStore } from "./store.js";
+import type { SummaryLlm } from "./summaries.js";
 import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
 const RUN_DEADLINE_MS = 45 * 60_000;
@@ -61,7 +59,7 @@ export class TeamReportsScheduler {
       config: TeamReportsConfig;
       resolved: ResolvedTeamReportsConfig;
       store: TeamReportsStore;
-      llm: OpenClawPluginApi["runtime"]["llm"];
+      llm: SummaryLlm;
       context: Pick<OpenClawPluginServiceContext, "logger" | "serviceHealth">;
       sources?: ReportSourceFactory;
     },

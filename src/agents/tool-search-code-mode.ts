@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import { TOOL_SEARCH_CODE_MODE_CHILD_SOURCE } from "./tool-search-code-mode-child.js";
@@ -47,11 +48,17 @@ export async function runCodeMode(params: {
   };
 }
 
-function buildCodeModeChildArgs(): string[] {
-  if (!process.allowedNodeEnvironmentFlags.has("--permission")) {
-    throw new ToolInputError("tool_search_code requires a Node runtime with --permission support.");
+function resolveCodeModeChildCommand(): { executable: string; args: string[] } {
+  const executable = resolveNodeRuntimeExecutable({ requiredFlag: "--permission" });
+  if (!executable) {
+    throw new ToolInputError(
+      "tool_search_code requires an installed Node runtime with --permission support.",
+    );
   }
-  return ["--permission", "--input-type=module", "--eval", TOOL_SEARCH_CODE_MODE_CHILD_SOURCE];
+  return {
+    executable,
+    args: ["--permission", "--input-type=module", "--eval", TOOL_SEARCH_CODE_MODE_CHILD_SOURCE],
+  };
 }
 
 function isCodeModeBridgeMethod(value: unknown): value is CodeModeBridgeMethod {
@@ -111,7 +118,8 @@ export function runCodeModeChild(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, buildCodeModeChildArgs(), {
+    const command = resolveCodeModeChildCommand();
+    const child = spawn(command.executable, command.args, {
       cwd: os.tmpdir(),
       env: {},
       // The worker returns logs/results over IPC and never writes stdout.

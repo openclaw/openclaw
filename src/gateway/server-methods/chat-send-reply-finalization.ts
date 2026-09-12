@@ -13,7 +13,6 @@ import {
   buildAssistantReplyContent,
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
-  extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   hasVisibleAssistantFinalMessage,
   stripManagedOutgoingAssistantContentBlocks,
@@ -297,8 +296,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       ? mediaMessage?.content
       : assistantContent;
   const displayReply =
-    extractAssistantDisplayTextFromContent(assistantContent) ??
-    buildTranscriptReplyText(finalPayloads);
+    extractAssistantDisplayText(assistantContent) ?? buildTranscriptReplyText(finalPayloads);
   const transcriptDisplayReply = displayReply?.trim() ?? "";
   const transcriptReply =
     mediaMessage?.transcriptText ||

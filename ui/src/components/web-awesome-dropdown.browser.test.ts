@@ -85,13 +85,16 @@ async function closed(f: Fixture) {
   expect(f.menu.getAnimations()).toHaveLength(0);
 }
 
-function observeNativeOcclusion(native = true) {
+function observeNativeOcclusion(
+  native = true,
+  getBounds = () => new DOMRect(0, 0, innerWidth, innerHeight),
+) {
   vi.stubGlobal(
     "webkit",
     native ? { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } } : undefined,
   );
   const states: boolean[] = [];
-  onTestFinished(subscribeNativeOverlayOcclusion((occluded) => states.push(occluded)));
+  onTestFinished(subscribeNativeOverlayOcclusion((occluded) => states.push(occluded), getBounds));
   return states;
 }
 
@@ -103,6 +106,37 @@ afterEach(async () => {
 });
 
 describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
+  it("ignores a distant menu but follows its submenu through overlap and closing", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(1280, 800);
+    let bounds = new DOMRect(900, 100, 300, 500);
+    const states = observeNativeOcclusion(true, () => bounds);
+    const f = await fixture();
+    await open(f);
+    expect(states).toEqual([false]);
+    await f.parent.openSubmenu();
+    const submenu = f.parent.shadowRoot!.querySelector<HTMLElement>('[part="submenu"]')!;
+    const rect = submenu.getBoundingClientRect();
+    // The native pane touches only the submenu, beyond the main menu's edge.
+    bounds = new DOMRect(rect.right - 10, rect.top, 100, rect.height);
+    expect(bounds.left).toBeGreaterThan(f.menu.getBoundingClientRect().right);
+    await expect.poll(() => states).toEqual([false, true]);
+    await duringElementAnimation(
+      submenu,
+      "hide",
+      () => {
+        f.parent.submenuOpen = false;
+      },
+      async () => {
+        await frame();
+        expect(states).toEqual([false, true]);
+      },
+    );
+    await expect.poll(() => states).toEqual([false, true, false]);
+    f.dropdown.open = false;
+    await closed(f);
+  });
+
   it("occludes native browser views from trigger opening through the complete hide animation", async () => {
     const { page } = await import("vitest/browser");
     const states = observeNativeOcclusion();

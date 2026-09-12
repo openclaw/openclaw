@@ -16,6 +16,11 @@ import type { CaptureOwner, LeaseExclusionParams } from "./openclaw-state-lease-
 // handles; neither a pathname nor inherited serialized data grants admission.
 const activeOwners = new AsyncLocalStorage<readonly CaptureOwner[]>();
 
+/** Independent work must acquire its own lease instead of inheriting a prior file owner. */
+export function runOutsideOpenClawStateLeaseScope<T>(run: () => T): T {
+  return activeOwners.exit(run);
+}
+
 function fail(errors: unknown[]): never {
   if (errors.length === 1) {
     throw errors[0];

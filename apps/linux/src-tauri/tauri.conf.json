@@ -43,7 +43,7 @@
           "identifier": "local-companion",
           "description": "Local setup screens can invoke app commands and receive installer progress.",
           "local": true,
-          "windows": ["main"],
+          "webviews": ["main"],
           "permissions": [
             "allow-bootstrap",
             "allow-build-info",

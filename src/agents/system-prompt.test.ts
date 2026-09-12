@@ -1294,7 +1294,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+      "Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Write/restart unavailable; ask human.",
     );
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
@@ -1324,11 +1324,9 @@ describe("buildAgentSystemPrompt", () => {
         "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
       );
       expect(prompt).toContain(
-        "Never run npm install -g openclaw or stop the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
       );
-      expect(prompt).toContain(
-        "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI.",
-      );
+      expect(prompt).toContain("For a chat update request, direct the user to `/update`.");
       expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).toContain(
         "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
@@ -1336,13 +1334,20 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
-  it.each([{ toolNames: ["exec"] }, { toolNames: [] }])(
-    "keeps updates out of exec without gateway ($toolNames)",
+  it.each([{ toolNames: ["exec"] }, { toolNames: ["message"] }, { toolNames: [] }])(
+    "keeps chat updates discoverable without gateway ($toolNames)",
     ({ toolNames }) => {
       const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
       expect(prompt).toContain(
-        "System controls unavailable. Updates and restarts need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI. Never run npm install -g openclaw or stop the gateway service via exec.",
+        "In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile.",
       );
+      expect(prompt).toContain("For a chat update request, direct the user to `/update`.");
+      expect(prompt).toContain("Outside chat, use the Control UI or ask the operator");
+      expect(prompt).toContain("Missing chat ownership needs owner setup");
+      expect(prompt).toContain(
+        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+      );
+      expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).not.toContain("update.run");
     },
   );

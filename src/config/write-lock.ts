@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, isErrno } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
+import {
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigWriteRefusal,
+} from "../infra/update-doctor-result.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
@@ -111,12 +115,15 @@ export async function withConfigWriteLock<T>(
   if (parentGuard && !inherited?.current.accepting) {
     throw new Error("Config write source admission has closed.");
   }
-  const guard = assertCurrent
-    ? () => {
-        parentGuard?.();
-        assertCurrent();
-      }
-    : captureConfigWriteLockGuard(configPath);
+  const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
+  const guard =
+    assertCurrent || doctorAuthority
+      ? () => {
+          parentGuard?.();
+          assertCurrent?.();
+          doctorAuthority?.assertCurrent();
+        }
+      : captureConfigWriteLockGuard(configPath);
   guard?.();
   const inheritedScope = inherited?.paths.get(configPath);
   if (inheritedScope?.active) {
@@ -145,6 +152,11 @@ export async function withConfigWriteLock<T>(
       );
     })
     .catch(async (error: unknown) => {
+      recordUpdateDoctorConfigWriteRefusal({
+        reason: "config-lock-refused",
+        message: formatErrorMessage(error),
+        keys: [],
+      });
       if (!(await isPermissionErrorInDirectory(error, configDir))) {
         throw error;
       }

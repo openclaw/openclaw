@@ -640,6 +640,8 @@ public struct AgentParams: Codable, Sendable {
 
 public struct AgentSummary: Codable, Sendable {
     public let id: String
+    public let status: String?
+    public let admissionrefusal: [String: AnyCodable]?
     public let kind: AgentKind?
     public let createdvia: AnyCodable?
     public let creatoragentid: AnyCodable?
@@ -657,6 +659,8 @@ public struct AgentSummary: Codable, Sendable {
 
     public init(
         id: String,
+        status: String? = nil,
+        admissionrefusal: [String: AnyCodable]? = nil,
         kind: AgentKind? = nil,
         createdvia: AnyCodable? = nil,
         creatoragentid: AnyCodable? = nil,
@@ -673,6 +677,8 @@ public struct AgentSummary: Codable, Sendable {
         defaultpermissionmode: SessionPermissionMode? = nil)
     {
         self.id = id
+        self.status = status
+        self.admissionrefusal = admissionrefusal
         self.kind = kind
         self.createdvia = createdvia
         self.creatoragentid = creatoragentid
@@ -691,6 +697,8 @@ public struct AgentSummary: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case status
+        case admissionrefusal = "admissionRefusal"
         case kind
         case createdvia = "createdVia"
         case creatoragentid = "creatorAgentId"
@@ -4665,6 +4673,82 @@ public struct ConnectParams: Codable, Sendable {
     }
 }
 
+public struct ControlUiPluginTab: Codable, Sendable {
+    public let pluginid: String
+    public let id: String
+    public let label: String
+    public let description: String?
+    public let icon: String?
+    public let path: String?
+    public let placement: String?
+    public let slug: String?
+    public let requiresgatewayauth: Bool?
+    public let group: AnyCodable?
+    public let order: Double?
+
+    public init(
+        pluginid: String,
+        id: String,
+        label: String,
+        description: String? = nil,
+        icon: String? = nil,
+        path: String? = nil,
+        placement: String? = nil,
+        slug: String? = nil,
+        requiresgatewayauth: Bool? = nil,
+        group: AnyCodable? = nil,
+        order: Double? = nil)
+    {
+        self.pluginid = pluginid
+        self.id = id
+        self.label = label
+        self.description = description
+        self.icon = icon
+        self.path = path
+        self.placement = placement
+        self.slug = slug
+        self.requiresgatewayauth = requiresgatewayauth
+        self.group = group
+        self.order = order
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case id
+        case label
+        case description
+        case icon
+        case path
+        case placement
+        case slug
+        case requiresgatewayauth = "requiresGatewayAuth"
+        case group
+        case order
+    }
+}
+
+public struct ControlUiPluginWidgetKind: Codable, Sendable {
+    public let pluginid: String
+    public let kind: String
+    public let label: String
+
+    public init(
+        pluginid: String,
+        kind: String,
+        label: String)
+    {
+        self.pluginid = pluginid
+        self.kind = kind
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case kind
+        case label
+    }
+}
+
 public struct ConversationListItem: Codable, Sendable {
     public let conversationref: String
     public let channel: String
@@ -5794,6 +5878,7 @@ public struct DesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let canresize: Bool?
     public let vncpassword: String?
     public let auth: String?
     public let preauthenticated: Bool?
@@ -5803,6 +5888,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        canresize: Bool? = nil,
         vncpassword: String? = nil,
         auth: String? = nil,
         preauthenticated: Bool? = nil)
@@ -5811,6 +5897,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.canresize = canresize
         self.vncpassword = vncpassword
         self.auth = auth
         self.preauthenticated = preauthenticated
@@ -5821,6 +5908,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case canresize = "canResize"
         case vncpassword = "vncPassword"
         case auth
         case preauthenticated
@@ -7868,8 +7956,8 @@ public struct HelloOk: Codable, Sendable {
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
     public let controluiurl: String?
-    public let controluitabs: [[String: AnyCodable]]?
-    public let controluiwidgetkinds: [[String: AnyCodable]]?
+    public let controluitabs: [ControlUiPluginTab]?
+    public let controluiwidgetkinds: [ControlUiPluginWidgetKind]?
     public let pluginsurfaceurls: [String: AnyCodable]?
     public let auth: [String: AnyCodable]
     public let policy: [String: AnyCodable]
@@ -7881,8 +7969,8 @@ public struct HelloOk: Codable, Sendable {
         features: [String: AnyCodable],
         snapshot: Snapshot,
         controluiurl: String? = nil,
-        controluitabs: [[String: AnyCodable]]? = nil,
-        controluiwidgetkinds: [[String: AnyCodable]]? = nil,
+        controluitabs: [ControlUiPluginTab]? = nil,
+        controluiwidgetkinds: [ControlUiPluginWidgetKind]? = nil,
         pluginsurfaceurls: [String: AnyCodable]? = nil,
         auth: [String: AnyCodable],
         policy: [String: AnyCodable])
@@ -8464,6 +8552,7 @@ public struct ModelsListParams: Codable, Sendable {
     public let provider: String?
     public let includedetails: Bool?
     public let includeprovidercapabilities: Bool?
+    public let includedefaultmodels: Bool?
     public let preparedonly: Bool?
     public let refresh: Bool?
     public let view: AnyCodable?
@@ -8475,6 +8564,7 @@ public struct ModelsListParams: Codable, Sendable {
         provider: String? = nil,
         includedetails: Bool? = nil,
         includeprovidercapabilities: Bool? = nil,
+        includedefaultmodels: Bool? = nil,
         preparedonly: Bool? = nil,
         refresh: Bool? = nil,
         view: AnyCodable? = nil)
@@ -8485,6 +8575,7 @@ public struct ModelsListParams: Codable, Sendable {
         self.provider = provider
         self.includedetails = includedetails
         self.includeprovidercapabilities = includeprovidercapabilities
+        self.includedefaultmodels = includedefaultmodels
         self.preparedonly = preparedonly
         self.refresh = refresh
         self.view = view
@@ -8497,6 +8588,7 @@ public struct ModelsListParams: Codable, Sendable {
         case provider
         case includedetails = "includeDetails"
         case includeprovidercapabilities = "includeProviderCapabilities"
+        case includedefaultmodels = "includeDefaultModels"
         case preparedonly = "preparedOnly"
         case refresh
         case view
@@ -8505,25 +8597,33 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let defaultmodels: [String: AnyCodable]?
     public let refreshfailed: Bool?
+    public let pendingproviders: [String]?
     public let accountselection: ChatAccountSelection?
     public let provideroutcomes: [[String: AnyCodable]]?
 
     public init(
         models: [ModelChoice],
+        defaultmodels: [String: AnyCodable]? = nil,
         refreshfailed: Bool? = nil,
+        pendingproviders: [String]? = nil,
         accountselection: ChatAccountSelection? = nil,
         provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.defaultmodels = defaultmodels
         self.refreshfailed = refreshfailed
+        self.pendingproviders = pendingproviders
         self.accountselection = accountselection
         self.provideroutcomes = provideroutcomes
     }
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case defaultmodels = "defaultModels"
         case refreshfailed = "refreshFailed"
+        case pendingproviders = "pendingProviders"
         case accountselection = "accountSelection"
         case provideroutcomes = "providerOutcomes"
     }
@@ -9494,6 +9594,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let channelids: [String]?
     public let install: PluginCatalogInstallAction?
     public let error: String?
+    public let runtime: PluginRuntimeStatus?
     public let categories: [String]?
     public let category: String?
     public let removable: Bool?
@@ -9518,6 +9619,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         channelids: [String]? = nil,
         install: PluginCatalogInstallAction? = nil,
         error: String? = nil,
+        runtime: PluginRuntimeStatus? = nil,
         categories: [String]? = nil,
         category: String? = nil,
         removable: Bool? = nil)
@@ -9541,6 +9643,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.channelids = channelids
         self.install = install
         self.error = error
+        self.runtime = runtime
         self.categories = categories
         self.category = category
         self.removable = removable
@@ -9566,6 +9669,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case channelids = "channelIds"
         case install
         case error
+        case runtime
         case categories
         case category
         case removable
@@ -9597,7 +9701,11 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     public let surface: AnyCodable
     public let label: String
     public let description: String?
+    public let icon: String?
+    public let path: String?
     public let placement: String?
+    public let group: AnyCodable?
+    public let order: Double?
     public let schema: AnyCodable?
     public let requiredscopes: [String]?
 
@@ -9608,7 +9716,11 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         surface: AnyCodable,
         label: String,
         description: String? = nil,
+        icon: String? = nil,
+        path: String? = nil,
         placement: String? = nil,
+        group: AnyCodable? = nil,
+        order: Double? = nil,
         schema: AnyCodable? = nil,
         requiredscopes: [String]? = nil)
     {
@@ -9618,7 +9730,11 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         self.surface = surface
         self.label = label
         self.description = description
+        self.icon = icon
+        self.path = path
         self.placement = placement
+        self.group = group
+        self.order = order
         self.schema = schema
         self.requiredscopes = requiredscopes
     }
@@ -9630,7 +9746,11 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case surface
         case label
         case description
+        case icon
+        case path
         case placement
+        case group
+        case order
         case schema
         case requiredscopes = "requiredScopes"
     }
@@ -10039,6 +10159,67 @@ public struct PluginOperatorGrants: Codable, Sendable {
     }
 }
 
+public struct PluginReloadTarget: Codable, Sendable {
+    public let pluginid: String
+    public let installhash: String?
+    public let sourcedigests: [String: AnyCodable]?
+
+    public init(
+        pluginid: String,
+        installhash: String? = nil,
+        sourcedigests: [String: AnyCodable]? = nil)
+    {
+        self.pluginid = pluginid
+        self.installhash = installhash
+        self.sourcedigests = sourcedigests
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case installhash = "installHash"
+        case sourcedigests = "sourceDigests"
+    }
+}
+
+public struct PluginRuntimeApplication: Codable, Sendable {
+    public let operationid: String
+    public let generation: Int
+    public let pluginids: [String]
+    public let sourcedigests: [String: AnyCodable]?
+
+    public init(
+        operationid: String,
+        generation: Int,
+        pluginids: [String],
+        sourcedigests: [String: AnyCodable]? = nil)
+    {
+        self.operationid = operationid
+        self.generation = generation
+        self.pluginids = pluginids
+        self.sourcedigests = sourcedigests
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationid = "operationId"
+        case generation
+        case pluginids = "pluginIds"
+        case sourcedigests = "sourceDigests"
+    }
+}
+
+public struct PluginRuntimeStatus: Codable, Sendable {
+    public let state: AnyCodable
+    public let error: String?
+
+    public init(
+        state: AnyCodable,
+        error: String? = nil)
+    {
+        self.state = state
+        self.error = error
+    }
+}
+
 public struct PluginSearchPackage: Codable, Sendable {
     public let name: String
     public let displayname: String
@@ -10193,6 +10374,16 @@ public struct PluginsCatalogGetResult: Codable, Sendable {
     {
         self.plugin = plugin
         self.detail = detail
+    }
+}
+
+public struct PluginsChangedEvent: Codable, Sendable {
+    public let generation: Int
+
+    public init(
+        generation: Int)
+    {
+        self.generation = generation
     }
 }
 
@@ -10352,17 +10543,20 @@ public struct PluginsInstallResult: Codable, Sendable {
     public let ok: Bool
     public let plugin: PluginCatalogEntry
     public let restartrequired: Bool
+    public let runtime: PluginRuntimeApplication?
     public let warnings: [String]?
 
     public init(
         ok: Bool,
         plugin: PluginCatalogEntry,
         restartrequired: Bool,
+        runtime: PluginRuntimeApplication? = nil,
         warnings: [String]? = nil)
     {
         self.ok = ok
         self.plugin = plugin
         self.restartrequired = restartrequired
+        self.runtime = runtime
         self.warnings = warnings
     }
 
@@ -10370,6 +10564,7 @@ public struct PluginsInstallResult: Codable, Sendable {
         case ok
         case plugin
         case restartrequired = "restartRequired"
+        case runtime
         case warnings
     }
 }
@@ -10377,21 +10572,25 @@ public struct PluginsInstallResult: Codable, Sendable {
 public struct PluginsListParams: Codable, Sendable {}
 
 public struct PluginsListResult: Codable, Sendable {
+    public let generation: Int?
     public let plugins: [PluginCatalogEntry]
     public let diagnostics: [AnyCodable]
     public let mutationallowed: Bool
 
     public init(
+        generation: Int? = nil,
         plugins: [PluginCatalogEntry],
         diagnostics: [AnyCodable],
         mutationallowed: Bool)
     {
+        self.generation = generation
         self.plugins = plugins
         self.diagnostics = diagnostics
         self.mutationallowed = mutationallowed
     }
 
     private enum CodingKeys: String, CodingKey {
+        case generation
         case plugins
         case diagnostics
         case mutationallowed = "mutationAllowed"
@@ -10402,11 +10601,75 @@ public struct PluginsRefreshParams: Codable, Sendable {}
 
 public struct PluginsRefreshResult: Codable, Sendable {
     public let ok: Bool
+    public let restartrequired: Bool?
+    public let runtime: PluginRuntimeApplication?
+    public let warnings: [String]?
 
     public init(
-        ok: Bool)
+        ok: Bool,
+        restartrequired: Bool? = nil,
+        runtime: PluginRuntimeApplication? = nil,
+        warnings: [String]? = nil)
     {
         self.ok = ok
+        self.restartrequired = restartrequired
+        self.runtime = runtime
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case restartrequired = "restartRequired"
+        case runtime
+        case warnings
+    }
+}
+
+public struct PluginsReloadParams: Codable, Sendable {
+    public let plugins: [PluginReloadTarget]
+    public let acknowledgecapabilities: [String: AnyCodable]?
+
+    public init(
+        plugins: [PluginReloadTarget],
+        acknowledgecapabilities: [String: AnyCodable]? = nil)
+    {
+        self.plugins = plugins
+        self.acknowledgecapabilities = acknowledgecapabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case plugins
+        case acknowledgecapabilities = "acknowledgeCapabilities"
+    }
+}
+
+public struct PluginsReloadResult: Codable, Sendable {
+    public let ok: Bool
+    public let pluginids: [String]
+    public let restartrequired: Bool
+    public let runtime: PluginRuntimeApplication
+    public let warnings: [String]?
+
+    public init(
+        ok: Bool,
+        pluginids: [String],
+        restartrequired: Bool,
+        runtime: PluginRuntimeApplication,
+        warnings: [String]? = nil)
+    {
+        self.ok = ok
+        self.pluginids = pluginids
+        self.restartrequired = restartrequired
+        self.runtime = runtime
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case pluginids = "pluginIds"
+        case restartrequired = "restartRequired"
+        case runtime
+        case warnings
     }
 }
 
@@ -10590,21 +10853,25 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
 public struct PluginsSetEnabledParams: Codable, Sendable {
     public let pluginid: String
     public let enabled: Bool
+    public let allowlistpolicy: String?
     public let acknowledgecapabilities: [String: AnyCodable]?
 
     public init(
         pluginid: String,
         enabled: Bool,
+        allowlistpolicy: String? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil)
     {
         self.pluginid = pluginid
         self.enabled = enabled
+        self.allowlistpolicy = allowlistpolicy
         self.acknowledgecapabilities = acknowledgecapabilities
     }
 
     private enum CodingKeys: String, CodingKey {
         case pluginid = "pluginId"
         case enabled
+        case allowlistpolicy = "allowlistPolicy"
         case acknowledgecapabilities = "acknowledgeCapabilities"
     }
 }
@@ -10613,17 +10880,20 @@ public struct PluginsSetEnabledResult: Codable, Sendable {
     public let ok: Bool
     public let plugin: PluginCatalogEntry
     public let restartrequired: Bool
+    public let runtime: PluginRuntimeApplication?
     public let warnings: [String]?
 
     public init(
         ok: Bool,
         plugin: PluginCatalogEntry,
         restartrequired: Bool,
+        runtime: PluginRuntimeApplication? = nil,
         warnings: [String]? = nil)
     {
         self.ok = ok
         self.plugin = plugin
         self.restartrequired = restartrequired
+        self.runtime = runtime
         self.warnings = warnings
     }
 
@@ -10631,6 +10901,7 @@ public struct PluginsSetEnabledResult: Codable, Sendable {
         case ok
         case plugin
         case restartrequired = "restartRequired"
+        case runtime
         case warnings
     }
 }
@@ -10640,27 +10911,56 @@ public struct PluginsUiDescriptorsParams: Codable, Sendable {}
 public struct PluginsUiDescriptorsResult: Codable, Sendable {
     public let ok: Bool
     public let descriptors: [PluginControlUiDescriptor]
+    public let generation: Int?
+    public let methods: [String]?
+    public let controluitabs: [ControlUiPluginTab]?
+    public let controluiwidgetkinds: [ControlUiPluginWidgetKind]?
+    public let pluginsurfaceurls: [String: AnyCodable]?
 
     public init(
         ok: Bool,
-        descriptors: [PluginControlUiDescriptor])
+        descriptors: [PluginControlUiDescriptor],
+        generation: Int? = nil,
+        methods: [String]? = nil,
+        controluitabs: [ControlUiPluginTab]? = nil,
+        controluiwidgetkinds: [ControlUiPluginWidgetKind]? = nil,
+        pluginsurfaceurls: [String: AnyCodable]? = nil)
     {
         self.ok = ok
         self.descriptors = descriptors
+        self.generation = generation
+        self.methods = methods
+        self.controluitabs = controluitabs
+        self.controluiwidgetkinds = controluiwidgetkinds
+        self.pluginsurfaceurls = pluginsurfaceurls
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case descriptors
+        case generation
+        case methods
+        case controluitabs = "controlUiTabs"
+        case controluiwidgetkinds = "controlUiWidgetKinds"
+        case pluginsurfaceurls = "pluginSurfaceUrls"
     }
 }
 
 public struct PluginsUninstallParams: Codable, Sendable {
     public let pluginid: String
+    public let keepfiles: Bool?
 
     public init(
-        pluginid: String)
+        pluginid: String,
+        keepfiles: Bool? = nil)
     {
         self.pluginid = pluginid
+        self.keepfiles = keepfiles
     }
 
     private enum CodingKeys: String, CodingKey {
         case pluginid = "pluginId"
+        case keepfiles = "keepFiles"
     }
 }
 
@@ -10668,6 +10968,7 @@ public struct PluginsUninstallResult: Codable, Sendable {
     public let ok: Bool
     public let pluginid: String
     public let restartrequired: Bool
+    public let runtime: PluginRuntimeApplication?
     public let removed: [String]
     public let warnings: [String]?
 
@@ -10675,12 +10976,14 @@ public struct PluginsUninstallResult: Codable, Sendable {
         ok: Bool,
         pluginid: String,
         restartrequired: Bool,
+        runtime: PluginRuntimeApplication? = nil,
         removed: [String],
         warnings: [String]? = nil)
     {
         self.ok = ok
         self.pluginid = pluginid
         self.restartrequired = restartrequired
+        self.runtime = runtime
         self.removed = removed
         self.warnings = warnings
     }
@@ -10689,6 +10992,7 @@ public struct PluginsUninstallResult: Codable, Sendable {
         case ok
         case pluginid = "pluginId"
         case restartrequired = "restartRequired"
+        case runtime
         case removed
         case warnings
     }
@@ -10923,6 +11227,7 @@ public struct PortalSummary: Codable, Sendable {
 
 public struct PresenceEntry: Codable, Sendable {
     public let host: String?
+    public let clientid: String?
     public let ip: String?
     public let version: String?
     public let platform: String?
@@ -10946,6 +11251,7 @@ public struct PresenceEntry: Codable, Sendable {
 
     public init(
         host: String? = nil,
+        clientid: String? = nil,
         ip: String? = nil,
         version: String? = nil,
         platform: String? = nil,
@@ -10968,6 +11274,7 @@ public struct PresenceEntry: Codable, Sendable {
         watchedsessions: [String]? = nil)
     {
         self.host = host
+        self.clientid = clientid
         self.ip = ip
         self.version = version
         self.platform = platform
@@ -10992,6 +11299,7 @@ public struct PresenceEntry: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case host
+        case clientid = "clientId"
         case ip
         case version
         case platform
@@ -19225,7 +19533,18 @@ public struct TalkAgentControlResult: Codable, Sendable {
     }
 }
 
-public struct TalkCatalogParams: Codable, Sendable {}
+public struct TalkCatalogParams: Codable, Sendable {
+    public let provider: String?
+    public let model: String?
+
+    public init(
+        provider: String? = nil,
+        model: String? = nil)
+    {
+        self.provider = provider
+        self.model = model
+    }
+}
 
 public struct TalkCatalogResult: Codable, Sendable {
     public let modes: [AnyCodable]
@@ -23282,6 +23601,7 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let canresize: Bool?
     public let vncpassword: String?
 
     public init(
@@ -23289,12 +23609,14 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        canresize: Bool? = nil,
         vncpassword: String? = nil)
     {
         self.transport = transport
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.canresize = canresize
         self.vncpassword = vncpassword
     }
 
@@ -23303,6 +23625,7 @@ public struct WorkerDesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case canresize = "canResize"
         case vncpassword = "vncPassword"
     }
 }

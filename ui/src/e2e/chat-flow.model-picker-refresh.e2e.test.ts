@@ -232,7 +232,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the warm model list interactive while a picker-open refresh is in flight", async () => {
+  it("keeps picker opens cached and the warm list interactive during a catalog publication", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -250,9 +250,12 @@ suite.define(() => {
       const picker = pane.locator(".chat-controls__model-picker");
       await picker.locator("[data-chat-model-option]").first().waitFor({ state: "attached" });
 
-      // Freeze the operator-signaled revalidation so the in-flight state is observable.
       await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
+      await picker.getByRole("option", { name: "GPT-5.6 Luna", exact: true }).waitFor();
+      expect(await gateway.getRequests("models.list")).toHaveLength(1);
+
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       const request = await gateway.waitForRequest("models.list", { after: 1 });
       expect(requireRecord(request.params)).toMatchObject({
         sessionKey: "agent:main:main",
@@ -311,11 +314,13 @@ suite.define(() => {
       const discoveryCount = (await gateway.getRequests("models.list")).length;
       await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
-      await gateway.waitForRequest("models.list", { after: discoveryCount });
       const search = picker.locator("[data-chat-model-search]");
       await search.fill("anthropic");
       await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
       expect(await previous.isVisible()).toBe(true);
+      expect(await gateway.getRequests("models.list")).toHaveLength(discoveryCount);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await gateway.waitForRequest("models.list", { after: discoveryCount });
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",

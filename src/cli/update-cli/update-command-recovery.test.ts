@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as snapshots from "../../infra/sqlite-snapshot-source.js";
 import {
   createRetainedUpdateRecovery,
   storeRetainedUpdateRecovery,
@@ -15,16 +16,134 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
+import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => vi.restoreAllMocks());
+
+describe("package finalization recovery targets", () => {
+  function target() {
+    const root = dirs.make("finalization-recovery-target-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const params: Parameters<typeof assertUpdateCommandPackageFinalization>[0] & {
+      root: string;
+    } = {
+      root,
+      opts: { run },
+      result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+    };
+    return { run, params, databasePath: resolveOpenClawStateSqlitePath(env) };
+  }
+
+  it.each(
+    (["entry", "settlement"] as const).flatMap((phase) =>
+      (["run-only", "same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
+        phase,
+        kind,
+      })),
+    ),
+  )("inspects each selected recovery target once at $phase ($kind)", async ({ phase, kind }) => {
+    const first = target();
+    const other = kind === "distinct-target" || kind === "retargeted" ? target() : undefined;
+    if (kind === "same-target") {
+      first.params.ownedManagedUpdateEnv = {
+        ...first.run.env,
+        OPENCLAW_STATE_DIR: first.params.root + path.sep + ".",
+      };
+    } else if (kind === "distinct-target") {
+      first.params.ownedManagedUpdateEnv = other!.run.env;
+    }
+    closeOpenClawStateDatabaseForTest();
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    if (kind === "retargeted") {
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const result = await lstat(...args);
+        if (String(args[0]) === path.dirname(first.databasePath)) {
+          first.run.env.OPENCLAW_STATE_DIR = other!.params.root;
+        }
+        return result;
+      });
+    }
+    if (phase === "entry") {
+      await expect(assertUpdateCommandPackageFinalization(first.params)).resolves.toBeUndefined();
+    } else {
+      await expect(
+        resolveSettledUpdateCommandResult(first.params, first.params.result),
+      ).resolves.toEqual({ result: first.params.result, settlementFailed: false });
+    }
+    const recoveryPaths =
+      kind === "distinct-target"
+        ? [other!.databasePath, first.databasePath]
+        : kind === "retargeted"
+          ? [first.databasePath, other!.databasePath]
+          : [first.databasePath];
+    expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual([
+      ...recoveryPaths,
+      // Settlement still needs its independent terminal-history read.
+      ...(phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : []),
+    ]);
+  });
+
+  it.each(["first-read", "distinct-read", "run-replaced", "fence-replaced"] as const)(
+    "retains the original executor after recovery admission (%s)",
+    async (boundary) => {
+      const first = target();
+      const other = boundary === "distinct-read" ? target() : undefined;
+      if (other) {
+        first.params.ownedManagedUpdateEnv = other.run.env;
+      }
+      let current = true;
+      first.run.executorFence = {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("original finalizer authority lost");
+          }
+        },
+      };
+      const replacementFence = { assertCurrent: vi.fn() };
+      closeOpenClawStateDatabaseForTest();
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const result = await lstat(...args);
+        if (String(args[0]) === path.dirname(first.databasePath)) {
+          if (boundary === "run-replaced") {
+            first.params.opts.run = { ...first.run };
+          } else if (boundary === "fence-replaced") {
+            first.run.executorFence = replacementFence;
+          } else {
+            current = false;
+          }
+        }
+        return result;
+      });
+      await expect(assertUpdateCommandPackageFinalization(first.params)).rejects.toMatchObject({
+        name: "UpdateCommandPendingRecoveryFailure",
+        cause: {
+          message:
+            boundary === "run-replaced" || boundary === "fence-replaced"
+              ? "Package finalization lost its original executor."
+              : "original finalizer authority lost",
+        },
+      });
+      expect(replacementFence.assertCurrent).not.toHaveBeenCalled();
+    },
+  );
+});
 
 async function fixture(rollback = false) {
   const root = dirs.make("terminal-consumer-");

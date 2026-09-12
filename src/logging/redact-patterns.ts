@@ -7,6 +7,7 @@ import {
   HTTP_AUTH_SCHEME_PATTERN,
   HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
 } from "../../packages/acp-core/src/structured-auth-redaction.js";
+import type { RedactMatch, RedactMatcher, RedactPattern } from "./redact-pattern-runtime.js";
 
 export const PAYMENT_CREDENTIAL_ENV_KEYS = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`;
 export const PAYMENT_CREDENTIAL_QUERY_KEYS = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`;
@@ -79,9 +80,129 @@ const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
-const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)`;
-export const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}`;
-const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
+
+function isAwsValueCharacter(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) ||
+    char === "/" ||
+    char === "+" ||
+    char === "="
+  );
+}
+
+function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
+  let runStart = -1;
+  let schemeStart = -1;
+  let urlStart = -1;
+  let authorityEnd = -1;
+  let urlEnd = -1;
+  let portStart = -1;
+  let portValid = true;
+  let hasAt = false;
+  const runs: Array<{ start: number; end: number; origin: number }> = [];
+  for (let index = 0; index <= text.length; index++) {
+    const char = text[index] ?? "";
+    const whitespace = index === text.length || /\s/.test(char);
+    if (char && isAwsValueCharacter(char)) {
+      if (runStart === -1) {
+        runStart = index;
+      }
+    } else if (runStart !== -1) {
+      if (index - runStart === 40) {
+        runs.push({ start: runStart, end: index, origin: runStart });
+      } else if (index - runStart > 40 && char === "@" && text[index - 41] === "/") {
+        runs.push({ start: index - 40, end: index, origin: runStart });
+      }
+      runStart = -1;
+    }
+    if (whitespace) {
+      // Later punctuation or query text can establish userinfo for an earlier run.
+      const publicUrl =
+        urlStart !== -1 &&
+        !hasAt &&
+        portValid &&
+        (portStart === -1 || (authorityEnd === -1 ? index : authorityEnd) > portStart + 1);
+      for (const run of runs) {
+        const before = text[run.start - 1] ?? "";
+        const after = text[run.end] ?? "";
+        const slashCredential = before === "/" && after === "@";
+        if (
+          (!slashCredential && (before === "_" || isAwsValueCharacter(before))) ||
+          after === "_" ||
+          text.slice(run.origin - 8, run.origin) === ";base64," ||
+          (publicUrl && run.start >= urlStart && run.end <= (urlEnd === -1 ? index : urlEnd))
+        ) {
+          continue;
+        }
+        let upper = false;
+        let lower = false;
+        let numeric = false;
+        let nonHex = false;
+        for (let offset = run.start; offset < run.end; offset++) {
+          const code = text.charCodeAt(offset);
+          upper ||= code >= 65 && code <= 90;
+          lower ||= code >= 97 && code <= 122;
+          numeric ||= (code >= 48 && code <= 57) || code === 43 || code === 47 || code === 61;
+          nonHex ||= !(
+            (code >= 48 && code <= 57) ||
+            (code >= 65 && code <= 70) ||
+            (code >= 97 && code <= 102)
+          );
+        }
+        if (upper && lower && numeric && nonHex) {
+          const match = text.slice(run.start, run.end);
+          yield { match, groups: [match], input: text, offset: run.start };
+        }
+      }
+      runs.length = 0;
+      schemeStart = urlStart = authorityEnd = urlEnd = portStart = -1;
+      portValid = true;
+      hasAt = false;
+      continue;
+    }
+    if (urlStart !== -1 && index >= urlStart) {
+      hasAt ||= char === "@";
+      const cutoff = "?#\"'<>`|()[]{}".includes(char);
+      if (urlEnd === -1 && cutoff) {
+        urlEnd = index;
+      }
+      if (authorityEnd === -1) {
+        if (char === "/" || cutoff) {
+          authorityEnd = index;
+        } else if (char === ":") {
+          portValid &&= portStart === -1;
+          portStart = index;
+        } else if (portStart !== -1 && (char < "0" || char > "9")) {
+          portValid = false;
+        }
+      }
+    }
+    if (/[A-Za-z0-9+.-]/.test(char)) {
+      if (schemeStart === -1) {
+        schemeStart = index;
+      }
+    } else {
+      if (
+        urlStart === -1 &&
+        char === ":" &&
+        text.startsWith("//", index + 1) &&
+        schemeStart !== -1 &&
+        /[A-Za-z]/.test(text[schemeStart]!)
+      ) {
+        urlStart = index + 3;
+      }
+      schemeStart = -1;
+    }
+  }
+}
+
+const AWS_SECRET_ACCESS_KEY_MATCHER: RedactMatcher = Object.freeze({
+  source: "aws-secret-access-key",
+  exec: matchAwsSecretAccessKeys,
+});
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
@@ -123,11 +244,10 @@ export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   AUTHORIZATION_BASIC_REDACT_PATTERN,
   AUTHORIZATION_BOT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
-  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 
-export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
+export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STRUCTURED_JSON_SECRET_REDACT_PATTERN,
@@ -245,7 +365,7 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   String.raw`(r8_[A-Za-z0-9]{10,})`,
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
-  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
+  AWS_SECRET_ACCESS_KEY_MATCHER,
 ];
 
 export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
@@ -265,6 +385,8 @@ export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
 
 // Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
 // and payment JSON; other model-visible text relies on registered and recognizable secret values.
-export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly string[] = DEFAULT_REDACT_PATTERNS.filter(
-  (pattern) => !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
-);
+export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly RedactPattern[] =
+  DEFAULT_REDACT_PATTERNS.filter(
+    (pattern) =>
+      typeof pattern !== "string" || !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
+  );

@@ -113,6 +113,28 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
+export class SqliteRepairableForeignKeyError extends Error {
+  readonly repair: Readonly<{
+    kind: "task-delivery-orphans";
+    relation: "task_delivery_state.task_id";
+    parentTable: "task_runs";
+    orphanCount: number;
+  }>;
+
+  constructor(databaseLabel: string, orphanCount: number) {
+    super(
+      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to preserve and repair these rows before retrying.`,
+    );
+    this.name = "SqliteRepairableForeignKeyError";
+    this.repair = {
+      kind: "task-delivery-orphans",
+      relation: "task_delivery_state.task_id",
+      parentTable: "task_runs",
+      orphanCount,
+    };
+  }
+}
+
 /** Return whether a named integrity failure proves persistent database damage. */
 export function isTerminalSqliteIntegrityError(error: Error): boolean {
   if (error.name !== "SqliteIntegrityError") {
@@ -283,6 +305,8 @@ function runSqliteCheck(
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
   let violationCount = 0;
+  let repairable = true;
+  let taskDeliveryForeignKeyId: bigint | undefined;
   const violations: SqliteForeignKeyViolation[] = [];
   try {
     // Use direct PRAGMA syntax because a real schema object can shadow the
@@ -293,6 +317,14 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {
       violationCount += 1;
       retainSortedForeignKeyViolation(violations, violation);
+      if (repairable) {
+        if (violation.table === "task_delivery_state" && violation.parent === "task_runs") {
+          taskDeliveryForeignKeyId ??= readTaskDeliveryCascadeForeignKeyId(database);
+          repairable = violation.fkid === taskDeliveryForeignKeyId;
+        } else {
+          repairable = false;
+        }
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -304,6 +336,9 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violations.length === 0) {
     return;
   }
+  if (repairable) {
+    throw new SqliteRepairableForeignKeyError(databaseLabel, violationCount);
+  }
 
   const details = violations.map(formatSqliteForeignKeyViolation);
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
@@ -312,6 +347,25 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   throw createSqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
   );
+}
+
+function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | undefined {
+  const statement = database.prepare("PRAGMA foreign_key_list(task_delivery_state);");
+  statement.setReadBigInts(true);
+  const foreignKeys = statement.all();
+  const taskKey = foreignKeys.find(
+    (key) =>
+      key.table === "task_runs" &&
+      key.from === "task_id" &&
+      key.to === "task_id" &&
+      key.on_delete === "CASCADE",
+  );
+  // A matching component of a composite foreign key is not the task-owned relation.
+  return taskKey &&
+    typeof taskKey.id === "bigint" &&
+    foreignKeys.filter((key) => key.id === taskKey.id).length === 1
+    ? taskKey.id
+    : undefined;
 }
 
 function createSqliteIntegrityError(message: string, cause?: unknown): Error {

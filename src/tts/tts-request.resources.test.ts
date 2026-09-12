@@ -382,62 +382,67 @@ describe.each([
       override.cleanup();
     }
   });
-  it("resolves fallback config from the refreshed runtime snapshot without a source snapshot", async () => {
-    const primary = createFixture("refresh-primary", true);
-    const fallback = createFixture("refresh-fallback");
-    primary.state.prepareResume.resolve();
-    fallback.resume();
-    try {
-      await primary.withEnvironment(async () => {
-        useNoBundledPlugins();
-        const base = combineConfig(primary, [fallback]);
-        const cfg: OpenClawConfig = {
-          ...base,
-          plugins: {
-            ...base.plugins,
-            entries: { [fallback.id]: { config: { voiceId: "before-refresh" } } },
-          },
-          tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
-        };
-        setRuntimeConfigSnapshot(cfg);
-        const pending = settle(
-          synthesize({
-            text: "refresh during fallback",
-            cfg,
-            prefsPath: primary.prefsPath,
-          }),
-        );
-        try {
-          await waitForHook(primary.state.synthesizeStarted.promise, pending);
-          setRuntimeConfigSnapshot({
-            ...cfg,
+  it.each([true, false])(
+    "refreshes only runtime-owned fallback config without a source snapshot (runtimeOwned=%s)",
+    async (runtimeOwned) => {
+      const primary = createFixture("refresh-primary", true);
+      const fallback = createFixture("refresh-fallback");
+      primary.state.prepareResume.resolve();
+      fallback.resume();
+      try {
+        await primary.withEnvironment(async () => {
+          useNoBundledPlugins();
+          const base = combineConfig(primary, [fallback]);
+          const cfg: OpenClawConfig = {
+            ...base,
             plugins: {
-              ...cfg.plugins,
-              entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
+              ...base.plugins,
+              entries: { [fallback.id]: { config: { voiceId: "before-refresh" } } },
             },
-          });
-          primary.state.synthesizeResume.resolve();
-          const result = await pending;
-          expect(result.error).toBeUndefined();
-          expect(result.value?.success).toBe(true);
-          expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
-          expect(result.value?.providerVoice).toBe("after-refresh");
-          expect(result.value?.audioBuffer).toEqual(pcm);
-          for (const entry of [...primary.state.connections, ...fallback.state.connections]) {
-            expect(entry.database.isOpen).toBe(false);
-            expect(entry.disposals).toBe(1);
+            tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
+          };
+          setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
+          const pending = settle(
+            synthesize({
+              text: "refresh during fallback",
+              cfg,
+              prefsPath: primary.prefsPath,
+            }),
+          );
+          try {
+            await waitForHook(primary.state.synthesizeStarted.promise, pending);
+            setRuntimeConfigSnapshot({
+              ...cfg,
+              plugins: {
+                ...cfg.plugins,
+                entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
+              },
+            });
+            primary.state.synthesizeResume.resolve();
+            const result = await pending;
+            expect(result.error).toBeUndefined();
+            expect(result.value?.success).toBe(true);
+            expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
+            expect(result.value?.providerVoice).toBe(
+              runtimeOwned ? "after-refresh" : "before-refresh",
+            );
+            expect(result.value?.audioBuffer).toEqual(pcm);
+            for (const entry of [...primary.state.connections, ...fallback.state.connections]) {
+              expect(entry.database.isOpen).toBe(false);
+              expect(entry.disposals).toBe(1);
+            }
+          } finally {
+            primary.resume();
+            await pending;
+            clearRuntimeConfigSnapshot();
           }
-        } finally {
-          primary.resume();
-          await pending;
-          clearRuntimeConfigSnapshot();
-        }
-      });
-    } finally {
-      primary.cleanup();
-      fallback.cleanup();
-    }
-  });
+        });
+      } finally {
+        primary.cleanup();
+        fallback.cleanup();
+      }
+    },
+  );
   it("joins provider work that outlives its buffered result before closing SQLite", async () => {
     const fixture = createFixture();
     fixture.state.callbacks.trackTail = true;

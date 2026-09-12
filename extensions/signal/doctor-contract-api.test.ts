@@ -1,13 +1,114 @@
 // Signal tests cover doctor contract api plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { resolveSignalAccount } from "./src/accounts.js";
 import { migrateLegacySignalTransportConfig } from "./src/config-compat.js";
+import { signalDoctor } from "./src/doctor.js";
+import { signalSetupAdapter } from "./src/setup-core.js";
 
 function signalConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { signal: entry } } as never;
 }
+
+describe("Signal Doctor account key repair", () => {
+  it("makes the complete named account resolvable and leaves other channels intact", () => {
+    const entry = {
+      account: "+12025550123",
+      transport: { kind: "external-native" as const, url: "http://127.0.0.1:18996" },
+      dmPolicy: "disabled" as const,
+      textChunkLimit: 321,
+      replyToMode: "off" as const,
+    };
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: { accounts: { "Work Phone": entry, personal: { enabled: false } } },
+        telegram: { accounts: { "Work Phone": { enabled: false } } },
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg });
+    expect(result.config.channels?.signal?.accounts).toEqual({
+      "work-phone": entry,
+      personal: { enabled: false },
+    });
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "work-phone" })).toMatchObject({
+      configured: true,
+      config: entry,
+    });
+    expect(result.config.channels?.telegram).toEqual(cfg.channels?.telegram);
+    expect(cfg.channels?.signal?.accounts).toHaveProperty("Work Phone");
+    expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
+  });
+
+  it.each(["Work Phone", "Default.", "!!!"])(
+    "preserves a working inherited account for %s",
+    async (key) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          signal: { account: "+12025550123", accounts: { [key]: { account: "+12025550124" } } },
+        },
+      };
+      const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "signal",
+        setupSurface: signalSetupAdapter,
+      });
+      const result = normalizeCompatibilityConfig({ cfg: promoted });
+      const accountId = key === "Work Phone" ? "work-phone" : "default";
+      expect(resolveSignalAccount({ cfg: result.config, accountId }).config.account).toBe(
+        "+12025550123",
+      );
+      expect(result.config.channels?.signal?.accounts).toEqual(cfg.channels?.signal?.accounts);
+      expect((await signalDoctor.cleanStaleConfig?.({ cfg: result.config }))?.warnings).toEqual([
+        expect.stringContaining("Doctor preserved it to avoid changing a working account"),
+      ]);
+    },
+  );
+
+  it.each(["Work.Phone", "work-phone", "WORK-PHONE"])(
+    "reports colliding %s without choosing an entry",
+    async (key) => {
+      const accounts = {
+        "Work Phone": { account: "+12025550123" },
+        [key]: { account: "+12025550124" },
+      };
+      const cfg: OpenClawConfig = { channels: { signal: { accounts } } };
+      const result = normalizeCompatibilityConfig({ cfg });
+      expect(result.config.channels?.signal?.accounts).toEqual(accounts);
+      expect(result.changes).toEqual([]);
+      expect((await signalDoctor.cleanStaleConfig?.({ cfg: result.config }))?.warnings).toEqual([
+        expect.stringContaining('resolve to "work-phone". Doctor preserved them; rename them'),
+      ]);
+    },
+  );
+
+  it("keeps the active default transport while repairing an independent named account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          transport: { kind: "external-native", url: "http://127.0.0.1:18996" },
+          accounts: {
+            "Default.": { account: "+12025550124" },
+            "Work Phone": { account: "+12025550123" },
+          },
+        },
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg });
+    expect(Object.keys(result.config.channels?.signal?.accounts ?? {})).toEqual([
+      "Default.",
+      "work-phone",
+    ]);
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).baseUrl).toBe(
+      "http://127.0.0.1:18996",
+    );
+    expect(
+      resolveSignalAccount({ cfg: result.config, accountId: "default" }).config.account,
+    ).toBeUndefined();
+  });
+});
 
 describe("signal streaming legacy config rules", () => {
   const rootRule = legacyConfigRules.find((rule) => rule.path.join(".") === "channels.signal");

@@ -278,7 +278,8 @@ function filterSessionEntries(params: {
       })
     : undefined;
 
-  for (const [key, entry] of candidateEntries) {
+  for (const pair of candidateEntries) {
+    const [key, entry] = pair;
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
@@ -329,9 +330,9 @@ function filterSessionEntries(params: {
       effectiveOwner?.identity?.type === "profile" &&
       effectiveOwner.identity.id === ownerFirstActorId
     ) {
-      ownerEntries.push([key, entry]);
+      ownerEntries.push(pair);
     }
-    entries.push([key, entry]);
+    entries.push(pair);
   }
 
   const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
@@ -355,11 +356,10 @@ function filterSessionEntries(params: {
 }
 
 function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
-  const parsed = parseAgentSessionKey(key);
   return (
-    parsed?.rest === "sessions" &&
+    entry?.updatedAt == null &&
     !normalizeOptionalString(entry?.sessionId) &&
-    entry?.updatedAt == null
+    parseAgentSessionKey(key)?.rest === "sessions"
   );
 }
 

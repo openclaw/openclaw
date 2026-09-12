@@ -133,6 +133,12 @@ If the destination changes, a newer draft appears, or storage fails, recovery ke
 available rather than overwriting newer input. Do not clear browser site data
 while you still have saved messages or attachment drafts to recover.
 
+If the browser closes its draft database connection, the next storage operation
+opens a fresh connection automatically. A recovery error without any loaded entries
+appears as **Saved messages could not be loaded**; it does not mean that messages
+have lost their destinations or that browser storage is full. Reload to retry if
+the error persists, keeping site data intact.
+
 First opens and reloads without usable warm state show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
 browser-stored credential. The login gate appears only after the initial connection fails or the

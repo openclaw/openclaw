@@ -5,12 +5,93 @@ import {
   filterAndSortSessionEntries,
   listSessionsFromStoreAsync,
 } from "../../gateway/session-utils-list.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import {
+  canPrewarmCombinedSessionStoresForGateway,
+  loadCombinedSessionStoreForGatewayCore,
+} from "./combined-store-gateway.js";
 import { persistSessionTranscriptTurn, replaceSessionEntrySync } from "./session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+
+it("lists admitted sessions across cached targets while preserving a refused database", async () => {
+  await withOpenClawTestState({ label: "combined-admission" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, cleaner: {} } },
+    };
+    for (const agentId of ["main", "cleaner"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: `agent:${agentId}:main` },
+        { sessionId: `${agentId}-session`, updatedAt: 1 },
+      );
+    }
+    expect(
+      Object.keys(
+        loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true }).store,
+      ),
+    ).toHaveLength(2);
+    const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const copy = new DatabaseSync(copyPath);
+    copy.exec(
+      "PRAGMA user_version = 16; UPDATE schema_meta SET agent_id = 'main', schema_version = 16;",
+    );
+    copy.close();
+    await assertOpenClawDatabasesReady({
+      config: cfg,
+      env: state.env,
+      operation: "gateway-startup",
+    });
+    const refusal = readAgentDatabaseAdmissionRefusal("cleaner");
+    expect(refusal).toBeDefined();
+    const before = await fs.readFile(copyPath);
+
+    for (const configuredAgentsOnly of [false, true]) {
+      const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
+      expect(Object.keys(combined.store)).toEqual(["agent:main:main"]);
+      expect(combined.diagnostics?.join("\n")).toContain(refusal?.reason);
+    }
+    expect(
+      canPrewarmCombinedSessionStoresForGateway(cfg, { agentIds: ["main", "cleaner"], maxRows: 1 }),
+    ).toBe(true);
+    expect(() => loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "cleaner" })).toThrow(
+      refusal?.reason,
+    );
+    const scoped = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "main" });
+    expect(
+      scoped.targetsBySessionKey
+        .get("agent:main:main")
+        ?.modelSource.loadSessionEntry("agent:cleaner:main"),
+    ).toBeUndefined();
+    expect(scoped.diagnostics?.join("\n")).toContain(refusal?.reason);
+    expect(await fs.readFile(copyPath)).toEqual(before);
+
+    const repaired = new DatabaseSync(copyPath);
+    repaired.exec(
+      `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}; UPDATE schema_meta SET agent_id = 'cleaner', schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+    );
+    repaired.close();
+    await assertOpenClawDatabasesReady({
+      config: cfg,
+      env: state.env,
+      operation: "gateway-startup",
+    });
+    expect(
+      Object.keys(
+        loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true }).store,
+      ),
+    ).toHaveLength(2);
+  });
+});
 
 it.each(["global", "unknown"])("projects the recorded aggregate %s owner", async (sessionKey) => {
   await withOpenClawTestState({ label: "combined-list-owner" }, async () => {
