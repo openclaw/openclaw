@@ -1583,7 +1583,6 @@ src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-error.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
-src/agents/agent-run-terminal-receipt.ts	1
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	7
 src/agents/agent-tool-definition-adapter.ts	4
@@ -2663,7 +2662,6 @@ src/flows/doctor-removed-workspaces-state-check.ts	2
 src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
-src/gateway/agent-turn/agent-job.ts	1
 src/gateway/agent-turn/agent-restart-recovery-context.ts	1
 src/gateway/agent-turn/agent-run-dispatch.ts	1
 src/gateway/agent-turn/agent-session-persist.ts	3

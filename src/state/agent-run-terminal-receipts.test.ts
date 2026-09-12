@@ -33,6 +33,55 @@ const owner = { agentId: "agent-a", sessionKey: "agent:a:main", sessionId: "sess
 const terminalJson = JSON.stringify({ status: "ok", startedAt: 10, endedAt: 20 });
 
 describe("durable agent run terminal receipts", () => {
+  it("keeps padded run IDs as distinct exact keys", () => {
+    const env = testEnv();
+    const paddedRunId = " run-padded ";
+    const plainRunId = "run-padded";
+    const paddedTerminalJson = JSON.stringify({ status: "ok", endedAt: 20 });
+    const plainTerminalJson = JSON.stringify({ status: "error", endedAt: 30 });
+
+    expect(
+      writeAgentRunTerminalReceipt({
+        runId: paddedRunId,
+        owner,
+        terminalJson: paddedTerminalJson,
+        env,
+      }),
+    ).toBe(true);
+    expect(
+      writeAgentRunTerminalReceipt({
+        runId: plainRunId,
+        owner,
+        terminalJson: plainTerminalJson,
+        env,
+      }),
+    ).toBe(true);
+
+    expect(readAgentRunTerminalReceipt({ runId: paddedRunId, owner, env })).toMatchObject({
+      runId: paddedRunId,
+      terminalJson: paddedTerminalJson,
+    });
+    expect(readAgentRunTerminalReceipt({ runId: plainRunId, owner, env })).toMatchObject({
+      runId: plainRunId,
+      terminalJson: plainTerminalJson,
+    });
+    expect(deleteAgentRunTerminalReceipt({ runId: paddedRunId, env })).toBe(true);
+    expect(readAgentRunTerminalReceipt({ runId: paddedRunId, owner, env })).toBeUndefined();
+    expect(readAgentRunTerminalReceipt({ runId: plainRunId, owner, env })).toBeDefined();
+  });
+
+  it.each([
+    ["oversized", `run-${"x".repeat(257)}`],
+    ["whitespace-only", " \t\n "],
+  ])("writes, reads, and deletes an exact %s admitted run ID", (_label, runId) => {
+    const env = testEnv();
+
+    expect(writeAgentRunTerminalReceipt({ runId, owner, terminalJson, env })).toBe(true);
+    expect(readAgentRunTerminalReceipt({ runId, owner, env })).toMatchObject({ runId });
+    expect(deleteAgentRunTerminalReceipt({ runId, env })).toBe(true);
+    expect(readAgentRunTerminalReceipt({ runId, owner, env })).toBeUndefined();
+  });
+
   it("keeps the first terminal write authoritative and enforces ownership on reads", () => {
     const env = testEnv();
     expect(
@@ -61,6 +110,52 @@ describe("durable agent run terminal receipts", () => {
         env,
       }),
     ).toBeUndefined();
+  });
+
+  it("lets only the exact owner promote provisional delivery to execution", () => {
+    const env = testEnv();
+    const provisional = JSON.stringify({
+      status: "ok",
+      endedAt: 20,
+      executionSettled: false,
+    });
+    const execution = JSON.stringify({
+      status: "timeout",
+      endedAt: 30,
+      executionSettled: true,
+    });
+    expect(
+      writeAgentRunTerminalReceipt({
+        runId: "run-promote",
+        owner,
+        terminalJson: provisional,
+        now: 100,
+        env,
+      }),
+    ).toBe(true);
+    expect(
+      writeAgentRunTerminalReceipt({
+        runId: "run-promote",
+        owner: { ...owner, sessionId: "session-other" },
+        terminalJson: execution,
+        replaceProvisionalDelivery: true,
+        now: 101,
+        env,
+      }),
+    ).toBe(false);
+    expect(
+      writeAgentRunTerminalReceipt({
+        runId: "run-promote",
+        owner,
+        terminalJson: execution,
+        replaceProvisionalDelivery: true,
+        now: 102,
+        env,
+      }),
+    ).toBe(true);
+    expect(
+      readAgentRunTerminalReceipt({ runId: "run-promote", owner, now: 103, env }),
+    ).toMatchObject({ terminalJson: execution });
   });
 
   it("uses seven-day retention and prunes expired rows on read", () => {

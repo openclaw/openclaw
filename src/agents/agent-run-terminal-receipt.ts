@@ -3,7 +3,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 
 type AgentRunTerminalModelRef = { provider: string; model: string };
 
-export type AgentRunAcceptedDelegationReceipt = {
+type AgentRunAcceptedDelegationReceipt = {
   runId: string;
   childSessionKey: string;
   completionWatch: boolean;
@@ -33,6 +33,8 @@ export type AgentRunTerminalReceipt = {
   terminalDisposition: "visible" | "not-visible";
 };
 
+export type AgentRunTerminalReceiptDraft = Omit<AgentRunTerminalReceipt, "terminalDisposition">;
+
 function boundedString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -45,6 +47,7 @@ function normalizeModelRef(value: unknown): AgentRunTerminalModelRef | undefined
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
+  // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
   const record = value as Record<string, unknown>;
   const provider = boundedString(record.provider, 128);
   const model = boundedString(record.model, 256);
@@ -65,7 +68,7 @@ function normalizeSuccessfulToolNames(value: unknown): string[] | undefined {
   ];
 }
 
-export function normalizeAgentRunAcceptedDelegationReceipts(
+function normalizeAgentRunAcceptedDelegationReceipts(
   value: unknown,
 ): AgentRunAcceptedDelegationReceipt[] | undefined {
   if (!Array.isArray(value)) {
@@ -77,6 +80,7 @@ export function normalizeAgentRunAcceptedDelegationReceipts(
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         return [];
       }
+      // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
       const record = entry as Record<string, unknown>;
       const runId = boundedString(record.runId, 256);
       const childSessionKey = boundedString(record.childSessionKey, 1_024);
@@ -102,6 +106,7 @@ export function normalizeAgentRunApprovalReceipts(
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
+    // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
     const record = entry as Record<string, unknown>;
     const approvalId = boundedString(record.approvalId, 256);
     const toolCallId = boundedString(record.toolCallId, 256);
@@ -124,22 +129,23 @@ export function normalizeAgentRunApprovalReceipts(
   return normalized.length > 0 ? normalized : undefined;
 }
 
-export function normalizeAgentRunTerminalReceipt(
+export function normalizeAgentRunTerminalReceiptDraft(
   value: unknown,
-): AgentRunTerminalReceipt | undefined {
+): AgentRunTerminalReceiptDraft | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
+  // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
   const receipt = value as Record<string, unknown>;
   const runId = boundedString(receipt.runId, 256);
   const sessionId = boundedString(receipt.sessionId, 256);
   const turnId = boundedString(receipt.turnId, 256);
   const requested = normalizeModelRef(receipt.requested);
   const effectiveBase = normalizeModelRef(receipt.effective);
+  // SAFETY: `normalizeModelRef` has already accepted `receipt.effective` as a record-like object.
   const effectiveRecord = receipt.effective as Record<string, unknown> | undefined;
   const responseModel = boundedString(effectiveRecord?.responseModel, 256);
   const successfulToolNames = normalizeSuccessfulToolNames(receipt.successfulToolNames);
-  const terminalDisposition = receipt.terminalDisposition;
   if (
     !runId ||
     !sessionId ||
@@ -148,8 +154,7 @@ export function normalizeAgentRunTerminalReceipt(
     !effectiveBase ||
     !responseModel ||
     !successfulToolNames ||
-    typeof receipt.rerouted !== "boolean" ||
-    (terminalDisposition !== "visible" && terminalDisposition !== "not-visible")
+    typeof receipt.rerouted !== "boolean"
   ) {
     return undefined;
   }
@@ -168,8 +173,21 @@ export function normalizeAgentRunTerminalReceipt(
     ...(approvalReceipts ? { approvalReceipts } : {}),
     ...(receipt.sourceReplyDelivered === true ? { sourceReplyDelivered: true } : {}),
     rerouted: receipt.rerouted,
-    terminalDisposition,
   };
+}
+
+export function normalizeAgentRunTerminalReceipt(
+  value: unknown,
+): AgentRunTerminalReceipt | undefined {
+  const draft = normalizeAgentRunTerminalReceiptDraft(value);
+  let terminalDisposition: unknown;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    // SAFETY: the object/non-array guard above narrows the runtime shape to an indexable record.
+    terminalDisposition = (value as Record<string, unknown>).terminalDisposition;
+  }
+  return draft && (terminalDisposition === "visible" || terminalDisposition === "not-visible")
+    ? { ...draft, terminalDisposition }
+    : undefined;
 }
 
 function formatAgentRunModelRef(value: AgentRunTerminalModelRef): string | undefined {

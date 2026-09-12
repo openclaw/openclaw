@@ -14623,6 +14623,36 @@ public struct SessionsAbortParams: Codable, Sendable {
     }
 }
 
+public struct SessionsAbortResult: Codable, Sendable {
+    public let ok: Bool
+    public let abortedrunid: AnyCodable
+    public let status: AnyCodable
+    public let runstate: AnyCodable?
+    public let terminalstatus: AnyCodable?
+
+    public init(
+        ok: Bool,
+        abortedrunid: AnyCodable,
+        status: AnyCodable,
+        runstate: AnyCodable? = nil,
+        terminalstatus: AnyCodable? = nil)
+    {
+        self.ok = ok
+        self.abortedrunid = abortedrunid
+        self.status = status
+        self.runstate = runstate
+        self.terminalstatus = terminalstatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case abortedrunid = "abortedRunId"
+        case status
+        case runstate = "runState"
+        case terminalstatus = "terminalStatus"
+    }
+}
+
 public struct SessionsAssignOwnerParams: Codable, Sendable {
     public let key: String
     public let agentid: String?

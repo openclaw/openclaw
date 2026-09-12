@@ -38,9 +38,10 @@ import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  AgentRunTerminalReceiptValidationError,
   deleteAgentRunTerminalReceipt,
   readAgentRunTerminalReceipt,
-  writeAgentRunTerminalReceipt,
+  writeAgentRunTerminalReceiptWithResult,
   type AgentRunTerminalReceiptOwner,
 } from "../../state/agent-run-terminal-receipts.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -51,6 +52,8 @@ const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
 export type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
+  /** Internal durable arbitration fact; public projections omit it. */
+  executionSettled?: boolean;
   startedAt?: number;
   endedAt?: number;
   error?: string;
@@ -226,11 +229,27 @@ function mergeSnapshot(
   );
   const terminalDelivery = incoming.terminalDelivery ?? existing.terminalDelivery;
   const terminalReceipt = incoming.terminalReceipt ?? existing.terminalReceipt;
-  const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
-  // Terminal status precedence and producer reply evidence are independent;
-  // a late sticky timeout must not erase the final reply (or vice versa).
+  const existingOutcome = terminalOutcomeFromSnapshot(existing);
+  const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
+  const preservesProvisionalFailure =
+    existing.executionSettled !== true &&
+    incoming.executionSettled === true &&
+    existingOutcome !== undefined &&
+    existingOutcome.status !== "ok" &&
+    incomingOutcome?.reason === "completed";
+  const incomingSettlesAfterProvisional =
+    existing.executionSettled !== true && incoming.executionSettled === true;
+  const canonical =
+    existing.executionSettled === true ||
+    (incomingSettlesAfterProvisional
+      ? preservesProvisionalFailure
+      : shouldPreserveTerminalSnapshot(existing, incoming))
+      ? existing
+      : incoming;
+  // Terminal status, execution settlement, and producer evidence are independent.
   return {
     ...canonical,
+    executionSettled: existing.executionSettled === true || incoming.executionSettled === true,
     ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
     ...(terminalReply ? { terminalReply } : {}),
@@ -266,6 +285,7 @@ function normalizePersistedAgentJobSnapshot(value: unknown): AgentJobTerminalSna
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
+  // SAFETY: the object/non-array guard above narrows the persisted payload to an indexable record.
   const record = value as Record<string, unknown>;
   if (record.status !== "ok" && record.status !== "error" && record.status !== "timeout") {
     return undefined;
@@ -284,6 +304,8 @@ function normalizePersistedAgentJobSnapshot(value: unknown): AgentJobTerminalSna
   const terminalReceipt = normalizeAgentRunTerminalReceipt(record.terminalReceipt);
   return {
     status: outcome.status,
+    // Receipts written before settlement-kind tracking were execution-authoritative.
+    executionSettled: record.executionSettled !== false,
     startedAt: asFiniteNumber(record.startedAt),
     endedAt: asFiniteNumber(record.endedAt),
     error: outcome.status === "ok" ? undefined : outcome.error,
@@ -381,10 +403,95 @@ function durableSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapsho
   const { terminalReply: _terminalReply, pendingError: _pendingError, ...durable } = terminal;
   return {
     ...durable,
+    executionSettled: snapshot.executionSettled === true,
     error: durableControlPlaneText(durable.error, 2_048),
     stopReason: durableControlPlaneText(durable.stopReason, 128),
     livenessState: durableControlPlaneText(durable.livenessState, 128),
   };
+}
+
+function completeDurableAgentRunTerminalWrite(
+  runId: string,
+  pending: PendingDurableAgentRunTerminal,
+  durable: AgentJobTerminalSnapshot,
+): void {
+  pendingDurableAgentRunTerminals.delete(runId);
+  publishAgentRunSnapshot(
+    projectDurableSnapshot(pending.snapshot, durable),
+    pending.snapshot.version,
+  );
+  if (durable.executionSettled === true) {
+    agentRunOwners.delete(runId);
+    agentRunApprovalReceipts.delete(runId);
+  }
+}
+
+function retireDurableAgentRunTerminalOwnerConflict(
+  runId: string,
+  pending: PendingDurableAgentRunTerminal,
+): void {
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
+  pendingDurableAgentRunTerminals.delete(runId);
+  agentRunOwners.delete(runId);
+  agentRunApprovalReceipts.delete(runId);
+  agentRunDurabilityFences.add(runId);
+  const failure: AgentRunObservation = {
+    ...pending.snapshot,
+    status: "error",
+    executionSettled: true,
+    error: "durable terminal receipt owner conflict",
+    stopReason: undefined,
+    timeoutPhase: undefined,
+    providerStarted: undefined,
+  };
+  publishAgentRunSnapshot(failure, pending.snapshot.version);
+  agentJobLog.warn(`durable terminal receipt owner conflict for run ${runId}`);
+}
+
+function retireDurableAgentRunTerminalValidationFailure(
+  runId: string,
+  pending: PendingDurableAgentRunTerminal,
+  error: AgentRunTerminalReceiptValidationError,
+): void {
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
+  pendingDurableAgentRunTerminals.delete(runId);
+  agentRunOwners.delete(runId);
+  agentRunApprovalReceipts.delete(runId);
+  agentRunDurabilityFences.add(runId);
+  publishAgentRunSnapshot(
+    {
+      ...pending.snapshot,
+      status: "error",
+      executionSettled: true,
+      error: "durable terminal receipt validation failed",
+      stopReason: undefined,
+      timeoutPhase: undefined,
+      providerStarted: undefined,
+    },
+    pending.snapshot.version,
+  );
+  agentJobLog.warn(`durable terminal receipt validation failed for run ${runId}: ${error.message}`);
+}
+
+function mergeRetainedDurableAgentRunTerminal(
+  runId: string,
+  pending: PendingDurableAgentRunTerminal,
+): void {
+  if (pending.snapshot.executionSettled !== true) {
+    return;
+  }
+  const retained = readDurableAgentRunSnapshot(runId, pending.owner);
+  if (!retained) {
+    return;
+  }
+  pending.snapshot = mergeSnapshot(
+    { ...projectDurableSnapshot(pending.snapshot, retained), cachedAt: 0 },
+    { ...pending.snapshot, cachedAt: 0 },
+  );
 }
 
 function attemptDurableAgentRunTerminalWrite(
@@ -399,25 +506,46 @@ function attemptDurableAgentRunTerminalWrite(
       deleteAgentRunTerminalReceipt({ runId });
       agentRunDurabilityFences.delete(runId);
     }
-    const inserted = writeAgentRunTerminalReceipt({
+    mergeRetainedDurableAgentRunTerminal(runId, pending);
+    const candidate = durableSnapshot(pending.snapshot);
+    const result = writeAgentRunTerminalReceiptWithResult({
       runId,
       owner: pending.owner,
-      terminalJson: JSON.stringify(durableSnapshot(pending.snapshot)),
+      terminalJson: JSON.stringify(candidate),
+      replaceProvisionalDelivery: pending.snapshot.executionSettled === true,
     });
-    const durable = inserted
-      ? durableSnapshot(pending.snapshot)
-      : readDurableAgentRunSnapshot(runId, pending.owner);
-    if (!durable) {
-      throw new Error("terminal receipt conflicts with the admitted run owner");
+    if (result.state === "owner-conflict") {
+      retireDurableAgentRunTerminalOwnerConflict(runId, pending);
+      return;
     }
-    pendingDurableAgentRunTerminals.delete(runId);
-    publishAgentRunSnapshot(
-      projectDurableSnapshot(pending.snapshot, durable),
-      pending.snapshot.version,
-    );
-    agentRunOwners.delete(runId);
-    agentRunApprovalReceipts.delete(runId);
+    const durable =
+      result.state === "written" ? candidate : readDurableAgentRunSnapshot(runId, pending.owner);
+    if (
+      !durable ||
+      (pending.snapshot.executionSettled === true && durable.executionSettled !== true)
+    ) {
+      throw new Error("terminal receipt persistence did not settle");
+    }
+    completeDurableAgentRunTerminalWrite(runId, pending, durable);
   } catch (error) {
+    if (error instanceof AgentRunTerminalReceiptValidationError) {
+      retireDurableAgentRunTerminalValidationFailure(runId, pending, error);
+      return;
+    }
+    try {
+      const durable = readDurableAgentRunSnapshot(runId, pending.owner);
+      if (durable) {
+        if (pending.snapshot.executionSettled !== true || durable.executionSettled === true) {
+          completeDurableAgentRunTerminalWrite(runId, pending, durable);
+          return;
+        }
+      } else if (readDurableAgentRunSnapshot(runId)) {
+        retireDurableAgentRunTerminalOwnerConflict(runId, pending);
+        return;
+      }
+    } catch {
+      // An unreadable write outcome remains transient and follows the bounded retry path.
+    }
     agentJobLog.warn(`terminal receipt persistence pending for run ${runId}: ${String(error)}`);
     scheduleDurableAgentRunTerminalRetry(runId, pending);
   }
@@ -611,6 +739,7 @@ function createSnapshotFromLifecycleEvent(params: {
     ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReply ? { terminalReply } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
+    executionSettled: hasExecutionSettlement(data),
     version: nextAgentRunVersion(),
   };
 }
@@ -693,6 +822,7 @@ function ensureAgentRunListener() {
 }
 
 function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
+  // SAFETY: dedupe payloads are JSON-like records by DedupeEntry contract; every field is rechecked below.
   const payload = entry.payload as
     | {
         status?: unknown;
@@ -825,6 +955,7 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
   if (incomingObservation.state === "terminal") {
+    agentRunStarts.delete(key.runId);
     const lifecycle = agentJobs.get(key.runId)?.snapshotsBySource.get("lifecycle");
     if (
       key.source === "chat" &&
@@ -841,6 +972,7 @@ export function setGatewayDedupeEntry(params: {
       runId: key.runId,
       source: key.source,
       recordedAt: params.entry.ts,
+      executionSettled: false,
     });
   }
 }
@@ -948,7 +1080,12 @@ function readAvailableAgentRunTerminal(params: {
     return undefined;
   }
   try {
-    return readDurableAgentRunSnapshot(params.runId, agentRunOwners.get(params.runId));
+    const durable = readDurableAgentRunSnapshot(params.runId, agentRunOwners.get(params.runId));
+    if (!durable) {
+      return undefined;
+    }
+    const { executionSettled: _executionSettled, ...publicDurable } = durable;
+    return publicDurable;
   } catch (error) {
     agentJobLog.warn(`terminal receipt read failed for run ${params.runId}: ${String(error)}`);
     return undefined;

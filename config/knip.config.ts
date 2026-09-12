@@ -507,6 +507,10 @@ const config = {
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
+    // Focused durable-terminal tests consume these explicit lifecycle/storage seams;
+    // production reaches the behavior through agent.wait and SQLite receipts.
+    "src/gateway/agent-turn/agent-job.ts": ["exports"],
+    "src/state/agent-run-terminal-receipts.ts": ["exports"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],

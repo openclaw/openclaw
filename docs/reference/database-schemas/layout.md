@@ -23,13 +23,15 @@ final status after a Gateway process restart. The row records the run ID, truste
 agent/session ownership tuple, normalized terminal JSON, and creation/expiry
 timestamps. It never stores transcript messages or raw model output.
 
-The table and expiry index are additive and installed on first admitted run
-start without changing the shared schema version. The first terminal insert for
-a run ID wins. A newly admitted owner deletes any retained row for a reused run
-ID before execution, and reads with live ownership metadata require an exact
-owner match. Rows expire after seven days; writes prune expired rows and cap the
-table at 5,000 newest receipts. Terminal JSON is limited to 64 KiB of UTF-8 bytes.
-Older readers ignore the table.
+The table and expiry index are installed on first admitted run start. State
+schema 18 removes the original 256-character `run_id` ceiling so opaque non-empty
+identifiers are retained exactly. The first execution terminal for a run ID is
+authoritative; the exact owner may promote a provisional delivery receipt once
+execution settles. A newly admitted owner deletes any retained row
+for a reused run ID before execution, and reads with live ownership metadata
+require an exact owner match. Rows expire after seven days; writes prune expired
+rows and cap the table at 5,000 newest receipts. Terminal JSON is limited to 64 KiB
+of UTF-8 bytes. Older readers ignore the table.
 
 ### Plugin state listing index
 

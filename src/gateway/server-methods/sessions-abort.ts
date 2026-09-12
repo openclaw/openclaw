@@ -188,6 +188,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       const target = ownerSessionKey
         ? resolveSessionSharingTarget({ cfg, sessionKey: ownerSessionKey, agentId: owner.agentId })
         : null;
+      const retainedSessionMatches =
+        typeof owner.sessionId === "string" && target?.entry.sessionId === owner.sessionId;
       const authorizationError = ownerSessionKey
         ? authorizeResolvedSessionMutation({
             cfg,
@@ -196,7 +198,13 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             agentId: owner.agentId,
           })
         : errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized");
-      if (!requestedAgentMatches || !requestedKeyMatches || !target || authorizationError) {
+      if (
+        !requestedAgentMatches ||
+        !requestedKeyMatches ||
+        !target ||
+        !retainedSessionMatches ||
+        authorizationError
+      ) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
         return;
       }

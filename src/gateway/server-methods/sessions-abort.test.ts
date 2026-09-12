@@ -298,6 +298,31 @@ test("sessions.abort reports an authorized exact completed run after hot state i
   });
 });
 
+test("sessions.abort rejects a recovered run after its session key is reused", async () => {
+  const agentId = "main";
+  const sessionKey = "agent:main:durable-reused";
+  const retainedSessionId = "session-durable-retained";
+  const runId = "run-durable-reused";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await replaceSessionEntry(
+    { agentId, sessionKey, storePath },
+    { sessionId: "session-durable-replacement", updatedAt: 43 },
+  );
+  writeAgentRunTerminalReceipt({
+    runId,
+    owner: { agentId, sessionKey, sessionId: retainedSessionId },
+    terminalJson: JSON.stringify({ status: "ok", startedAt: 10, endedAt: 20 }),
+  });
+
+  const result = await directSessionReq("sessions.abort", { runId });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "unauthorized" },
+  });
+  expect(result).not.toHaveProperty("payload.terminalStatus");
+});
+
 test("sessions.abort reports an exact unknown run without changing legacy status", async () => {
   const result = await directSessionReq("sessions.abort", { runId: "run-unknown-durable" });
 

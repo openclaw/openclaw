@@ -5,6 +5,7 @@ import {
   type AgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { readDurableAgentJobTerminalReceipt } from "../agent-turn/agent-job.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import {
@@ -30,11 +31,34 @@ export const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
     const cfg = context.getRuntimeConfig();
     if (operatorSessionCap(gatewayClient, cfg) === "none") {
       const run = getAgentRunContext(params.runId);
-      const target = run?.sessionKey
-        ? resolveSessionSharingTarget({ cfg, sessionKey: run.sessionKey, agentId: run.agentId })
+      let recoveredOwner:
+        | NonNullable<ReturnType<typeof readDurableAgentJobTerminalReceipt>>["owner"]
+        | undefined;
+      if (!run) {
+        try {
+          recoveredOwner = readDurableAgentJobTerminalReceipt(params.runId)?.owner;
+        } catch {
+          // Authorization fails closed when durable state is temporarily unreadable.
+        }
+      }
+      const owner = run ?? recoveredOwner;
+      const target = owner?.sessionKey
+        ? resolveSessionSharingTarget({
+            cfg,
+            sessionKey: owner.sessionKey,
+            agentId: owner.agentId,
+          })
         : null;
+      const retainedSessionMatches =
+        run !== undefined ||
+        (typeof recoveredOwner?.sessionId === "string" &&
+          target?.entry.sessionId === recoveredOwner.sessionId);
       const visibilityFilter = createSessionListEntryFilter({ client: gatewayClient, cfg });
-      if (!target || visibilityFilter?.(target.storeKey, target.entry) === false) {
+      if (
+        !target ||
+        !retainedSessionMatches ||
+        visibilityFilter?.(target.storeKey, target.entry) === false
+      ) {
         respond(
           false,
           undefined,

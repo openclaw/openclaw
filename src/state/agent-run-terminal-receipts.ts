@@ -13,6 +13,13 @@ export const AGENT_RUN_TERMINAL_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 export const AGENT_RUN_TERMINAL_RECEIPT_MAX_ROWS = 5_000;
 export const AGENT_RUN_TERMINAL_RECEIPT_MAX_JSON_BYTES = 64 * 1_024;
 
+export class AgentRunTerminalReceiptValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentRunTerminalReceiptValidationError";
+  }
+}
+
 type AgentRunTerminalReceiptDatabase = {
   agent_run_terminal_receipts: AgentRunTerminalReceipts;
 };
@@ -31,10 +38,34 @@ export type AgentRunTerminalReceipt = {
   expiresAt: number;
 };
 
+export type AgentRunTerminalReceiptWriteResult =
+  | { state: "written" }
+  | { state: "retained" }
+  | { state: "owner-conflict" };
+
+type AgentRunTerminalReceiptWriteParams = {
+  runId: string;
+  owner: AgentRunTerminalReceiptOwner;
+  terminalJson: string;
+  replaceProvisionalDelivery?: boolean;
+  now?: number;
+  ttlMs?: number;
+  env?: NodeJS.ProcessEnv;
+};
+
+function validateRunId(runId: string): string {
+  if (runId.length === 0) {
+    throw new AgentRunTerminalReceiptValidationError("runId must not be empty");
+  }
+  return runId;
+}
+
 function normalizeRequiredText(value: string, name: string, maxLength: number): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > maxLength) {
-    throw new Error(`${name} must contain between 1 and ${maxLength} characters`);
+    throw new AgentRunTerminalReceiptValidationError(
+      `${name} must contain between 1 and ${maxLength} characters`,
+    );
   }
   return normalized;
 }
@@ -68,11 +99,21 @@ function isValidTerminalJson(terminalJson: string): boolean {
 
 function validateTerminalJson(terminalJson: string): string {
   if (!isValidTerminalJson(terminalJson)) {
-    throw new Error(
+    throw new AgentRunTerminalReceiptValidationError(
       `terminalJson must encode an object within ${AGENT_RUN_TERMINAL_RECEIPT_MAX_JSON_BYTES} UTF-8 bytes`,
     );
   }
   return terminalJson;
+}
+
+function isProvisionalDeliveryTerminalJson(terminalJson: string): boolean {
+  try {
+    // SAFETY: JSON.parse returns an untyped value; only a strict false marker is consumed below.
+    const decoded = JSON.parse(terminalJson) as { executionSettled?: unknown };
+    return decoded.executionSettled === false;
+  } catch {
+    return false;
+  }
 }
 
 function ownerMatches(
@@ -94,26 +135,29 @@ function deleteInvalidReceiptBestEffort(runId: string, env?: NodeJS.ProcessEnv):
   }
 }
 
-/** First terminal writer wins; expired and excess rows are pruned in the same transaction. */
-export function writeAgentRunTerminalReceipt(params: {
-  runId: string;
-  owner: AgentRunTerminalReceiptOwner;
-  terminalJson: string;
-  now?: number;
-  ttlMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const runId = normalizeRequiredText(params.runId, "runId", 256);
+/**
+ * First execution terminal wins. An exact owner may promote its provisional
+ * delivery receipt once execution settles; expired and excess rows are pruned
+ * in the same transaction.
+ */
+export function writeAgentRunTerminalReceiptWithResult(
+  params: AgentRunTerminalReceiptWriteParams,
+): AgentRunTerminalReceiptWriteResult {
+  const runId = validateRunId(params.runId);
   const owner = normalizeOwner(params.owner);
   const terminalJson = validateTerminalJson(params.terminalJson);
   const now = params.now ?? Date.now();
   const ttlMs = params.ttlMs ?? AGENT_RUN_TERMINAL_RECEIPT_TTL_MS;
   if (!Number.isSafeInteger(now) || now < 0 || !Number.isSafeInteger(ttlMs) || ttlMs < 1) {
-    throw new Error("terminal receipt timestamps must be non-negative safe integers");
+    throw new AgentRunTerminalReceiptValidationError(
+      "terminal receipt timestamps must be non-negative safe integers",
+    );
   }
   const expiresAt = now + ttlMs;
   if (!Number.isSafeInteger(expiresAt)) {
-    throw new Error("terminal receipt expiry exceeds the safe integer range");
+    throw new AgentRunTerminalReceiptValidationError(
+      "terminal receipt expiry exceeds the safe integer range",
+    );
   }
   return runOpenClawStateWriteTransaction(
     (database) => {
@@ -123,11 +167,33 @@ export function writeAgentRunTerminalReceipt(params: {
         database.db,
         db.deleteFrom("agent_run_terminal_receipts").where("expires_at_ms", "<=", now),
       );
-      const inserted = executeSqliteQuerySync(
+      const existing = executeSqliteQueryTakeFirstSync(
         database.db,
-        db
-          .insertInto("agent_run_terminal_receipts")
-          .values({
+        db.selectFrom("agent_run_terminal_receipts").selectAll().where("run_id", "=", runId),
+      );
+      let result: AgentRunTerminalReceiptWriteResult;
+      if (existing && !ownerMatches(existing, owner)) {
+        result = { state: "owner-conflict" };
+      } else if (
+        existing &&
+        params.replaceProvisionalDelivery === true &&
+        isProvisionalDeliveryTerminalJson(existing.terminal_json)
+      ) {
+        const updated = executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("agent_run_terminal_receipts")
+            .set({ terminal_json: terminalJson, created_at_ms: now, expires_at_ms: expiresAt })
+            .where("run_id", "=", runId),
+        );
+        result =
+          (updated.numAffectedRows ?? 0n) > 0n ? { state: "written" } : { state: "retained" };
+      } else if (existing) {
+        result = { state: "retained" };
+      } else {
+        const inserted = executeSqliteQuerySync(
+          database.db,
+          db.insertInto("agent_run_terminal_receipts").values({
             run_id: runId,
             agent_id: owner.agentId,
             session_key: owner.sessionKey ?? null,
@@ -135,9 +201,11 @@ export function writeAgentRunTerminalReceipt(params: {
             terminal_json: terminalJson,
             created_at_ms: now,
             expires_at_ms: expiresAt,
-          })
-          .onConflict((conflict) => conflict.column("run_id").doNothing()),
-      );
+          }),
+        );
+        result =
+          (inserted.numAffectedRows ?? 0n) > 0n ? { state: "written" } : { state: "retained" };
+      }
       const excessRunIds = db
         .selectFrom("agent_run_terminal_receipts")
         .select("run_id")
@@ -149,11 +217,15 @@ export function writeAgentRunTerminalReceipt(params: {
         database.db,
         db.deleteFrom("agent_run_terminal_receipts").where("run_id", "in", excessRunIds),
       );
-      return (inserted.numAffectedRows ?? 0n) > 0n;
+      return result;
     },
     { env: params.env },
     { operationLabel: "agent-run-terminal-receipt.write" },
   );
+}
+
+export function writeAgentRunTerminalReceipt(params: AgentRunTerminalReceiptWriteParams): boolean {
+  return writeAgentRunTerminalReceiptWithResult(params).state === "written";
 }
 
 /** Reads only live, valid receipts and optionally requires an exact trusted owner tuple. */
@@ -163,7 +235,7 @@ export function readAgentRunTerminalReceipt(params: {
   now?: number;
   env?: NodeJS.ProcessEnv;
 }): AgentRunTerminalReceipt | undefined {
-  const runId = normalizeRequiredText(params.runId, "runId", 256);
+  const runId = validateRunId(params.runId);
   const owner = params.owner ? normalizeOwner(params.owner) : undefined;
   const now = params.now ?? Date.now();
   const row = withExistingOpenClawStateDatabaseReadOnly(
@@ -212,7 +284,7 @@ export function deleteAgentRunTerminalReceipt(params: {
   runId: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const runId = normalizeRequiredText(params.runId, "runId", 256);
+  const runId = validateRunId(params.runId);
   return runOpenClawStateWriteTransaction(
     (database) => {
       ensureAgentRunTerminalReceiptSchema(database.db);

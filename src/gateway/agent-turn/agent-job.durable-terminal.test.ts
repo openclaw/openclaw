@@ -6,7 +6,11 @@ import {
   registerAgentRunContext,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
-import { readAgentRunTerminalReceipt } from "../../state/agent-run-terminal-receipts.js";
+import {
+  deleteAgentRunTerminalReceipt,
+  readAgentRunTerminalReceipt,
+  writeAgentRunTerminalReceipt,
+} from "../../state/agent-run-terminal-receipts.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
@@ -14,6 +18,7 @@ import {
 import {
   resetAgentJobStateForTest,
   setAgentJobTerminalPersistenceFailureForTest,
+  setGatewayDedupeEntry,
   waitForAgentJob,
 } from "./agent-job.js";
 
@@ -85,6 +90,260 @@ afterEach(() => {
 });
 
 describe("durable agent job terminal receipts", () => {
+  it("settles concurrent padded run IDs for one session independently across recovery", async () => {
+    const paddedRunId = ` run-concurrent-${runSequence++} `;
+    const plainRunId = paddedRunId.trim();
+    startRun(paddedRunId);
+    startRun(plainRunId);
+
+    finishRun(paddedRunId, { endedAt: 21 });
+    finishRun(plainRunId, { endedAt: 22 });
+
+    await expect(
+      Promise.all([
+        waitForAgentJob({ runId: paddedRunId, timeoutMs: 0 }),
+        waitForAgentJob({ runId: plainRunId, timeoutMs: 0 }),
+      ]),
+    ).resolves.toMatchObject([
+      { status: "ok", endedAt: 21 },
+      { status: "ok", endedAt: 22 },
+    ]);
+
+    resetAgentJobStateForTest();
+    await expect(
+      Promise.all([
+        waitForAgentJob({ runId: paddedRunId, timeoutMs: 0 }),
+        waitForAgentJob({ runId: plainRunId, timeoutMs: 0 }),
+      ]),
+    ).resolves.toMatchObject([
+      { status: "ok", endedAt: 21 },
+      { status: "ok", endedAt: 22 },
+    ]);
+  });
+
+  it.each([
+    ["oversized", `run-${"x".repeat(257)}`],
+    ["whitespace-only", " \t\n "],
+  ])("terminalizes an admitted %s run ID without a persistence retry", async (_label, runId) => {
+    vi.useFakeTimers();
+    startRun(runId);
+    finishRun(runId);
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+
+    resetAgentJobStateForTest();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("terminalizes deterministic receipt validation failures without retrying", async () => {
+    vi.useFakeTimers();
+    const runId = `run-invalid-owner-${runSequence++}`;
+    startRun(runId, { ...owner, agentId: "a".repeat(129) });
+    finishRun(runId);
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "durable terminal receipt validation failed",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires a dedupe-only run start when its terminal owner settles", async () => {
+    const runId = `run-dedupe-only-${runSequence++}`;
+    const dedupe = new Map();
+    registerAgentRunContext(runId, owner);
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: { ts: 10, ok: true, payload: { status: "accepted", runId } },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: { ts: 20, ok: true, payload: { status: "ok", runId, endedAt: 20 } },
+    });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20,
+    });
+  });
+
+  it.each([
+    {
+      label: "failure",
+      data: { phase: "error", status: "error", error: "execution failed" },
+      expected: { status: "error", error: "execution failed" },
+    },
+    {
+      label: "cancellation",
+      data: { phase: "error", status: "error", stopReason: "rpc" },
+      expected: { status: "error", stopReason: "rpc" },
+    },
+    {
+      label: "hard timeout",
+      data: {
+        phase: "end",
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: { status: "timeout", timeoutPhase: "provider" },
+    },
+  ])(
+    "promotes a later execution $label over provisional durable delivery success",
+    async ({ data, expected }) => {
+      const runId = `run-delivery-before-execution-${runSequence++}`;
+      const dedupe = new Map();
+      registerAgentRunContext(runId, owner);
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        entry: { ts: 10, ok: true, payload: { status: "accepted", runId } },
+      });
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        entry: { ts: 20, ok: true, payload: { status: "ok", runId, endedAt: 20 } },
+      });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "ok",
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { ...data, executionSettled: true, startedAt: 10, endedAt: 30 },
+      });
+      resetAgentJobStateForTest();
+
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(expected);
+    },
+  );
+
+  it("replaces a provisional delivery failure with the later execution failure", async () => {
+    const runId = `run-delivery-failure-before-execution-${runSequence++}`;
+    const dedupe = new Map();
+    startRun(runId);
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 20,
+        ok: false,
+        payload: { status: "error", runId, error: "delivery failed", endedAt: 20 },
+      },
+    });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        status: "error",
+        executionSettled: true,
+        error: "execution failed",
+        endedAt: 30,
+      },
+    });
+    resetAgentJobStateForTest();
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "execution failed",
+    });
+  });
+
+  it.each([
+    {
+      label: "provider timeout",
+      payload: { status: "timeout", timeoutPhase: "provider", providerStarted: true },
+      expected: { status: "timeout", timeoutPhase: "provider" },
+    },
+    {
+      label: "cancellation",
+      payload: { status: "error", stopReason: "rpc" },
+      expected: { status: "error", stopReason: "rpc" },
+    },
+  ])(
+    "keeps a provisional $label through later execution success while preserving delivery evidence",
+    async ({ payload, expected }) => {
+      const runId = `run-sticky-before-success-${runSequence++}`;
+      const dedupe = new Map();
+      startRun(runId);
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        entry: {
+          ts: 20,
+          ok: false,
+          payload: { runId, startedAt: 10, endedAt: 20, ...payload },
+        },
+      });
+      finishRun(runId, {
+        endedAt: 30,
+        terminalDelivery: { status: "sent", resultCount: 1 },
+      });
+
+      const hot = await waitForAgentJob({ runId, timeoutMs: 0 });
+      expect(hot).toMatchObject({
+        ...expected,
+        terminalDelivery: { status: "sent", resultCount: 1 },
+      });
+      expect(hot).not.toHaveProperty("executionSettled");
+
+      resetAgentJobStateForTest();
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 0 });
+      expect(recovered).toMatchObject({
+        ...expected,
+        terminalDelivery: { status: "sent", resultCount: 1 },
+      });
+      expect(recovered).not.toHaveProperty("executionSettled");
+      expect(
+        JSON.parse(readAgentRunTerminalReceipt({ runId, owner })?.terminalJson ?? "null"),
+      ).toMatchObject({ executionSettled: true });
+    },
+  );
+
+  it("retires a conflicting durable owner with one explicit failure and no retry", async () => {
+    vi.useFakeTimers();
+    const runId = `run-owner-conflict-${runSequence++}`;
+    const conflictingOwner = {
+      agentId: "agent-b",
+      sessionKey: "agent:agent-b:main",
+      sessionId: "session-b",
+    };
+    startRun(runId);
+    writeAgentRunTerminalReceipt({
+      runId,
+      owner: conflictingOwner,
+      terminalJson: JSON.stringify({ status: "ok", executionSettled: true, endedAt: 15 }),
+    });
+
+    finishRun(runId);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("durable terminal receipt owner conflict"),
+    });
+
+    deleteAgentRunTerminalReceipt({ runId });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readAgentRunTerminalReceipt({ runId, owner })).toBeUndefined();
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("durable terminal receipt owner conflict"),
+    });
+  });
+
   it("returns a stable terminal snapshot repeatedly after process-local state is lost", async () => {
     const runId = `run-durable-${runSequence++}`;
     const waiting = waitForAgentJob({ runId, timeoutMs: 5_000 });

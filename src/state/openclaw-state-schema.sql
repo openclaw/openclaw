@@ -2518,7 +2518,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
 -- Bounded, first-use terminal control-plane receipts let waiters recover after
 -- gateway process loss without retaining transcript or assistant reply content.
 CREATE TABLE IF NOT EXISTS agent_run_terminal_receipts (
-  run_id TEXT NOT NULL PRIMARY KEY CHECK (length(run_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL PRIMARY KEY CHECK (run_id <> ''),
   agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
   session_key TEXT CHECK (session_key IS NULL OR length(session_key) BETWEEN 1 AND 1024),
   session_id TEXT CHECK (session_id IS NULL OR length(session_id) BETWEEN 1 AND 256),

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
+// v18 admits opaque terminal-receipt run IDs without a legacy length ceiling.
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
 // v15 removes redundant agent/session projections from conversation bindings.
@@ -14,7 +15,7 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 17;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 18;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
@@ -42,6 +43,7 @@ export const FIRST_USE_STATE_TABLES = [
   "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
   "outbound_message_progress",
+  "agent_run_terminal_receipts",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
   "idx_update_runs_created",
@@ -61,6 +63,7 @@ export const FIRST_USE_STATE_INDEXES = [
   "outbound_message_execution_bindings_execution_event_idx",
   "outbound_message_progress_occurred_idx",
   "outbound_message_progress_run_occurred_idx",
+  "idx_agent_run_terminal_receipts_expiry",
 ] as const;
 // These additive tables stay optional until their feature-local lazy ensures
 // run; fold them into the next natural schema-version bump.
@@ -81,7 +84,6 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_proposals",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
-  "agent_run_terminal_receipts",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
@@ -90,7 +92,6 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
   "idx_skill_workshop_collection_reviews_owner_time",
-  "idx_agent_run_terminal_receipts_expiry",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -126,6 +127,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "conversation-binding-targets-v15"
     | "skill-workshop-directory-ownership-v16"
     | "prepared-worker-ownership-v17"
+    | "terminal-receipt-run-id-v18"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

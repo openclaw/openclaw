@@ -27,6 +27,23 @@ title: "State schema history"
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
 | 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
+| 18      | Opaque terminal-receipt run IDs without the legacy 256-character ceiling                                                                                                                                                                                                                                                        | Unreleased          |
+
+### State schema 18
+
+Schema 18 rebuilds an existing `agent_run_terminal_receipts` table so its
+`run_id` constraint accepts every non-empty opaque identifier instead of
+rejecting identifiers longer than 256 characters. Migration copies every row
+with its original rowid and values, then recreates
+`idx_agent_run_terminal_receipts_expiry` in the same schema transaction. A
+failure rolls back the table, index, content marker, and published version
+change together.
+
+Databases where the first-use receipt table is still absent advance without
+creating it. The first later receipt write installs the canonical schema. After
+publication, builds supporting state schema 17 or earlier refuse the database.
+Rollback requires stopping writers and restoring the verified pre-upgrade
+backup into a separate state directory; do not lower either version marker.
 
 ### State schema 17
 

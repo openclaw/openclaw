@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatAgentRunRouteChange,
   normalizeAgentRunTerminalReceipt,
+  normalizeAgentRunTerminalReceiptDraft,
   type AgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipt.js";
 import { isProviderModelRerouted } from "./provider-model-route.js";
@@ -111,6 +112,13 @@ describe("formatAgentRunRouteChange", () => {
 });
 
 describe("normalizeAgentRunTerminalReceipt", () => {
+  it("preserves a producer draft until the terminal owner adds disposition", () => {
+    const { terminalDisposition: _terminalDisposition, ...draft } = visibleRerouteReceipt;
+
+    expect(normalizeAgentRunTerminalReceiptDraft(draft)).toEqual(draft);
+    expect(normalizeAgentRunTerminalReceipt(draft)).toBeUndefined();
+  });
+
   it("bounds and deduplicates delegation and approval linkage", () => {
     const normalized = normalizeAgentRunTerminalReceipt({
       ...visibleRerouteReceipt,
