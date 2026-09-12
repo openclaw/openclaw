@@ -3859,6 +3859,36 @@ describe("update-cli", () => {
     );
   });
 
+  it("restarts the managed gateway when stop partially succeeds before failing", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-partial-stop-failure"));
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime
+      .mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" })
+      .mockResolvedValueOnce({ status: "unknown", state: "not-loaded" });
+    serviceStop.mockImplementationOnce(async (args: unknown) => {
+      (args as { onMutation?: () => void }).onMutation?.();
+      throw new Error("stop validation failed");
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_SERVICE_KIND: "gateway" }),
+      }),
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("preserves both the update and Scheduled Task recovery failures", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockPackageInstallStatus(createCaseDir("openclaw-update-recovery-failure"));

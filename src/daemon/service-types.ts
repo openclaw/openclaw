@@ -31,6 +31,8 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   warn?: (message: string) => void;
+  /** Called after the native supervisor mutation, before post-stop validation. */
+  onMutation?: () => void;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
