@@ -17,6 +17,7 @@ const {
   getUserPreferencesMock,
   resolveOperatorRolePolicyForProfileMock,
   canReceiveSessionEventMock,
+  resolveSessionSharingTargetMock,
   mentionCurrentMock,
   webPushWarnMock,
 } = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ const {
   getUserPreferencesMock: vi.fn(),
   resolveOperatorRolePolicyForProfileMock: vi.fn(),
   canReceiveSessionEventMock: vi.fn(),
+  resolveSessionSharingTargetMock: vi.fn(),
   mentionCurrentMock: vi.fn(),
   webPushWarnMock: vi.fn(),
 }));
@@ -80,6 +82,7 @@ vi.mock("./operator-role-policy.js", async (importOriginal) => ({
 vi.mock("./session-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-sharing.js")>()),
   canReceiveSessionEvent: canReceiveSessionEventMock,
+  resolveSessionSharingTarget: resolveSessionSharingTargetMock,
 }));
 
 const { createEventWebPushDelivery } = await import("./event-web-push.js");
@@ -151,6 +154,7 @@ describe("event Web Push classification", () => {
     getUserPreferencesMock.mockReturnValue({});
     resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
     canReceiveSessionEventMock.mockReturnValue(true);
+    resolveSessionSharingTargetMock.mockReturnValue({ entry: { label: "Deployment review" } });
     mentionCurrentMock.mockReturnValue(true);
   });
 
@@ -780,6 +784,209 @@ describe("event Web Push classification", () => {
 
       await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
       expect(order).toEqual(["current", "send", "next-microtask"]);
+    });
+  });
+
+  describe("completion labels", () => {
+    const scope = { agentId: "research", sessionKeys: ["agent:research:thread.1"] };
+    const completion = { state: "final", runId: "run-1" };
+
+    function emitCompletion(opts = scope, payload: Record<string, unknown> = completion): void {
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
+        "chat",
+        payload,
+        opts,
+      );
+    }
+
+    function expectCompletionBody(body: string): void {
+      expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+        expect.objectContaining({ payload: expect.objectContaining({ body }) }),
+      );
+    }
+
+    it.each(["identified", "detailed"] as const)(
+      "uses an explicit session label for %s copy",
+      async (detailLevel) => {
+        const subscription = boundSubscription("browser-device");
+        subscription.devicePreferences.detailLevel = detailLevel;
+        listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+        emitCompletion();
+
+        await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+        expectCompletionBody("Deployment review: An agent completed its response.");
+        expect(resolveSessionSharingTargetMock).toHaveBeenCalledOnce();
+        expect(resolveSessionSharingTargetMock).toHaveBeenCalledWith({
+          cfg: {},
+          agentId: "research",
+          sessionKey: "agent:research:thread.1",
+        });
+      },
+    );
+
+    it("keeps private copy generic without looking up label metadata", async () => {
+      const subscription = boundSubscription("browser-device");
+      subscription.devicePreferences.detailLevel = "private";
+      listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+      emitCompletion();
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("An agent completed its response.");
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, "", "   "])(
+      "keeps the agent fallback for an absent or blank explicit label: %s",
+      async (label) => {
+        resolveSessionSharingTargetMock.mockReturnValue({
+          entry: { label, displayName: "Generated title", subject: "Conversation content" },
+        });
+        emitCompletion();
+
+        await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+        expectCompletionBody("research: An agent completed its response.");
+      },
+    );
+
+    it("ignores payload-provided labels and message text", async () => {
+      resolveSessionSharingTargetMock.mockReturnValue(null);
+      emitCompletion(scope, {
+        ...completion,
+        label: "Untrusted label",
+        title: "Untrusted title",
+        message: { role: "assistant", content: [{ type: "text", text: "Synthetic message" }] },
+      });
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("research: An agent completed its response.");
+    });
+
+    it("does not use a payload-only routing key as a label source", async () => {
+      emitCompletion(
+        { agentId: "research", sessionKeys: [] },
+        { ...completion, sessionKey: scope.sessionKeys[0] },
+      );
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("research: An agent completed its response.");
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it("does not choose an arbitrary label from multiple authoritative sessions", async () => {
+      emitCompletion({
+        ...scope,
+        sessionKeys: [...scope.sessionKeys, "agent:research:thread.2"],
+      });
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("research: An agent completed its response.");
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it("does not read metadata for a reader rejected by the existing access check", async () => {
+      canReceiveSessionEventMock.mockReturnValue(false);
+      emitCompletion();
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps disabled subscriptions outside metadata lookup", async () => {
+      const subscription = boundSubscription("browser-device");
+      subscription.devicePreferences.enabled = false;
+      listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+      emitCompletion();
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it("reads the label once per fanout while preserving private grouping", async () => {
+      const identified = boundSubscription("browser-device");
+      const detailed = boundSubscription("phone-device");
+      detailed.devicePreferences.detailLevel = "detailed";
+      const privateSubscription = boundSubscription("tablet-device");
+      privateSubscription.devicePreferences.detailLevel = "private";
+      listBoundWebPushSubscriptionsMock.mockReturnValue([
+        identified,
+        detailed,
+        privateSubscription,
+      ]);
+      listDevicePairingMock.mockReturnValue({
+        paired: [
+          pairedOperator("browser-device"),
+          pairedOperator("phone-device"),
+          pairedOperator("tablet-device"),
+        ],
+      });
+      emitCompletion();
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2));
+      expect(resolveSessionSharingTargetMock).toHaveBeenCalledOnce();
+      expectCompletionBody("Deployment review: An agent completed its response.");
+      expectCompletionBody("An agent completed its response.");
+    });
+
+    it("does not retain label metadata across separate events", async () => {
+      const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+      delivery.handleEvent("chat", completion, scope);
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      resolveSessionSharingTargetMock.mockReturnValue({ entry: { label: "Renamed session" } });
+
+      delivery.handleEvent("chat", { ...completion, runId: "run-2" }, scope);
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2));
+      expectCompletionBody("Renamed session: An agent completed its response.");
+      expect(resolveSessionSharingTargetMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back without publishing a metadata exception", async () => {
+      resolveSessionSharingTargetMock.mockImplementation(() => {
+        throw new Error("synthetic private storage path");
+      });
+      emitCompletion();
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("research: An agent completed its response.");
+    });
+
+    it("uses the existing 80-character label bound", async () => {
+      resolveSessionSharingTargetMock.mockReturnValue({ entry: { label: "x".repeat(81) } });
+      emitCompletion();
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody(`${"x".repeat(80)}: An agent completed its response.`);
+    });
+
+    it("does not change the background-task notification label", async () => {
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
+        "task",
+        {
+          action: "upserted",
+          task: { id: "task-1", title: "Task label", runtime: "subagent", status: "failed" },
+        },
+        scope,
+      );
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expectCompletionBody("Task label needs attention.");
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve a completion label for a yielding parent", async () => {
+      emitCompletion(scope, { ...completion, yielded: true });
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      expect(resolveSessionSharingTargetMock).not.toHaveBeenCalled();
     });
   });
 });
