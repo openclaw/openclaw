@@ -136,6 +136,70 @@ describe("isCliBindingFlushed", () => {
   });
 });
 
+describe("CLI session binding survives an interruption whose transcript flushed", () => {
+  it("keeps the CLI session binding when an interrupted turn's transcript flushed", () => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const result = buildCliRunResult({
+      context,
+      output: {
+        text: "partial reply",
+        terminalInterruption: { reason: "timeout" },
+      },
+      effectiveCliSessionId: "interrupted-but-flushed-session",
+      bindingFlushOk: true,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    });
+
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe(
+      "interrupted-but-flushed-session",
+    );
+  });
+
+  it("still clears the CLI session binding when an interrupted turn's transcript never flushed", () => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const result = buildCliRunResult({
+      context,
+      output: {
+        text: "partial reply",
+        terminalInterruption: { reason: "timeout" },
+      },
+      effectiveCliSessionId: "interrupted-unflushed-session",
+      bindingFlushOk: false,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    });
+
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+
+  it("clears the CLI session binding on interruption when the flush was never probed", () => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const result = buildCliRunResult({
+      context,
+      output: {
+        text: "partial reply",
+        terminalInterruption: { reason: "timeout" },
+      },
+      effectiveCliSessionId: "interrupted-unprobed-session",
+      bindingFlushOk: undefined,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    });
+
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+});
+
 describe("CLI native continuity projection", () => {
   it.each(["blocked", "no-native-id", "native", "stateless"])(
     "projects only explicit native continuity from a %s result",
