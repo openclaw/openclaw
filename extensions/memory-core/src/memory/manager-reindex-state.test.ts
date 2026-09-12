@@ -73,23 +73,32 @@ describe("memory reindex state", () => {
       meta: { provenanceVersion: undefined },
       reason: "index provenance classifier changed",
       code: "provenance_version",
+      chunkingVersionOnly: false,
     },
     {
       name: "missing chunking version",
       meta: { chunkingVersion: undefined },
       reason: "index chunking implementation changed",
       code: "chunking_version",
+      chunkingVersionOnly: true,
     },
-  ])("invalidates indexes with $name as OpenClaw-owned", ({ meta, reason, code }) => {
-    expect(
-      resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
-    ).toEqual({
-      status: "mismatched",
-      reason,
-      code,
-      owner: "openclaw",
-    });
-  });
+  ])(
+    "invalidates indexes with $name as OpenClaw-owned",
+    ({ meta, reason, code, chunkingVersionOnly }) => {
+      expect(
+        resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
+      ).toEqual({
+        status: "mismatched",
+        reason,
+        code,
+        owner: "openclaw",
+        // Strict equality in both directions: the keyword-only fallback marker
+        // appears exactly when the stored content still matches the configured
+        // corpus, and never rides along on other OpenClaw-owned mismatches.
+        ...(chunkingVersionOnly ? { chunkingVersionOnly: true } : {}),
+      });
+    },
+  );
 
   it("invalidates indexes built by a previous chunking implementation", () => {
     expect(
@@ -99,6 +108,25 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toMatchObject({
+      status: "mismatched",
+      reason: "index chunking implementation changed",
+      code: "chunking_version",
+      owner: "openclaw",
+    });
+  });
+
+  it("withholds the keyword-only fallback when the indexed scope no longer matches", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({
+            chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+            scopeHash: "scope-prior",
+          }),
+          configuredScopeHash: "scope-current",
+        }),
+      ),
+    ).toEqual({
       status: "mismatched",
       reason: "index chunking implementation changed",
       code: "chunking_version",

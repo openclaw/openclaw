@@ -145,7 +145,7 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function resolveMemoryIndexIdentityState(params: {
+type MemoryIndexIdentityParams = {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model?: string } | null;
   providerKey?: string;
@@ -158,7 +158,11 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
-}): MemoryIndexIdentityState {
+};
+
+function resolveConfigurationIndexIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
     return {
@@ -167,12 +171,6 @@ export function resolveMemoryIndexIdentityState(params: {
       code: "metadata_missing",
       owner: "openclaw",
     };
-  }
-  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
-    return openClawIndexMismatch("provenance_version", "index provenance classifier changed");
-  }
-  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
-    return openClawIndexMismatch("chunking_version", "index chunking implementation changed");
   }
   const expectedModel =
     params.provider && params.provider.model === undefined
@@ -223,4 +221,70 @@ export function resolveMemoryIndexIdentityState(params: {
     return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
   }
   return { status: "valid" };
+}
+
+// The constraints that decide whether stored keyword rows still describe the
+// configured corpus. Embedding identity is deliberately absent: keyword reads
+// never consume embeddings, so a changed model or an unavailable provider must
+// not lock the last published keyword index away.
+function resolveContentScopeIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
+  const { meta } = params;
+  if (!meta) {
+    return {
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    };
+  }
+  if (configuredMetaSourcesDiffer({ meta, configuredSources: params.configuredSources })) {
+    return configuredIndexMismatch("sources", "index sources changed");
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return configuredIndexMismatch("scope", "index scope changed");
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return configuredIndexMismatch("chunking", "index chunking changed");
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
+  }
+  return { status: "valid" };
+}
+
+export function resolveMemoryIndexIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
+  const { meta } = params;
+  if (!meta) {
+    return {
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    };
+  }
+  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
+    return openClawIndexMismatch("provenance_version", "index provenance classifier changed");
+  }
+  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
+    // The version diagnostic normally shadows the configuration checks, so run
+    // the content-scope constraints explicitly: stored keyword rows may stay
+    // readable during a pending upgrade only when the indexed corpus still
+    // matches the configured sources and scope. A narrowed scope must keep
+    // failing closed even while the version diagnostic shadows it. Embedding
+    // identity (model/provider/settings/vector dims) does not block this
+    // keyword-only fallback: those constraints gate vector retrieval, which the
+    // fallback never touches, and a provider that just failed its rebuild would
+    // otherwise keep keyword results locked out forever.
+    return {
+      ...openClawIndexMismatch("chunking_version", "index chunking implementation changed"),
+      ...(resolveContentScopeIdentityState(params).status === "valid"
+        ? { chunkingVersionOnly: true }
+        : {}),
+    };
+  }
+  return resolveConfigurationIndexIdentityState(params);
 }
