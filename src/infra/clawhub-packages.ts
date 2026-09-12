@@ -1,6 +1,7 @@
 // ClawHub package metadata, security, search, and telemetry operations.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import {
   createClawHubError,
   fetchClawHubJson,
@@ -9,20 +10,14 @@ import {
   readRequiredClawHubBooleanField,
   readRequiredClawHubStringArrayField,
   readRequiredClawHubStringField,
-  requestClawHub,
+  withClawHubResponse,
   resolveClawHubAuthToken,
   type ClawHubFetch,
 } from "./clawhub-client.js";
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
-// Keep aligned with @openclaw/plugin-package-contract ExternalPluginCompatibility.
-export type ClawHubPackageCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  pluginSdkVersion?: string;
-  minGatewayVersion?: string;
-};
+export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 type ClawHubPackageHostTarget = {
   os?: string | null;
   arch?: string | null;
@@ -457,22 +452,26 @@ export async function reportClawHubPluginInstallTelemetry(params: {
     return;
   }
 
-  const { response, url, hasToken } = await requestClawHub({
-    baseUrl: params.baseUrl,
-    path: "/api/cli/telemetry/install",
-    method: "POST",
-    token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    json: {
-      event: "plugin_install",
-      packageName,
-      version: params.version ?? undefined,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: "/api/cli/telemetry/install",
+      method: "POST",
+      token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      json: {
+        event: "plugin_install",
+        packageName,
+        version: params.version ?? undefined,
+      },
     },
-  });
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+    },
+  );
 }
 
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {

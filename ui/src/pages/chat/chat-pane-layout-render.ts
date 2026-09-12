@@ -19,6 +19,7 @@ import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
@@ -55,6 +56,11 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly toolIcons = new ChatToolIconController(
+    this,
+    () => this.context,
+    () => (this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined),
+  );
   private desktopFocus: {
     key: string;
     client: ChatPageHost["client"];
@@ -119,7 +125,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
+      pluginToolIcons: this.toolIcons.icons,
       presented: this.active && this.presented,
+      transcriptVisible:
+        this.presented &&
+        this.visuallyPresented &&
+        isSidebarSlotVisible(sidebarLayout, "conversation"),
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: nothing,
@@ -132,8 +143,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented =
-      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+      this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
     const desktopFocusKey = JSON.stringify([

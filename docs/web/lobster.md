@@ -80,3 +80,9 @@ Collected observations from people who spend too much time watching their sideba
 ## Privacy
 
 Everything on this page happens locally in your browser: the randomness, the schedule, the Lobsterdex. No lobster data leaves your machine. OpenClaw does not know which lobsters you have met, and frankly it is jealous.
+
+## Related
+
+- [Control UI](/web/control-ui) - the dashboard the lobster wanders into
+- [Settings](/web/control-ui/settings#appearance-themes) - the Control UI Appearance panel that holds the visits and sounds toggles
+- [OpenClaw lore](/start/lore) - why there is a lobster at all

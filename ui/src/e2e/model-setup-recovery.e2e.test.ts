@@ -1,7 +1,9 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,6 +22,174 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("verifies the current model connection and retries saved replacement credentials", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+          : {}),
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "openclaw.setup.detect",
+            "openclaw.setup.verify",
+            "openclaw.setup.activate.start",
+            "openclaw.setup.auth.start",
+            "wizard.next",
+          ],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              candidates: [
+                {
+                  kind: "existing-model",
+                  brandId: "openai",
+                  label: "Current model",
+                  detail: "openai/gpt-5 — already configured",
+                  modelRef: "openai/gpt-5",
+                  recommended: false,
+                  credentials: true,
+                },
+                {
+                  kind: "provider-auto:openai",
+                  brandId: "openai",
+                  label: "OpenAI",
+                  detail: "Already configured",
+                  modelRef: "openai/gpt-5",
+                  recommended: false,
+                  credentials: true,
+                },
+                {
+                  kind: "saved-auth:openai:replacement",
+                  brandId: "openai",
+                  label: "Saved OpenAI credentials",
+                  detail: "Saved for retry after a failed setup test",
+                  modelRef: "openai/gpt-5",
+                  recommended: false,
+                  credentials: true,
+                },
+                {
+                  kind: "claude-cli",
+                  brandId: "claude",
+                  label: "Claude Code",
+                  detail: "logged in",
+                  modelRef: "claude-cli/claude-opus-5",
+                  recommended: false,
+                  credentials: true,
+                },
+              ],
+              manualProviders: [],
+              workspace: "/tmp/openclaw-e2e",
+              configuredModel: "openai/gpt-5",
+              setupComplete: true,
+            },
+            "openclaw.setup.verify": {
+              ok: true,
+              modelRef: "openai/gpt-5",
+              latencyMs: 1234,
+            },
+            "openclaw.setup.activate.start": { done: false, status: "running" },
+            "wizard.next": {
+              done: true,
+              status: "done",
+              modelActivation: { modelRef: "openai/gpt-5" },
+            },
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        expect(response?.status()).toBe(200);
+        await expect
+          .poll(() => page.locator('[data-candidate-kind="existing-model"]').count())
+          .toBe(0);
+        await expect.poll(() => page.locator('[data-candidate-kind="claude-cli"]').count()).toBe(1);
+        expect(await page.locator('[data-candidate-kind="provider-auto:openai"]').count()).toBe(0);
+        const savedCredentials = page.locator(
+          '[data-candidate-kind="saved-auth:openai:replacement"]',
+        );
+        await savedCredentials.getByText("Saved OpenAI credentials", { exact: true }).waitFor();
+        if (artifactDir) {
+          await writeFile(
+            path.join(artifactDir, "configured-route-dedup-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator('[data-candidate-kind="claude-cli"]'),
+              savedCredentials,
+            ]),
+          );
+          await page.setViewportSize({ height: 844, width: 390 });
+          await expect
+            .poll(() =>
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
+            )
+            .toBe(false);
+          await writeFile(
+            path.join(artifactDir, "configured-route-dedup-mobile.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator('[data-candidate-kind="claude-cli"]'),
+              savedCredentials,
+            ]),
+          );
+          await page.setViewportSize({ height: 900, width: 1280 });
+        }
+        await page.getByRole("button", { name: "Check model" }).click();
+        const verify = await gateway.waitForRequest("openclaw.setup.verify");
+        expect(verify.params).toEqual({ agentId: "main" });
+        await page.getByText("Ready · 1234 ms").waitFor();
+        const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
+          .length;
+        const verifyCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.verify"))
+          .length;
+        await page.getByRole("button", { name: "Check again" }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("openclaw.setup.verify")).length)
+          .toBe(verifyCountBeforeRefresh + 1);
+        expect((await gateway.getRequests("openclaw.setup.detect")).length).toBe(
+          detectCountBeforeRefresh,
+        );
+        await page.getByRole("button", { name: "Check again" }).waitFor();
+        await page.getByText("Ready · 1234 ms").waitFor();
+        await savedCredentials.getByRole("button", { name: "Test & use" }).click();
+        const activation = await gateway.waitForRequest("openclaw.setup.activate.start");
+        expect(activation.params).toEqual({
+          kind: "saved-auth:openai:replacement",
+          modelRef: "openai/gpt-5",
+          agentId: "main",
+          sessionId: expect.any(String),
+        });
+        await page.locator(".model-setup-success").waitFor();
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
+        expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
+        if (artifactDir) {
+          await writeFile(
+            path.join(artifactDir, "saved-retry-request.json"),
+            JSON.stringify(
+              {
+                activation,
+                activations: await gateway.getRequests("openclaw.setup.activate.start"),
+                signIns: await gateway.getRequests("openclaw.setup.auth.start"),
+              },
+              null,
+              2,
+            ),
+          );
+          await writeFile(
+            path.join(artifactDir, "saved-retry-success-desktop.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".model-setup-success"),
+            ]),
+          );
+        }
+      },
+    );
+  });
+
   it.each(["rejected", "uncertain"] as const)(
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {

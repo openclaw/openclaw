@@ -47,6 +47,8 @@ cd ~/.openclaw/npm/projects/<encoded-package>
 npm install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 ```
 
+### npm-pack tarball installs
+
 `openclaw plugins install npm-pack:<path.tgz>` uses the same per-plugin npm
 project root for a local npm-pack tarball: OpenClaw reads the tarball's npm
 metadata, adds it to the managed project as a copied `file:` dependency, runs
@@ -67,6 +69,8 @@ published package path that records official trust. Privileged helper access
 and trusted-official scope handling should be validated on that trusted
 install path, not inferred from a local tarball install.
 
+### Missing runtime imports
+
 If a plugin fails at runtime with a missing import, fix the package manifest
 instead of repairing the managed project by hand. Runtime imports belong in
 the plugin package `dependencies` or `optionalDependencies`; `devDependencies`
@@ -75,10 +79,14 @@ are not installed for managed runtime projects. A local `npm install` inside
 diagnostic, but it is not package-acceptance proof because the next install or
 update recreates the project from package metadata.
 
+### Hoisted transitive dependencies
+
 npm may hoist transitive dependencies to the per-plugin project's
 `node_modules` beside the plugin package. OpenClaw scans the managed project
 root before trusting the install, and removes that project on uninstall, so
 hoisted runtime dependencies stay inside that plugin's cleanup boundary.
+
+### Lockfile policy
 
 OpenClaw-owned npm plugin packages never ship npm lockfiles. The repository
 uses `pnpm-lock.yaml` as its committed product dependency review boundary, then
@@ -95,6 +103,8 @@ policy, and rejects generated versions absent from `pnpm-lock.yaml`. Nothing
 is written into the checkout. Third-party plugin packages may still contain
 lockfiles according to their own packaging policy; OpenClaw's installer leaves
 that npm behavior to the installed npm version.
+
+### Verify a package tarball
 
 Before treating a local package as release-candidate proof, inspect the
 tarball that will be installed:
@@ -117,6 +127,8 @@ tmpdir=$(mktemp -d)
 )
 rm -rf "$tmpdir"
 ```
+
+### Bundled runtime dependencies
 
 OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency
@@ -145,6 +157,8 @@ instead of embedding every platform binary in the plugin tarball. The root
 bundle its full dependency tree. See
 [dependency locking](/gateway/security/dependency-locking).
 
+### Host peer dependency
+
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the
 host package into a managed project, because a stale host package can affect
@@ -152,6 +166,8 @@ npm's peer resolution inside that plugin. Managed npm installs skip npm peer
 resolution/materialization, and OpenClaw reasserts plugin-local
 `node_modules/openclaw` links for installed packages that declare the host
 peer, after install or update.
+
+### git installs
 
 git installs clone or refresh the repository, then run:
 
@@ -212,6 +228,17 @@ be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
 
+Package verification uses build-generated
+`dist/runtime-dependency-ownership.json` to identify chunks used only by
+plugins. Each entry binds a chunk filename and SHA-256 hash to its owning
+plugins; every owner must declare the dependency in its bundled or installed
+`@openclaw/<id>` package manifest. Root imports, including root references to
+otherwise plugin-owned chunks, still require root dependency declarations.
+Missing metadata or changed chunk bytes cannot grant a plugin exemption.
+Rebuilt releases, including `2026.7.33`, use this same generated artifact;
+package versions and generated source-region comments do not grant ownership.
+This verification does not change Node's runtime dependency resolution.
+
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
 prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
 `extensions` when neither built tree is available. pnpm owns the source dependency
@@ -247,6 +274,9 @@ node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions
 This requires existing root SDK output in `dist/plugin-sdk` and the selected
 package's standalone runtime output. If the package output is missing, build
 it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The standalone build runs the selected package's asset build command and copies
+its declared `openclaw.build.staticAssets` into `dist`, including for new packages
+that are not yet tracked by Git. Missing declared source files fail the build.
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.
@@ -271,10 +301,11 @@ absent from the packaged inventory, and empty `dist` directories.
 `plugin-runtime-deps` only when the alias itself is genuinely dangling. Live
 aliases are preserved. Neither Doctor nor postinstall deletes shared
 `plugin-runtime-deps` roots or mirrors, which may still serve another
-installation or profile. The deprecated `core/doctor/legacy-plugin-dependencies`
-selector is informational only; it no longer scans shared roots for removal.
+installation or profile. Since 2026.9.2 the deprecated
+`core/doctor/legacy-plugin-dependencies` selector is informational only; it no
+longer scans shared roots for removal.
 
-Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
-Current install, update, uninstall, and doctor flows still recognize that
-legacy flat root for recovery and cleanup only. New npm installs create
-per-plugin project roots instead.
+A shared `~/.openclaw/npm/node_modules` root was the npm install layout before
+2026.5.28. Install, update, uninstall, and doctor flows still recognize that
+legacy flat root for recovery and cleanup only. Installs from 2026.5.28 onward
+create per-plugin project roots instead.

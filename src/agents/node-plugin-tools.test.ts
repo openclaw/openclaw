@@ -1,5 +1,6 @@
 /** Tests connected node-hosted plugin tool materialization. */
 
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
@@ -12,9 +13,11 @@ import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -344,6 +347,43 @@ describe("createNodePluginTools", () => {
     });
     expect(JSON.stringify(result.details)).not.toContain("canary");
     expect(isToolResultError(result)).toBe(true);
+  });
+
+  it.each([false, true])("snapshots node MCP text once (isError: %s)", async (isError) => {
+    const text = "ordinary report line\n".repeat(25_000);
+    const payload = CallToolResultSchema.parse({
+      content: [
+        { type: "text", text },
+        { type: "resource_link", uri: "memo://report", name: "Report" },
+        { type: "text", text: "résumé\n東京", _meta: { source: "report" } },
+      ],
+      isError,
+    });
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "node-mcp",
+          name: "docs_read",
+          description: "Read node-local reports",
+          command: "mcp.tools.call.v1",
+          mcp: { server: "docs", tool: "read" },
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload });
+    const tool = expectDefined(createNodePluginTools({})[0], "node MCP report tool");
+    const result = snapshotToolSearchTargetTranscriptResult(await tool.execute("report", {}));
+
+    expect(result.content).toEqual([
+      { type: "text", text },
+      { type: "text", text: "[Report] memo://report" },
+      { type: "text", text: "résumé\n東京" },
+    ]);
+    expect(isToolResultError(result)).toBe(isError);
+    expect(consumeMcpCodeModeGuestResult(result)).toEqual(payload);
+    const contentBytes = Buffer.byteLength(JSON.stringify(result.content));
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(contentBytes + 1_024);
   });
 
   it("projects node MCP schemas and calls through the exact namespace catalog entry", async () => {

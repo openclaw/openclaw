@@ -4,6 +4,8 @@
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-services.tsbuildinfo"
   },
   "include": [
+    "../../src/cli/daemon-cli/**/*.test.ts",
+    "../../src/cli/daemon-cli/**/*.test.tsx",
     "../../src/cron/**/*.test.ts",
     "../../src/cron/**/*.test.tsx",
     "../../src/daemon/**/*.test.ts",
@@ -14,7 +16,7 @@
     "../../src/skills/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
     "../../src/secrets/**/*.test.tsx",
-    "../../src/shared/**/*.test.ts",
-    "../../src/shared/**/*.test.tsx"
+    "../../src/plugin-state/**/*.test.ts",
+    "../../src/plugin-state/**/*.test.tsx"
   ]
 }

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -280,7 +281,7 @@ async function createAgentSessionImpl(
 
   // Use provided or create AuthStorage and ModelRegistry
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, getRuntimeConfig());
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);

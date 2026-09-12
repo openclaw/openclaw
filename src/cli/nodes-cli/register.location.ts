@@ -1,10 +1,10 @@
 // Node location commands: invokes location.get on a paired node and formats the location payload.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
+  buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeNonNegativeInteger,
@@ -52,19 +52,16 @@ export function registerNodesLocationCommands(nodes: Command) {
           );
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "location.get",
             params: {
-              maxAgeMs: Number.isFinite(maxAgeMs) ? maxAgeMs : undefined,
+              maxAgeMs,
               desiredAccuracy,
-              timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+              timeoutMs,
             },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof invokeTimeoutMs === "number" && Number.isFinite(invokeTimeoutMs)) {
-            invokeParams.timeoutMs = invokeTimeoutMs;
-          }
+            timeoutMs: invokeTimeoutMs,
+          });
 
           const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};

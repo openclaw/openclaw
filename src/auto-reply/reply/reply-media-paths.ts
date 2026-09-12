@@ -169,11 +169,12 @@ export function createReplyMediaPathNormalizer(params: {
     return await sandboxWorkspacePromise;
   };
 
-  const resolveMediaAccessForSource = (media: string) =>
+  const resolveMediaAccessForSource = (media: string, sessionWorkspaceDir?: string) =>
     resolveAgentScopedOutboundMediaAccess({
       cfg: params.cfg,
       agentId,
       workspaceDir: params.workspaceDir,
+      ...(sessionWorkspaceDir ? { sessionWorkspaceDir } : {}),
       mediaSources: [media],
       mediaAccess: params.mediaAccess,
       workspaceMediaAccess: params.workspaceMediaAccess,
@@ -191,6 +192,7 @@ export function createReplyMediaPathNormalizer(params: {
 
   const persistLocalReplyMedia = async (
     media: string,
+    sessionWorkspaceDir?: string,
   ): Promise<{ path: string; contentType?: string }> => {
     if (!isLikelyLocalMediaSource(media)) {
       return { path: media };
@@ -207,7 +209,7 @@ export function createReplyMediaPathNormalizer(params: {
       return await cached;
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      mediaAccess: resolveMediaAccessForSource(media),
+      mediaAccess: resolveMediaAccessForSource(media, sessionWorkspaceDir),
     })
       .then((saved) => ({
         ...saved,
@@ -289,7 +291,7 @@ export function createReplyMediaPathNormalizer(params: {
         }
         throw err;
       }
-      const persisted = await persistLocalReplyMedia(sandboxResolvedMedia);
+      const persisted = await persistLocalReplyMedia(sandboxResolvedMedia, sandboxWorkspace.root);
       return {
         mediaUrl: persisted.path,
         trustedLocalMedia: true,

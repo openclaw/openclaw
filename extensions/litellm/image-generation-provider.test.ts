@@ -15,29 +15,22 @@ const {
 
 installProviderHttpMockCleanup();
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 function mockGeneratedPngResponse() {
-  postJsonRequestMock.mockResolvedValue({
-    response: jsonResponse({
+  postJsonRequestMock.mockImplementation(async () => ({
+    response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),
-  });
+  }));
 }
 
 function mockEditedPngResponse() {
-  postMultipartRequestMock.mockResolvedValue({
-    response: jsonResponse({
+  postMultipartRequestMock.mockImplementation(async () => ({
+    response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),
-  });
+  }));
 }
 
 function mockObjectArg(mock: unknown, index = -1): Record<string, unknown> {

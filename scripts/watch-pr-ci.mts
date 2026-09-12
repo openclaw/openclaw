@@ -903,7 +903,7 @@ async function main(argv = process.argv.slice(2)) {
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
         console.log(
-          `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
+          `STATUS rollup=${result.verdict.toLowerCase()} github_rollup=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
         );
         if (result.verdict === "FAILING") {
           return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
@@ -927,7 +927,12 @@ async function main(argv = process.argv.slice(2)) {
   if (watchResult !== undefined) {
     return watchResult;
   }
-  return emit(`TIMEOUT state=${lastState} pending=${lastPending}`, 16);
+  return emit(
+    args.completion === "rollup"
+      ? `TIMEOUT github_rollup=${lastState} pending=${lastPending}`
+      : "TIMEOUT completion=ci-run",
+    16,
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

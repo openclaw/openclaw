@@ -3,7 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayDevicePairingCapabilities
 import ai.openclaw.app.GatewayDevicePairingMutation
 import ai.openclaw.app.GatewayDeviceTokenSummary
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPairedDeviceSummary
@@ -382,7 +382,7 @@ private fun Char.isPairingIdentityControl(): Boolean =
     code in 0x2066..0x2069
 
 private fun nodeApprovalCommandRow(node: GatewayNodeSummary): Pair<String, String>? {
-  val command = gatewayNodeApprovalCommand(node.approvalState, node.pendingRequestId) ?: return null
+  val command = gatewayNodeApprovalCommand(node.approvalState) ?: return null
   return (node.displayName ?: node.id) to command
 }
 
@@ -515,38 +515,38 @@ private fun nodeSubtitle(node: GatewayNodeSummary): String {
 
 private fun nodeStatusText(node: GatewayNodeSummary): String =
   when (node.approvalState) {
-    GatewayNodeApprovalState.PendingApproval -> nativeString("Needs approval")
-    GatewayNodeApprovalState.PendingReapproval -> nativeString("Needs reapproval")
-    GatewayNodeApprovalState.Unapproved -> nativeString("Unapproved")
+    is GatewayNodeCapabilityApproval.PendingApproval -> nativeString("Needs approval")
+    is GatewayNodeCapabilityApproval.PendingReapproval -> nativeString("Needs reapproval")
+    GatewayNodeCapabilityApproval.Unapproved -> nativeString("Unapproved")
     else -> if (node.connected) nativeString("Online") else nativeString("Offline")
   }
 
 private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
   when (node.approvalState) {
-    GatewayNodeApprovalState.Approved -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
+    GatewayNodeCapabilityApproval.Approved -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
 
-    GatewayNodeApprovalState.PendingApproval,
-    GatewayNodeApprovalState.PendingReapproval,
-    GatewayNodeApprovalState.Unapproved,
+    is GatewayNodeCapabilityApproval.PendingApproval,
+    is GatewayNodeCapabilityApproval.PendingReapproval,
+    GatewayNodeCapabilityApproval.Unapproved,
     -> ClawStatus.Warning
 
-    GatewayNodeApprovalState.Loading,
-    GatewayNodeApprovalState.Unsupported,
+    GatewayNodeCapabilityApproval.Loading,
+    GatewayNodeCapabilityApproval.Unsupported,
     -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
   }
 
-private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): String? =
+private fun nodeApprovalSubtitle(approvalState: GatewayNodeCapabilityApproval): String? =
   when (approvalState) {
-    GatewayNodeApprovalState.Approved -> nativeString("Approved")
+    GatewayNodeCapabilityApproval.Approved -> nativeString("Approved")
 
-    GatewayNodeApprovalState.PendingApproval -> nativeString("Capability approval pending")
+    is GatewayNodeCapabilityApproval.PendingApproval -> nativeString("Capability approval pending")
 
-    GatewayNodeApprovalState.PendingReapproval -> nativeString("Capability reapproval pending")
+    is GatewayNodeCapabilityApproval.PendingReapproval -> nativeString("Capability reapproval pending")
 
-    GatewayNodeApprovalState.Unapproved -> nativeString("Capability unapproved")
+    GatewayNodeCapabilityApproval.Unapproved -> nativeString("Capability unapproved")
 
-    GatewayNodeApprovalState.Loading,
-    GatewayNodeApprovalState.Unsupported,
+    GatewayNodeCapabilityApproval.Loading,
+    GatewayNodeCapabilityApproval.Unsupported,
     -> null
   }
 

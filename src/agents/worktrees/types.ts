@@ -73,6 +73,7 @@ export type ManagedWorktreeBranchesResult = {
   defaultBranch?: string;
   headBranch?: string;
   repositoryStatus?: ManagedWorktreeRepositoryStatus;
+  branchesUnavailable?: boolean;
 };
 
 export type ManagedWorktreeGcResult = {

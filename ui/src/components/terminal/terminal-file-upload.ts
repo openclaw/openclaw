@@ -1,3 +1,8 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import type {
+  TerminalUploadPathStyle,
+  TerminalUploadResult,
+} from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
 
 // Keep this client guard aligned with the gateway protocol's 16 MiB limit so
@@ -5,7 +10,6 @@ import { t } from "../../i18n/index.ts";
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 type TerminalUploadFile = { name: string; contentBase64: string };
-type TerminalUploadResult = { path: string; size: number };
 
 type TerminalUploadClient = {
   request<T = unknown>(
@@ -40,8 +44,36 @@ export async function encodeTerminalUpload(file: File): Promise<string> {
   return btoa(chunks.join(""));
 }
 
-/** Quotes one staged path for the shell that owns the active terminal. */
-export function quoteTerminalUploadPath(filePath: string, shell: string): string {
+function quotePosixUploadPath(filePath: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
+    return filePath;
+  }
+  return `'${filePath.replaceAll("'", "'\\''")}'`;
+}
+
+/** Uses the admitted receiver's path contract, keeping shell checks intact. */
+export function quoteTerminalUploadPath(
+  filePath: string,
+  shell: string,
+  uploadPathStyle?: TerminalUploadPathStyle,
+): string {
+  if (uploadPathStyle === "native") {
+    if (containsAsciiControlCharacter(filePath)) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    if (/^(?:[a-z]:[\\/]|\\\\)/iu.test(filePath)) {
+      if (filePath.includes('"')) {
+        throw new Error(t("terminal.uploadInvalidNativePath"));
+      }
+      // Native CLI parsers recognize Windows paths before POSIX unescaping.
+      return `"${filePath}"`;
+    }
+    if (!filePath.startsWith("/")) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    // Native path readers remove outer quotes and backslash escapes, not shell quote concatenation.
+    return `"${filePath.replace(/[\\"$`]/gu, "\\$&")}"`;
+  }
   const shellName = shell.split(/[\\/]/u).pop()?.toLowerCase() ?? "";
   if (/^(?:pwsh|powershell)(?:\.exe)?$/u.test(shellName)) {
     return `'${filePath.replaceAll("'", "''")}'`;
@@ -56,8 +88,5 @@ export function quoteTerminalUploadPath(filePath: string, shell: string): string
   if (!posixShell) {
     throw new Error(t("terminal.uploadUnsupportedShell", { shell: shellName || shell }));
   }
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
-    return filePath;
-  }
-  return `'${filePath.replaceAll("'", "'\\''")}'`;
+  return quotePosixUploadPath(filePath);
 }

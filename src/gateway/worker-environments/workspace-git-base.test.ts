@@ -31,7 +31,7 @@ describe("prepared worker projects", () => {
       prepareWorkerProjectSnapshot({ localPath, namespace });
     const original = await prepare(repository);
     expect(original).toBeDefined();
-    expect(await prepare(worktree)).toEqual({ ...original, root: worktree });
+    expect(await prepare(worktree)).toEqual({ ...original, root: worktree, label: "linked" });
 
     await fs.writeFile(path.join(worktree, "input.txt"), "next commit\n");
     await requireGit(worktree, ["commit", "--quiet", "-am", "next"]);
@@ -40,16 +40,53 @@ describe("prepared worker projects", () => {
     expect(updated?.baseCommit).not.toBe(original?.baseCommit);
     expect(updated?.baseCommit).toBe(await requireGit(worktree, ["rev-parse", "HEAD"]));
     expect((await prepare(worktree, "gateway-two"))?.key).not.toBe(original?.key);
+    expect(
+      await prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: original!.baseCommit,
+      }),
+    ).toEqual({ ...original, root: worktree, label: "linked" });
+    await expect(
+      prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: "HEAD",
+      }),
+    ).rejects.toThrow("not a commit id");
 
     const unrelated = path.join(root, "unrelated");
     await createRepository(unrelated);
     expect((await prepare(unrelated))?.key).not.toBe(original?.key);
   });
 
+  it("labels snapshots from the normalized origin, falling back to the project directory", async () => {
+    const root = await fs.realpath(tempDirs.make("worker-project-label-"));
+    const repository = path.join(root, "project");
+    await createRepository(repository);
+    const prepare = () =>
+      prepareWorkerProjectSnapshot({ localPath: repository, namespace: "gateway" });
+    const original = await prepare();
+    expect(original?.label).toBe("project");
+
+    await requireGit(repository, ["remote", "add", "origin", "git@example.invalid:Team/Repo.git"]);
+    expect(await prepare()).toEqual({ ...original, label: "example.invalid/team/repo" });
+
+    await requireGit(repository, ["remote", "set-url", "origin", "/local/repository.git"]);
+    expect(await prepare()).toEqual(original);
+  });
+
   it("does not invent a project snapshot for a plain or unborn workspace", async () => {
     const root = await fs.realpath(tempDirs.make("worker-project-unborn-"));
     const prepare = () => prepareWorkerProjectSnapshot({ localPath: root, namespace: "gateway" });
     expect(await prepare()).toBeUndefined();
+    await expect(
+      prepareWorkerProjectSnapshot({
+        localPath: root,
+        namespace: "gateway",
+        baseCommit: "a".repeat(40),
+      }),
+    ).rejects.toThrow("no longer available");
     await requireGit(root, ["init", "--quiet"]);
     await fs.writeFile(path.join(root, "input.txt"), "uncommitted\n");
     await requireGit(root, ["add", "."]);

@@ -36,14 +36,17 @@ async function readExistingVectorModel(databasePath: string): Promise<string | n
   if (!fs.existsSync(databasePath)) {
     return null;
   }
-  const { openNodeSqliteDatabase, prepareSqliteReadOnlyLocationSync } =
+  const { openNodeSqliteDatabase, prepareSqliteReadOnlyLocation } =
     await import("openclaw/plugin-sdk/sqlite-runtime");
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
+  let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   let failure: unknown;
   let model: string | null = null;
   try {
-    prepared = prepareSqliteReadOnlyLocationSync(databasePath);
+    // The live agent database is written continuously; a byte-neutral raw copy needs
+    // a quiescent WAL and cannot stabilize on a multi-GB live database. Online backup
+    // holds an ordinary read transaction, like every Gateway reader.
+    prepared = await prepareSqliteReadOnlyLocation(databasePath);
     db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     const table = db
       .prepare(

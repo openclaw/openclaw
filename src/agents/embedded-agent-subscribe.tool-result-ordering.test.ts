@@ -13,6 +13,223 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 describe("subscribeEmbeddedAgentSession tool result ordering", () => {
+  it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
+    const flushEntered = createDeferred();
+    const pendingFlush = createDeferred();
+    const onBlockReplyFlush = vi.fn(() => {
+      flushEntered.resolve();
+      return pendingFlush.promise;
+    });
+    const recordEvent =
+      vi.fn<
+        NonNullable<SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"]>["recordEvent"]
+      >();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-trajectory-pending-delivery",
+      trajectoryRecorder: { recordEvent, flush: async () => {} },
+      onBlockReplyFlush,
+    });
+    const apiKey = "sk-1234567890abcdefXYZ";
+
+    try {
+      emit({
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "first-call",
+        args: { command: "printf fixture", apiKey },
+      });
+      expect(recordEvent).toHaveBeenCalledExactlyOnceWith("tool.call", {
+        toolCallId: "first-call",
+        name: "exec",
+        args: { command: "printf fixture", apiKey: expect.any(String) },
+      });
+      expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(apiKey);
+      await flushEntered.promise;
+
+      emit({
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "first-call",
+        isError: false,
+        result: {
+          content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+          details: { status: "completed", aggregated: "x".repeat(9_000) },
+        },
+      });
+      emit({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "second-call",
+        args: { path: "/tmp/missing-trajectory-fixture" },
+      });
+      emit({
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "second-call",
+        isError: false,
+        result: { details: { status: "error", error: "Fixture does not exist" } },
+      });
+
+      expect(onBlockReplyFlush).toHaveBeenCalledOnce();
+      expect(recordEvent.mock.calls).toEqual([
+        ["tool.call", expect.objectContaining({ toolCallId: "first-call", name: "exec" })],
+        [
+          "tool.result",
+          {
+            toolCallId: "first-call",
+            name: "exec",
+            success: true,
+            result: {
+              content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
+              details: {
+                status: "completed",
+                aggregated: `${"x".repeat(8_000)}\n...(live output truncated)...`,
+              },
+            },
+          },
+        ],
+        [
+          "tool.call",
+          {
+            toolCallId: "second-call",
+            name: "read",
+            args: { path: "/tmp/missing-trajectory-fixture" },
+          },
+        ],
+        [
+          "tool.result",
+          {
+            toolCallId: "second-call",
+            name: "read",
+            success: false,
+            result: { details: { status: "error", error: "Fixture does not exist" } },
+          },
+        ],
+      ]);
+
+      pendingFlush.resolve();
+      await subscription.waitForPendingEvents();
+      expect(recordEvent).toHaveBeenCalledTimes(4);
+    } finally {
+      pendingFlush.resolve();
+      await subscription.waitForPendingEvents();
+      subscription.unsubscribe();
+    }
+  });
+
+  it("settles tool delivery when trajectory recording throws", async () => {
+    const recordEvent = vi.fn(() => {
+      throw new Error("Trajectory storage failed");
+    });
+    const onAgentToolResult = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-trajectory-recording-failure",
+      trajectoryRecorder: { recordEvent, flush: async () => {} },
+      onAgentToolResult,
+    });
+    const result = { content: [{ type: "text", text: "Fixture contents" }] };
+
+    try {
+      expect(() =>
+        emit({
+          type: "tool_execution_start",
+          toolName: "read",
+          toolCallId: "recording-failure-call",
+          args: { path: "/tmp/trajectory-fixture" },
+        }),
+      ).not.toThrow();
+      expect(() =>
+        emit({
+          type: "tool_execution_end",
+          toolName: "read",
+          toolCallId: "recording-failure-call",
+          isError: false,
+          result,
+        }),
+      ).not.toThrow();
+      emitAssistantTextDeltaAndEnd({ emit, text: "The tool completed." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+
+      expect(recordEvent).toHaveBeenCalledTimes(2);
+      expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+        toolName: "read",
+        result,
+        isError: false,
+      });
+      expect(subscription.getLastToolError()).toBeUndefined();
+      expect(subscription.assistantTexts).toEqual(["The tool completed."]);
+    } finally {
+      await subscription.waitForPendingEvents();
+      subscription.unsubscribe();
+    }
+  });
+
+  it.each([
+    { outcome: "success", success: true, recorderFails: false },
+    { outcome: "failure", success: false, recorderFails: false },
+    { outcome: "success", success: true, recorderFails: true },
+    { outcome: "failure", success: false, recorderFails: true },
+  ])(
+    "preserves nested tool outcomes and capture order ($outcome, recorder fails: $recorderFails)",
+    async ({ success, recorderFails }) => {
+      const order: string[] = [];
+      const recordEvent = vi.fn<
+        NonNullable<SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"]>["recordEvent"]
+      >((type) => {
+        order.push(type);
+        if (recorderFails) {
+          throw new Error("Trajectory storage failed");
+        }
+      });
+      const { subscription } = createSubscribedSessionHarness({
+        runId: `run-nested-trajectory-${success}-${recorderFails}`,
+        trajectoryRecorder: { recordEvent, flush: async () => {} },
+      });
+      const result = { content: [{ type: "text", text: "Nested fixture" }] };
+      const toolError = new Error("Nested fixture failed");
+
+      try {
+        const execution = subscription.runToolLifecycle({
+          toolName: "read",
+          toolCallId: "nested-call",
+          args: { path: "/tmp/nested-trajectory-fixture" },
+          execute: async (onImplementationStart) => {
+            onImplementationStart();
+            order.push("execute");
+            if (!success) {
+              throw toolError;
+            }
+            return result;
+          },
+        });
+        if (success) {
+          await expect(execution).resolves.toBe(result);
+        } else {
+          await expect(execution).rejects.toBe(toolError);
+        }
+        expect(order).toEqual(["tool.call", "execute", "tool.result"]);
+        expect(recordEvent.mock.calls).toEqual([
+          [
+            "tool.call",
+            {
+              toolCallId: "nested-call",
+              name: "read",
+              args: { path: "/tmp/nested-trajectory-fixture" },
+            },
+          ],
+          [
+            "tool.result",
+            expect.objectContaining({ toolCallId: "nested-call", name: "read", success }),
+          ],
+        ]);
+      } finally {
+        await subscription.waitForPendingEvents();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
   it.each([
     { delivery: "resolve", flush: false },
     { delivery: "reject", flush: false },

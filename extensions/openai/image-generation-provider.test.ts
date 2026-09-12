@@ -364,6 +364,8 @@ describe("openai image generation provider", () => {
     expect(provider.defaultModel).toBe("gpt-image-2");
     expect(provider.models).toEqual([
       "gpt-image-2",
+      "gpt-image-2.5-flare",
+      "gpt-image-2.5-sunburst",
       "gpt-image-1.5",
       "gpt-image-1",
       "gpt-image-1-mini",
@@ -373,11 +375,17 @@ describe("openai image generation provider", () => {
     expect(provider.capabilities.geometry?.sizes).toContain("2160x3840");
     expect(provider.capabilities.geometry?.sizesByModel).toEqual({
       "gpt-image-2": [],
+      "gpt-image-2.5-flare": [],
+      "gpt-image-2.5-sunburst": [],
       "gpt-image-2-2026-04-21": [],
     });
     expect(provider.capabilities.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
+      qualitiesByModel: {
+        "gpt-image-2.5-flare": ["low", "medium", "high", "xhigh", "max", "auto"],
+        "gpt-image-2.5-sunburst": ["low", "medium", "high", "xhigh", "max", "auto"],
+      },
       backgrounds: ["transparent", "opaque", "auto"],
     });
   });
@@ -669,6 +677,10 @@ describe("openai image generation provider", () => {
     { model: "gpt-image-2", size: "2880x2880" },
     { model: "gpt-image-2", size: "3072x2176" },
     { model: "gpt-image-2-2026-04-21", size: "864x1536" },
+    { model: "gpt-image-2.5-flare", size: "1536x864" },
+    { model: "gpt-image-2.5-sunburst", size: "1024x640" },
+    { model: "gpt-image-2.5-flare", size: "auto" },
+    { model: "gpt-image-2.5-sunburst", size: "auto" },
   ])("preserves flexible $model generation dimensions $size", async ({ model, size }) => {
     mockGeneratedPngResponse();
 
@@ -684,6 +696,54 @@ describe("openai image generation provider", () => {
       size,
     });
     expect(result.metadata).toBeUndefined();
+  });
+
+  it.each([
+    { model: "gpt-image-2.5-flare", quality: "xhigh" as const },
+    { model: "gpt-image-2.5-sunburst", quality: "max" as const },
+  ])("uses the direct generation and edit contracts for $model", async ({ model, quality }) => {
+    mockGeneratedPngResponse();
+    const request = {
+      model,
+      quality,
+      size: "1536x864",
+      outputFormat: "webp" as const,
+      background: "transparent" as const,
+      authStore: createMixedOpenAIAuthStore(),
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              auth: "api-key" as const,
+              models: [],
+            },
+          },
+        },
+      },
+    };
+    await generateOpenAIImage("A transparent sticker", request);
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(jsonRequestCall().body).toMatchObject({
+      model,
+      quality,
+      size: "1536x864",
+      output_format: "webp",
+      background: "transparent",
+    });
+
+    await generateOpenAIImage("Change the sticker color", {
+      ...request,
+      inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }],
+    });
+    const edit = postMultipartRequestMock.mock.calls[0]?.[0];
+    expect(edit.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(edit.body.get("model")).toBe(model);
+    expect(edit.body.get("quality")).toBe(quality);
+    expect(edit.body.get("size")).toBe("1536x864");
+    expect(edit.body.get("background")).toBe("transparent");
+    expect(edit.body.get("output_format")).toBe("webp");
+    expect(edit.body.getAll("image[]")).toHaveLength(1);
   });
 
   it.each(["16x16", "1024x624", "1025x1024", "3088x1024", "4096x2048", "2896x2896"])(

@@ -1,9 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyEvidence } from "../policy-state.js";
-import { agentsPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { agentScopedPolicyTargets, scopedWorkspaceAgentMatches } from "./policy-scope.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readStringList } from "./utils.js";
 
@@ -14,7 +14,7 @@ export function agentWorkspaceFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   if (
-    agentsPolicyShapeFinding(isRecord(policy) ? policy.agents : undefined, {
+    posturePolicyShapeFinding("agents", isRecord(policy) ? policy.agents : undefined, {
       policyDocName,
       policyPath,
     }) !== undefined

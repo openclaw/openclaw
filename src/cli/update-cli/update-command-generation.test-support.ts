@@ -12,6 +12,7 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -65,6 +66,7 @@ export function registerGenerationRecoveryTests(
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,
@@ -121,6 +123,11 @@ export function registerGenerationRecoveryTests(
       );
       const candidateConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
       candidateConfig.meta.lastTouchedVersion = "9999.1.1";
+      await fs.writeFile(configPath, JSON.stringify(candidateConfig));
+      const activationConfig = {
+        ...(await readUpdateConfigSnapshot(configPath)),
+        raw: configSnapshot.raw,
+      };
       if (contentChanged) {
         candidateConfig.gateway.port = 19306;
       }
@@ -158,9 +165,12 @@ export function registerGenerationRecoveryTests(
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
         healthy: mocks.running,
-        gatewayBootId: "service-boot",
         staleGatewayPids: [],
-        runtime: { status: mocks.running ? "running" : "stopped" },
+        runtime: {
+          status: mocks.running ? "running" : "stopped",
+          pid: mocks.running ? 4242 : undefined,
+        },
+        gatewayBootId: "service-boot",
         gatewayVersion: mocks.running ? VERSION : undefined,
         expectedVersion: expectedVersion ?? undefined,
         portUsage: { port, status: mocks.running ? "busy" : "free", listeners: [], hints: [] },
@@ -180,6 +190,7 @@ export function registerGenerationRecoveryTests(
         result,
         root,
         configSnapshot,
+        activationConfig,
         installKindChanged: false,
         requestedChannel: null,
         storedChannel: "stable",
@@ -232,7 +243,8 @@ export function registerGenerationRecoveryTests(
           after: { version: VERSION },
           verification: { serviceRunning: true, runningVersion: VERSION },
         });
-        expect(completedStatus).toBe("rolled-back");
+        // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+        expect(completedStatus).toBe("running");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
         expect(renderUpdateRunReport(record).headline).toBe(

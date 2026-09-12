@@ -14,11 +14,12 @@ import {
 import { removeCommandByName } from "./command-tree.js";
 import { loadPrivateQaCliModule } from "./private-qa-cli.js";
 import {
+  findCommandGroupEntry,
   registerCommandGroupByName,
   registerCommandGroups,
   type CommandGroupEntry,
 } from "./register-command-groups.js";
-import { getSubCliEntriesCore, type SubCliDescriptor } from "./subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -205,8 +206,19 @@ function resolveSubCliCommandGroups(
   );
 }
 
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntriesCore();
+export function getSubCliCompletionGroups(argv: string[] = process.argv) {
+  const entries = resolveSubCliCommandGroups(argv, { purpose: "completion" });
+  const groups: Array<{ name: string; entry: CommandGroupEntry }> = [];
+  let previous: CommandGroupEntry | undefined;
+  // Keep descriptor names for warnings and separated group visits for final command order.
+  for (const { name } of getSubCliEntriesCore()) {
+    const entry = findCommandGroupEntry(entries, name);
+    if (entry && entry !== previous) {
+      groups.push({ name, entry });
+    }
+    previous = entry;
+  }
+  return groups;
 }
 
 export async function registerSubCliByNameCore(

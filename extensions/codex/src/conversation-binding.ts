@@ -58,7 +58,7 @@ import type { CodexAppServerConversationBindingData } from "./conversation-bindi
 import {
   assertNativeConversationApprovalPolicySupported,
   buildCodexConversationAgentLookup,
-  buildConversationThreadRequest,
+  buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
   resolveConversationAppServerRuntime,
@@ -205,17 +205,24 @@ async function runBoundTurn(params: {
             await withLeasedCodexAppServerClientStartSelectionRetry({
               lease: clientLease,
               options: clientOptions,
-              run: async (requestClient, requestOptions) =>
-                await requestClient.request(
+              run: async (requestClient, requestOptions) => {
+                const threadRequest = await buildConversationThreadRequestForClient(
+                  requestClient,
+                  threadRequestRuntime,
+                  serviceTier,
+                  requestOptions,
+                );
+                return await requestClient.request(
                   "thread/start",
                   {
-                    ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
+                    ...threadRequest,
                     developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                     experimentalRawEvents: true,
                     ...(params.incognito ? { ephemeral: true } : {}),
                   },
                   requestOptions(),
-                ),
+                );
+              },
               onClientChange: (nextClient) => {
                 client = nextClient;
               },
@@ -287,8 +294,14 @@ async function runBoundTurn(params: {
           const response = await withLeasedCodexAppServerClientStartSelectionRetry({
             lease: clientLease,
             options: clientOptions,
-            run: async (requestClient, requestOptions) =>
-              await resumeCodexAppServerThread({
+            run: async (requestClient, requestOptions) => {
+              const threadRequest = await buildConversationThreadRequestForClient(
+                requestClient,
+                threadRequestRuntime,
+                serviceTier,
+                requestOptions,
+              );
+              return await resumeCodexAppServerThread({
                 client: requestClient,
                 onSubscriptionReleased: () => {
                   isolatedSubscriptionClient = requestClient;
@@ -299,11 +312,12 @@ async function runBoundTurn(params: {
                 },
                 request: {
                   threadId,
-                  ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
+                  ...threadRequest,
                 },
                 requestResume: (request) =>
                   requestClient.request("thread/resume", request, requestOptions()),
-              }),
+              });
+            },
             onClientChange: (nextClient) => {
               client = nextClient;
             },

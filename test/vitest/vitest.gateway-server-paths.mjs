@@ -5,6 +5,7 @@ export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
   "src/gateway/probe.auth.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
 ];
 
 // Gateway methods needing native process state or a private module graph keep
@@ -26,7 +27,6 @@ export const gatewayServerIsolatedTestFiles = [
 export const gatewayServerExcludedTestFiles = [
   "src/gateway/gateway.test.ts",
   "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
 ];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);

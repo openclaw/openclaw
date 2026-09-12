@@ -40,6 +40,9 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+}));
+
+vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -83,7 +86,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
@@ -123,7 +126,7 @@ describe("managed plugin installation", () => {
   beforeEach(() => {
     // Explicit empty env fixtures must never acquire a lease in the operator's home.
     vi.spyOn(os, "homedir").mockReturnValue(tempDirs.make("openclaw-managed-install-home-"));
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     for (const mock of Object.values(mocks)) {
       if (typeof mock === "function" && "mockReset" in mock) {
         mock.mockReset();
