@@ -45,6 +45,16 @@ const command = (
 const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] = [
   {
     placeholders: [
+      command("webmcp_list", "List experimental page WebMCP tools"),
+      command("webmcp_execute", "Execute an experimental page WebMCP tool"),
+    ],
+    register: async (args) => {
+      const module = await import("./browser-cli-webmcp.js");
+      module.registerBrowserWebMcpCommands(args.browser, args.parentOpts);
+    },
+  },
+  {
+    placeholders: [
       command("status", "Show browser status"),
       command("start", "Start the browser (no-op if already running)"),
       command("stop", "Stop the browser (best-effort)"),

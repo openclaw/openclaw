@@ -20,6 +20,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getRuntimeConfig } from "../config/config.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import {
+  BROWSER_TOOL_PERSISTENT_MODEL_HINT,
+  BROWSER_TOOL_TRANSIENT_MODEL_HINT,
+  stripBrowserToolModelHints,
+} from "./client-model-hints.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
@@ -140,13 +145,6 @@ function withLoopbackBrowserAuth(
   });
 }
 
-const BROWSER_TOOL_PERSISTENT_MODEL_HINT =
-  "Do NOT retry the browser tool — it will keep failing. " +
-  "Use an alternative approach or inform the user that the browser is currently unavailable.";
-const BROWSER_TOOL_TRANSIENT_MODEL_HINT =
-  "This may be a transient browser error. Retry the browser tool once. " +
-  "If the same error persists, use an alternative approach or inform the user that the browser is currently unavailable.";
-
 // Retry history already lives in the model transcript. Keep this classifier stateless so one
 // session's transient failure cannot suppress browser retries in another session.
 const BROWSER_TRANSIENT_NETWORK_ERROR_RE =
@@ -222,11 +220,7 @@ function normalizeErrorMessage(err: unknown): string {
 }
 
 function appendBrowserToolModelHint(message: string, hint: string): string {
-  const messageWithoutHints = message
-    .replaceAll(BROWSER_TOOL_PERSISTENT_MODEL_HINT, "")
-    .replaceAll(BROWSER_TOOL_TRANSIENT_MODEL_HINT, "")
-    .trim();
-  return `${messageWithoutHints} ${hint}`;
+  return `${stripBrowserToolModelHints(message)} ${hint}`;
 }
 
 type BrowserFetchFailureKind = "timeout" | "aborted" | "transient-network" | "persistent";

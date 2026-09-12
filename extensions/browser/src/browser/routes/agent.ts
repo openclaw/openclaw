@@ -10,10 +10,12 @@ import { registerBrowserAgentDebugRoutes } from "./agent.debug.js";
 import { registerBrowserAgentScreencastRoutes } from "./agent.screencast.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { registerBrowserAgentStorageRoutes } from "./agent.storage.js";
+import { registerBrowserWebMcpRoutes } from "./agent.webmcp.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 
 /** Register all agent-facing browser route groups. */
 export function registerBrowserAgentRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  registerBrowserWebMcpRoutes(app, ctx);
   registerBrowserAgentSnapshotRoutes(app, ctx);
   registerBrowserAgentScreencastRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);

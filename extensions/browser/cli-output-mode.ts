@@ -83,6 +83,8 @@ export function resolveBrowserLazySubcommand(argv: readonly string[]): string | 
 export function isBrowserMachineOutput(params: { argv: readonly string[] }): boolean {
   const path = resolveBrowserCommandPath(params.argv);
   return (
+    path[0] === "webmcp_list" ||
+    path[0] === "webmcp_execute" ||
     path[0] === "evaluate" ||
     path[0] === "console" ||
     (path[0] === "cookies" && path.length === 1) ||

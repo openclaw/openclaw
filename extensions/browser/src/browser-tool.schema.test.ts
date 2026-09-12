@@ -117,6 +117,14 @@ describe("browser tool schema", () => {
   it.each([false, true])("accepts the new action parameters (bound=%s)", (tabBound) => {
     const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
     for (const args of [
+      { action: "webmcp_list", targetId: "t1" },
+      {
+        action: "webmcp_execute",
+        targetId: "t1",
+        contextId: "t1/document-1",
+        toolName: "increment_counter",
+        input: { amount: 2 },
+      },
       { action: "requests", targetId: "t1", filter: "fetch", clear: true, limit: 10 },
       { action: "errors", targetId: "t1", clear: true, limit: 10 },
       { action: "text", targetId: "t1", selector: "article", maxChars: 1000 },
@@ -136,6 +144,7 @@ describe("browser tool schema", () => {
     expect(Value.Check(schema, { action: "requests", clear: "true" })).toBe(false);
     expect(Value.Check(schema, { action: "errors", clear: "true" })).toBe(false);
     expect(Value.Check(schema, { action: "errors", limit: 0 })).toBe(false);
+    expect(Value.Check(schema, { action: "webmcp_execute", input: [] })).toBe(false);
   });
 
   it("hides Playwright-only actions for an existing-session binding", () => {

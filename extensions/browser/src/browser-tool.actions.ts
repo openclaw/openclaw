@@ -171,7 +171,7 @@ function formatTabsToolResult(result: {
 
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
 export function formatBrowserExternalToolResult(params: {
-  kind: "act" | "download" | "tabs";
+  kind: "act" | "download" | "tabs" | "webmcp_list" | "webmcp_execute";
   payload: unknown;
 }): AgentToolResult<unknown> {
   const result = jsonResult(params.payload);

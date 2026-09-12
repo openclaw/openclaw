@@ -47,6 +47,8 @@ export function parseBrowserTabToolBinding(value: unknown): BindingResult {
 }
 
 export const BROWSER_TAB_BOUND_ACTIONS = [
+  "webmcp_list",
+  "webmcp_execute",
   "act",
   "close",
   "console",
