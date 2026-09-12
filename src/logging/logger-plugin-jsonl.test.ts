@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createSubsystemLogger, getChildLogger } from "../plugin-sdk/logging-core.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -12,7 +13,6 @@ import { getDefaultRedactPatterns } from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 import { loggingState } from "./state.js";
-import { createSubsystemLogger } from "./subsystem.js";
 
 const paths = createSuiteLogPathTracker("openclaw-plugin-jsonl-");
 const token = "synthetic-credential-123456";
@@ -38,6 +38,23 @@ const headers = Object.fromEntries(
 );
 const maskedHeaders = Object.fromEntries(Object.keys(headers).map((key) => [key, "***"]));
 let rawConsole: typeof loggingState.rawConsole;
+function registerPlugin(logger: ReturnType<typeof createSubsystemLogger>, id: string) {
+  const host = createPluginRegistry({
+    logger,
+    runtime: createPluginRuntime(),
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id,
+    source: import.meta.url,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+  });
+  host.registry.plugins.push(record);
+  return { api: host.createApi(record, { config: {} }), registry: host.registry };
+}
+
 beforeAll(async () => await paths.setup());
 beforeEach(() => {
   rawConsole = loggingState.rawConsole;
@@ -53,7 +70,7 @@ afterEach(async () => {
 });
 afterAll(async () => await paths.cleanup());
 
-it.each([
+const patternCases = [
   { name: "default", custom: false, patterns: undefined },
   {
     name: "custom-only",
@@ -66,7 +83,9 @@ it.each([
     patterns: [...getDefaultRedactPatterns(), "CUSTOM_ONLY_[A-Z]+"],
   },
   { name: "copied-defaults", custom: false, patterns: getDefaultRedactPatterns() },
-])(
+];
+
+it.each(patternCases)(
   "Gateway plugin service logger preserves JSONL, credential headers, and pattern reload ($name)",
   async ({ custom, patterns }) => {
     vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
@@ -80,20 +99,7 @@ it.each([
     const output = vi.fn();
     loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
     const logger = createSubsystemLogger("plugins");
-    const host = createPluginRegistry({
-      logger,
-      runtime: createPluginRuntime(),
-      activateGlobalSideEffects: false,
-    });
-    const record = createPluginRecord({
-      id: "jsonl-proof",
-      source: import.meta.url,
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    host.registry.plugins.push(record);
-    const api = host.createApi(record, { config: {} });
+    const { api, registry } = registerPlugin(logger, "jsonl-proof");
     const keySecret = "registered-property-name-123456";
     registerSecretValueForRedaction(keySecret);
     let accessorReads = 0;
@@ -134,7 +140,7 @@ it.each([
         api.logger.info("CUSTOM_ONLY_VALUE RELOADED_VALUE");
       },
     });
-    const services = await startPluginServices({ registry: host.registry, config: {} });
+    const services = await startPluginServices({ registry, config: {} });
     await services.stop();
     await flushLogger();
     const raw = fs.readFileSync(file, "utf8");
@@ -191,20 +197,7 @@ it("Gateway plugin service logger overflow marker preserves quoted hostname JSON
   applyLoggingConfig({ level: "info", file, consoleLevel: "silent" });
   testApi.setHostnameResolverForTests(() => message);
   testApi.setFileLogQueueMaxRecordsForTests(1);
-  const host = createPluginRegistry({
-    logger: createSubsystemLogger("plugins"),
-    runtime: createPluginRuntime(),
-    activateGlobalSideEffects: false,
-  });
-  const record = createPluginRecord({
-    id: "overflow-proof",
-    source: import.meta.url,
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-  });
-  host.registry.plugins.push(record);
-  const api = host.createApi(record, { config: {} });
+  const { api, registry } = registerPlugin(createSubsystemLogger("plugins"), "overflow-proof");
   api.registerService({
     id: "overflow-proof",
     start() {
@@ -212,7 +205,7 @@ it("Gateway plugin service logger overflow marker preserves quoted hostname JSON
       api.logger.info("second");
     },
   });
-  const services = await startPluginServices({ registry: host.registry, config: {} });
+  const services = await startPluginServices({ registry, config: {} });
   await services.stop();
   await flushLogger();
   const records = fs
@@ -228,3 +221,108 @@ it("Gateway plugin service logger overflow marker preserves quoted hostname JSON
   });
   expect(records[1].message).toBe("second");
 });
+
+it.each(patternCases)(
+  "Gateway plugin service masks complete long strings, secret fields, and derived messages ($name)",
+  async ({ patterns }) => {
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    const file = paths.nextPath();
+    applyLoggingConfig({
+      level: "info",
+      file,
+      consoleStyle: "json",
+      consoleLevel: "info",
+      ...(patterns ? { redactPatterns: patterns } : {}),
+    });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const logger = createSubsystemLogger("complete-record");
+    const rawLogger = getChildLogger({ subsystem: "complete-record" });
+    const { api, registry } = registerPlugin(logger, "complete-record");
+    const prefix = `${"x".repeat(16_380)} `;
+    const suffix = ` ${"y".repeat(20_000)}`;
+    const long = `${prefix}token=${token}${suffix}`;
+    const maskedLong = `${prefix}token=synthe…3456${suffix}`;
+    const partial = "sk-abcdefghijklmnopqrstuvwxyz0123456789:OPAQUE_REMAINDER";
+    let conversions = 0;
+    const converted = new (class {
+      toJSON() {
+        conversions += 1;
+        return { token: "OPAQUE_CONVERT_TOKEN", text: message };
+      }
+    })();
+    api.registerService({
+      id: "complete-record",
+      start() {
+        logger.info(long, { scenario: "long", payload: long });
+        logger.info("partial fields", {
+          scenario: "partial",
+          password: partial,
+          token: partial,
+          Authorization: partial,
+          clientSecret: "CUSTOM_ONLY_VALUE OPAQUE_REMAINDER",
+          TOKEN: "${TOKEN:-literal-default-secret}",
+          session: "$WORKSPACE_DIR/session.jsonl",
+        });
+        rawLogger.info(undefined, "derived class", converted);
+        rawLogger.info(
+          new (class {
+            toJSON() {
+              return { scenario: "first-class", note: "abcd-efgh-ijkl-mnop" };
+            }
+          })(),
+        );
+        logger.info("converted console", {
+          scenario: "class-console",
+          converted: new (class {
+            toJSON() {
+              return { text: message, token: partial };
+            }
+          })(),
+        });
+      },
+    });
+    const services = await startPluginServices({ registry, config: {} });
+    await services.stop();
+    await flushLogger();
+    const text = fs.readFileSync(file, "utf8");
+    const records = text
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const consoleRecords = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(records).toHaveLength(5);
+    expect(consoleRecords).toHaveLength(3);
+    expect(records[0][1].payload).toBe(maskedLong);
+    expect(records[0][2]).toBe(maskedLong);
+    expect(consoleRecords[0]).toMatchObject({ message: maskedLong, payload: maskedLong });
+    const maskedFields = {
+      password: "sk-abc…NDER",
+      token: "sk-abc…NDER",
+      Authorization: "sk-abc…NDER",
+      clientSecret: "CUSTOM…NDER",
+      TOKEN: "${TOKEN:-***}",
+      session: "$WORKSPACE_DIR/session.jsonl",
+    };
+    expect(records[1][1]).toMatchObject(maskedFields);
+    expect(consoleRecords[1]).toMatchObject(maskedFields);
+    expect(conversions).toBe(1);
+    expect(records[2].message).toBe(
+      `derived class ${JSON.stringify({ token: "OPAQUE…OKEN", text: '--token "synthe…3456"' })}`,
+    );
+    expect(records[3].message).toBe('{"scenario":"first-class","note":"abcd-e…mnop"}');
+    expect(consoleRecords[2].converted).toEqual({
+      text: '--token "synthe…3456"',
+      token: "sk-abc…NDER",
+    });
+    const tail = await readConfiguredLogTail({ maxBytes: 500_000 });
+    expect(tail.lines.map((line) => JSON.parse(line))).toHaveLength(5);
+    for (const serialized of [text, JSON.stringify(consoleRecords), tail.lines.join("\n")]) {
+      expect(serialized).not.toContain(token);
+      expect(serialized).not.toContain("OPAQUE_REMAINDER");
+      expect(serialized).not.toContain("OPAQUE_CONVERT_TOKEN");
+      expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
+    }
+  },
+);

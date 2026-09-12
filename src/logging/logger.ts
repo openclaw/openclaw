@@ -206,11 +206,10 @@ function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined
   return normalizeTraceContext((value as { trace?: unknown }).trace);
 }
 
-function getSortedNumericLogArgs(logObj: TsLogRecord): unknown[] {
+function getSortedNumericLogEntries(logObj: TsLogRecord): Array<[string, unknown]> {
   return Object.entries(logObj)
     .filter(([key]) => /^\d+$/.test(key))
-    .toSorted((a, b) => Number(a[0]) - Number(b[0]))
-    .map(([, value]) => value);
+    .toSorted((a, b) => Number(a[0]) - Number(b[0]));
 }
 
 function clampFileLogText(value: string, maxChars: number): string {
@@ -249,37 +248,32 @@ function readFirstContextString(
   return undefined;
 }
 
-function stringifyFileLogMessagePart(value: unknown): string | undefined {
+function stringifyFileLogMessagePart(value: unknown, json: boolean): string | undefined {
+  if (json) {
+    return JSON.stringify(value);
+  }
   if (typeof value === "string") {
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
-  if (value instanceof Error) {
-    return value.message || value.name;
-  }
   if (isPlainLogRecordObject(value) && typeof value.message === "string") {
     return value.message;
   }
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
-function buildFileLogMessage(numericArgs: readonly unknown[]): string | undefined {
-  const parts = numericArgs
-    .map(stringifyFileLogMessagePart)
+type FileLogMessagePart = { key: string; json: boolean; messageText: boolean };
+
+function buildFileLogMessage(
+  record: Record<string, unknown>,
+  parts: readonly FileLogMessagePart[],
+): string | undefined {
+  const text = parts
+    .map(({ key, json }) => stringifyFileLogMessagePart(record[key], json))
     .filter((part): part is string => Boolean(part && part.trim()));
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return clampFileLogText(parts.join(" "), MAX_FILE_LOG_MESSAGE_CHARS);
+  return text.length > 0 ? clampFileLogText(text.join(" "), MAX_FILE_LOG_MESSAGE_CHARS) : undefined;
 }
 
 function resolveLogHostname(): string {
@@ -356,25 +350,39 @@ function resolveLogTraceContext(
     : { trustedTraceContext: false };
 }
 
-function buildFileLogFields(logObj: TsLogRecord): Record<string, string> {
-  const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
-  // Message serialization can invoke caller code; capture the normalized trace first.
+function prepareFileLogRecord(logObj: TsLogRecord): {
+  fields: Record<string, string>;
+  messageParts: FileLogMessagePart[];
+} {
+  const entries = getSortedNumericLogEntries(logObj);
+  const { bindings, args } = extractLogBindingPrefix(entries.map(([, value]) => value));
+  // Capture context and display roles before native conversion can invoke caller code.
   const { trace } = resolveLogTraceContext(bindings, args);
   const structuredArg = isPlainLogRecordObject(args[0]) ? args[0] : undefined;
   const sources = [structuredArg, bindings, logObj];
-  const messageArgs =
-    structuredArg && typeof structuredArg.message !== "string" ? args.slice(1) : args;
-  const message = buildFileLogMessage(messageArgs);
+  const metadataCount = structuredArg && typeof structuredArg.message !== "string" ? 1 : 0;
+  const messageParts = entries
+    .slice(entries.length - args.length + metadataCount)
+    .map(([key, value]) => {
+      const json =
+        value != null &&
+        !["string", "number", "boolean", "bigint"].includes(typeof value) &&
+        !(value instanceof Error) &&
+        !(isPlainLogRecordObject(value) && typeof value.message === "string");
+      return { key, json, messageText: json || typeof value === "string" };
+    });
   const agentId = readFirstContextString(sources, ["agent_id", "agentId"]);
   const sessionId = readFirstContextString(sources, ["session_id", "sessionId", "sessionKey"]);
   const channel = readFirstContextString(sources, ["channel", "messageProvider"]);
   return {
-    hostname: resolveLogHostname(),
-    ...(message ? { message } : {}),
-    ...(agentId ? { agent_id: agentId } : {}),
-    ...(sessionId ? { session_id: sessionId } : {}),
-    ...(channel ? { channel } : {}),
-    ...trace,
+    fields: {
+      hostname: resolveLogHostname(),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(channel ? { channel } : {}),
+      ...trace,
+    },
+    messageParts,
   };
 }
 
@@ -394,7 +402,9 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
         };
       }
     | undefined;
-  const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
+  const { bindings, args: numericArgs } = extractLogBindingPrefix(
+    getSortedNumericLogEntries(logObj).map(([, value]) => value),
+  );
 
   const { trace, trustedTraceContext } = resolveLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
@@ -608,17 +618,24 @@ function buildLogger(): TsLogger<LogObj> {
         }
       }
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const fields = buildFileLogFields(logObj as TsLogRecord);
-      const record = {
-        ...logObj,
-        _meta: withResolvedLogMetaHostname(
-          logObj["_meta"],
-          expectDefined(fields.hostname, "structured log hostname"),
-        ),
-        time,
-        ...fields,
-      };
-      const line = JSON.stringify(redactLogRecordForTransport(record));
+      const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
+      const record = redactLogRecordForTransport(
+        {
+          ...logObj,
+          _meta: withResolvedLogMetaHostname(
+            logObj["_meta"],
+            expectDefined(fields.hostname, "structured log hostname"),
+          ),
+          time,
+          ...fields,
+        },
+        new Set(messageParts.filter((part) => part.messageText).map((part) => part.key)),
+      );
+      const message = buildFileLogMessage(record, messageParts);
+      if (message) {
+        record.message = message;
+      }
+      const line = JSON.stringify(record);
       fileLogTransport.enqueue({
         file: activeFile,
         hostname: expectDefined(fields.hostname, "structured log hostname"),
