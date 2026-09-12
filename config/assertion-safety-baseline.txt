@@ -609,7 +609,6 @@ extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
 extensions/logbook/src/node-host.ts	1
 extensions/logbook/src/service.ts	6
-extensions/logbook/src/store.ts	4
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-auth.ts	1
 extensions/matrix/src/approval-handler.runtime.ts	8
@@ -1491,7 +1490,7 @@ packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	9
 packages/gateway-protocol/src/gateway-error-details.ts	1
-packages/gateway-protocol/src/protocol-validator.ts	3
+packages/gateway-protocol/src/protocol-validator.ts	2
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
@@ -1878,7 +1877,6 @@ src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/provisioning-error.ts	1
 src/agents/sandbox/registry.ts	3
-src/agents/sandbox/ssh-backend.ts	1
 src/agents/sandbox/test-args.ts	1
 src/agents/sandbox/tool-policy.ts	2
 src/agents/session-activity-notes.ts	1
@@ -3131,7 +3129,7 @@ src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
 src/media-understanding/runner.entries.ts	7
-src/media-understanding/runner.ts	2
+src/media-understanding/runner.ts	1
 src/media-understanding/runtime.ts	2
 src/media-understanding/shared.ts	2
 src/media/audio-transcode.ts	1
@@ -3416,7 +3414,6 @@ src/secrets/plan.ts	4
 src/secrets/private-plan-file.ts	1
 src/secrets/provider-env-vars.ts	1
 src/secrets/resolve.ts	1
-src/secrets/runtime-auth-collectors.ts	2
 src/secrets/runtime-command-secrets.ts	4
 src/secrets/runtime-config-collectors-core.ts	7
 src/secrets/runtime-config-collectors-memory.ts	1

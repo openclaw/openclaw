@@ -17,11 +17,11 @@ import {
 import {
   backupVerifyCommandMock,
   createMockTarStream,
-  createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
   tarCreateMock,
 } from "./backup.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { backupCreateCommand } = await import("./backup.js");
 
@@ -97,7 +97,7 @@ describe("backup commands", () => {
 
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
     try {
       return await fn(runtime);
     } finally {
@@ -224,7 +224,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
       await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# external\n", "utf8");
 
-      const runtime = createBackupTestRuntime();
+      const runtime = createTestRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
       tarCreateMock.mockImplementationOnce(
@@ -326,7 +326,7 @@ describe("backup commands", () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-json-"));
     try {
-      const runtime = createBackupTestRuntime();
+      const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
         (
@@ -376,7 +376,7 @@ describe("backup commands", () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
     await mockStateOnlyBackupPlan(stateDir);
 
     await expect(
@@ -391,7 +391,7 @@ describe("backup commands", () => {
     const outputPath = path.join(tempHome.home, "backups", "daily", "backup.tar.gz");
     await mockStateOnlyBackupPlan(stateDir);
 
-    const result = await backupCreateCommand(createBackupTestRuntime(), { output: outputPath });
+    const result = await backupCreateCommand(createTestRuntime(), { output: outputPath });
 
     expect(result.archivePath).toBe(outputPath);
     expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
@@ -433,7 +433,7 @@ describe("backup commands", () => {
       }),
     );
 
-    const error = await backupCreateCommand(createBackupTestRuntime(), {
+    const error = await backupCreateCommand(createTestRuntime(), {
       output: outputPath,
     }).catch((caught: unknown) => caught);
 
@@ -453,7 +453,7 @@ describe("backup commands", () => {
     await fs.writeFile(outputParent, "file\n", "utf8");
     await mockStateOnlyBackupPlan(stateDir);
 
-    const error = await backupCreateCommand(createBackupTestRuntime(), {
+    const error = await backupCreateCommand(createTestRuntime(), {
       output: outputPath,
     }).catch((caught: unknown) => caught);
 
@@ -477,7 +477,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
 
-      const runtime = createBackupTestRuntime();
+      const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
 
       await expect(
@@ -500,7 +500,7 @@ describe("backup commands", () => {
     const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
     await writeWorkspaceBackupConfig(stateDir, workspaceDir);
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
 
     const result = await backupCreateCommand(runtime, { nowMs });
 
@@ -516,7 +516,7 @@ describe("backup commands", () => {
         await fs.symlink(workspaceDir, workspaceLink);
         vi.mocked(process["cwd"]).mockReturnValue(workspaceLink);
         const symlinkNowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
-        const symlinkResult = await backupCreateCommand(createBackupTestRuntime(), {
+        const symlinkResult = await backupCreateCommand(createTestRuntime(), {
           nowMs: symlinkNowMs,
         });
         expect(symlinkResult.archivePath).toBe(
@@ -536,7 +536,7 @@ describe("backup commands", () => {
     await fs.writeFile(existingArchive, "already here", "utf8");
     await mockStateOnlyBackupPlan(stateDir);
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
 
     const result = await backupCreateCommand(runtime, {
       output: existingArchive,
@@ -629,7 +629,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
     await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), "{}", "utf8");
 
-    const runtime = createBackupTestRuntime();
+    const runtime = createTestRuntime();
 
     const result = await backupCreateCommand(runtime, {
       dryRun: true,

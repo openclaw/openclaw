@@ -61,6 +61,7 @@ type CommandPaletteProps = {
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
   sessionSearchIncomplete: boolean;
+  archivedTranscriptsExcluded: number;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIdChange: (id: string) => void;
@@ -238,6 +239,15 @@ function renderCommandPalette(props: CommandPaletteProps) {
               : nothing
           }
           ${
+            props.archivedTranscriptsExcluded > 0
+              ? html`<div class="cmd-palette__empty" role="status">
+                  ${t("sessionsView.transcriptSearchArchivedExcluded", {
+                    count: String(props.archivedTranscriptsExcluded),
+                  })}
+                </div>`
+              : nothing
+          }
+          ${
             grouped.length === 0 && !props.sessionSearchFailed
               ? html`<div class="cmd-palette__empty">
                   <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
@@ -307,6 +317,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private modelSearchError: string | null = null;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
+  @state() private archivedTranscriptsExcluded = 0;
   @state() private sessionSearchIncomplete = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
@@ -405,6 +416,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.sessionItems = [];
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
+    this.archivedTranscriptsExcluded = 0;
     this.sessionSearchIncomplete = false;
   }
 
@@ -579,6 +591,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       }
       const transcriptResult = transcriptOutcome?.result ?? null;
       this.sessionSearchPartial = transcriptOutcome?.error === true;
+      this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
       this.sessionSearchIncomplete =
         transcriptOutcome?.error !== true &&
         (transcriptResult?.indexing === true || transcriptResult?.truncated === true);
@@ -631,6 +644,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIncomplete: this.sessionSearchIncomplete,
+      archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
       desktopAvailable: this.desktopAvailable,
       custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,

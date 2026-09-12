@@ -9,6 +9,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type TranscriptMessageAnchorRewriteResult<TMessage> = {
@@ -28,6 +29,7 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
       let result: TranscriptMessageAnchorRewriteResult<TMessage> | null = null;
       runOpenClawAgentWriteTransaction(
         (database) => {
+          assertSessionTranscriptHot(database.db, resolved.sessionId);
           const row = executeSqliteQueryTakeFirstSync(
             database.db,
             getSessionKysely(database.db)

@@ -302,7 +302,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Lines that need the operator's attention even when routine tool rows are hidden. */
+/** Approvals and failures that can start a draft when their rows are visible. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -1241,26 +1241,6 @@ export function mergeChannelProgressDraftLineForStreaming<
     params.maxLines,
     params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
   );
-}
-
-/**
- * Removes the stored line an event addresses, matched the way the merge path
- * matches it. A stored line can carry the id of an earlier item family for the
- * same tool call (`tool:<call>` while the event arrives as `command:<call>`),
- * so an id-only comparison would miss it.
- */
-export function removeChannelProgressDraftLineForStreaming<
-  TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine): TLine[] {
-  const lineKeys = resolveProgressDraftLineMergeKeys(line);
-  if (lineKeys.length === 0) {
-    return lines;
-  }
-  const next = lines.filter(
-    (entry) => !resolveProgressDraftLineMergeKeys(entry).some((key) => lineKeys.includes(key)),
-  );
-  // Reference equality is part of the caller contract; redraw work only runs after a real removal.
-  return next.length === lines.length ? lines : next;
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(

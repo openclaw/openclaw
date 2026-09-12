@@ -50,7 +50,7 @@ for the exact allowlist configuration and lifecycle.
 
 ## Codex or OpenClaw on a cloud profile
 
-The same configured Crabbox profile can host either harness. Select its **Cloud · profile** row after choosing an OpenClaw or Codex model; the selected runtime determines whether provisioning prepares a worker child or the managed Codex exec-server. Codex cloud-node execution requires the same explicit Gateway command allowlist and placement-scoped approval as paired-device execution. It never falls back to Gateway-local or SSH execution if the node command is missing, denied, or disconnected.
+The same configured Crabbox profile can host either harness. Select its profile row under **Cloud** after choosing an OpenClaw or Codex model; the selected runtime determines whether provisioning prepares a worker child or the managed Codex exec-server. Codex cloud-node execution requires the same explicit Gateway command allowlist and placement-scoped approval as paired-device execution. It never falls back to Gateway-local or SSH execution if the node command is missing, denied, or disconnected.
 
 For cloud-profile placement, the equivalent RPC flow is:
 
@@ -81,9 +81,9 @@ Repository setup uses the existing executable `.openclaw/worktree-setup.sh` cont
 
 ## Choose an operating system and machine class per session
 
-A worker profile's `settings.target` and `settings.class` remain its defaults; an omitted Crabbox target means Linux. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals an **Operating system** section when the profile advertises at least two systems, followed by **Machine**. The machine list shows classes for the selected operating system, plus any classes that apply to every system, with reported vCPU and RAM when available and the default marked. Changing the operating system clears a selected class if it is unavailable for that system.
+A worker profile's `settings.target` and `settings.class` remain its defaults; an omitted Crabbox target means Linux. In the Control UI New Session picker, hover or focus a configurable profile under **Cloud** to open its **Operating system** and **Machine** options. Only available operating systems appear. Before the profile is selected, dashed outlines identify its defaults. Choosing any option selects that profile and activates the default for the other setting. The machine list shows classes for the selected operating system, plus any classes that apply to every system, with reported vCPU and RAM when available and the default marked. Changing the operating system clears a selected class if it is unavailable for that system.
 
-The place chip includes the operating system when it differs from the profile default, using `profile · OS · Machine`. To override the operating system or size for one new placement over RPC, pass `os` and/or `machineClass` with `profileId`:
+The selected profile row shows its operating system and machine in muted text beside the profile name; the closed picker shows only the profile name. To override the operating system or size for one new placement over RPC, pass `os` and/or `machineClass` with `profileId`:
 
 ```bash
 openclaw gateway call sessions.dispatch \
@@ -91,7 +91,7 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","os":"linux","machineClass":"tiny"}'
 ```
 
-The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, and macOS when the selected backend reports the matching target. Before reading the catalog or starting a worker, the plugin resolves a supported Crabbox binary, automatically installing its managed copy when the selected binary is outdated or missing. Every target uses the same supported version; an old local CLI no longer hides non-Linux targets. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the managed installation policy. Desktop and warm images remain Linux only. The **Operating system** section appears when a provider advertises more than one target; `environments.list` omits `operatingSystems` for a single target, and each Crabbox machine option identifies its `os`.
+The bundled Crabbox provider advertises Linux, Windows (WSL2), native Windows, and macOS when the selected backend reports the matching target. Before reading the catalog or starting a worker, the plugin resolves a supported Crabbox binary, automatically installing its managed copy when the selected binary is outdated or missing. Every target uses the same supported version; an old local CLI no longer hides non-Linux targets. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the managed installation policy. Desktop and warm images remain Linux only. The **Operating system** section appears when the catalog includes available operating-system choices; Crabbox omits `operatingSystems` for a single target, and each Crabbox machine option identifies its `os`.
 
 Select `windows/normal` for native Windows and `windows/wsl2` for the Linux environment inside Windows. Native Windows runs `settings.setup` as PowerShell and requires supported Node.js, npm, and Crabbox's detached-process launcher on the guest. A Bash setup recipe cannot be reused unchanged for that target; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 

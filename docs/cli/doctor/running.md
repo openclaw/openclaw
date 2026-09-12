@@ -51,7 +51,9 @@ Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
-not activate a service confirmed offline before maintenance. A loaded, enabled
+not activate a service confirmed offline before maintenance. On Linux, it also
+restores a previously running service if systemd unloads the stopped unit during
+repair; a changed service definition or manager still blocks restart. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
 resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.

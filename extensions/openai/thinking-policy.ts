@@ -73,9 +73,8 @@ function normalizeCodexReasoningEffort(value: string): OpenAIThinkingLevelId | u
 }
 
 function buildCodexLevels(efforts: readonly string[]): ProviderThinkingProfile["levels"] {
-  // Omitting an effort remains a valid Codex choice even when model/list has
-  // no reasoning presets. Every other picker stop must come from that list.
-  const supported = new Set<OpenAIThinkingLevelId>(["off"]);
+  // Omitting effort uses the model default; only an advertised none/off disables reasoning.
+  const supported = new Set<OpenAIThinkingLevelId>();
   for (const effort of efforts) {
     const level = normalizeCodexReasoningEffort(effort);
     if (level) {

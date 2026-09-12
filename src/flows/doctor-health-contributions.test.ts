@@ -42,7 +42,8 @@ const mocks = vi.hoisted(() => ({
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     detected: [],
     changes: [],
-    configOwnerMigrationApplied: false,
+    migratedProfileIds: new Set<string>(),
+    blockedProfileIds: new Set<string>(),
     warnings: [],
   }),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map<string, string>()),
@@ -725,7 +726,8 @@ describe("doctor health contributions", () => {
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockClear().mockResolvedValue({
       detected: [],
       changes: [],
-      configOwnerMigrationApplied: false,
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReset().mockReturnValue(new Map());
@@ -2635,7 +2637,8 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
-      prompter: ctx.prompter,
+      env: process.env,
+      prompter: { confirmAutoFix: ctx.prompter.confirmAutoFix },
       openAICodexAuthProfileIdMap:
         mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
@@ -4645,6 +4648,7 @@ describe("doctor health contributions", () => {
       expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledWith({
         cfg,
         retiredModelRefConfig,
+        migrateCodexModelRefs: true,
         repairRetiredModelRefs: repair,
         blockedModelIdentities: new Set(["codex\u0000gpt-5.6-sol"]),
       });

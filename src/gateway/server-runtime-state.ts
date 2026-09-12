@@ -106,6 +106,7 @@ export async function createGatewayHttpTransport(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
+  updateCanary?: boolean;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
@@ -413,6 +414,9 @@ export async function createGatewayHttpTransport(params: {
   let startListeningPromise: Promise<void> | null = null;
   let startListeningComplete = false;
   const startSandboxHost = async (): Promise<number> => {
+    if (params.updateCanary) {
+      throw new Error("Sandbox host is disabled during update validation");
+    }
     if (sandboxHostStartPromise) {
       return await sandboxHostStartPromise;
     }
@@ -557,7 +561,8 @@ export async function createGatewayHttpTransport(params: {
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
       }
-      if (params.cfg.mcp?.apps?.enabled === true) {
+      // Published updaters retain the live sandbox port but already pass --update-canary.
+      if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {
         await startSandboxHost();
       }
       startListeningComplete = true;

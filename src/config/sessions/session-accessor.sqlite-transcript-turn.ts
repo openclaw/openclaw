@@ -100,6 +100,8 @@ export async function appendExpectedSessionTranscriptTurn(
     ...scope,
     sessionId: options.expectedSessionId,
   });
+  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+  await restoreSessionColdTranscript({ ...scope, sessionId: options.expectedSessionId });
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {

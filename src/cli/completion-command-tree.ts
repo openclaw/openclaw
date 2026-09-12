@@ -14,7 +14,7 @@ export type ShellCompletionContext = {
   valueChoices: ShellCompletionValueChoice[];
 };
 
-type ShellCompletionCommandTree = {
+export type ShellCompletionCommandTree = {
   root: ShellCompletionContext;
   descendants: ShellCompletionContext[];
 };

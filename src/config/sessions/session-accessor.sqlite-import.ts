@@ -33,6 +33,7 @@ import {
   appendTranscriptEventsInTransaction,
   createTranscriptEventInserter,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -97,6 +98,7 @@ function importSqliteSessionRowsInTransaction(
       transcriptEvents,
     };
   }
+  assertSessionTranscriptHot(database.db, params.entry.sessionId);
   const preservedHarnessId =
     params.entry.agentHarnessId === undefined &&
     currentEntry?.sessionId === params.entry.sessionId &&

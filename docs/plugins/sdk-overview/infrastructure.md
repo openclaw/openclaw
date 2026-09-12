@@ -70,6 +70,12 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
+For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Kysely shape once and binds fresh parameters on each call. It uses the normal
+synchronous executor and the connection's bounded statement cache when enabled.
+Keep the prepared function with its database owner and discard it when closing
+the connection; transaction callbacks must remain synchronous.
+
 ### SQLite worker stores
 
 Use `openSqliteWorkerStore<Operations>` from
@@ -95,6 +101,24 @@ results across the boundary, never SQL strings, callbacks, or Kysely builders.
 Declare private build entries with
 [`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
 and derive their locations from the loader's `api.runtimeSource` fact.
+
+Pass `existingOnly: true` when acquisition must preserve a missing database.
+The call returns `undefined` without starting a worker or invoking a factory
+when the file is absent and no active actor retains that path. A cold existing
+open requires the module's explicit
+`openExistingSqliteWorkerBackend(input, { databasePath })` export. The host
+never substitutes the ordinary creation factory. The existing factory must
+use SQLite's native read-only or existing-file opening mode and validate the
+current schema without creating or migrating it. A filesystem existence check
+followed by ordinary create-if-missing opening does not satisfy this contract.
+
+The host checks physical identity before dispatching the existing factory and
+again before returning the store. Disappearance or replacement after admission
+rejects acquisition. Existing-only and ordinary clients share the same physical
+actor when their module and initialization input match; changing open intent
+does not rerun a factory or create another connection. Domain commands still
+own write permission and any later schema initialization. Existing-only
+acquisition provides no read-only capability for subsequent commands.
 
 Abort signals remove operations that are still queued. Once dispatched, an
 operation retains its result or failure; cancellation does not prove rollback.

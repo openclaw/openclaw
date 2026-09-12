@@ -62,6 +62,8 @@ const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 const CUSTOM_MODEL_SETUP_GUIDANCE =
   "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";
+export const MODEL_PICKER_CHANGED_MESSAGE =
+  "Available models changed. Open /models and choose again.";
 
 type ModelsCommandSessionEntry = Partial<
   Pick<
@@ -85,6 +87,7 @@ export type ModelsProviderData = {
     modelNames: ReadonlyMap<string, string>;
     byProvider: ReadonlyMap<string, ModelsProviderMenu>;
   };
+  refreshWarning?: string;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
   isCurrent?: () => boolean;
@@ -136,12 +139,7 @@ function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   return normalized;
 }
 
-function buildRuntimeChoice(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  runtime: string;
-  cli?: boolean;
-}): ModelsRuntimeChoice {
+function buildRuntimeChoice(params: { cfg: OpenClawConfig; runtime: string }): ModelsRuntimeChoice {
   const id = normalizeRuntimeChoiceId(params.runtime);
   const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
   return {
@@ -149,10 +147,8 @@ function buildRuntimeChoice(params: {
     label,
     description:
       id === "openclaw"
-        ? "Use the built-in OpenClaw runtime."
-        : params.cli
-          ? `Run ${params.provider} models through ${label}.`
-          : `Use the ${label} runtime selected by the effective harness policy.`,
+        ? "Use OpenClaw's built-in agent and tools."
+        : `Use ${label} to run this model.`,
   };
 }
 
@@ -477,9 +473,7 @@ async function projectPreparedModelsProviderData(
       if (!runtimes) {
         continue;
       }
-      const choices = runtimes.map((runtime) =>
-        buildRuntimeChoice({ cfg, provider, runtime, cli: cliRuntimeProviders.has(runtime) }),
-      );
+      const choices = runtimes.map((runtime) => buildRuntimeChoice({ cfg, runtime }));
       runtimeChoicesByModel.set(`${provider}/${model}`, choices);
       for (const choice of choices) {
         providerChoices.set(choice.id, choice);
@@ -499,6 +493,9 @@ async function projectPreparedModelsProviderData(
     resolvedDefault,
     modelNames,
     modelMenu: buildModelsMenu({ byProvider, modelNames, modelAvailability, loginProviders }),
+    refreshWarning: snapshot.refreshFailed
+      ? "Some models could not be refreshed. You can still choose from the available models."
+      : undefined,
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
@@ -721,7 +718,7 @@ function buildProviderInfos(params: {
   }));
 }
 
-export async function resolveModelsCommandReply(params: {
+type ModelsCommandReplyParams = {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
   surface?: string;
@@ -730,7 +727,11 @@ export async function resolveModelsCommandReply(params: {
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
-}): Promise<ReplyPayload | null> {
+};
+
+export async function resolveModelsCommandReply(
+  params: ModelsCommandReplyParams,
+): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
     return null;
@@ -758,10 +759,19 @@ export async function resolveModelsCommandReply(params: {
       };
     }
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-      return { text: "Model catalog changed. Run /models again." };
+      return { text: MODEL_PICKER_CHANGED_MESSAGE };
     }
     throw error;
   }
+  const reply = buildModelsCommandReply(params, parsed, data);
+  return { ...reply, text: [data.refreshWarning, reply.text].filter(Boolean).join("\n\n") };
+}
+
+function buildModelsCommandReply(
+  params: ModelsCommandReplyParams,
+  parsed: ParsedModelsCommand,
+  data: PreparedModelsProviderData,
+): ReplyPayload & { text: string } {
   const { byProvider, providers } = data;
   const availability =
     parsed.action === "list" && parsed.provider

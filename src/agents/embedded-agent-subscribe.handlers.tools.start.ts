@@ -158,6 +158,7 @@ function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): s
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  parentToolCallId?: string;
   hasRepliedRef?: { value: boolean };
 };
 
@@ -314,6 +315,7 @@ export function handleToolExecutionStart(
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
     lifecycleProvenance?: "nested";
+    parentToolCallId?: string;
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
@@ -391,6 +393,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
       args,
+      parentToolCallId: evt.parentToolCallId,
       ...(ctx.params.hasRepliedRef
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
         : {}),
@@ -483,6 +486,7 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
+        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -511,6 +515,7 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
+        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },

@@ -122,6 +122,7 @@ jobs:
           sparse-checkout: |
             package.json
             src/config/zod-schema.agent-defaults.ts
+            src/config/zod-schema.agent-defaults-base.ts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -174,6 +175,14 @@ jobs:
 
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
             schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+            # Follow the shipped composition only when the wrapper has no inline contract.
+            if [[ -f "$schema_path" ]] &&
+              ! grep -Fqx '    mediaModels: z' "$schema_path" &&
+              ! grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' "$schema_path" &&
+              grep -Fqx 'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";' "$schema_path" &&
+              grep -Fqx 'export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({' "$schema_path"; then
+              schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults-base.ts"
+            fi
             if [[ -f "$schema_path" ]]; then
               schema_content="$(cat "$schema_path")"
             elif [[ -z "$kova_ref" ]]; then

@@ -1,16 +1,16 @@
-import { teamReportsExtensionTestRoots } from "./vitest.extension-team-reports-paths.mjs";
+import { databaseWorkerExtensionTestRoots } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { pluginControlUiPathGlob } from "./vitest.ui-paths.mjs";
 
-export function createExtensionTeamReportsVitestConfig(
+export function createExtensionDatabaseWorkersVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(
-    teamReportsExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
+    databaseWorkerExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
     {
       dir: "extensions",
       env,
-      name: "extension-team-reports",
+      name: "extension-database-workers",
       // The database broker runs in the application main thread and owns its SQLite workers.
       pool: "forks",
       isolate: true,
@@ -21,4 +21,4 @@ export function createExtensionTeamReportsVitestConfig(
   );
 }
 
-export default createExtensionTeamReportsVitestConfig();
+export default createExtensionDatabaseWorkersVitestConfig();

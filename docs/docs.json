@@ -2579,6 +2579,7 @@
                           "gateway/sandboxing/podman-backend",
                           "gateway/sandboxing/ssh-backend",
                           "gateway/sandboxing/openshell-backend",
+                          "gateway/sandboxing/crabbox-backend",
                           "gateway/sandboxing/workspace-access",
                           "gateway/sandboxing/multiple-folders-for-one-agent",
                           "gateway/sandboxing/images-and-setup",

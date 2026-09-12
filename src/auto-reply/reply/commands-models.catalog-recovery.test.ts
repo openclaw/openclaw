@@ -15,6 +15,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../../agents/pre
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const catalogMocks = vi.hoisted(() => ({
   readSnapshot: vi.fn<(params: unknown) => ModelCatalogSnapshot | undefined>(),
@@ -24,7 +25,7 @@ const catalogMocks = vi.hoisted(() => ({
   isCurrent: (): boolean => true,
 }));
 
-const { buildPreparedModelsProviderData, resolveModelsCommandReply } =
+const { buildPreparedModelsProviderData, handleModelsCommand, resolveModelsCommandReply } =
   await import("./commands-models.js");
 
 const staleCfg = {
@@ -90,6 +91,33 @@ afterEach(() => {
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([
+    { commandBodyNormalized: "/models", choice: "- anthropic (1)" },
+    { commandBodyNormalized: "/models anthropic", choice: "- anthropic/claude-opus-4-5" },
+  ])(
+    "keeps usable choices and clears the refresh warning after recovery for $commandBodyNormalized",
+    async ({ commandBodyNormalized, choice }) => {
+      const snapshot: ModelCatalogSnapshot = {
+        entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Available model" }],
+        routeVariants: [],
+        refreshFailed: true,
+      };
+      catalogMocks.readSnapshot.mockReturnValue(snapshot);
+      const params = buildCommandTestParams(commandBodyNormalized, staleCfg);
+
+      const failedRefresh = await handleModelsCommand(params, true);
+
+      expect(failedRefresh?.shouldContinue).toBe(false);
+      expect(failedRefresh?.reply?.text).toContain("Some models could not be refreshed.");
+      expect(failedRefresh?.reply?.text).toContain(choice);
+      snapshot.refreshFailed = false;
+      const recovered = await handleModelsCommand(params, true);
+      expect(recovered?.shouldContinue).toBe(false);
+      expect(recovered?.reply?.text).not.toContain("Some models could not be refreshed.");
+      expect(recovered?.reply?.text).toContain(choice);
+    },
+  );
+
   it.each(["default", "all"] as const)(
     "rejects a generation retired during %s projection and allows a current retry",
     async (view) => {

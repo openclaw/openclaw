@@ -109,7 +109,9 @@ browser's timezone. Frames and the SQLite timeline database live under
 
 Startup completes storage recovery and pruning before capture begins. Shutdown
 stops new work and waits for admitted database and model operations before closing
-storage.
+storage. SQLite opening, queries, transactions, maintenance, and closing run in
+host-owned workers. Frame reads and pruning share admission, so previews and
+analysis finish reading their files before retention can remove them.
 
 ## Model and data flow
 
