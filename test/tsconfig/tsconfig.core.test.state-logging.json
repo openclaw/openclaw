@@ -11,6 +11,8 @@
     "../../src/shared/**/*.test.ts",
     "../../src/shared/**/*.test.tsx",
     "../../src/infra/update-managed-service-handoff-database.test.ts",
-    "../../src/infra/package-update-activation-journal.test.ts"
+    "../../src/infra/package-update-activation-journal.test.ts",
+    "../../src/config/sessions/session-cold-storage*.test.ts",
+    "../../src/config/sessions/session-accessor.sqlite-cold-read.test.ts"
   ]
 }

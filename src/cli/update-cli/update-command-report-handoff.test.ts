@@ -5,7 +5,7 @@ import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const prompts = vi.hoisted(() => ({
@@ -40,7 +40,7 @@ it("carries pre-mutation refusal facts through triage into the reviewed preview"
   await withTriageTerminal(true, async () => {
     await expect(
       withUpdateFailureTriage({}, { root, env: { ...process.env } }, () =>
-        reportPreMutationUpdateFailure({
+        reportPreMutationUpdateResult({
           root,
           installKind: "package",
           reason: "node-runtime-preflight",

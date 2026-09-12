@@ -151,10 +151,16 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
-    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const commandPath = getCommanderCommandPath(actionCommand);
+    const nativeUpdateCapabilityProbe =
+      commandPath.length === 2 &&
+      (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
+      ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.getOptionValue("updateExecutor") === "check";
+    const jsonOutputMode =
+      nativeUpdateCapabilityProbe || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const commandPath = getCommanderCommandPath(actionCommand);
     const startupPolicy = resolveCliStartupPolicy({
       argv,
       commandPath,
@@ -175,7 +181,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+    // Capability discovery precedes staged-update admission and must not migrate live state.
+    if (
+      nativeUpdateCapabilityProbe ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
     await runStateStoreGuard(commandPath);

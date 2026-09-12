@@ -8,14 +8,27 @@
 
 .transcripts-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+}
+
+.transcripts-layout--selected {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
 }
 
 .transcripts-library {
   min-width: 0;
   padding: var(--space-4);
+}
+
+.transcripts-layout--selected .transcripts-library {
   border-inline-end: 1px solid var(--border);
+}
+
+.transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
 }
 
 .transcripts-filters {
@@ -108,6 +121,24 @@
 
 .meetings-day .transcripts-list {
   margin-block: 0;
+  border-inline-start: 1px solid var(--border);
+  margin-inline-start: var(--space-1);
+  padding-inline-start: var(--space-4);
+}
+
+.meetings-day .transcripts-list > li {
+  position: relative;
+}
+
+.meetings-day .transcripts-list > li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--space-4) - 4px);
+  inset-block-start: 32px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
 }
 
 .meetings-row__meta,
@@ -117,11 +148,25 @@
   line-height: 1.7;
 }
 
-.meetings-row__overview,
 .meetings-row__participants {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.meetings-row__overview {
+  color: var(--text);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.meetings-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 96px;
+  padding: var(--space-5);
+  color: var(--muted);
 }
 
 .meetings-live {
@@ -230,21 +275,12 @@
   color: var(--text-strong);
 }
 
-.transcripts-reader__placeholder {
-  padding-block: var(--space-8);
-}
-
 @media (max-width: 900px) {
   .transcripts-layout {
     display: block;
   }
 
-  .transcripts-library {
-    border-inline-end: 0;
-  }
-
-  .transcripts-layout--selected .transcripts-library,
-  .transcripts-reader__placeholder {
+  .transcripts-layout--selected .transcripts-library {
     display: none;
   }
 

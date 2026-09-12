@@ -266,12 +266,7 @@ export function buildSlackProgressStreamChunks(params: {
     plan: params.plan,
     maxLineChars: params.maxLineChars,
   });
-  // Detailed work rows keep their identity through plan changes and already
-  // carry failures. Quiet cards need separate failure attention rows.
-  const attention = buildProgressAttentionTasks(
-    params.summaryRow ? params.lines : approvals,
-    params.finalInProgressStatus,
-  );
+  const attention = buildProgressAttentionTasks(approvals, params.finalInProgressStatus);
   const headline = params.title?.trim() || params.label?.trim();
   const newest = tasks.at(-1);
   const title = compactChunkText(
@@ -542,11 +537,9 @@ export function reconcileSlackNativeTaskChunks(params: {
     if (nextTasks.has(id)) {
       continue;
     }
-    // Missing attention has cleared; failed tool history instead outlives the
-    // rolling window until successful closeout. Never resend append-only fields.
-    const recovered =
-      row.status === "error" &&
-      (id.startsWith(SLACK_ATTENTION_TASK_PREFIX) || params.finalStatus === "complete");
+    // Failed tool history outlives the rolling window until successful closeout.
+    // Never resend append-only fields.
+    const recovered = row.status === "error" && params.finalStatus === "complete";
     if (row.status === "complete" || (row.status === "error" && !recovered)) {
       nextTasks.set(id, row);
       continue;

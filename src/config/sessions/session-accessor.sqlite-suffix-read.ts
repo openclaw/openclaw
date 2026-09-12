@@ -20,6 +20,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -37,6 +38,7 @@ export function loadTranscriptSuffixEventsBoundedSync(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
+      assertSessionTranscriptHot(database.db, resolved.sessionId);
       const db = getSessionKysely(database.db);
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
       if (fence) {

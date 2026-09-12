@@ -62,7 +62,6 @@ function enableAdvertiserUnitMode(hostname = "test-host") {
 
 function mockCiaoService(params?: {
   advertise?: ReturnType<typeof vi.fn>;
-  destroy?: ReturnType<typeof vi.fn>;
   serviceState?: string;
   stateRef?: { value: string };
   on?: ReturnType<typeof vi.fn>;
@@ -70,7 +69,7 @@ function mockCiaoService(params?: {
   responder?: Record<string, unknown>;
 }) {
   const advertise = params?.advertise ?? vi.fn().mockResolvedValue(undefined);
-  const destroy = params?.destroy ?? vi.fn().mockResolvedValue(undefined);
+  const destroy = vi.fn().mockResolvedValue(undefined);
   const on =
     params?.on ??
     vi.fn((event: string, listener: (value: unknown) => void) => {
@@ -99,7 +98,7 @@ function mockCiaoService(params?: {
     return service;
   });
   getResponder.mockReturnValue(params?.responder ?? { createService, shutdown });
-  return { advertise, destroy, on };
+  return { destroy };
 }
 
 vi.mock("@homebridge/ciao", () => {
@@ -152,7 +151,6 @@ describe("gateway bonjour advertiser", () => {
   it("does not block on advertise and publishes expected txt keys", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
     let resolveAdvertise = () => {};
     const advertise = vi.fn().mockImplementation(
       async () =>
@@ -160,7 +158,7 @@ describe("gateway bonjour advertiser", () => {
           resolveAdvertise = resolve;
         }),
     );
-    mockCiaoService({ advertise, destroy });
+    const { destroy } = mockCiaoService({ advertise });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -204,9 +202,7 @@ describe("gateway bonjour advertiser", () => {
   it("omits cliPath and sshPort in minimal mode", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -271,9 +267,7 @@ describe("gateway bonjour advertiser", () => {
     vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
     vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -288,14 +282,12 @@ describe("gateway bonjour advertiser", () => {
   it("attaches conflict listeners for services", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
     const onCalls: Array<{ event: string }> = [];
 
     const on = vi.fn((event: string) => {
       onCalls.push({ event });
     });
-    mockCiaoService({ advertise, destroy, on });
+    mockCiaoService({ on });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -311,13 +303,11 @@ describe("gateway bonjour advertiser", () => {
   it("cleans up ciao process handlers after shutdown", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
     const order: string[] = [];
     shutdown.mockImplementation(async () => {
       order.push("shutdown");
     });
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const cleanupException = vi.fn(() => {
       order.push("cleanup-exception");
@@ -345,9 +335,7 @@ describe("gateway bonjour advertiser", () => {
   it("handles ciao netmask assertions at the bonjour caller", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -378,9 +366,8 @@ describe("gateway bonjour advertiser", () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
     const advertise = vi.fn().mockRejectedValue(new Error("boom"));
-    mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
+    mockCiaoService({ advertise, serviceState: "unannounced" });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -407,11 +394,10 @@ describe("gateway bonjour advertiser", () => {
   it("handles advertise throwing synchronously", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
     const advertise = vi.fn(() => {
       throw new Error("sync-fail");
     });
-    mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
+    mockCiaoService({ advertise, serviceState: "unannounced" });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -427,9 +413,7 @@ describe("gateway bonjour advertiser", () => {
   it("suppresses ciao self-probe retry console noise while advertising", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const originalConsoleLog = console.log;
     const baseConsoleLog = vi.fn();
@@ -458,9 +442,7 @@ describe("gateway bonjour advertiser", () => {
   it("suppresses transient ciao ENODEV MDNS socket warnings while advertising", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const originalConsoleWarn = console.warn;
     const baseConsoleWarn = vi.fn();
@@ -491,8 +473,6 @@ describe("gateway bonjour advertiser", () => {
   it("does not monkey-patch responder methods during shutdown", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
     const responder = {
       createService,
       shutdown,
@@ -507,7 +487,7 @@ describe("gateway bonjour advertiser", () => {
       probe: responder.probe,
       republishService: responder.republishService,
     };
-    mockCiaoService({ advertise, destroy, responder });
+    mockCiaoService({ responder });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -524,9 +504,7 @@ describe("gateway bonjour advertiser", () => {
   it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const originalConsoleLog = console.log;
     const baseConsoleLog = vi.fn();
@@ -553,10 +531,9 @@ describe("gateway bonjour advertiser", () => {
     vi.useFakeTimers();
 
     const stateRef = { value: "unannounced" };
-    const destroy = vi.fn().mockResolvedValue(undefined);
     const advertise = vi.fn(() => new Promise<void>(() => {}));
     const listenerMap = new Map<string, (value: unknown) => void>();
-    mockCiaoService({ advertise, destroy, stateRef, listenerMap });
+    const { destroy } = mockCiaoService({ advertise, stateRef, listenerMap });
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -590,11 +567,9 @@ describe("gateway bonjour advertiser", () => {
   it("makes advertiser shutdown idempotent", async () => {
     enableAdvertiserUnitMode();
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
     const cleanupException = vi.fn();
     const cleanupRejection = vi.fn();
-    mockCiaoService({ advertise, destroy });
+    const { destroy } = mockCiaoService();
     registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
     registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
 
@@ -618,9 +593,7 @@ describe("gateway bonjour advertiser", () => {
 
     vi.spyOn(os, "hostname").mockReturnValue("Mac.localdomain");
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -643,9 +616,7 @@ describe("gateway bonjour advertiser", () => {
     vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -663,9 +634,7 @@ describe("gateway bonjour advertiser", () => {
     const reportedHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
     enableAdvertiserUnitMode(reportedHostname);
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -687,9 +656,7 @@ describe("gateway bonjour advertiser", () => {
     const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghij";
     enableAdvertiserUnitMode(longHostname);
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -714,9 +681,7 @@ describe("gateway bonjour advertiser", () => {
     const cjkHostname = "你".repeat(21);
     enableAdvertiserUnitMode(cjkHostname);
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -739,9 +704,7 @@ describe("gateway bonjour advertiser", () => {
     vi.stubEnv("OPENCLAW_MDNS_HOSTNAME", undefined);
     vi.spyOn(os, "hostname").mockReturnValue("Lobster");
 
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const advertise = vi.fn().mockResolvedValue(undefined);
-    mockCiaoService({ advertise, destroy });
+    mockCiaoService();
 
     const started = await startAdvertiser({
       gatewayPort: 18789,

@@ -70,6 +70,12 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
+For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Kysely shape once and binds fresh parameters on each call. It uses the normal
+synchronous executor and the connection's bounded statement cache when enabled.
+Keep the prepared function with its database owner and discard it when closing
+the connection; transaction callbacks must remain synchronous.
+
 ### SQLite worker stores
 
 Use `openSqliteWorkerStore<Operations>` from

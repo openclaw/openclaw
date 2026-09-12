@@ -87,6 +87,7 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
+import { renderSessionStorage } from "./session-storage.ts";
 import { renderTalkPage } from "./talk-page.ts";
 import { renderUpdates } from "./updates.ts";
 import {
@@ -1303,7 +1304,16 @@ export class ConfigPage extends OpenClawLightDomElement {
                   this.routeData?.targetBlockId === "config-section-transcripts",
                 editor,
               })
-          : undefined,
+          : this.pageId === "ai-agents" && activeSection === "session"
+            ? (editor) =>
+                renderSessionStorage({
+                  mutationDisabled: this.isCuratedConfigMutationDisabled(),
+                  advancedExpanded:
+                    this.routeData?.advanced === true ||
+                    this.routeData?.targetBlockId === "config-section-session",
+                  editor,
+                })
+            : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
           ? renderBrowserLinkPreferencesRow({

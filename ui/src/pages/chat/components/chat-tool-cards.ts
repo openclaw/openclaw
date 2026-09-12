@@ -34,6 +34,7 @@ import {
   toolWorkspacePath,
   type ToolRenderOptions,
 } from "./chat-tool-content.ts";
+import { renderToolFailures } from "./chat-tool-failure.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 export {
@@ -519,6 +520,7 @@ export function renderToolCard(
               `
             : nothing
         }
+        ${expanded ? nothing : renderToolFailures([card], false)}
         ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
       </div>
     `,

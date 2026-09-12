@@ -259,7 +259,11 @@ for line in sys.stdin:
         raise RuntimeError("injected native query failure")
     request = json.loads(line)
     observations = runpy.run_path(sys.argv[2])["read_processes"](request["pids"])
-    pathlib.Path(sys.argv[1], "lease").write_text("replacement")
+    # Retire atomically: an actor can exit as soon as it observes the replacement,
+    # so teardown must never race an open Python handle on the Windows lease.
+    replacement = pathlib.Path(sys.argv[1], "lease-replacement")
+    replacement.write_text("replacement")
+    replacement.replace(pathlib.Path(sys.argv[1], "lease"))
     print(json.dumps(dict(id=request["id"], observations=observations)), flush=True)
 `;
           return censusPreload(

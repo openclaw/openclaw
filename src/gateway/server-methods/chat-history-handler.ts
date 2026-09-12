@@ -8,10 +8,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import {
-  resolveActiveEmbeddedRunOwner,
-  resolveActiveEmbeddedRunHandleSessionId,
-} from "../../agents/embedded-agent-runner/runs.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
@@ -20,6 +16,7 @@ import {
   listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
+import { readRestoredSessionTranscript } from "../../config/sessions/session-cold-storage-read.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -28,12 +25,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
-  projectInFlightRunSnapshot,
   resolveInFlightRunSnapshot,
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
-import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
@@ -67,6 +62,7 @@ import {
   resolveChatHistoryNextOffset,
   shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
+import { resolveEmbeddedAgentRunRecoverySnapshot } from "./chat-history-recovery.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
@@ -94,31 +90,6 @@ function respondChatHistoryUnavailable(
       retryAfterMs: 250,
     }),
   );
-}
-
-function resolveEmbeddedAgentRunRecoverySnapshot(params: {
-  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
-  requestedSessionKey: string;
-  canonicalSessionKey: string;
-  sessionId?: string;
-}) {
-  const sessionId =
-    params.sessionId ??
-    resolveActiveEmbeddedRunHandleSessionId(params.canonicalSessionKey) ??
-    resolveActiveEmbeddedRunHandleSessionId(params.requestedSessionKey);
-  if (!sessionId) {
-    return undefined;
-  }
-  const owner = resolveActiveEmbeddedRunOwner(sessionId);
-  if (!owner) {
-    return undefined;
-  }
-  return projectInFlightRunSnapshot({
-    chatRunState: params.chatRunState,
-    runId: owner.runId,
-    startedAtMs: owner.startedAtMs,
-    sessionAbortable: true,
-  });
 }
 
 async function handleChatHistoryRequest({
@@ -606,20 +577,23 @@ async function handleChatHistoryRequest({
     });
     let delta: ReturnType<typeof readChatHistoryDelta>;
     try {
-      delta = readChatHistoryDelta({
+      const scope = {
         agentId: sessionAgentId,
-        cursor,
-        maxBytes: maxHistoryBytes,
-        scope: {
-          agentId: sessionAgentId,
-          sessionEntry: entry,
-          sessionId,
-          sessionKey: canonicalKey,
-          storePath,
-        },
+        sessionEntry: entry,
+        sessionId,
         sessionKey: canonicalKey,
-        sessionSnapshot,
-      });
+        storePath,
+      };
+      delta = await readRestoredSessionTranscript(scope, () =>
+        readChatHistoryDelta({
+          agentId: sessionAgentId,
+          cursor,
+          maxBytes: maxHistoryBytes,
+          scope,
+          sessionKey: canonicalKey,
+          sessionSnapshot,
+        }),
+      );
     } catch (error) {
       if (!isSessionTranscriptProjectionUnavailableError(error)) {
         throw error;

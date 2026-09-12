@@ -23,6 +23,7 @@ export type AgentEventPayload = {
 
 export type ToolStreamEntry = {
   toolCallId: string;
+  parentToolCallId?: string;
   runId: string;
   sessionKey?: string;
   name: string;

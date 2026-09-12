@@ -365,7 +365,8 @@ export function activateCodexAttemptTurn(
       if (transcriptItems.length === 0) {
         return;
       }
-      await promptMirrorPromise;
+      await projectionReady;
+      await notifications.drainNotificationQueue();
       assertSteeringActive();
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
@@ -546,6 +547,7 @@ export function activateCodexAttemptTurn(
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
+  const projectionReady = bindProjection();
   params.replyOperation?.attachBackend(handle);
   setActiveEmbeddedRun(
     params.sessionId,
@@ -578,7 +580,7 @@ export function activateCodexAttemptTurn(
     freezeRunTerminalOutcome,
     notifyUserMessagePersisted,
     abortListener,
-    ready: bindProjection(),
+    ready: projectionReady,
   };
 }
 

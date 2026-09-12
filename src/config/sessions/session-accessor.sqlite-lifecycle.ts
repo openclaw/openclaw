@@ -223,6 +223,22 @@ export async function resetSessionEntryLifecycle(
 ): Promise<ResetSessionEntryLifecycleResult> {
   const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
+  if (params.resetBoundary) {
+    params.commitGuard?.();
+    const source = withOpenClawAgentDatabaseReadOnly(
+      (database) => readLifecycleTargetSnapshot(database, params.target)[0]?.entry.sessionId,
+      toDatabaseOptions(resolved),
+    );
+    if (source.found && source.value) {
+      const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+      await restoreSessionColdTranscript({
+        agentId: resolved.agentId,
+        env: resolved.env,
+        storePath: params.storePath,
+        sessionId: source.value,
+      });
+    }
+  }
   return await withCommittedHistoryMaintenance(
     { agentId: resolved.agentId, storePath: params.storePath },
     async (recordCommit) =>

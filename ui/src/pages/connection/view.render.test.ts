@@ -10,7 +10,7 @@ type ConnectionProps = Parameters<typeof renderConnection>[0];
 
 function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
   return {
-    connected: false,
+    phase: "offline",
     hello: null,
     liveGatewayUrl: "ws://127.0.0.1:18789",
     settings: {
@@ -33,12 +33,18 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     systemInfoUnavailable: false,
     systemInfoLoading: false,
     dirty: false,
+    sessionDirty: false,
+    sessionSaved: false,
     showGatewaySecret: false,
     onConnectionChange: () => undefined,
     onSecretChange: () => undefined,
     onSessionKeyChange: () => undefined,
     onToggleGatewaySecretVisibility: () => undefined,
     onConnect: () => undefined,
+    onDiscardConnection: () => undefined,
+    onReconnect: () => undefined,
+    onSaveSession: () => undefined,
+    onDiscardSession: () => undefined,
     ...overrides,
   };
 }
@@ -65,6 +71,51 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
+  it.each([
+    ["connected", null, null],
+    ["connecting", null, "Connecting…"],
+    ["starting", null, "Connecting…"],
+    ["reconnecting", null, "Reconnecting…"],
+    ["offline", null, "Connect"],
+    ["stopped", null, "Connect"],
+    ["offline", "Connection refused", "Retry connection"],
+    ["reload-required", null, null],
+  ] as const)("offers the appropriate action in %s with error %s", (phase, lastError, label) => {
+    const container = document.createElement("div");
+    render(renderConnection(createConnectionProps({ phase, lastError })), container);
+    const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
+    expect(action?.textContent?.trim() ?? null).toBe(label);
+    if (action) {
+      expect(action.disabled).toBe(["connecting", "starting", "reconnecting"].includes(phase));
+    }
+    expect(container.querySelector<HTMLButtonElement>("details button")?.disabled).toBe(
+      phase !== "connected",
+    );
+  });
+
+  it.each(["connecting", "starting", "reconnecting"] as const)(
+    "lets a corrected draft replace a connection stuck in %s",
+    (phase) => {
+      const container = document.createElement("div");
+      render(renderConnection(createConnectionProps({ phase, dirty: true })), container);
+      const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
+      expect(action?.textContent?.trim()).toBe("Apply and reconnect");
+      expect(action?.disabled).toBe(false);
+    },
+  );
+
+  it("shows a secret for a new target even when the live Gateway uses trusted proxy auth", () => {
+    const props = createConnectionProps({
+      phase: "connected",
+      hello: { snapshot: { authMode: "trusted-proxy" } } as unknown as GatewayHelloOk,
+    });
+    props.settings.gatewayUrl = "wss://other.example";
+    const container = document.createElement("div");
+    render(renderConnection(props), container);
+    expect(container.querySelector('input[aria-label="Gateway secret"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Authenticated via trusted proxy.");
+  });
+
   it("shows setup-code guidance beneath the secret before connecting", () => {
     const container = document.createElement("div");
     const secret = btoa(
@@ -84,7 +135,7 @@ describe("connection view rendering", () => {
 
   it("names the live Gateway in the summary, not the edited draft", () => {
     const props = createConnectionProps({
-      connected: true,
+      phase: "connected",
       liveGatewayUrl: "wss://live.example:443/",
       settings: { ...createConnectionProps().settings, gatewayUrl: "wss://draft.example:443/" },
     });
@@ -101,11 +152,7 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps()), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual([
-      "Gateway URL",
-      "Gateway secret",
-      "Default session",
-    ]);
+    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
     expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
       "Not connected.",
     );
@@ -148,14 +195,10 @@ describe("connection view rendering", () => {
       snapshot: { authMode: "trusted-proxy", uptimeMs: 90_000 },
       policy: { tickIntervalMs: 30_000 },
     } as unknown as GatewayHelloOk;
-    render(renderConnection(createConnectionProps({ connected: true, hello })), container);
+    render(renderConnection(createConnectionProps({ phase: "connected", hello })), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual([
-      "Gateway URL",
-      "Gateway secret",
-      "Default session",
-    ]);
+    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
     expect(container.querySelector('input[aria-label="Gateway secret"]')).toBeNull();
     expect(container.querySelector('[role="radiogroup"]')).toBeNull();
     expect(container.querySelector(".settings-row .settings-status")?.textContent?.trim()).toBe(
@@ -163,7 +206,7 @@ describe("connection view rendering", () => {
     );
     expect(container.textContent).toContain("Authenticated via trusted proxy.");
     expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
-      "Connected to 127.0.0.1:18789 · proxy auth · 30s tick",
+      "Connected to 127.0.0.1:18789",
     );
     expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
       "Connected",
@@ -212,7 +255,7 @@ describe("connection view rendering", () => {
     const sections = [...container.querySelectorAll(".settings-section__heading")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(sections).toEqual(["Connection", "Gateway Host"]);
+    expect(sections).toEqual(["Connection", "Session", "Gateway Host"]);
     expect(container.querySelector("#settings-connection-host")).not.toBeNull();
     const name = container.querySelector(".config-host__name");
     expect(name?.textContent?.trim()).toBe("Gateway Mac");
@@ -360,7 +403,7 @@ describe("connection view rendering", () => {
 
     render(
       renderConnection(
-        createConnectionProps({ connected: true, lastError: "connect failed: unauthorized" }),
+        createConnectionProps({ phase: "connected", lastError: "connect failed: unauthorized" }),
       ),
       container,
     );

@@ -136,6 +136,9 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   });
   return {
     results: result.hits,
+    ...(result.archivedTranscriptsExcluded
+      ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };

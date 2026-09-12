@@ -15,6 +15,24 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Cold transcript archives
+
+The per-agent `session_transcript_cold_archives` table records cold transcript
+locations alongside `session_windows` and `transcript_events`. Each row belongs
+to a retained session window and identifies its generation, archive name, hash,
+counts, and sizes. The payload lives in an immutable compressed JSONL file, or
+in the row's blob when embedded by a supported backup.
+
+The default archive directory is
+`~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
+`<sha256>.jsonl.zst`. A database in a directory named `agent` uses its sibling
+`sessions/cold/` directory; other store layouts use `cold/` beside the database.
+These files contain authoritative history. See
+[cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+for retention and restoration, and
+[agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+for the schema and update contract.
+
 ### Plugin state listing index
 
 Plugin keyed stores use the shared `plugin_state_entries` table. Its listing

@@ -80,12 +80,6 @@ const binaryCache = new Map<string, Promise<string | null>>();
 const libraryCache = new Map<string, Promise<string | null>>();
 const observedBackendCache = new Map<string, "cpu" | "cuda" | "metal">();
 
-export function clearLocalAudioInspectionCacheForTests(): void {
-  binaryCache.clear();
-  libraryCache.clear();
-  observedBackendCache.clear();
-}
-
 function commandId(command: string): string {
   return path.basename(command.trim()).toLowerCase();
 }

@@ -6,6 +6,79 @@ import Testing
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `automatic recovery preserves a named profile port ownership failure`() async throws {
+        try #require(AppProfile.current.isActive)
+        let configPath = TestIsolation.tempConfigPath()
+        let marker = URL(fileURLWithPath: configPath + ".disable-launchagent")
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
+        try Data().write(to: marker)
+        defer {
+            try? FileManager.default.removeItem(atPath: configPath)
+            try? FileManager.default.removeItem(at: marker)
+        }
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: [connectionModeKey: "local"])
+        {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            let manager = GatewayProcessManager()
+            let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
+            manager.setTestingConnection(connection)
+            manager.setTestingSkipControlChannelRefresh(true)
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                manager.setTestingDesiredActive(false)
+                state.connectionMode = previousMode
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let port = GatewayEnvironment.gatewayPort()
+            await PortGuardian.shared.setTestingDescriptor(
+                .init(pid: 4242, command: "external-gateway", executablePath: "/tmp/external-gateway"),
+                forPort: port)
+            #expect(await manager._testAttachExistingGatewayIfAvailable(port: port))
+            let failure = manager.lastFailureReason ?? ""
+            #expect(failure.contains("already owned by another process"))
+            let endpointState = await GatewayEndpointStore.shared.currentState()
+            let revision = GatewayEndpointStore.shared.routeRevision
+            #expect(endpointState == .unavailable(mode: .local, reason: failure, routeRevision: revision))
+            let failureLog = manager.log
+            let daemonCalls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+
+            for _ in 0..<3 {
+                manager.setActive(true, source: .recovery)
+                #expect(manager.status == .failed(failure))
+                await manager.waitForStartupAttempt()
+                #expect(manager.log == failureLog)
+                #expect(await GatewayEndpointStore.shared.currentState() == endpointState)
+                #expect(GatewayEndpointStore.shared.routeRevision == revision)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == daemonCalls)
+            }
+
+            // An explicit retry still starts a fresh ownership check; it cannot adopt the rejected listener.
+            manager.setActive(true)
+            #expect(manager.status == .starting)
+            await manager.waitForStartupAttempt()
+            #expect(manager.status == .failed(failure))
+            #expect(manager.log != failureLog)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+
+            manager.setTestingDesiredActive(false)
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
+        }
+    }
+
+    @Test
     func `named profile hosting repair requires restart before activation`() async throws {
         try #require(AppProfile.current.isActive)
         let configPath = TestIsolation.tempConfigPath()

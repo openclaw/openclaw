@@ -21,6 +21,7 @@ import {
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
+  discoverStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
 import {
   isUpdateCompatibilityChunk,
@@ -785,8 +786,12 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
     if (!shouldCopyStaticExtensionAssets(phaseParams)) {
       return;
     }
-    copyStaticExtensionAssets(phaseParams);
-    copyStaticExtensionAssetsToRuntimeOverlay(phaseParams);
+    const assetParams = {
+      ...phaseParams,
+      assets: discoverStaticExtensionAssets(phaseParams),
+    };
+    copyStaticExtensionAssets(assetParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(assetParams);
   });
   runPhase("stable root runtime imports", () =>
     rewriteRootRuntimeImportsToStableAliases(phaseParams),

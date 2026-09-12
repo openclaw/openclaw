@@ -21,6 +21,14 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+[Cold transcript storage](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+requires agent schema 20 even though it adds a companion table. Older readers
+would interpret extracted transcript rows as missing history and cannot safely
+ignore the new representation. The supported updater's Doctor phase performs
+the schema migration; changing the cold-storage age setting afterward needs no
+Gateway restart. These are separate operations: live configuration reload does
+not authorize an active schema migration.
+
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
 first-use ensure add it when needed; the schema version stays 19. The column

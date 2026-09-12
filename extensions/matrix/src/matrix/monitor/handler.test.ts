@@ -3778,7 +3778,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it.each([undefined, false])(
-    "keeps quiet Matrix status, plans, and attention with toolProgress=%s",
+    "keeps quiet Matrix status, plans, and approvals without tool failures with toolProgress=%s",
     async (toolProgress) => {
       vi.useFakeTimers();
       let finish: (() => Promise<void>) | undefined;
@@ -3817,10 +3817,13 @@ describe("matrix monitor handler draft streaming", () => {
 
         await opts.onCommandOutput?.({ phase: "end", name: "exec", exitCode: 1 });
         await vi.advanceTimersByTimeAsync(1_000);
-        const attention = lastCallArg(editMessageMatrixMock, 2, "Matrix failure edit body");
-        expect(attention).toContain("exit 1");
-        expect(attention).toContain("confirm-operation");
-        expect(attention).not.toContain("Read File");
+        const quietProgress = lastCallArg(editMessageMatrixMock, 2, "Matrix quiet progress body");
+        expect(quietProgress).toContain("Working");
+        expect(quietProgress).toContain("▸ Inspect");
+        expect(quietProgress).toContain("confirm-operation");
+        expect(quietProgress).not.toContain("exit 1");
+        expect(quietProgress).not.toContain("Exec");
+        expect(quietProgress).not.toContain("Read File");
       } finally {
         try {
           await finish?.();
