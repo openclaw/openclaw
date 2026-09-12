@@ -4238,6 +4238,26 @@ export const en: TranslationMap & {
       costCategories: "Cost categories",
       remaining: "{percent}% left",
       resets: "Resets {date}",
+      account: "Account",
+      accessCredential: "Access credential expires",
+      credentialNoExpiry: "No expiry reported",
+      credentialStatus: "Access credential status",
+      credentialStates: {
+        ok: "Valid",
+        expiring: "Expiring soon",
+        expired: "Expired",
+        missing: "Unavailable",
+        static: "Static token",
+      },
+      refreshable: "OpenClaw can refresh",
+      credentialExplanation:
+        "These dates and states describe access credentials, not subscription expiry. An expired OAuth access token can be refreshed by OpenClaw and does not mean the account is invalid.",
+      preferred: "Preferred",
+      setPreferred: "Set as preferred",
+      settingPreferred: "Saving…",
+      setPreferredHint:
+        "Moves this profile to the front for new agent selections and failover. It does not switch an already sticky session.",
+      adminRequired: "Setting the preferred profile requires operator.admin access.",
     },
     presets: {
       today: "Today",

@@ -14,6 +14,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { downloadTextFile } from "../../lib/download.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/usage.css";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
@@ -104,10 +105,26 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
+function formatCredentialExpiry(expiresAt: number | undefined): string {
+  if (!expiresAt || !Number.isFinite(expiresAt)) {
+    return t("usage.providerUsage.credentialNoExpiry");
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(expiresAt));
+}
+
 function renderProviderUsage(
   providers: ProviderUsageSnapshot[],
   unavailable: boolean,
   stalled: boolean,
+  options: {
+    canSetPreferred: boolean;
+    busyProfileId: string | null;
+    errors: Record<string, string>;
+    onSetPreferred?: (provider: ProviderUsageSnapshot) => void;
+  },
 ) {
   const notice = stalled
     ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
@@ -128,9 +145,18 @@ function renderProviderUsage(
     html`
       ${notice}
       <div class="usage-panel provider-usage-section">
+        ${
+          providers.some((provider) => provider.provider === "openai" && provider.authProfileId)
+            ? html`<div class="provider-usage-credential-note" role="note">
+                ${t("usage.providerUsage.credentialExplanation")}
+              </div>`
+            : nothing
+        }
         <div class="provider-usage-grid">
-          ${providers.map(
-            (provider) => html`
+          ${providers.map((provider) => {
+            const profileId = provider.authProfileId;
+            const actionError = profileId ? options.errors[profileId] : undefined;
+            return html`
               <article class="provider-usage-card">
                 <div class="provider-usage-card__header">
                   <div>
@@ -143,10 +169,71 @@ function renderProviderUsage(
                       : nothing
                   }
                 </div>
+                ${
+                  profileId
+                    ? html`
+                        <div class="provider-usage-account">
+                          <div>
+                            <span>${t("usage.providerUsage.account")}</span>
+                            <strong>${provider.accountEmail ?? profileId}</strong>
+                          </div>
+                          <div>
+                            <span>${t("usage.providerUsage.accessCredential")}</span>
+                            <strong>${formatCredentialExpiry(provider.credentialExpiresAt)}</strong>
+                          </div>
+                          <div>
+                            <span>${t("usage.providerUsage.credentialStatus")}</span>
+                            <strong
+                              >${t(
+                                `usage.providerUsage.credentialStates.${provider.credentialStatus ?? "missing"}`,
+                              )}${
+                                provider.credentialRefreshable
+                                  ? ` · ${t("usage.providerUsage.refreshable")}`
+                                  : ""
+                              }</strong
+                            >
+                          </div>
+                        </div>
+                        <div class="provider-usage-preference">
+                          ${
+                            provider.isPreferred
+                              ? html`<span class="provider-usage-plan"
+                                  >${t("usage.providerUsage.preferred")}</span
+                                >`
+                              : html`<button
+                                  class="btn btn--sm"
+                                  ?disabled=${
+                                    !options.canSetPreferred || options.busyProfileId !== null
+                                  }
+                                  title=${
+                                    options.canSetPreferred
+                                      ? t("usage.providerUsage.setPreferredHint")
+                                      : t("usage.providerUsage.adminRequired")
+                                  }
+                                  @click=${() => options.onSetPreferred?.(provider)}
+                                >
+                                  ${
+                                    options.busyProfileId === profileId
+                                      ? t("usage.providerUsage.settingPreferred")
+                                      : t("usage.providerUsage.setPreferred")
+                                  }
+                                </button>`
+                          }
+                        </div>
+                        ${
+                          actionError
+                            ? html`<div class="provider-usage-error" role="alert">
+                                ${formatUiExternalText(actionError)}
+                              </div>`
+                            : nothing
+                        }
+                      `
+                    : nothing
+                }
                 ${renderProviderUsageDetails(provider)}
               </article>
-            `,
-          )}
+            `;
+          })}
         </div>
       </div>
     `,
@@ -750,6 +837,12 @@ export function renderUsage(props: UsageProps) {
           data.providerUsage,
           data.providerUsageUnavailable,
           data.providerUsageStalled,
+          {
+            canSetPreferred: data.canSetPreferredProfile === true,
+            busyProfileId: data.preferredProfileBusy ?? null,
+            errors: data.preferredProfileErrors ?? {},
+            onSetPreferred: detailActions.onSetPreferredProfile,
+          },
         )}
         ${
           isEmpty

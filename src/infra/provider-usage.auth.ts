@@ -5,9 +5,11 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
+  listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
+import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
@@ -24,13 +26,19 @@ import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
-import type { UsageProviderId } from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
   accountId?: string;
   authProfileId?: string;
+  authProfileOrder?: string[];
+  isPreferred?: boolean;
+  credentialExpiresAt?: number;
+  credentialStatus?: ProviderUsageSnapshot["credentialStatus"];
+  credentialRefreshable?: boolean;
+  authError?: string;
   hookProvider?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -294,13 +302,39 @@ function resolveUsageCredentialProviderIds(params: {
   return [...providerIds];
 }
 
-async function resolveOAuthToken(params: {
+function resolveCredentialDisplayMetadata(
+  credential: AuthStore["profiles"][string],
+  now = Date.now(),
+): Pick<ProviderAuth, "credentialExpiresAt" | "credentialStatus" | "credentialRefreshable"> {
+  if (!credential || (credential.type !== "oauth" && credential.type !== "token")) {
+    return { credentialStatus: "missing", credentialRefreshable: false };
+  }
+  const credentialRefreshable = credential.type === "oauth";
+  const expires = credential.expires;
+  if (expires === undefined) {
+    return { credentialStatus: "static", credentialRefreshable };
+  }
+  const credentialStatus =
+    expires <= now
+      ? "expired"
+      : expires - now <= DEFAULT_OAUTH_REFRESH_MARGIN_MS
+        ? "expiring"
+        : "ok";
+  return {
+    credentialExpiresAt: expires,
+    credentialStatus,
+    credentialRefreshable,
+  };
+}
+
+async function resolveOAuthTokens(params: {
   state: UsageAuthState;
   provider: string;
   excludeProfileIds?: string[];
-}): Promise<ProviderAuth | null> {
+  all?: boolean;
+}): Promise<ProviderAuth[]> {
   if (!params.state.allowAuthProfileStore) {
-    return null;
+    return [];
   }
   const store = resolveUsageAuthStore(params.state);
   const order = resolveAuthProfileOrder({
@@ -308,8 +342,13 @@ async function resolveOAuthToken(params: {
     store,
     provider: params.provider,
   });
-  const deduped = dedupeProfileIds(order);
+  // Keep current runtime ordering first, then retain every saved profile so an
+  // expired or otherwise unusable subscription still gets a visible account card.
+  const deduped = dedupeProfileIds([...order, ...listProfilesForProvider(store, params.provider)]);
   const excludedProfileIds = new Set(params.excludeProfileIds ?? []);
+  const preferredProfileId = deduped[0];
+  const reportProfileFailures = normalizeProviderId(params.provider) === "openai";
+  const results: ProviderAuth[] = [];
 
   for (const profileId of deduped) {
     if (excludedProfileIds.has(profileId)) {
@@ -329,34 +368,73 @@ async function resolveOAuthToken(params: {
         agentDir: params.state.agentDir,
       });
       if (!resolved) {
+        if (!reportProfileFailures) {
+          continue;
+        }
+        results.push({
+          provider: params.provider,
+          token: "",
+          authProfileId: profileId,
+          authProfileOrder: [...deduped],
+          isPreferred: profileId === preferredProfileId,
+          ...(cred.email ? { email: cred.email } : {}),
+          ...resolveCredentialDisplayMetadata(cred),
+          authError: "Credential unavailable",
+        });
+      } else {
+        results.push({
+          provider: params.provider,
+          token: resolved.apiKey,
+          ...(cred.type === "oauth" && cred.accountId ? { accountId: cred.accountId } : {}),
+          authProfileId: profileId,
+          authProfileOrder: [...deduped],
+          isPreferred: profileId === preferredProfileId,
+          // Plan metadata is captured at external CLI sync time; runtime usage
+          // fetches must not re-read CLI keychains, so the stored profile is the
+          // only prompt-free source for plan labels.
+          ...(cred.type === "oauth" && cred.subscriptionType
+            ? { subscriptionType: cred.subscriptionType }
+            : {}),
+          ...(cred.type === "oauth" && cred.rateLimitTier
+            ? { rateLimitTier: cred.rateLimitTier }
+            : {}),
+          // Token credentials carry an email too; oauth-only gating would drop
+          // identity for static bearer profiles whose tokens expose no claims.
+          ...(cred.email ? { email: cred.email } : {}),
+          ...resolveCredentialDisplayMetadata(store.profiles[profileId] ?? cred),
+        });
+      }
+    } catch {
+      if (!reportProfileFailures) {
         continue;
       }
-      return {
-        provider: params.provider as UsageProviderId,
-        token: resolved.apiKey,
-        accountId:
-          cred.type === "oauth" && "accountId" in cred
-            ? (cred as { accountId?: string }).accountId
-            : undefined,
-        // Plan metadata is captured at external CLI sync time; runtime usage
-        // fetches must not re-read CLI keychains, so the stored profile is the
-        // only prompt-free source for plan labels.
-        ...(cred.type === "oauth" && cred.subscriptionType
-          ? { subscriptionType: cred.subscriptionType }
-          : {}),
-        ...(cred.type === "oauth" && cred.rateLimitTier
-          ? { rateLimitTier: cred.rateLimitTier }
-          : {}),
-        // Token credentials carry an email too; oauth-only gating would drop
-        // identity for static bearer profiles whose tokens expose no claims.
+      results.push({
+        provider: params.provider,
+        token: "",
+        authProfileId: profileId,
+        authProfileOrder: [...deduped],
+        isPreferred: profileId === preferredProfileId,
         ...(cred.email ? { email: cred.email } : {}),
-      };
-    } catch {
-      // ignore
+        ...resolveCredentialDisplayMetadata(cred),
+        // Credential resolution failures can contain storage/provider details.
+        // Keep account cards useful without forwarding those internals to the UI.
+        authError: "Credential unavailable",
+      });
+    }
+    if (!params.all && results.length > 0) {
+      break;
     }
   }
 
-  return null;
+  return results;
+}
+
+async function resolveOAuthToken(params: {
+  state: UsageAuthState;
+  provider: string;
+  excludeProfileIds?: string[];
+}): Promise<ProviderAuth | null> {
+  return (await resolveOAuthTokens({ ...params, all: false }))[0] ?? null;
 }
 
 async function resolveProviderUsageAuthViaPlugin(params: {
@@ -396,6 +474,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
           ? {
               token: auth.token,
               ...(auth.accountId ? { accountId: auth.accountId } : {}),
+              ...(auth.authProfileId ? { authProfileId: auth.authProfileId } : {}),
               ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
               ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
               ...(auth.email ? { email: auth.email } : {}),
@@ -416,6 +495,9 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       provider: params.provider,
       token: resolved.token,
       ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+      ...(params.provider === "openai" && resolved.authProfileId
+        ? { authProfileId: resolved.authProfileId }
+        : {}),
       ...(resolved.subscriptionType ? { subscriptionType: resolved.subscriptionType } : {}),
       ...(resolved.rateLimitTier ? { rateLimitTier: resolved.rateLimitTier } : {}),
       ...(resolved.email ? { email: resolved.email } : {}),
@@ -556,13 +638,30 @@ export async function resolveProviderAuths(params: {
       };
       const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
 
+      // OpenAI's plugin hook intentionally resolves a single usable subscription
+      // token. When no direct credential can override it, enumerate the saved
+      // profiles first so the Usage page can report each account separately.
+      if (provider === "openai" && !hasDirectCredentialSource && allowAuthProfileStore) {
+        const profileAuths = await resolveOAuthTokens({ state, provider, all: true });
+        if (profileAuths.length > 0) {
+          auths.push(...profileAuths);
+          continue;
+        }
+      }
+
       if (hasPluginCredentialSource) {
         const pluginAuth = await resolveProviderUsageAuthViaPlugin({
           state,
           provider,
         });
         if (pluginAuth.auth) {
-          auths.push(pluginAuth.auth);
+          if (provider === "openai" && pluginAuth.auth.authProfileId) {
+            auths.push(...(await resolveOAuthTokens({ state, provider, all: true })));
+          } else {
+            // Dedicated provider API-key paths retain their existing single
+            // snapshot behavior. Only saved OpenAI subscription profiles fan out.
+            auths.push(pluginAuth.auth);
+          }
           continue;
         }
         if (pluginAuth.handled) {
@@ -574,7 +673,11 @@ export async function resolveProviderAuths(params: {
         provider,
       });
       if (fallbackAuth) {
-        auths.push(fallbackAuth);
+        if (provider === "openai" && fallbackAuth.authProfileId) {
+          auths.push(...(await resolveOAuthTokens({ state, provider, all: true })));
+        } else {
+          auths.push(fallbackAuth);
+        }
       }
     } catch (error) {
       if (!params.onError) {

@@ -2998,7 +2998,6 @@ src/infra/pairing-files.ts	1
 src/infra/path-case.ts	3
 src/infra/ports.ts	2
 src/infra/private-mode.ts	2
-src/infra/provider-usage.auth.ts	2
 src/infra/provider-usage.fetch.codex.ts	1
 src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	2

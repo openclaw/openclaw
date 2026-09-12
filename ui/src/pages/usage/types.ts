@@ -87,6 +87,9 @@ type UsageDataState = {
   /** The gateway never converged the refresh; the empty list is not an answer. */
   providerUsageStalled: boolean;
   providerUsageUnavailable: boolean;
+  canSetPreferredProfile?: boolean;
+  preferredProfileBusy?: string | null;
+  preferredProfileErrors?: Record<string, string>;
 };
 
 export type UsageFilterState = {
@@ -172,6 +175,7 @@ type UsageCallbacks = {
     onLogFilterQueryChange: (next: string) => void;
     onLogFilterClear: () => void;
     onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void;
+    onSetPreferredProfile?: (provider: ProviderUsageSummary["providers"][number]) => void;
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;

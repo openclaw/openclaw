@@ -732,6 +732,54 @@ describe("renderUsage", () => {
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
+  it("renders OpenAI account credential context and dispatches preferred-profile actions", () => {
+    const container = document.createElement("div");
+    const onSetPreferredProfile = vi.fn();
+    const base = createUsageProps();
+    const account = {
+      provider: "openai",
+      displayName: "OpenAI",
+      plan: "plus",
+      windows: [{ label: "Week", usedPercent: 20 }],
+      authProfileId: "openai:personal",
+      authProfileOrder: ["openai:work", "openai:personal"],
+      accountEmail: "person@example.com",
+      isPreferred: false,
+      credentialExpiresAt: Date.UTC(2026, 8, 12, 12),
+      credentialStatus: "expiring" as const,
+      credentialRefreshable: true,
+    };
+
+    render(
+      renderUsage({
+        ...base,
+        data: {
+          ...base.data,
+          providerUsage: [account],
+          canSetPreferredProfile: true,
+          preferredProfileErrors: { "openai:personal": "save failed" },
+        },
+        callbacks: {
+          ...base.callbacks,
+          details: { ...base.callbacks.details, onSetPreferredProfile },
+        },
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("person@example.com");
+    expect(container.textContent).toContain("plus");
+    expect(container.textContent).toContain("Access credential expires");
+    expect(container.textContent).toContain("Expiring soon · OpenClaw can refresh");
+    expect(container.textContent).toContain("not subscription expiry");
+    expect(container.textContent).toContain("save failed");
+    const button = container.querySelector<HTMLButtonElement>(".provider-usage-preference button");
+    button?.click();
+    expect(onSetPreferredProfile).toHaveBeenCalledWith(account);
+    expect(button?.title).toContain("new agent selections and failover");
+    expect(button?.title).toContain("does not switch an already sticky session");
+  });
+
   it("filters visible sessions when an agent scope is selected", () => {
     const container = document.createElement("div");
 

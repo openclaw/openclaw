@@ -10,6 +10,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import {
   GatewayPageController,
@@ -56,6 +57,8 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private providerUsageSummary: ProviderUsageSummary | null = null;
   @state() private providerUsageUnavailable = false;
   @state() private providerUsageIncomplete = false;
+  @state() private preferredProfileBusy: string | null = null;
+  @state() private preferredProfileErrors: Record<string, string> = {};
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -450,6 +453,74 @@ class UsagePage extends OpenClawLightDomElement {
     }
   }
 
+  private async setPreferredProfile(
+    provider: ProviderUsageSummary["providers"][number],
+  ): Promise<void> {
+    const client = this.context.gateway.snapshot.client;
+    const agentId = this.usageAgentId ?? undefined;
+    const profileId = provider.authProfileId;
+    const currentOrder = provider.authProfileOrder;
+    if (
+      !client ||
+      !profileId ||
+      !currentOrder ||
+      provider.isPreferred ||
+      this.preferredProfileBusy ||
+      !canCallGatewayMethod(this.context.gateway.snapshot, "models.authOrderSet", "operator.admin")
+    ) {
+      return;
+    }
+    const profileIds = [profileId, ...currentOrder.filter((candidate) => candidate !== profileId)];
+    this.preferredProfileBusy = profileId;
+    this.preferredProfileErrors = { ...this.preferredProfileErrors, [profileId]: "" };
+    try {
+      const result = await client.request<{ warning?: string }>("models.authOrderSet", {
+        provider: "openai",
+        profileIds,
+        ...(agentId ? { agentId } : {}),
+      });
+      if (
+        client !== this.context.gateway.snapshot.client ||
+        agentId !== (this.usageAgentId ?? undefined)
+      ) {
+        return;
+      }
+      if (this.providerUsageSummary) {
+        this.providerUsageSummary = {
+          ...this.providerUsageSummary,
+          providers: this.providerUsageSummary.providers.map((candidate) =>
+            candidate.provider === "openai" && candidate.authProfileId
+              ? {
+                  ...candidate,
+                  authProfileOrder: profileIds,
+                  isPreferred: candidate.authProfileId === profileId,
+                }
+              : candidate,
+          ),
+        };
+      }
+      if (result.warning) {
+        this.preferredProfileErrors = {
+          ...this.preferredProfileErrors,
+          [profileId]: result.warning,
+        };
+      }
+    } catch (error) {
+      if (
+        client !== this.context.gateway.snapshot.client ||
+        agentId !== (this.usageAgentId ?? undefined)
+      ) {
+        return;
+      }
+      this.preferredProfileErrors = {
+        ...this.preferredProfileErrors,
+        [profileId]: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      this.preferredProfileBusy = null;
+    }
+  }
+
   override render() {
     const timeSeries = this.details.timeSeries.data;
     const props: UsageProps = {
@@ -473,6 +544,13 @@ class UsagePage extends OpenClawLightDomElement {
         providerUsage: this.providerUsageSummary?.providers ?? [],
         providerUsageStalled: this.providerUsageStalled,
         providerUsageUnavailable: this.providerUsageUnavailable,
+        canSetPreferredProfile: canCallGatewayMethod(
+          this.context.gateway.snapshot,
+          "models.authOrderSet",
+          "operator.admin",
+        ),
+        preferredProfileBusy: this.preferredProfileBusy,
+        preferredProfileErrors: this.preferredProfileErrors,
       },
       filters: {
         startDate: this.usageStartDate,
@@ -630,6 +708,7 @@ class UsagePage extends OpenClawLightDomElement {
           },
           onSelectSession: (key, shiftKey, orderedKeys) =>
             this.selectSession(key, shiftKey, orderedKeys),
+          onSetPreferredProfile: (provider) => void this.setPreferredProfile(provider),
           onTimeSeriesModeChange: (mode) => {
             this.usageTimeSeriesMode = mode;
           },

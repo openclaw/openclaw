@@ -76,6 +76,11 @@ function scopeProviderUsageCredentialKey(
 function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
   const usageByProvider = new Map<string, ProviderUsageStatus>();
   for (const snap of usage.providers) {
+    // Account-scoped summaries may contain several OpenAI cards. Models uses
+    // one provider-level enrichment, so retain the first (current-order) card.
+    if (usageByProvider.has(snap.provider)) {
+      continue;
+    }
     usageByProvider.set(snap.provider, {
       windows: snap.windows,
       ...(snap.summary ? { summary: snap.summary } : {}),
@@ -94,20 +99,22 @@ function retainLastGoodOnTimeout(
   if (!lastGood) {
     return summary;
   }
+  const snapshotKey = (provider: ProviderUsageSnapshot) =>
+    `${provider.provider}\0${provider.authProfileId ?? ""}`;
   const lastGoodByProvider = new Map(
     lastGood.providers
       .filter((provider) => provider.error === undefined)
-      .map((provider) => [provider.provider, provider]),
+      .map((provider) => [snapshotKey(provider), provider]),
   );
   const retainedLastGood = summary.providers.some(
-    (provider) => provider.error === "Timeout" && lastGoodByProvider.has(provider.provider),
+    (provider) => provider.error === "Timeout" && lastGoodByProvider.has(snapshotKey(provider)),
   );
   return {
     ...summary,
     updatedAt: retainedLastGood ? lastGood.updatedAt : summary.updatedAt,
     providers: summary.providers.map((provider) =>
       provider.error === "Timeout"
-        ? (lastGoodByProvider.get(provider.provider) ?? provider)
+        ? (lastGoodByProvider.get(snapshotKey(provider)) ?? provider)
         : provider,
     ),
   };

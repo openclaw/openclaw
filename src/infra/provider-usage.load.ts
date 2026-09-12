@@ -83,7 +83,22 @@ async function fetchProviderUsageSnapshot(params: {
     },
   });
   if (pluginSnapshot) {
-    return pluginSnapshot;
+    return {
+      ...pluginSnapshot,
+      ...(params.auth.email && !pluginSnapshot.accountEmail
+        ? { accountEmail: params.auth.email }
+        : {}),
+      ...(params.auth.authProfileId ? { authProfileId: params.auth.authProfileId } : {}),
+      ...(params.auth.authProfileOrder ? { authProfileOrder: params.auth.authProfileOrder } : {}),
+      ...(params.auth.isPreferred !== undefined ? { isPreferred: params.auth.isPreferred } : {}),
+      ...(params.auth.credentialExpiresAt !== undefined
+        ? { credentialExpiresAt: params.auth.credentialExpiresAt }
+        : {}),
+      ...(params.auth.credentialStatus ? { credentialStatus: params.auth.credentialStatus } : {}),
+      ...(params.auth.credentialRefreshable !== undefined
+        ? { credentialRefreshable: params.auth.credentialRefreshable }
+        : {}),
+    };
   }
   return await fetchProviderUsageSnapshotFallback({
     auth: params.auth,
@@ -113,9 +128,9 @@ export async function loadProviderUsageSummary(
         displayName: providerUsageLabel(provider) ?? provider,
       }))
     : opts.auth
-      ? opts.auth.map((auth) => ({
-          provider: auth.provider,
-          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+      ? [...new Set(opts.auth.map((auth) => auth.provider))].map((provider) => ({
+          provider,
+          displayName: providerUsageLabel(provider) ?? provider,
         }))
       : listProviderUsagePluginDescriptors({
           config,
@@ -126,62 +141,87 @@ export async function loadProviderUsageSummary(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
   const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
-  const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
+  const failureSnapshot = (
+    provider: UsageProviderId,
+    error: string,
+    auth?: ProviderAuth,
+  ): ProviderUsageSnapshot => ({
     provider,
     displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
     windows: [],
     error,
+    ...(auth?.email ? { accountEmail: auth.email } : {}),
+    ...(auth?.authProfileId ? { authProfileId: auth.authProfileId } : {}),
+    ...(auth?.authProfileOrder ? { authProfileOrder: auth.authProfileOrder } : {}),
+    ...(auth?.isPreferred !== undefined ? { isPreferred: auth.isPreferred } : {}),
+    ...(auth?.credentialExpiresAt !== undefined
+      ? { credentialExpiresAt: auth.credentialExpiresAt }
+      : {}),
+    ...(auth?.credentialStatus ? { credentialStatus: auth.credentialStatus } : {}),
+    ...(auth?.credentialRefreshable !== undefined
+      ? { credentialRefreshable: auth.credentialRefreshable }
+      : {}),
   });
   let authStore = opts.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
-  const tasks = descriptors.map(({ provider }) => {
-    // The response deadline does not end the auth/fetch producer's lifetime.
-    return raceUsageTimeout(
-      trackAsyncWork(async () => {
-        let authError: unknown;
-        const auth =
-          opts.auth?.find((candidate) => candidate.provider === provider) ??
-          (
-            await resolveProviderAuths({
-              providers: [provider],
-              agentDir: opts.agentDir,
+  const tasks = descriptors.map(async ({ provider }) => {
+    let auths: ProviderAuth[];
+    try {
+      let authError: unknown;
+      auths = opts.auth
+        ? opts.auth.filter((candidate) => candidate.provider === provider)
+        : await resolveProviderAuths({
+            providers: [provider],
+            agentDir: opts.agentDir,
+            config,
+            env,
+            getStore: getAuthStore,
+            store: opts.authStore,
+            onError: (_provider, error) => {
+              authError = error;
+            },
+          });
+      if (authError) {
+        const message = formatErrorMessage(authError);
+        return [failureSnapshot(provider, message.trim() || "Auth failed")];
+      }
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      return [failureSnapshot(provider, message.trim() || "Auth failed")];
+    }
+
+    return await Promise.all(
+      auths.map((auth) =>
+        // Each saved account owns its timeout and failure so one bad profile
+        // cannot hide successful siblings.
+        raceUsageTimeout(
+          trackAsyncWork(async () => {
+            if (auth.authError) {
+              return failureSnapshot(provider, auth.authError, auth);
+            }
+            return await fetchProviderUsageSnapshot({
+              auth,
               config,
               env,
-              getStore: getAuthStore,
-              store: opts.authStore,
-              onError: (_provider, error) => {
-                authError = error;
-              },
-            })
-          )[0];
-        if (authError) {
-          const message = formatErrorMessage(authError);
-          return failureSnapshot(provider, message.trim() || "Auth failed");
-        }
-        if (!auth) {
-          return undefined;
-        }
-        return await fetchProviderUsageSnapshot({
-          auth,
-          config,
-          env,
-          agentDir: opts.agentDir,
-          workspaceDir: opts.workspaceDir,
+              agentDir: opts.agentDir,
+              workspaceDir: opts.workspaceDir,
+              timeoutMs,
+              fetchFn,
+            });
+          }),
           timeoutMs,
-          fetchFn,
-        });
-      }),
-      timeoutMs,
-      failureSnapshot(provider, "Timeout"),
-    ).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      return failureSnapshot(provider, message.trim() || "Fetch failed");
-    });
+          failureSnapshot(provider, "Timeout", auth),
+        ).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          return failureSnapshot(provider, message.trim() || "Fetch failed", auth);
+        }),
+      ),
+    );
   });
 
   const snapshots = (await Promise.all(tasks))
-    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
+    .flat()
     .toSorted(
       (left, right) =>
         (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -

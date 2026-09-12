@@ -20,6 +20,63 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("UsagePage cache convergence", () => {
+  it("moves an OpenAI profile to the front without reordering its siblings", async () => {
+    const usage = cacheSnapshot("sessions", "fresh");
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        return {
+          updatedAt: 1,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [{ label: "Week", usedPercent: 10 }],
+              authProfileId: "openai:second",
+              authProfileOrder: ["openai:first", "openai:second", "openai:third"],
+              accountEmail: "second@example.com",
+              isPreferred: false,
+              credentialStatus: "static",
+              credentialRefreshable: false,
+            },
+          ],
+        };
+      }
+      if (method === "usage.cost") {
+        return usage.costSummary;
+      }
+      if (method === "sessions.usage") {
+        return usage.result;
+      }
+      if (method === "models.authOrderSet") {
+        return { provider: "openai" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const context = contextWithClient({ request } as unknown as GatewayBrowserClient);
+    context.setGatewaySnapshot({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        features: { methods: ["models.authOrderSet"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true, context);
+    await preloadUsage(page);
+
+    const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (entry) => entry.textContent?.trim() === "Set as preferred",
+    );
+    expect(button).toBeDefined();
+    button!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authOrderSet", {
+        provider: "openai",
+        profileIds: ["openai:second", "openai:first", "openai:third"],
+      }),
+    );
+    await page.updateComplete;
+    expect(page.textContent).toContain("Preferred");
+  });
+
   it("gives a debounced date change its own retries when an old poll becomes due", async () => {
     vi.useFakeTimers();
     focusDocument();
