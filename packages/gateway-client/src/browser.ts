@@ -7,6 +7,7 @@ export * from "./connect-auth.js";
 export * from "./protocol-client.js";
 export * from "./reconnect-policy.js";
 export * from "./session-projection.js";
+export { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export * from "./session-subscriptions.js";
 export {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,

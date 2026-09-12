@@ -25,7 +25,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { chatScopedEventSessionMatches, resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -50,9 +50,10 @@ import {
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import {
+  captureChatProjectionScope,
   getChatSessionProjection,
+  publishChatSessionProjection,
   readChatSessionProjectionScope,
-  reduceChatSessionProjection,
 } from "./history-merge.ts";
 import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
 import {
@@ -386,12 +387,12 @@ function handleSessionsChangedEvent(
     });
   }
   if (resetsSelectedSession) {
-    const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-    // Reset keeps the public session ID; the explicit reducer event is the
-    // only proof that its old live and pending transcript no longer exists.
-    reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+    resetChatHistoryProjection(state, resolveChatAgentId(state) ?? undefined);
   }
   if (changesBranchTopology) {
+    if (!resetsSelectedSession) {
+      publishChatSessionProjection(state, getChatSessionProjection(state), { resetScope: true });
+    }
     retireChatBranchRequests(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
@@ -635,6 +636,7 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
+    const projectionScopeIsCurrent = captureChatProjectionScope(state, terminalPayload.runId);
     const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
     // Keep the complete user display pinned before applying the terminal, but
@@ -643,7 +645,12 @@ export function handlePageGatewayEvent(
       retainUntilConsumed: Boolean(queued && requiresChatInputConsumption(queued)),
     });
     const finish = (outcome: Awaited<typeof retirement>) => {
-      if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
+      if (
+        outcome !== "stale" &&
+        state.connectionEpoch === connectionEpoch &&
+        ownerIsCurrent() &&
+        projectionScopeIsCurrent()
+      ) {
         apply();
       }
     };

@@ -684,6 +684,13 @@ describe("PR refresh wire ownership", () => {
       await Promise.resolve();
       await nextFrame();
       request.mockClear();
+      const forcedSubscriptions = () =>
+        request.mock.calls.filter(
+          ([method, params]) =>
+            method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
+            Array.isArray(params?.refreshSessionKeys) &&
+            params.refreshSessionKeys.length > 0,
+        );
       const message = (text: string) => ({
         role: "assistant",
         content: [
@@ -740,12 +747,40 @@ describe("PR refresh wire ownership", () => {
           await nextFrame();
         }
         pane.presented = !(hiddenFirst && index === 0);
+        const replacedScope = index > 0 && (reset || branchSwitch);
+        if (replacedScope) {
+          const refreshCount = forcedSubscriptions().length;
+          const beforeReplay = {
+            messages: [...state.chatMessages],
+            runId: state.chatRunId,
+            stream: state.chatStream,
+            runError: state.chatRunError,
+          };
+          handlePageGatewayEvent(state, {
+            type: "event",
+            event: "chat",
+            payload: {
+              state: "final",
+              runId: "wire-pr-run",
+              sessionKey: key,
+              message: message(text),
+            },
+          });
+          await nextFrame();
+          expect(forcedSubscriptions()).toHaveLength(refreshCount);
+          expect({
+            messages: state.chatMessages,
+            runId: state.chatRunId,
+            stream: state.chatStream,
+            runError: state.chatRunError,
+          }).toEqual(beforeReplay);
+        }
         handlePageGatewayEvent(state, {
           type: "event",
           event: "chat",
           payload: {
             state: "final",
-            runId: "wire-pr-run",
+            runId: replacedScope ? "wire-pr-replacement-run" : "wire-pr-run",
             sessionKey: key,
             message: message(text),
           },
@@ -757,12 +792,7 @@ describe("PR refresh wire ownership", () => {
         // subscribe acknowledgement finish before the next announcement arrives.
         await nextFrame();
       }
-      const forces = request.mock.calls.filter(
-        ([method, params]) =>
-          method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
-          Array.isArray(params?.refreshSessionKeys) &&
-          params.refreshSessionKeys.length > 0,
-      );
+      const forces = forcedSubscriptions();
       for (const [, params] of forces) {
         expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
       }

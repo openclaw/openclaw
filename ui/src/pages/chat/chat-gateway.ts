@@ -22,6 +22,8 @@ import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
+  chatRunBelongsToRetiredScope,
+  getChatRunOwner,
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
@@ -175,6 +177,14 @@ function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
     }
     return null;
   }
+  if (
+    payload.runId &&
+    chatRunBelongsToRetiredScope(state, payload.runId) &&
+    !activeRunMatches &&
+    !isPendingLocalChatRun(state, payload.runId)
+  ) {
+    return null;
+  }
   const scope = readChatSessionProjectionScope(state);
   const publishVisibleTerminal = (
     message: Record<string, unknown>,
@@ -267,14 +277,13 @@ function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
       const pendingRunId = state.chatQueue.find(
         (item) => item.sendState === "sending" && item.sendRunId,
       )?.sendRunId;
-      const diagnosticOwnerRunId =
-        state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;
+      const diagnosticOwnerRunId = state.chatRunId ?? pendingRunId ?? getChatRunOwner(state);
       if (
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
       ) {
-        // Late diagnostics belong to the active, pending, or latest locally terminal run;
+        // Late diagnostics belong to the active, pending, or retained display owner;
         // publishing them over a newer response falsely marks the new run failed.
         setChatRunError(
           state,
