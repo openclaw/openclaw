@@ -51,6 +51,7 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientByInstanceId,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import {
@@ -573,15 +574,20 @@ async function compactCodexNativeThread(
       params.abortSignal,
       async () => {
         assertCurrent();
-        const client = await clientFactory({
-          startOptions: appServer.start,
-          ...(preparedApiKey
-            ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
-            : { authProfileId: connection.clientAuthProfileId }),
-          agentDir: params.agentDir,
-          config: params.config,
-          assertCurrent,
-        });
+        const boundClient = options.clientFactory
+          ? undefined
+          : retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+        const client =
+          boundClient?.client ??
+          (await clientFactory({
+            startOptions: appServer.start,
+            ...(preparedApiKey
+              ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
+              : { authProfileId: connection.clientAuthProfileId }),
+            agentDir: params.agentDir,
+            config: params.config,
+            assertCurrent,
+          }));
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
         let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
         let compactionSucceeded = false;
@@ -892,7 +898,9 @@ async function compactCodexNativeThread(
               await releaseThreadSubscription?.();
             }
           } finally {
-            if (shouldReleaseDefaultLease) {
+            if (boundClient) {
+              boundClient.release();
+            } else if (shouldReleaseDefaultLease) {
               releaseLeasedSharedCodexAppServerClient(client);
             }
           }

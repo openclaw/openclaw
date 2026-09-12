@@ -14,9 +14,12 @@ import {
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
@@ -31,7 +34,11 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -214,6 +221,125 @@ describe("maybeCompactCodexAppServerSession", () => {
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("compacts through the bound shared client despite a different startup cache key", async () => {
+    vi.stubEnv("CODEX_HOME", tempDir);
+    const harnesses: ReturnType<typeof createClientHarness>[] = [];
+    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id?: number; method: string };
+          if (request.id === undefined) {
+            return;
+          }
+          if (request.method === "initialize") {
+            send({
+              id: request.id,
+              result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome: tempDir },
+            });
+          } else if (request.method === "account/read") {
+            send({ id: request.id, result: { account: null, requiresOpenaiAuth: false } });
+          } else if (request.method === "thread/start") {
+            send({
+              id: request.id,
+              result: {
+                thread: { id: "thread-1", cwd: tempDir, status: { type: "idle" }, turns: [] },
+              },
+            });
+          } else if (request.method === "thread/resume") {
+            send({
+              id: request.id,
+              error: { code: -32600, message: "thread thread-1 already has an active writer" },
+            });
+          } else {
+            send({ id: request.id, result: {} });
+            if (request.method === "thread/compact/start") {
+              for (const method of ["item/started", "item/completed"]) {
+                send({
+                  method,
+                  params: {
+                    threadId: "thread-1",
+                    turnId: "compact-turn",
+                    item: { type: "contextCompaction", id: "compact-item" },
+                  },
+                });
+              }
+              send({
+                method: "turn/completed",
+                params: { threadId: "thread-1", turn: { id: "compact-turn", status: "completed" } },
+              });
+            }
+          }
+        },
+      });
+      harnesses.push(harness);
+      return harness.client;
+    });
+    const pluginConfig = {
+      appServer: {
+        command: process.execPath,
+        args: ["app-server"],
+        homeScope: "user",
+      },
+    };
+    let owner: CodexAppServerClient | undefined;
+    try {
+      owner = await getLeasedSharedCodexAppServerClient({
+        startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig }).start,
+        agentDir: tempDir,
+        authProfileId: null,
+        authBindingFingerprint: "ordinary-turn-binding",
+      });
+      await owner.request("thread/start", { cwd: tempDir }, { timeoutMs: 5_000 });
+      expect(await retainCodexAppServerLiveThread(owner, "thread-1")).toBe(true);
+      const sessionFile = await writeTestBinding({ clientId: owner.getInstanceId() });
+      const params = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        agentDir: tempDir,
+        workspaceDir: tempDir,
+        trigger: "manual" as const,
+      };
+      const options = {
+        pluginConfig,
+        nativeCompletionTimeoutMs: 1_000,
+        nativeInterruptGraceMs: 100,
+      };
+      const explicitFactory = vi.fn(async () => owner!);
+      await expect(
+        maybeCompactCodexAppServerSession(params, { ...options, clientFactory: explicitFactory }),
+      ).resolves.toMatchObject({ ok: true, compacted: true });
+      expect(explicitFactory).toHaveBeenCalledOnce();
+
+      const result = await maybeCompactCodexAppServerSession(params, options);
+      expect(result, result?.reason).toMatchObject({ ok: true, compacted: true });
+      await expect(maybeCompactCodexAppServerSession(params, options)).resolves.toMatchObject({
+        ok: true,
+        compacted: true,
+      });
+      expect(start).toHaveBeenCalledOnce();
+      expect(
+        harnesses[0]?.writes
+          .map((line) => JSON.parse(line).method)
+          .filter((method) => method.startsWith("thread/")),
+      ).toEqual([
+        "thread/start",
+        "thread/compact/start",
+        "thread/compact/start",
+        "thread/compact/start",
+      ]);
+      expect(releaseLeasedSharedCodexAppServerClient(owner)).toBe(true);
+      expect(releaseLeasedSharedCodexAppServerClient(owner)).toBe(false);
+    } finally {
+      if (owner) {
+        releaseLeasedSharedCodexAppServerClient(owner);
+      }
+      start.mockRestore();
+      await Promise.all(harnesses.map(({ client }) => client.closeAndWait()));
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects a host-only rotation after recovering the predecessor during compaction startup", async () => {
