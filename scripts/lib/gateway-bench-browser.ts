@@ -312,7 +312,10 @@ async function measureSessionClick(
     // The browser click event owns the clock, excluding Playwright actionability and transport.
     await page.evaluate(
       ({ target: expected, timeoutMs: budgetMs }) => {
-        const { promise, resolve } = Promise.withResolvers<ClickTiming>();
+        let resolve!: (timing: ClickTiming) => void;
+        const promise = new Promise<ClickTiming>((complete) => {
+          resolve = complete;
+        });
         let startedAt: number | undefined;
         let historyVisibleMs: number | null = null;
         let composerReadyMs: number | null = null;
