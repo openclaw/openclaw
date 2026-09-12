@@ -1194,7 +1194,9 @@ export function createModelAuthAvailabilityResolver(
         ? undefined
         : (configuredAuthMode ?? (basePolicy.hasDirectMaterial ? "api-key" : undefined));
     const automaticRouteAuthMode =
-      basePolicy.hasDirectFallback && !basePolicy.required ? undefined : selectedConfiguredMode;
+      basePolicy.hasDirectFallback && !basePolicy.required && !configuredAuthMode
+        ? undefined
+        : selectedConfiguredMode;
     const targetForMode = (mode: string | undefined): AuthTarget => {
       const requirement = resolveProviderModelRouteAuthRequirement(mode);
       const route = requirement

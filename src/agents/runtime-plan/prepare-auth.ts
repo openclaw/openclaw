@@ -420,7 +420,7 @@ export function prepareAgentRuntimeAuth(
       ? directSource(selectedConfiguredAuthMode)
       : undefined;
   const automaticRouteAuthMode =
-    fallbackDirectSource && !providerBindingSuppressesProfiles
+    fallbackDirectSource && !providerBindingSuppressesProfiles && !configuredAuthMode
       ? undefined
       : selectedConfiguredAuthMode;
   const ownership = selectedProfileId

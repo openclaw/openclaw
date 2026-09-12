@@ -29,10 +29,15 @@ not grant credential access or change which runtimes can execute a route.
 A `ProviderModelRouteResolution` with `kind: "routes"` can set
 `preferredAuthRequirement`. Core applies that preference only when both
 authentication classes have eligible profiles and selection is automatic.
-Required profile bindings, configured provider authentication, and explicit auth
-order remain authoritative. A preference does not create a credential or make an
-unavailable or cooldown-blocked profile eligible. Single-class selection keeps
-its existing behavior.
+Preparation and availability apply the same precedence: required consumer or
+provider profile bindings select the account; configured provider authentication
+constrains automatic selection to that billing route; explicit auth order ranks
+the remaining eligible profiles. Inherited `routeIntent` and
+`preferredAuthRequirement` only break ties after those choices. An environment
+credential supplies fallback material without clearing configured authentication;
+its mode is inferred only when no mode is configured. A preference does not create
+a credential or make an unavailable or cooldown-blocked profile eligible.
+Single-class selection keeps its existing behavior.
 
 Candidate order remains separate from credential precedence, and
 `runtimePolicy.compatibleIds` continues to describe execution compatibility.

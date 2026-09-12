@@ -1650,6 +1650,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   it.each([
     {
       label: "ambient Platform key behind an OAuth profile",
+      rejects: false,
       env: { OPENAI_API_KEY: "ambient-platform-key" },
       profileId: "openai:chatgpt",
       profile: {
@@ -1662,7 +1663,8 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       requirements: ["subscription"],
     },
     {
-      label: "ambient OAuth token behind a Platform profile",
+      label: "ambient OAuth token behind an incompatible Platform profile",
+      rejects: true,
       config: {
         models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
       } as OpenClawConfig,
@@ -1675,14 +1677,20 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       },
       requirements: ["api-key"],
     },
-  ])("does not queue $label", ({ config, env, profile, profileId, requirements }) => {
-    const prepared = prepareAgentRuntimeAuth({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      config,
-      env,
-      authProfileStore: authStore({ [profileId]: profile }, { openai: [profileId] }),
-    });
+  ])("does not queue $label", ({ config, env, profile, profileId, requirements, rejects }) => {
+    const prepare = () =>
+      prepareAgentRuntimeAuth({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        env,
+        authProfileStore: authStore({ [profileId]: profile }, { openai: [profileId] }),
+      });
+    if (rejects) {
+      expect(prepare).toThrow("Explicit auth order for openai has no usable profiles.");
+      return;
+    }
+    const prepared = prepare();
 
     expect(prepared.attempts.map((attempt) => attempt.plan.modelRoute?.authRequirement)).toEqual(
       requirements,
@@ -1856,7 +1864,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ]);
   });
 
-  it("keeps an API profile ahead of configured OAuth direct material", () => {
+  it("keeps configured OAuth direct material on the subscription route", () => {
     const prepared = prepareAgentRuntimeAuth({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -1879,15 +1887,13 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
 
     expect(prepared.attempts.map((attempt) => attempt.plan.modelRoute?.authRequirement)).toEqual([
-      "api-key",
       "subscription",
     ]);
     expect(prepared.attempts).toMatchObject([
-      { kind: "profile", profileId: "openai:platform" },
       {
         kind: "direct",
         allowAuthProfileFallback: false,
-        requiresPriorProfileAttempt: true,
+        requiresPriorProfileAttempt: false,
         plan: { selectedAuthMode: "oauth" },
       },
     ]);
