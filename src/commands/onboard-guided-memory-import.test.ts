@@ -1,238 +1,101 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  runGuidedOnboarding as runGuidedOnboardingImpl,
-  type GuidedOnboardingDeps,
-} from "./onboard-guided.js";
-
-const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
-  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
-
-const restoreTerminalState = vi.hoisted(() => vi.fn());
-const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "candidate:claude-cli"));
-vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped }));
-
-vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
-
-vi.mock("./onboard-interactive-runner.js", async (importActual) => {
-  const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
-  return { ...actual, hasInteractiveOnboardingTty: () => true };
-});
-
-const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn(async () => ({
-    exists: false,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    issues: [] as Array<{ path?: string; message: string }>,
-    config: {},
-  })),
-);
-const localOnboarding = vi.hoisted(() => ({
-  read: vi.fn(() => undefined),
-  readForConfig: vi.fn(() => undefined),
-  begin: vi.fn(),
-  complete: vi.fn(() => true),
-}));
-
-const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-memory-import-log-");
-
-vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
-vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingState: localOnboarding.read,
-  readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
-  beginLocalOnboarding: localOnboarding.begin,
-  completeLocalOnboarding: localOnboarding.complete,
-}));
-vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
-  validateFirstOnboardingAgentName: () => undefined,
-}));
-vi.mock("./onboard-helpers.js", () => ({
-  DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
-  printWizardHeader: vi.fn(),
-}));
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
-}
-
-function setupApplyResult() {
-  return {
-    configPath: "/tmp/openclaw.json",
-    configHashBefore: null,
-    configHashAfter: null,
-    bootstrapPending: false,
-    workspaceReady: true,
-    gateway: { status: "ready" as const, action: "installed" as const },
-    lines: [],
-  };
-}
-
-function setupDeps(params: {
-  prompter: WizardPrompter;
-  applySetup?: GuidedOnboardingDeps["applySetup"];
-  runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
-  runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
-}) {
-  const runSetupMemoryImportStep = vi.fn<
-    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
-  return {
-    createPrompter: () => params.prompter,
-    persistAccessMode: vi.fn(async () => undefined),
-    applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
-    launchHatchTui: vi.fn(async () => undefined),
-    listManualOptions: vi.fn(async () => ({
-      manualProviders: [],
-      authOptions: [],
-      workspace: "/tmp/openclaw-workspace",
-      setupComplete: false,
-    })),
-    detect: vi.fn<NonNullable<GuidedOnboardingDeps["detect"]>>(async () => ({
-      candidates: [
-        {
-          kind: "claude-cli",
-          label: "Claude Code",
-          detail: "logged in",
-          modelRef: "claude-cli/opus",
-          recommended: false,
-          credentials: true,
-        },
-      ],
-      unavailableCandidates: [],
-      manualProviders: [],
-      authOptions: [],
-      recommendedInstalls: [],
-      workspace: "/tmp/openclaw-workspace",
-      setupComplete: false,
-    })),
-    activate: vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "claude-cli/opus",
-      latencyMs: 1250,
-      lines: ["Workspace: /tmp/work", "Gateway: running"],
-    })),
-    persistRiskAcknowledgement: vi.fn(async () => undefined),
-    runSetupMemoryImportStep,
-    runAppRecommendations:
-      params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
-    runBrowserHandoff: vi.fn(async () => ({
-      handedOff: false as const,
-      reason: "timeout" as const,
-    })),
-    runSystemAgentChat: vi.fn(async () => undefined),
-    platform: "linux" as const,
-  } satisfies GuidedOnboardingDeps;
-}
+import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("guided onboarding post-inference steps", () => {
-  beforeAll(async () => {
-    await logPathTracker.setup();
-  });
+  const {
+    candidate,
+    detection,
+    localOnboarding,
+    makeRuntime,
+    promptAuthChoiceGrouped,
+    restoreTerminalState,
+    runGuidedOnboarding,
+    setupApplyResult,
+    setupDeps,
+  } = setupGuidedCustodianTestSuite();
 
-  beforeEach(() => {
-    localOnboarding.read.mockReset();
-    localOnboarding.read.mockReturnValue(undefined);
-    localOnboarding.readForConfig.mockReset();
-    localOnboarding.readForConfig.mockReturnValue(undefined);
-    localOnboarding.begin.mockReset();
-    localOnboarding.complete.mockReset();
-    localOnboarding.complete.mockReturnValue(true);
-    restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockClear();
-    readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      issues: [],
-      config: {},
+  function setupPostInferenceDeps(params: {
+    prompter: WizardPrompter;
+    runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
+    runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  }) {
+    return setupDeps({
+      ...params,
+      detect: async () => detection({ candidates: [candidate("codex-cli", "Codex")] }),
+      activate: vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (activation) => {
+        activation.onCommitStarted?.(localOnboarding.persisted.config ?? {});
+        localOnboarding.persisted.config = {
+          ...localOnboarding.persisted.config,
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+        };
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 1250,
+          lines: ["Inference connected"],
+        };
+      }),
+      applySetup: vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (options, hooks) => {
+        const config = localOnboarding.persisted.config ?? {};
+        options.assertCommitPreconditions?.(config);
+        hooks?.beforePersistentApply?.();
+        localOnboarding.persisted.config = {
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: { ...config.agents?.defaults, workspace: options.workspace },
+          },
+          gateway: { mode: "local" },
+        };
+        return setupApplyResult();
+      }),
     });
-  });
-
-  afterEach(() => {
-    loggingState.rawConsole = null;
-    resetLogger();
-  });
-
-  afterAll(async () => {
-    await logPathTracker.cleanup();
-  });
+  }
 
   it("connects the selected candidate before any workspace prompt", async () => {
-    const persistedConfig: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "claude-cli/opus" } } },
-    };
-    const appliedConfig: OpenClawConfig = {
-      ...persistedConfig,
-      gateway: { mode: "local" },
-    };
-    readConfigFileSnapshot
-      .mockResolvedValueOnce({
-        exists: false,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: {},
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: persistedConfig,
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: appliedConfig,
-      });
-    const select = vi.fn(async () => "unexpected") as unknown as WizardPrompter["select"];
     const text = vi.fn(async () => "unexpected");
     const prompter = createWizardPrompter({
       text,
-      select,
       confirm: vi.fn(async () => false),
     });
-    const applySetup = vi.fn(async () => setupApplyResult());
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
       async ({ config }) => ({ config, commitResult: vi.fn() }),
     );
-    const deps = setupDeps({ prompter, applySetup, runAppRecommendations });
+    const deps = setupPostInferenceDeps({ prompter, runAppRecommendations });
+    const applySetup = vi.mocked(deps.applySetup);
+    const activate = vi.mocked(deps.activate);
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(deps.activate).toHaveBeenCalledWith(
+    const appliedConfig: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" }, workspace: "/tmp/work" },
+      },
+      gateway: { mode: "local" },
+      telemetry: { enabled: false, consentedAt: expect.any(String) },
+      wizard: localOnboarding.persisted.config?.wizard,
+    };
+    expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "claude-cli",
-        modelRef: "claude-cli/opus",
+        kind: "codex-cli",
+        modelRef: "openai/gpt-5.5",
         workspace: "/tmp/work",
         surface: "cli",
       }),
     );
     expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.activate.mock.invocationCallOrder[0]!,
+      activate.mock.invocationCallOrder[0]!,
     );
     expect(text).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
-      undefined,
+      expect.objectContaining({ beforePersistentApply: expect.any(Function) }),
     );
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runAppRecommendations).toHaveBeenCalledWith({
@@ -254,40 +117,6 @@ describe("guided onboarding post-inference steps", () => {
   });
 
   it("imports memories only after setup persists the selected agent workspace", async () => {
-    const inferenceConfig: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "claude-cli/opus" } } },
-    };
-    const appliedConfig: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "claude-cli/opus" },
-          workspace: "/tmp/work",
-        },
-      },
-      gateway: { mode: "local" },
-    };
-    readConfigFileSnapshot
-      .mockResolvedValueOnce({
-        exists: false,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: {},
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: inferenceConfig,
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: appliedConfig,
-      });
     const prompter = createWizardPrompter();
     const runSetupMemoryImportStep = vi.fn<
       NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
@@ -295,10 +124,21 @@ describe("guided onboarding post-inference steps", () => {
       await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
       return { status: "completed", providers: [] };
     });
-    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+    const deps = setupPostInferenceDeps({ prompter, runSetupMemoryImportStep });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
+    const appliedConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          workspace: "/tmp/work",
+        },
+      },
+      gateway: { mode: "local" },
+      telemetry: { enabled: false, consentedAt: expect.any(String) },
+      wizard: localOnboarding.persisted.config?.wizard,
+    };
     expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
       expect.objectContaining({ config: appliedConfig, prompter }),
     );
@@ -320,7 +160,7 @@ describe("guided onboarding post-inference steps", () => {
     const runSetupMemoryImportStep = vi.fn<
       NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
     >(async () => ({ status: "nothing-to-import", providers: [] }));
-    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+    const deps = setupPostInferenceDeps({ prompter, runSetupMemoryImportStep });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
