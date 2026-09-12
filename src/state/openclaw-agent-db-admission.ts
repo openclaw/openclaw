@@ -63,7 +63,7 @@ function assertAgentDatabaseOpenAuthority(
 /** Bind both admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
-    options: OpenClawAgentDatabaseOptions,
+    options: OpenClawAgentDatabaseOptions & { skipIntegrityCheck?: boolean },
     pending: PendingAgentDatabaseOpen,
   ) => SqliteIntegrityOperation<OpenClawAgentDatabase>,
 ) {

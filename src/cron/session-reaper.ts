@@ -137,8 +137,12 @@ export async function sweepCronRunSessions(params: {
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
     // store's physical database owner internally through its SQLite scope.
+    // Use the read-only listing path: the reaper only reads entries to select
+    // pruning candidates, and the writable open runs a full PRAGMA integrity_check
+    // on every agent database (blocking the event loop for seconds per agent).
     for (const { sessionKey, entry } of listSessionEntriesCore({
       agentId: params.agentId,
+      clone: false,
       storePath,
     })) {
       if (!isCronRunSessionKey(sessionKey)) {
