@@ -28,12 +28,30 @@ export function normalizeDeleteCleanupTarget(
 }
 
 /** Binds the irreversible delete handoff to the exact session identity being deleted. */
-export function assignDeleteCleanupDispatch(
+function assignDeleteCleanupDispatch(
   entry: SubagentRunRecord,
   target: SubagentDeleteCleanupTarget,
 ): void {
   entry.deleteCleanupDispatchedAt ??= Date.now();
   entry.deleteCleanupTarget ??= target;
+}
+
+/** Durably records the delete handoff, rolling back when persistence fails. */
+export function persistDeleteCleanupDispatch(
+  entry: SubagentRunRecord,
+  target: SubagentDeleteCleanupTarget,
+  persistOrThrow: () => void,
+): void {
+  const previousDeleteCleanupDispatchedAt = entry.deleteCleanupDispatchedAt;
+  const previousDeleteCleanupTarget = entry.deleteCleanupTarget;
+  assignDeleteCleanupDispatch(entry, target);
+  try {
+    persistOrThrow();
+  } catch (error) {
+    entry.deleteCleanupDispatchedAt = previousDeleteCleanupDispatchedAt;
+    entry.deleteCleanupTarget = previousDeleteCleanupTarget;
+    throw error;
+  }
 }
 
 /** Releases a confirmed session-changed rejection so restart cannot retry that delete. */

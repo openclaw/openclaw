@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeSubagentRunState,
   persistChangedDeleteCleanupFence,
+  persistDeleteCleanupDispatch,
   persistSuppressedSubagentSessionEffects,
 } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -27,6 +28,22 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
 }
 
 describe("delete-cleanup persistence fences", () => {
+  it("rolls back a new delete dispatch when durable persistence fails", () => {
+    const entry = baseRun({ cleanup: "delete" });
+
+    expect(() =>
+      persistDeleteCleanupDispatch(
+        entry,
+        { sessionId: "next-child", lifecycleRevision: "next-revision" },
+        () => {
+          throw new Error("registry store boom");
+        },
+      ),
+    ).toThrow("registry store boom");
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(entry.deleteCleanupTarget).toBeUndefined();
+  });
+
   it("rolls back a missing-identity fence when durable persistence fails", () => {
     const entry = baseRun({ cleanup: "delete" });
     expect(() =>

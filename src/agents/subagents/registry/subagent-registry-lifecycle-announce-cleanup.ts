@@ -3,13 +3,13 @@ import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
-  assignDeleteCleanupDispatch,
   ensureCompletionState,
   ensureDeliveryState,
   getDeliveryLastError,
   isDeliverySuspended,
   normalizeDeleteCleanupTarget,
   persistChangedDeleteCleanupFence,
+  persistDeleteCleanupDispatch,
   persistSuppressedSubagentSessionEffects,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
@@ -456,8 +456,9 @@ export const startSubagentAnnounceCleanupFlow = (
           if (!cleanupSessionIdentity) {
             suppressChildSessionEffects();
           } else {
-            assignDeleteCleanupDispatch(entry, cleanupSessionIdentity);
-            params.persistOrThrow(runId);
+            persistDeleteCleanupDispatch(entry, cleanupSessionIdentity, () =>
+              params.persistOrThrow(runId),
+            );
             const sessionCleanup = await deleteSubagentSessionForCleanup({
               callGateway: params.callGateway,
               childSessionKey: entry.childSessionKey,
@@ -503,8 +504,9 @@ export const startSubagentAnnounceCleanupFlow = (
             // after deletion may already have reached the gateway. The target
             // identity must land with the stamp so restart cannot retarget a
             // successor at the same child key.
-            assignDeleteCleanupDispatch(entry, cleanupSessionIdentity);
-            params.persistOrThrow(runId);
+            persistDeleteCleanupDispatch(entry, cleanupSessionIdentity, () =>
+              params.persistOrThrow(runId),
+            );
             const sessionCleanup = await deleteSubagentSessionForCleanup({
               callGateway: params.callGateway,
               childSessionKey: entry.childSessionKey,
@@ -618,8 +620,6 @@ export const startSubagentAnnounceCleanupFlow = (
             const previousDelivery = entry.delivery
               ? { ...entry.delivery, payload: entry.delivery.payload }
               : undefined;
-            const previousDeleteCleanupDispatchedAt = entry.deleteCleanupDispatchedAt;
-            const previousDeleteCleanupTarget = entry.deleteCleanupTarget;
             try {
               if (
                 entry.completion?.required === true &&
@@ -634,13 +634,12 @@ export const startSubagentAnnounceCleanupFlow = (
               }
               // Announce owns delete submission; fence late yields at the
               // exact handoff instead of when cleanup merely starts.
-              assignDeleteCleanupDispatch(entry, cleanupSessionIdentity);
-              params.persistOrThrow(runId);
+              persistDeleteCleanupDispatch(entry, cleanupSessionIdentity, () =>
+                params.persistOrThrow(runId),
+              );
               return true;
             } catch (error) {
               entry.delivery = previousDelivery;
-              entry.deleteCleanupDispatchedAt = previousDeleteCleanupDispatchedAt;
-              entry.deleteCleanupTarget = previousDeleteCleanupTarget;
               throw error;
             }
           }
