@@ -214,17 +214,19 @@ function evaluateCliRuntimeModelAuthAvailability(
   const authPolicy = resolveBundledCliBackendAuthPolicy(runtimeProvider);
   if (
     selectedProfileId &&
+    ref.pinnedProfileId &&
     authPolicy?.strictSelectedProfile &&
     !authPolicy.nativeAuthProfileIds?.includes(selectedProfileId)
   ) {
     // This CLI forbids account substitution while materializing selected auth.
     // Neither shared profiles nor its native login can rescue that selection.
-    return ref.pinnedProfileId
-      ? evaluateProviderAuth(provider, {
-          modelId: ref.modelId,
-          requiredProfileId: selectedProfileId,
-        })
-      : evaluation;
+    // Only an explicit pin is a selection: an automatic session preference is
+    // never forwarded to the CLI (see resolveCliExecutionAuthProfileId), so it
+    // must not veto a route the user never constrained.
+    return evaluateProviderAuth(provider, {
+      modelId: ref.modelId,
+      requiredProfileId: selectedProfileId,
+    });
   }
   if (normalizeProviderId(runtimeProvider) === normalizeProviderId(provider)) {
     return runtimeOwners?.length ? evaluation : undefined;
