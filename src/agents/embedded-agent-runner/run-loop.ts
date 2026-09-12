@@ -225,13 +225,13 @@ export async function runPreparedEmbeddedLoop(
     resolvedSessionKey,
     lifecycleGeneration,
   });
-  const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
     params.sessionPersistence !== "detached" &&
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runParams: { ...params, abortSignal: input.laneController.abortSignal },
+    startedAtMs: started,
     provider,
     modelId,
     globalLane,
@@ -717,7 +717,7 @@ export async function runPreparedEmbeddedLoop(
       compaction: {
         state: contextRecoveryState,
         session: sessionPromptState,
-        originalTarget: originalCompactionTarget,
+        originalTarget: { ...sessionPromptState.sessionTarget },
         durable: durableCompactionAccounting,
         authority: accountingAuthority,
       },

@@ -2,6 +2,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
+  MockedFailoverError,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
@@ -12,6 +15,7 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import { resolveEmbeddedRunLaneTimeoutMs } from "./run/lane-runtime.js";
 
 describe("direct embedded retry lifecycle", () => {
   let run: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -32,7 +36,6 @@ describe("direct embedded retry lifecycle", () => {
 
   it("cancels a long retry wait when its lane expires without aborting the caller", async () => {
     const { sleepWithAbort } = await import("../../infra/backoff.js");
-    const { sleepWithAbort: sleep } = await import("../../../packages/retry/src/index.js");
     const mockedSleep = vi.mocked(sleepWithAbort);
     const previousSleep = mockedSleep.getMockImplementation();
     const caller = new AbortController();
@@ -42,9 +45,19 @@ describe("direct embedded retry lifecycle", () => {
     let pending: ReturnType<typeof run> | undefined;
     vi.useFakeTimers();
     try {
-      mockedSleep.mockImplementation((delayMs, signal) => {
+      mockedSleep.mockImplementation((_delayMs, signal) => {
         sleepSignal = signal;
-        wait = sleep(delayMs, signal).finally(() => {
+        wait = new Promise<void>((_resolve, reject) => {
+          const abort = () => {
+            const reason = signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason ?? "aborted")));
+          };
+          if (signal?.aborted) {
+            abort();
+          } else {
+            signal?.addEventListener("abort", abort, { once: true });
+          }
+        }).finally(() => {
           waitSettled = true;
         });
         return wait;
@@ -65,14 +78,15 @@ describe("direct embedded retry lifecycle", () => {
         runId: "run-retry-lane-expiry",
         provider: "mock",
         model: "model",
-        timeoutMs: 30_000,
+        // Admit the provider floor while retaining the finite lane watchdog.
+        timeoutMs: 3_610_000,
         abortSignal: caller.signal,
       });
       const outcome = pending.catch((error: unknown) => error);
       await vi.waitFor(() => expect(mockedSleep).toHaveBeenCalled(), { timeout: 10_000 });
       expect(mockedSleep).toHaveBeenCalledWith(3_600_000, expect.any(AbortSignal));
       expect(waitSettled).toBe(false);
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(resolveEmbeddedRunLaneTimeoutMs(3_610_000) + 1);
       expect(await outcome).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
       expect(caller.signal.aborted).toBe(false);
       expect(sleepSignal?.aborted).toBe(true);
@@ -85,6 +99,42 @@ describe("direct embedded retry lifecycle", () => {
       mockedSleep.mockImplementation(previousSleep ?? (async () => {}));
       vi.useRealTimers();
     }
+  });
+
+  it("refuses an oversized retry floor within a finite run budget without aborting the caller", async () => {
+    const { sleepWithAbort } = await import("../../infra/backoff.js");
+    const caller = new AbortController();
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "error",
+      content: [],
+      errorMessage: "429 rate limit exceeded; Retry-After: 3600",
+    });
+    mockedClassifyAssistantFailoverReason.mockReturnValue("rate_limit");
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedIsRateLimitAssistantError.mockReturnValue(true);
+    mockedIsFailoverAssistantError.mockReturnValue(true);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      }),
+    );
+
+    const pending = run({
+      ...session.runParams,
+      runId: "run-retry-floor-refused",
+      provider: "mock",
+      model: "model",
+      timeoutMs: 30_000,
+      abortSignal: caller.signal,
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(pending).rejects.toThrow(/rate limit/i);
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(assistant);
+    expect(caller.signal.aborted).toBe(false);
   });
 
   it.each(["recovered", "exhausted", "caller-deferred"] as const)(
