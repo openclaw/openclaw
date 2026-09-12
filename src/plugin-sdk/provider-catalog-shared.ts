@@ -10,6 +10,7 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type {
@@ -87,7 +88,9 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
     if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
-      return await existing.value;
+      const value = await existing.value;
+      recordLiveCatalogExpiry(existing.expiresAt);
+      return value;
     }
     liveCatalogCache.delete(key);
   }
@@ -100,6 +103,9 @@ export async function getCachedLiveCatalogValue<T>(params: {
   try {
     const resolved = await entry.value;
     retain = params.shouldCache?.(resolved) ?? true;
+    if (retain) {
+      recordLiveCatalogExpiry(expiresAt);
+    }
     return resolved;
   } finally {
     // Expired work may finish after a replacement load. Only its own entry

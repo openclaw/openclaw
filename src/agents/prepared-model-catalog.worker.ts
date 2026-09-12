@@ -13,6 +13,7 @@ import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-regi
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
@@ -306,16 +307,12 @@ export async function runPreparedModelCatalogWorkerRequest(
         providerStaticModels: undefined,
       });
     }
-    const source = await prepareAgentCatalogSource(
-      exactAgentFacts,
-      catalogGeneration,
-      "live",
-      false,
-      {
+    const { value: source, providerExpiries } = await captureProviderCatalogExpiries(() =>
+      prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
         authStore,
         providerDiscoveryProviderIds: request.providerIds,
         providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-      },
+      }),
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,
@@ -360,6 +357,7 @@ export async function runPreparedModelCatalogWorkerRequest(
       generationFingerprint,
       snapshot: facts.modelCatalog,
       runtimeModels,
+      providerExpiries,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>

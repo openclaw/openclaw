@@ -96,7 +96,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
    * Full inventory discovery is deliberately outside the startup publication boundary.
    */
   modelCatalog: ModelCatalogSnapshot;
-  /** Reads a completed full catalog without starting provider discovery. */
+  /** Returns saved inventory immediately while expired provider catalogs renew separately. */
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Reads validated executable rows from this owner's accepted provider publication. */
   readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
@@ -213,8 +213,7 @@ export type PreparedModelCatalogInventory = {
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
-  providerSources: ReadonlyMap<string, string>;
-  providerCredentials: ReadonlyMap<string, string>;
+  providers: ReadonlyMap<string, { source: string; credentials: string; expiresAt?: number }>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 
@@ -224,7 +223,8 @@ export type PreparedModelCatalogAttempt = {
     pluginFingerprint: string;
     credentials: Readonly<AuthStorageData>;
   };
-  error?: Error;
+  /** Undefined records a failure before an individual provider scope starts. */
+  failedProviders: Set<string | undefined>;
 };
 
 export type PreparedModelRuntimeOwner = {

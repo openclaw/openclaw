@@ -31,7 +31,7 @@ export function createCatalogAttemptReporter(
   const attempt: PreparedModelCatalogAttempt =
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
       ? owner.catalogAttempt
-      : { source };
+      : { source, failedProviders: new Set() };
   let pendingProviders: readonly string[] = [];
   return {
     started: (providers) => {
@@ -49,7 +49,7 @@ export function createCatalogAttemptReporter(
         enumerable: true,
         configurable: true,
         get: () =>
-          attempt.error !== undefined ||
+          attempt.failedProviders.size > 0 ||
           catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
           undefined,
       });
@@ -59,15 +59,23 @@ export function createCatalogAttemptReporter(
       pendingProviders = providers
         ? pendingProviders.filter((provider) => !providers.includes(provider))
         : [];
-      delete attempt.error;
+      if (providers) {
+        for (const provider of providers) {
+          attempt.failedProviders.delete(provider);
+        }
+      } else {
+        attempt.failedProviders.clear();
+      }
       owner.catalogAttempt = attempt;
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     },
     failed: (error) => {
       if (isCurrent() && !(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        pendingProviders = [];
         const attemptError = toStringifiedError(error);
-        attempt.error = attemptError;
+        for (const provider of pendingProviders.length ? pendingProviders : [undefined]) {
+          attempt.failedProviders.add(provider);
+        }
+        pendingProviders = [];
         owner.catalogAttempt = attempt;
         notifyPreparedModelRuntimePublication({ phase: "catalog-failed", error: attemptError });
       }

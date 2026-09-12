@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
@@ -12,6 +14,23 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeRefreshOptions,
 } from "./prepared-model-runtime.types.js";
+
+const log = createSubsystemLogger("agents/prepared-model-runtime");
+
+export function refreshCommittedProviderCatalogs(
+  owners: Iterable<PreparedModelRuntimeOwner>,
+): void {
+  for (const owner of owners) {
+    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
+      continue;
+    }
+    void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
+      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+        log.warn(`provider catalog refresh failed: ${String(error)}`);
+      }
+    });
+  }
+}
 
 /** Retains provider inventory across runtime selection; rebuilds check its source and auth. */
 export function collectPreparedModelRuntimeInventories(
