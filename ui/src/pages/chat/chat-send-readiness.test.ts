@@ -381,6 +381,85 @@ it.each([false, true])(
   },
 );
 
+it.each(["steer", "interrupt", "queue"] as const)(
+  "preserves the selected %s policy when initial history reveals an active run",
+  async (followUpMode) => {
+    const sessionKey = "agent:main:main";
+    const message = "Apply my selected follow-up mode";
+    const history = createDeferred<ChatHistoryResult>();
+    const host = makeChatHost({
+      sessionKey,
+      chatMessage: message,
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: sessionKey,
+            sessionId: "current-session",
+            hasActiveRun: false,
+            status: "done",
+            kind: "direct",
+            updatedAt: 1,
+          },
+        ],
+      },
+      requestHandlers: {
+        "chat.startup": () => history.promise,
+        "chat.send": { status: "started", messageSeq: 1 },
+      },
+    });
+    applyChatCacheSnapshot(host, {
+      messages: [],
+      sessionId: "current-session",
+      displayedLeafEntryId: "cached-leaf",
+      pagination: { hasMore: false, completeSnapshot: true },
+    });
+    const loading = loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = handleSendChat(host, undefined, { followUpMode });
+    try {
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue[0]).toMatchObject({ text: message, sendAttempts: 0 });
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    } finally {
+      history.resolve({
+        messages: [],
+        inFlightRun: { runId: "active-run", text: "Work started after the cached snapshot" },
+        sessionInfo: {
+          key: sessionKey,
+          sessionId: "current-session",
+          activeLeafEntryId: "active-leaf",
+          activeRunIds: ["active-run"],
+          hasActiveRun: true,
+          status: "running",
+          kind: "direct",
+          updatedAt: 2,
+        },
+      });
+      await loading;
+      await sending;
+    }
+
+    if (followUpMode === "queue") {
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ text: message, sendAttempts: 0, sendState: "waiting-idle" }),
+      ]);
+    } else {
+      expect(findChatSendPayload(host)).toMatchObject({
+        sessionKey,
+        message,
+        queueMode: followUpMode,
+      });
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(host.chatQueue).toEqual([]);
+    }
+  },
+);
+
 it.each(["steer", "interrupt"] as const)(
   "resumes an early %s message for its captured session after switching panes",
   async (queueMode) => {

@@ -583,14 +583,14 @@ export async function handleSendChat(
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     let waitingForSettings = Boolean(pendingSettings);
-    const directRunActive = hasDirectSessionRun(host);
+    const applyRunPolicy = hasDirectSessionRun(host) || isInitialChatHistoryUnavailable(host);
     // Only an explicit browser override replaces inherited Gateway policy.
     const followUpMode =
       opts?.followUpMode ??
       host.chatFollowUpMode ??
       normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
     const activeRunQueueMode =
-      !intent && directRunActive && followUpMode !== "queue" ? followUpMode : undefined;
+      !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
@@ -714,7 +714,7 @@ export async function handleSendChat(
           previousDraft: cleared.previousDraft,
           previousAttachments: cleared.previousAttachments,
           previousMentions: cleared.previousMentions,
-          ...(intent || (directRunActive && followUpMode !== "queue")
+          ...(intent || (applyRunPolicy && followUpMode !== "queue")
             ? { allowActiveRunSend: true }
             : {}),
           ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
