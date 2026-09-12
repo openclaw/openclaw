@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readWorkspaceSkillFile } from "../skills/lifecycle/workspace-skill-write.js";
 import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
@@ -33,6 +34,17 @@ type OwnerAgentInference = {
   ownerAgentId?: string;
   unconfiguredOwnerAgentId?: string;
 };
+
+export function isReadOnlyRehearsalProposal(
+  record: SkillProposalRecord,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return [
+    record.target.skillDir,
+    record.target.skillFile,
+    ...(record.supportFiles ?? []).map((file) => path.join(record.target.skillDir, file.path)),
+  ].some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env));
+}
 
 export function resolveLegacyWorkshopWorkspaceDir(
   skillDir: string,
@@ -284,7 +296,7 @@ export async function planWorkshopRelocation(
   recoverableDeferredSources: ReadonlySet<string> = new Set(),
 ) {
   const { candidates, external } = classifyWorkshopRelocation(
-    records,
+    records.filter(({ record }) => !isReadOnlyRehearsalProposal(record, env)),
     config,
     env,
     deferredSources,
@@ -327,6 +339,14 @@ export async function planWorkshopRelocation(
       agentId: plan.ownerAgentId,
       env,
     });
+    if (
+      [target.skillDir, target.skillFile].some((filePath) =>
+        isUpdateRehearsalReadOnlyPath(filePath, env),
+      )
+    ) {
+      plan.deferred = true;
+      continue;
+    }
     const key = [
       plan.ownerAgentId,
       plan.source,
