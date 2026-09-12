@@ -766,7 +766,7 @@ describe("node host invoke", () => {
           error: {
             code: "INVALID_REQUEST",
             message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command\nNo approval request was created for this attempt; this is not a user denial. For shell chains, retry one command at a time with absolute paths or an explicit working directory. For inline code, use a script file. Retry through the normal approval flow.",
           },
         }),
       );

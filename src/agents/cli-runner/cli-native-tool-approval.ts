@@ -25,6 +25,7 @@ import {
   revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../../infra/system-run-approval-binding.js";
+import { formatSystemRunApprovalPreparationError } from "../../infra/system-run-approval-guidance.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
@@ -221,7 +222,7 @@ export async function requestCliNativeToolApproval(params: {
           kind: "deny",
           reason: "operand-binding",
           message: sanitizeExecApprovalWarningTextWithStatus(
-            `${prepared.message}\n${description.text}`,
+            `${formatSystemRunApprovalPreparationError(prepared.message)}\n${description.text}`,
           ).text,
         };
       }
