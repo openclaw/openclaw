@@ -89,9 +89,9 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   const row = html`
     <button
       type="button"
-      class="session-menu__item ${description
-        ? "session-menu__item--described"
-        : ""} ${params.compact ? "new-session-page__environment-option" : ""}"
+      class="session-menu__item ${
+        description ? "session-menu__item--described" : ""
+      } ${params.compact ? "new-session-page__environment-option" : ""}"
       data-suggested=${params.suggested ? "true" : nothing}
       aria-description=${params.suggested ? t("newSession.machineDefault") : nothing}
       data-value=${params.value}
@@ -109,41 +109,57 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         params.onSelect();
       }}
     >
-      ${params.icon
-        ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
-        : nothing}
+      ${
+        params.icon
+          ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
+          : nothing
+      }
       <span class="session-menu__text">
         ${params.label}
-        ${params.selectedSummary
-          ? html`<span class="new-session-page__selected-summary">${params.selectedSummary}</span>`
-          : nothing}
-        ${description
-          ? html`<span class="session-menu__description">${description}</span>`
-          : nothing}
+        ${
+          params.selectedSummary
+            ? html`<span class="new-session-page__selected-summary"
+                >${params.selectedSummary}</span
+              >`
+            : nothing
+        }
+        ${
+          description
+            ? html`<span class="session-menu__description">${description}</span>`
+            : nothing
+        }
       </span>
-      ${!params.compact && params.facts?.length
-        ? html`<span class="new-session-page__menu-meta">
-            ${params.facts?.length
-              ? html`<span class="new-session-page__menu-facts">
-                  ${params.facts.map(
-                    (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-                  )}
-                </span>`
-              : nothing}
-          </span>`
-        : nothing}
-      ${!params.compact && params.sub
-        ? html`<span class="session-menu__sub">${params.sub}</span>`
-        : nothing}
+      ${
+        !params.compact && params.facts?.length
+          ? html`<span class="new-session-page__menu-meta">
+              ${
+                params.facts?.length
+                  ? html`<span class="new-session-page__menu-facts">
+                      ${params.facts.map(
+                        (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+                      )}
+                    </span>`
+                  : nothing
+              }
+            </span>`
+          : nothing
+      }
+      ${
+        !params.compact && params.sub
+          ? html`<span class="session-menu__sub">${params.sub}</span>`
+          : nothing
+      }
 
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
-      ${params.hasSubmenu
-        ? html`<span class="new-session-page__submenu-chevron" aria-hidden="true"
-            >${icons.chevronRight}</span
-          >`
-        : nothing}
+      ${
+        params.hasSubmenu
+          ? html`<span class="new-session-page__submenu-chevron" aria-hidden="true"
+              >${icons.chevronRight}</span
+            >`
+          : nothing
+      }
     </button>
   `;
   return params.compact && !params.hideDetails
@@ -152,61 +168,71 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         placement="right-start"
         ?open-on-click=${accessibleBlocker || touchDetails}
       >
-        ${touchDetails
-          ? html`<div class="new-session-page__environment-detail-trigger">
-              ${row}
-              <button
-                type="button"
-                class="new-session-page__touch-details"
-                aria-label=${t("newSession.environmentDetails", { name: params.label })}
-                ?disabled=${submitting}
-              >
-                ${icons.info}
-              </button>
-            </div>`
-          : row}
+        ${
+          touchDetails
+            ? html`<div class="new-session-page__environment-detail-trigger">
+                ${row}
+                <button
+                  type="button"
+                  class="new-session-page__touch-details"
+                  aria-label=${t("newSession.environmentDetails", { name: params.label })}
+                  ?disabled=${submitting}
+                >
+                  ${icons.info}
+                </button>
+              </div>`
+            : row
+        }
         <div slot="content" class="new-session-page__environment-card">
-          ${unavailableReason
-            ? html`<span>${formatUnavailableReason(unavailableReason, params.remediation)}</span>`
-            : html`
-                <strong>${params.label}</strong>
-                ${params.summary ? detailRow(icons.info, params.summary) : nothing}
-                ${params.platform ? detailRow(icons.layers, params.platform) : nothing}
-                ${params.sub ? detailRow(icons.info, params.sub) : nothing}
-                ${params.capabilityLabels?.length
-                  ? detailRow(icons.info, params.capabilityLabels.join(", "))
-                  : nothing}
-                ${params.trust
-                  ? detailRow(
-                      params.trust === "persistent" ? icons.repeat : icons.clock,
-                      t(
-                        params.trust === "persistent"
-                          ? "newSession.persistentEnvironmentHint"
-                          : "newSession.disposableEnvironmentHint",
-                      ),
-                    )
-                  : nothing}
-                ${params.provider ? detailRow(icons.server, params.provider) : nothing}
-                ${params.hardware ? detailRow(icons.info, params.hardware) : nothing}
-                ${[
-                  ...new Set(
-                    [
-                      params.description,
-                      ...(params.facts ?? []),
-                      params.provider && !params.disabled ? undefined : params.title,
-                    ].filter(Boolean),
-                  ),
-                ].map((detail) => detailRow(icons.info, detail!))}
-                ${params.capacityLabel
-                  ? html`<div class="new-session-page__card-row">
-                      <span class="new-session-page__card-icon" aria-hidden="true"
-                        >${icons.activity}</span
-                      ><span class="new-session-page__capacity-caption"
-                        >${params.capacityLabel}</span
-                      >
-                    </div>`
-                  : nothing}
-              `}
+          ${
+            unavailableReason
+              ? html`<span>${formatUnavailableReason(unavailableReason, params.remediation)}</span>`
+              : html`
+                  <strong>${params.label}</strong>
+                  ${params.summary ? detailRow(icons.info, params.summary) : nothing}
+                  ${params.platform ? detailRow(icons.layers, params.platform) : nothing}
+                  ${params.sub ? detailRow(icons.info, params.sub) : nothing}
+                  ${
+                    params.capabilityLabels?.length
+                      ? detailRow(icons.info, params.capabilityLabels.join(", "))
+                      : nothing
+                  }
+                  ${
+                    params.trust
+                      ? detailRow(
+                          params.trust === "persistent" ? icons.repeat : icons.clock,
+                          t(
+                            params.trust === "persistent"
+                              ? "newSession.persistentEnvironmentHint"
+                              : "newSession.disposableEnvironmentHint",
+                          ),
+                        )
+                      : nothing
+                  }
+                  ${params.provider ? detailRow(icons.server, params.provider) : nothing}
+                  ${params.hardware ? detailRow(icons.info, params.hardware) : nothing}
+                  ${[
+                    ...new Set(
+                      [
+                        params.description,
+                        ...(params.facts ?? []),
+                        params.provider && !params.disabled ? undefined : params.title,
+                      ].filter(Boolean),
+                    ),
+                  ].map((detail) => detailRow(icons.info, detail!))}
+                  ${
+                    params.capacityLabel
+                      ? html`<div class="new-session-page__card-row">
+                          <span class="new-session-page__card-icon" aria-hidden="true"
+                            >${icons.activity}</span
+                          ><span class="new-session-page__capacity-caption"
+                            >${params.capacityLabel}</span
+                          >
+                        </div>`
+                      : nothing
+                  }
+                `
+          }
         </div>
       </openclaw-tooltip>`
     : row;
@@ -371,38 +397,44 @@ export function renderCloudConfiguration(params: {
       role="group"
       aria-label=${t("newSession.operatingSystem")}
     >
-      ${fixedOs
-        ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-            >${fixedOs.label}</span
-          >`
-        : renderCloudOsMenuItems({
-            operatingSystems,
-            selectedId: params.selectedOs,
-            suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-            submitting: params.submitting,
-            onSelect: params.onSelectOs,
-          })}
+      ${
+        fixedOs
+          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
+              >${fixedOs.label}</span
+            >`
+          : renderCloudOsMenuItems({
+              operatingSystems,
+              selectedId: params.selectedOs,
+              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+              submitting: params.submitting,
+              onSelect: params.onSelectOs,
+            })
+      }
     </div>
-    ${params.machines.length
-      ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
-          <div
-            class="new-session-page__cloud-choice-list"
-            role="group"
-            aria-label=${t("newSession.machine")}
-          >
-            ${fixedMachine
-              ? renderFixedMachine(fixedMachine)
-              : renderCloudMachineMenuItems({
-                  machines: params.machines,
-                  selectedId: params.selectedMachine,
-                  suggestedId: params.suggested
-                    ? params.machines.find((machine) => machine.default)?.id
-                    : undefined,
-                  submitting: params.submitting,
-                  onSelect: params.onSelectMachine,
-                })}
-          </div>`
-      : nothing}
+    ${
+      params.machines.length
+        ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
+            <div
+              class="new-session-page__cloud-choice-list"
+              role="group"
+              aria-label=${t("newSession.machine")}
+            >
+              ${
+                fixedMachine
+                  ? renderFixedMachine(fixedMachine)
+                  : renderCloudMachineMenuItems({
+                      machines: params.machines,
+                      selectedId: params.selectedMachine,
+                      suggestedId: params.suggested
+                        ? params.machines.find((machine) => machine.default)?.id
+                        : undefined,
+                      submitting: params.submitting,
+                      onSelect: params.onSelectMachine,
+                    })
+              }
+            </div>`
+        : nothing
+    }
   </section>`;
 }
 
