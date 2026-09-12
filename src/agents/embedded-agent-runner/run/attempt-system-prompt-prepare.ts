@@ -322,7 +322,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     })(),
     systemPrompt: attemptSystemPrompt.systemPrompt,
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
-    skillsPrompt: params.skillsPrompt,
+    skillsPrompt: effectiveSkillsPrompt ?? "",
     tools: params.effectiveTools,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
