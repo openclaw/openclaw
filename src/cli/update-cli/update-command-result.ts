@@ -2,6 +2,7 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -16,13 +17,15 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
@@ -59,6 +62,47 @@ export type MutableUpdateExecutionResult = {
   activationConfig?: UpdateConfigSnapshot;
 };
 
+export function createUpdateCommandFailureResult(
+  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
+    failure: { cause: unknown; detail?: string };
+    admission?: true;
+  },
+): UpdateRunResult {
+  const { failure, admission, ...result } = params;
+  const { cause, detail } = failure;
+  const preMutationFailure = cause instanceof UpdatePreMutationError;
+  const admissionFailure =
+    admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
+  const reason =
+    cause instanceof UpdateRequesterRevokedError
+      ? cause.code
+      : preMutationFailure
+        ? cause.reason
+        : admissionFailure
+          ? "managed-service-preflight"
+          : "update-failed";
+  return {
+    ...result,
+    status: "error",
+    reason,
+    steps: [
+      {
+        name: preMutationFailure || admissionFailure ? reason : "update",
+        command: "openclaw update",
+        cwd: result.root ?? process.cwd(),
+        durationMs: result.durationMs,
+        exitCode: 1,
+        ...(isAbortError(cause) ? { termination: "signal" as const } : {}),
+        ...(detail !== undefined ? { stderrTail: detail } : {}),
+        // Recorded diagnostics do not change post-mutation recovery eligibility.
+        ...(preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
+          ? { failureFacts: cause.failureFacts }
+          : {}),
+      },
+    ],
+  };
+}
+
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(
   opts: UpdateCommandOptions,
@@ -78,13 +122,12 @@ export async function withUpdateAdmissionReporting<T>(
       defaultRuntime.error(message);
     }
     printResult(
-      {
-        status: "error",
+      createUpdateCommandFailureResult({
         mode: "unknown",
-        reason: "managed-service-preflight",
-        steps: [],
+        admission: true,
+        failure: { cause: error },
         durationMs: 0,
-      },
+      }),
       opts,
       { nextAction: message },
     );
@@ -228,6 +271,7 @@ export function resolveAutomaticUpdateTriage(
 }
 
 export type UpdateAdmissionReportParams = {
+  failureFacts?: readonly UpdateFailureFact[];
   root: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
@@ -235,6 +279,12 @@ export type UpdateAdmissionReportParams = {
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
 };
+
+export type RefuseUpdate = (
+  reason: string,
+  message?: string,
+  failureFacts?: readonly UpdateFailureFact[],
+) => Promise<void>;
 
 /** A fresh admission decision is data until its staging and executor owners settle. */
 export class UnreportedUpdateAdmissionOutcome extends Error {

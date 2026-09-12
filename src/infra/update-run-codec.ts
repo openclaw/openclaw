@@ -7,6 +7,8 @@ import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -18,6 +20,7 @@ const RETAINED_STEP_NAMES = [
   "notice:verifying",
   "previous generation restoration",
   "post-update verification",
+  "task-delivery-recovery",
   "driver:adopted",
   "driver:identity-unavailable",
   "reconcile:abandoned",
@@ -72,10 +75,11 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
-        // Reserved identities and timestamps fit; discard optional diagnostics
-        // before losing phase history, notice custody, or restoration proof.
+        // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
-          isRecord(item) ? { ...item, detail: undefined } : item,
+          isRecord(item) && item.step !== "task-delivery-recovery"
+            ? { ...item, detail: undefined, failureFacts: undefined }
+            : item,
         );
         if (JSON.stringify(compacted) === json) {
           throw new Error("Update run retained step metadata exceeds its byte limit");
@@ -146,13 +150,25 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
   // Process identities are exact observations, never redacted diagnostic strings.
   const { driver, previousDrivers, ...originDiagnostics } = input.origin;
   const record = UpdateRunRecordSchema.parse(
-    mapJsonText({ ...input, origin: originDiagnostics }, (value) => {
-      let text = redactSensitiveText(value, { mode: "tools" });
-      for (const [pattern, replacement] of redactPaths) {
-        text = text.replace(pattern, () => replacement);
-      }
-      return truncateUtf16Safe(text, 1024);
-    }),
+    mapJsonText(
+      {
+        ...input,
+        origin: originDiagnostics,
+        steps: input.steps.map((step) => ({
+          ...step,
+          ...(step.failureFacts
+            ? { failureFacts: normalizeUpdateFailureFacts(step.failureFacts, env) }
+            : {}),
+        })),
+      },
+      (value) => {
+        let text = redactSensitiveText(value, { mode: "tools" });
+        for (const [pattern, replacement] of redactPaths) {
+          text = text.replace(pattern, () => replacement);
+        }
+        return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
+      },
+    ),
   );
   record.origin = UpdateRunRecordSchema.shape.origin.parse({
     ...record.origin,

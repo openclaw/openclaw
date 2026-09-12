@@ -234,13 +234,10 @@ async function configureSpawnRuntime(
         close: () => {},
       },
     });
+    const { createInMemoryTaskFlowRegistryStore } =
+      await import("../src/test-utils/task-registry-store.js");
     flowStore.configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({ flows: new Map() }),
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-        close: () => {},
-      },
+      store: createInMemoryTaskFlowRegistryStore(),
     });
     return;
   }

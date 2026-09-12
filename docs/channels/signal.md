@@ -83,6 +83,8 @@ Minimal config:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
 
+Account keys use the normalized IDs shown by status. For example, `Work Phone` with its own `account` number runs as `work-phone` and uses its authored settings without running Doctor. If multiple keys normalize to the same ID, the exact key wins and Doctor reports the collision. Legacy aliases without their own number keep their existing inherited behavior. Doctor can clean up unambiguous keys, but refuses to rename an alias when that would activate previously ignored settings.
+
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
 ## What it is

@@ -4,9 +4,9 @@ import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
-import { createJiti } from "jiti";
 import type * as TypeScript from "typescript";
 import { isPathInside } from "../infra/path-guards.js";
+import { createJiti } from "./jiti-factory.js";
 
 const require = createRequire(import.meta.url);
 

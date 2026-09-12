@@ -100,6 +100,11 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
+Changing a running watcher's condition or saved state protects that edit from the
+old evaluation's state updates and `once` completion, including after a Gateway
+restart. The completed payload still retains its run history. An unchanged
+watcher keeps its usual `once` behavior; renaming it does not reset its condition.
+
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
 Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
@@ -110,7 +115,7 @@ Author watchers around **actionable state**, not only success: a watcher that go
 Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
-Create a watcher from a local script file (`-` reads the script from stdin):
+Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
 
 ```bash
 openclaw automations add \

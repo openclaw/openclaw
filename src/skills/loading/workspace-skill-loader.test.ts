@@ -265,7 +265,7 @@ describe("loadWorkspaceSkills", () => {
     expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
     expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");
     expect(bundledControlUi?.skill.filePath).toBe(
-      path.join(bundledSkillsDir, "control-ui", "SKILL.md"),
+      await fs.realpath(path.join(bundledSkillsDir, "control-ui", "SKILL.md")),
     );
   });
 

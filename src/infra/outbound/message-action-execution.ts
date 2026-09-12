@@ -120,15 +120,11 @@ async function callGatewayMessageAction<T>(params: {
       ? Math.min(gateway.timeoutMs, MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS)
       : gateway.timeoutMs;
   const call = {
-    url: gateway.url,
-    token: gateway.token,
+    ...gateway,
     method: "message.action",
     params: params.actionParams,
     timeoutMs,
     signal: params.abortSignal,
-    clientName: gateway.clientName,
-    clientDisplayName: gateway.clientDisplayName,
-    mode: gateway.mode,
     agentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
   };
   try {

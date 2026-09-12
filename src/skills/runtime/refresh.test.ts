@@ -55,7 +55,9 @@ describe("ensureSkillsWatcher", () => {
     createdWatchers.length = 0;
     pluginSkillsMocks.resolvePluginSkillRoots.mockClear();
     pluginSkillsMocks.resolvePluginSkillRootsFromMetadata.mockClear();
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-fixture-"));
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-fixture-")),
+    );
     fixtureWorkspaceDir = await createFixtureDirectory("workspace");
     await createFixtureDirectory("workspace/skills");
   });

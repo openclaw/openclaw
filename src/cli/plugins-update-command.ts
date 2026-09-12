@@ -1,5 +1,6 @@
 // `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
 import { isDeepStrictEqual } from "node:util";
+import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -20,6 +21,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import { resolveSourceCheckoutBundledPluginIds } from "../plugins/bundled-sources.js";
 import {
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
@@ -64,7 +66,7 @@ import { VERSION } from "../version.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
-import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
+import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
@@ -196,19 +198,73 @@ type RunPluginUpdateCommandParams = {
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
   if (params.opts.dryRun) {
-    return await runPluginUpdateCommandUnlocked(params);
+    const exitCode = await runPluginUpdateCommandUnlocked(params);
+    if (exitCode !== 0) {
+      defaultRuntime.exit(exitCode);
+    }
+    return;
   }
   assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async (lease) => await runPluginUpdateCommandUnlocked(params, lease),
+  const gateway = await resolvePluginLifecycleGateway();
+  // Verify the running owner before changing packages; an old or unreachable
+  // Gateway must not silently turn this into an offline update.
+  if (gateway) {
+    await gateway("plugins.list", {});
+  }
+  let changed = false;
+  const update = withPluginLifecycleLease({}, (lease) =>
+    runPluginUpdateCommandUnlocked(params, lease, () => {
+      changed = true;
+    }),
   );
+  let updateFailure: { error: unknown } | undefined;
+  await update.catch((error: unknown) => {
+    updateFailure = { error };
+  });
+  // The runtime owner takes the same lease. Old callbacks retain their captured
+  // package graph while this explicit application waits for ownership.
+  if (changed) {
+    if (gateway) {
+      try {
+        const result = await gateway<PluginsRefreshResult>("plugins.refresh", {});
+        if (!result.runtime) {
+          throw new Error("Plugin update did not return a runtime application receipt.");
+        }
+        for (const warning of result.warnings ?? []) {
+          defaultRuntime.log(theme.warn(warning));
+        }
+        defaultRuntime.log(
+          `Applied plugin updates in Gateway generation ${result.runtime.generation}.`,
+        );
+      } catch (error) {
+        const failure = new Error(
+          "Plugin updates were saved but runtime application failed. Inspect the error, repair the plugin, then run openclaw plugins reload <id>.",
+          { cause: error },
+        );
+        if (updateFailure) {
+          failure.cause = new AggregateError([updateFailure.error, error], undefined, {
+            cause: error,
+          });
+        }
+        throw failure;
+      }
+    } else {
+      defaultRuntime.log("Updates saved; they will load on the next Gateway start.");
+    }
+  }
+  // Recover the original settlement, including rejection with undefined, after runtime apply.
+  const exitCode = await update;
+  // Process exit skips finally blocks; release ownership and apply committed updates first.
+  if (exitCode !== 0) {
+    defaultRuntime.exit(exitCode);
+  }
 }
 
 async function runPluginUpdateCommandUnlocked(
   params: RunPluginUpdateCommandParams,
   lease?: PluginLifecycleLeaseContext,
-) {
+  onMetadataChanged?: () => void,
+): Promise<0 | 1> {
   const assertOwned = lease?.assertOwned.bind(lease);
   if (!params.opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
@@ -232,11 +288,11 @@ async function runPluginUpdateCommandUnlocked(
   const mutationSnapshot = params.opts.dryRun ? null : await sourceSnapshotPromise;
   if (!params.opts.dryRun && !mutationSnapshot) {
     defaultRuntime.error("Could not inspect config ownership before updating plugins or hooks.");
-    return defaultRuntime.exit(1);
+    return 1;
   }
   if (mutationSnapshot && !mutationSnapshot.snapshot.valid) {
     defaultRuntime.error("Cannot update plugins or hooks while the config is invalid.");
-    return defaultRuntime.exit(1);
+    return 1;
   }
   // Bind selection, updater input, ownership checks, and persistence to one
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
@@ -253,6 +309,10 @@ async function runPluginUpdateCommandUnlocked(
     config: cfgWithPluginInstallRecords,
     installRecords: pluginInstallRecords,
   });
+  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+    config: cfgWithPluginInstallRecords,
+    installRecords: pluginInstallRecords,
+  });
   const installOwnerByPluginId = new Map<string, string>();
   const rejectedPluginIds = new Map<string, string>();
   const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
@@ -260,6 +320,9 @@ async function runPluginUpdateCommandUnlocked(
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
     ...Object.keys(pluginInstallRecords),
   ])) {
+    if (sourceBundledIds.has(pluginId)) {
+      continue;
+    }
     const ownership = ownershipResolver.resolveLifecycle(pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
@@ -289,15 +352,17 @@ async function runPluginUpdateCommandUnlocked(
   });
   if (pluginSelection.error) {
     defaultRuntime.error(pluginSelection.error);
-    return defaultRuntime.exit(1);
+    return 1;
   }
+  // Dormant records still reach the updater for notices, but no package mutation.
+  const packageUpdateIds = pluginSelection.pluginIds.filter((id) => !sourceBundledIds.has(id));
   const packageUpdateSnapshotResult = capturePluginPackageUpdateSnapshot({
     index: installedPluginIndex,
-    installOwners: pluginSelection.pluginIds,
+    installOwners: packageUpdateIds,
   });
   if (!packageUpdateSnapshotResult.ok) {
     defaultRuntime.error(packageUpdateSnapshotResult.error);
-    return defaultRuntime.exit(1);
+    return 1;
   }
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
   const packagePluginIds = Object.fromEntries(
@@ -316,19 +381,19 @@ async function runPluginUpdateCommandUnlocked(
   if (pluginSelection.pluginIds.length === 0 && hookSelection.hookIds.length === 0) {
     if (params.opts.all) {
       defaultRuntime.log("No tracked plugins or hook packs to update.");
-      return;
+      return 0;
     }
     defaultRuntime.error(
       params.id
         ? `No tracked plugin or hook pack found for "${params.id}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`
         : "Provide a plugin or hook-pack id, or use --all.",
     );
-    return defaultRuntime.exit(1);
+    return 1;
   }
 
   const pluginUpdateMayMutate =
     !params.opts.dryRun &&
-    pluginSelection.pluginIds.some((pluginId) => {
+    packageUpdateIds.some((pluginId) => {
       return mayMutatePluginInstallRecord(
         pluginInstallRecords[pluginId],
         pluginSelection.specOverrides?.[pluginId],
@@ -345,7 +410,7 @@ async function runPluginUpdateCommandUnlocked(
   if (pluginUpdateMayMutate || hookUpdateMayMutate) {
     if (!mutationSnapshot) {
       defaultRuntime.error("Could not inspect config ownership before updating plugins or hooks.");
-      return defaultRuntime.exit(1);
+      return 1;
     }
     const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
       parsed: (mutationSnapshot.snapshot.parsed ?? {}) as Record<string, unknown>,
@@ -361,7 +426,7 @@ async function runPluginUpdateCommandUnlocked(
     const pluginReferencesMayBeUnresolved =
       Object.hasOwn(parsedConfig, "$include") ||
       containsConfigIncludeDirective(mutationSnapshot.snapshot.sourceConfig.plugins);
-    const pluginIdMigrationMayMutate = pluginSelection.pluginIds.some((pluginId) => {
+    const pluginIdMigrationMayMutate = packageUpdateIds.some((pluginId) => {
       return (
         pluginInstallRecordMayMigrateConfigId({
           pluginId,
@@ -372,7 +437,7 @@ async function runPluginUpdateCommandUnlocked(
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
-    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+    const pluginLoadPathMayMutate = packageUpdateIds.some((pluginId) =>
       configReferencesNpmInstallPath({
         config: cfg,
         install: pluginInstallRecords[pluginId],
@@ -413,7 +478,7 @@ async function runPluginUpdateCommandUnlocked(
     }
     if (blockedReasons.size > 0) {
       defaultRuntime.error(Array.from(blockedReasons).join(" "));
-      return defaultRuntime.exit(1);
+      return 1;
     }
   }
 
@@ -490,9 +555,8 @@ async function runPluginUpdateCommandUnlocked(
         installOwnerMigrations: resolvePluginInstallOwnerMigrations(pluginResult),
       });
       if (!reconciled.ok) {
-        await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
         defaultRuntime.error(reconciled.error);
-        return defaultRuntime.exit(1);
+        return 1;
       }
       pluginResult = { ...pluginResult, config: reconciled.config };
     }
@@ -538,20 +602,19 @@ async function runPluginUpdateCommandUnlocked(
         const currentInstallRecords = await loadInstalledPluginIndexInstallRecords();
         const currentSnapshot = capturePluginPackageUpdateSnapshot({
           index: installedPluginIndex,
-          installOwners: pluginSelection.pluginIds,
+          installOwners: packageUpdateIds,
         });
         if (
           !isDeepStrictEqual(currentInstallRecords, persistedPluginInstallRecords) ||
           !currentSnapshot.ok ||
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
-          await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
           defaultRuntime.error(
             currentSnapshot.ok
               ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
               : currentSnapshot.error,
           );
-          return defaultRuntime.exit(1);
+          return 1;
         }
       }
       const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
@@ -570,7 +633,13 @@ async function runPluginUpdateCommandUnlocked(
           sourceConfig: sourceSnapshot?.snapshot.sourceConfig ?? {},
         }),
       });
-      let recordsOnlyPluginUpdate = false;
+      const writeOptions = {
+        ...sourceSnapshot?.writeOptions,
+        afterWrite: {
+          mode: "none" as const,
+          reason: "plugin update applies runtime after releasing its lease",
+        },
+      };
       if (shouldPersistPluginInstallIndex) {
         if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
           await commitPluginInstallRecordsOnly({
@@ -584,29 +653,26 @@ async function runPluginUpdateCommandUnlocked(
               });
             },
           });
-          recordsOnlyPluginUpdate = pluginResult.changed;
         } else {
           await commitPluginInstallRecordsWithConfig({
             previousInstallRecords: persistedPluginInstallRecords,
             nextInstallRecords: nextPluginInstallRecords,
             nextConfig,
             baseHash: sourceSnapshot?.snapshot.hash,
-            writeOptions: {
-              ...sourceSnapshot?.writeOptions,
-              afterWrite: { mode: "restart", reason: "plugin source changed" },
-            },
+            writeOptions,
           });
         }
       } else {
         await replaceConfigFile({
           nextConfig,
           baseHash: sourceSnapshot?.snapshot.hash,
-          writeOptions: sourceSnapshot?.writeOptions,
+          writeOptions,
         });
       }
       packageUpdatePersisted = true;
+      onMetadataChanged?.();
       await settlePluginInstallTransactions(deferredInstallTransactions, "commit").catch(() =>
-        logger.warn("Plugin update committed, but cleanup failed. Restart is required."),
+        logger.warn("Plugin update committed, but cleanup failed. Run openclaw plugins doctor."),
       );
       if (pluginResult.changed) {
         await refreshPluginRegistryAfterConfigMutation({
@@ -616,11 +682,7 @@ async function runPluginUpdateCommandUnlocked(
           invalidateRuntimeCache: false,
           logger,
         });
-        if (recordsOnlyPluginUpdate) {
-          await notifyGatewayPluginMetadataChanged(cfg);
-        }
       }
-      defaultRuntime.log("Restart the gateway to load plugins and hooks.");
     }
 
     const outcomeSummary = logPluginUpdateOutcomes({
@@ -628,13 +690,10 @@ async function runPluginUpdateCommandUnlocked(
       log: defaultRuntime.log,
       error: defaultRuntime.error,
     });
-    if (outcomeSummary.hasErrors) {
-      defaultRuntime.exit(1);
-    }
-  } catch (error) {
+    return outcomeSummary.hasErrors ? 1 : 0;
+  } finally {
     if (!packageUpdatePersisted) {
       await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
     }
-    throw error;
   }
 }

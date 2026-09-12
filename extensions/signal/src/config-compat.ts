@@ -3,6 +3,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -323,18 +324,15 @@ function signalAccountIds(entries: Record<string, unknown>[]): string[] {
     .map(([accountId]) => accountId);
 }
 
-function isDefaultSignalAccountId(accountId: string | undefined): boolean {
-  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
+function resolveNestedDefaultEntryIndex(entries: Record<string, unknown>[]): number | undefined {
+  const accounts = isRecord(entries[0]?.accounts) ? entries[0].accounts : {};
+  const key = resolveSignalAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+  const offset = signalAccountIds(entries).findIndex((accountId) => accountId === key);
+  return offset >= 0 ? offset + 1 : undefined;
 }
 
-function resolveSignalAccountKey(
-  accounts: Record<string, unknown>,
-  accountId: string,
-): string | undefined {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  return Object.keys(accounts).find(
-    (key) => Boolean(key.trim()) && normalizeAccountId(key) === normalizedAccountId,
-  );
+function isDefaultSignalAccountId(accountId: string | undefined): boolean {
+  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
 }
 
 function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
@@ -357,7 +355,7 @@ function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: nu
   // A canonical root transport owns the default account; a nested default's
   // retired endpoint fields are cleanup-only and must not block migration.
   return (
-    isDefaultSignalAccountId(signalAccountIds(entries)[index - 1]) &&
+    index === resolveNestedDefaultEntryIndex(entries) &&
     isSignalTransportConfig(entries[0]?.transport)
   );
 }
@@ -415,14 +413,11 @@ function allocateMigratedManagedPorts(params: {
 }): Array<SignalTransportConfig | undefined> {
   const reservedPorts = new Set<number>();
   const rootIsAccount = hasRootSignalAccount(params.entries);
-  const accountIds = signalAccountIds(params.entries);
-  const nestedDefaultOffset = accountIds.findIndex((accountId) =>
-    isDefaultSignalAccountId(accountId),
-  );
+  const nestedDefaultIndex = resolveNestedDefaultEntryIndex(params.entries);
   const canonicalDefaultIndex = isSignalTransportConfig(params.entries[0]?.transport)
     ? 0
-    : nestedDefaultOffset >= 0
-      ? nestedDefaultOffset + 1
+    : nestedDefaultIndex !== undefined
+      ? nestedDefaultIndex
       : rootIsAccount
         ? 0
         : undefined;
@@ -480,7 +475,7 @@ function applyMigratedSignalTransports(params: {
   if (!isRecord(nextSignal)) {
     return undefined;
   }
-  const accountIds = signalAccountIds(params.entries);
+  const nestedDefaultIndex = resolveNestedDefaultEntryIndex(params.entries);
   const nextAccounts = isRecord(nextSignal.accounts) ? nextSignal.accounts : {};
   const nextEntries = [nextSignal, ...Object.values(nextAccounts).filter(isRecord)];
   const rootIsAccount = hasRootSignalAccount(params.entries);
@@ -488,8 +483,7 @@ function applyMigratedSignalTransports(params: {
     ? params.entries[0].transport
     : undefined;
   for (const [index, entry] of nextEntries.entries()) {
-    const accountId = index === 0 ? undefined : accountIds[index - 1];
-    if (isDefaultSignalAccountId(accountId)) {
+    if (index === nestedDefaultIndex) {
       const defaultTransport = canonicalRootTransport ?? params.transports[index];
       if (defaultTransport) {
         nextSignal.transport = defaultTransport;

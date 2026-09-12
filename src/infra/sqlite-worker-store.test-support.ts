@@ -5,7 +5,7 @@ import { parentPort, threadId } from "node:worker_threads";
 import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
 
@@ -22,7 +22,8 @@ if (parentPort) {
 
 export type FixtureOpenInput =
   | { type: "link"; existingPath: string }
-  | { type: "replace"; backupPath: string };
+  | { type: "observe"; markerPath: string }
+  | { type: "replace"; backupPath: string; replacementPath?: string };
 
 type Receipt = { actor: string; writes: number; threadId: number };
 export type FixtureOperations = {
@@ -56,15 +57,39 @@ function waitForFile(file: string): Promise<void> {
 
 export function createSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
-  { databasePath }: { databasePath: string },
+  context: { databasePath: string },
+): SqliteWorkerBackend<FixtureOperations> {
+  return createFixtureBackend(input, context.databasePath, false);
+}
+
+export function openExistingSqliteWorkerBackend(
+  input: FixtureOpenInput | undefined,
+  context: { databasePath: string },
+): SqliteWorkerBackend<FixtureOperations> {
+  return createFixtureBackend(input, context.databasePath, true);
+}
+
+function createFixtureBackend(
+  input: FixtureOpenInput | undefined,
+  databasePath: string,
+  existingOnly: boolean,
 ): SqliteWorkerBackend<FixtureOperations> {
   if (input?.type === "link") {
     linkSync(input.existingPath, databasePath);
+  } else if (input?.type === "observe") {
+    writeFileSync(input.markerPath, "factory called");
   } else if (input?.type === "replace") {
     renameSync(databasePath, input.backupPath);
+    if (input.replacementPath) {
+      renameSync(input.replacementPath, databasePath);
+    }
   }
-  const db = openNodeSqliteDatabase(databasePath);
-  db.exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+  const db = openNodeSqliteDatabase(
+    existingOnly ? resolveExistingSqliteFileUri(databasePath) : databasePath,
+  );
+  if (!existingOnly) {
+    db.exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+  }
   const query = getNodeSqliteKysely<{ entries: { id: Generated<number>; value: string } }>(db);
   const actor = randomUUID();
   let writes = 0;

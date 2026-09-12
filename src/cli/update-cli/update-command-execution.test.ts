@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -232,7 +234,7 @@ beforeEach(() => {
   mocks.maybeRestartService.mockResolvedValue(undefined);
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
-  mocks.pluginPreflight.mockResolvedValue(undefined);
+  mocks.pluginPreflight.mockResolvedValue([]);
   mocks.readGitRecovery.mockResolvedValue({ serviceRestartSafe: true });
   mocks.runGitUpdate.mockResolvedValue({ ...successfulUpdate, mode: "git" });
   mocks.runPackageUpdate.mockResolvedValue(successfulUpdate);
@@ -389,6 +391,48 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
   });
 
+  it.each(["admission", "execution"] as const)(
+    "preserves native inspection reasons through %s refusal",
+    async (phase) => {
+      mocks.maybeStopService.mockImplementation(async ({ handoffFromGateway }) => {
+        if (phase === "admission" || handoffFromGateway) {
+          return {
+            stopped: false,
+            inspected: false,
+            runtimeInspected: false,
+            running: false,
+            serviceMutationAllowed: false,
+            serviceUpdateVerdict: {
+              kind: "unavailable",
+              message: "The systemd user session bus is unavailable.",
+              inspectionReason: "systemd-user-bus-unavailable",
+            },
+            blockMessage: "The systemd user session bus is unavailable.",
+          };
+        }
+        return inspectOrStopService("inspect");
+      });
+      const execution = await executeMutableUpdate(executionParams("package"));
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: "managed-service-preflight",
+        steps: [
+          {
+            failureFacts: [
+              {
+                check: "managed-service",
+                code: "systemd-user-bus-unavailable",
+                message: "The systemd user session bus is unavailable.",
+              },
+            ],
+          },
+        ],
+      });
+      expect(mocks.serviceStopped).toBe(false);
+      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["available", "incompatible", "changed-owner"] as const)(
     "admits local artifacts from the staged version before rehearsal: %s",
     async (outcome) => {
@@ -403,11 +447,16 @@ describe("mutable update execution", () => {
           expect(targetVersion).toBe("1.0.7");
           expect(mocks.serviceStopped).toBe(false);
           if (outcome === "incompatible") {
-            throw new UpdatePreMutationError(
-              "plugin-incompatible",
-              "fixture installed plugin is incompatible",
-            );
+            return [
+              {
+                pluginId: "fixture",
+                reason: "Installed plugin is incompatible and its replacement is unavailable.",
+                message: "Fixture plugin update needs a retry.",
+                guidance: [],
+              },
+            ];
           }
+          return [];
         });
         mocks.revalidateSchemaContext.mockImplementation(async (context) => {
           if (outcome === "changed-owner" && events.includes("preflight")) {
@@ -439,17 +488,17 @@ describe("mutable update execution", () => {
           packageTargetVersion: undefined,
         });
         expect(events).toEqual(
-          outcome === "available" ? ["staged", "preflight", "rehearsal"] : ["staged", "preflight"],
+          outcome === "changed-owner"
+            ? ["staged", "preflight"]
+            : ["staged", "preflight", "rehearsal"],
         );
         expect(execution?.mutationStarted).toBe(false);
         expect(mocks.serviceStopped).toBe(false);
-        expect(execution?.result.status).toBe(outcome === "available" ? "ok" : "error");
-        if (outcome !== "available") {
+        expect(execution?.result.status).toBe(outcome === "changed-owner" ? "error" : "ok");
+        if (outcome === "changed-owner") {
           expect(mocks.validateCanary).not.toHaveBeenCalled();
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-          expect(execution?.result.reason).toBe(
-            outcome === "incompatible" ? "plugin-incompatible" : "database-schema-preflight",
-          );
+          expect(execution?.result.reason).toBe("database-schema-preflight");
         }
       });
     },
@@ -470,6 +519,7 @@ describe("mutable update execution", () => {
         let databaseAdvanced = target !== "artifact-state-change";
         mocks.pluginPreflight.mockImplementation(async () => {
           databaseAdvanced = true;
+          return [];
         });
         mocks.checkTargetSchemas.mockImplementation(async (versions) => ({
           incompatible:
@@ -585,17 +635,17 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { failure: "missing", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "metadata", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "throw", contract: "api", range: ">=1.0.0", refused: false },
-    { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", refused: true },
-    { failure: "metadata", contract: "host", range: ">=1.0.2", refused: true },
-    { failure: "throw", contract: "host", range: ">=1.0.2", refused: true },
+    { failure: "missing", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "metadata", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "throw", contract: "api", range: ">=1.0.0", incompatible: false },
+    { failure: "missing", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "metadata", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "throw", contract: "api", range: ">=1.0.0 <1.0.1", incompatible: true },
+    { failure: "metadata", contract: "host", range: ">=1.0.2", incompatible: true },
+    { failure: "throw", contract: "host", range: ">=1.0.2", incompatible: true },
   ])(
-    "refuses unresolved incompatible plugins before mutation ($failure, $contract, $range)",
-    async ({ failure, contract, range, refused }) => {
+    "preserves plugin admission and exception handling ($failure, $contract, $range)",
+    async ({ failure, contract, range, incompatible }) => {
       await withTestDir({ prefix: "openclaw-plugin-admission-" }, async (installPath) => {
         await fs.writeFile(
           path.join(installPath, "package.json"),
@@ -616,8 +666,9 @@ describe("mutable update execution", () => {
           failure === "missing"
             ? "No matching version found"
             : "registry connection failed: ECONNRESET";
+        const metadataFailure = new Error(error);
         if (failure === "throw") {
-          mocks.npmMetadata.mockRejectedValue(new Error(error));
+          mocks.npmMetadata.mockRejectedValue(metadataFailure);
         } else {
           mocks.npmMetadata.mockResolvedValue({
             ok: false,
@@ -631,32 +682,48 @@ describe("mutable update execution", () => {
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
         const execution = await executeMutableUpdate(executionParams("package"));
+        const unclassifiedFailure = incompatible && failure === "throw";
 
-        expect(execution?.result.status).toBe(refused ? "error" : "ok");
-        if (refused) {
-          expect(execution?.result.reason).toBe("plugin-incompatible");
-          expect(execution?.failure?.detail).toContain('Plugin "demo" (installed 1.0.0)');
-          expect(execution?.failure?.detail).toContain(range);
-          expect(execution?.failure?.detail).toContain("core 1.0.1");
-          expect(execution?.failure?.detail).toContain("@example/demo@1.0.1");
-          expect(execution?.failure?.detail).toContain(error);
-          if (failure !== "missing") {
-            expect(execution?.failure?.detail).toContain("registry could not be reached");
-            expect(execution?.failure?.detail).toContain("Retry when the registry is reachable");
-          }
+        expect(execution?.result.status).toBe(unclassifiedFailure ? "error" : "ok");
+        expect(mocks.npmMetadata).toHaveBeenCalledTimes(incompatible ? 1 : 0);
+        expect(mocks.serviceStopped).toBe(false);
+        if (unclassifiedFailure) {
+          expect(execution?.result.reason).toBe("update-failed");
+          expect(execution?.failure?.cause).toBe(metadataFailure);
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
           expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-          expect(mocks.serviceStopped).toBe(false);
         } else {
+          const warnings = await mocks.pluginPreflight.mock.results[0]?.value;
           expect(execution?.result.reason).toBeUndefined();
+          expect(mocks.prepareMutableUpdate).toHaveBeenCalledOnce();
           expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+          if (incompatible) {
+            expect(warnings).toEqual([
+              expect.objectContaining({
+                pluginId: "demo",
+                reason: expect.stringContaining(range),
+                message:
+                  'Plugin "demo" update availability could not be confirmed; the core update can continue.',
+                guidance: [],
+              }),
+            ]);
+            expect(warnings[0]?.reason).toContain("Installed 1.0.0");
+            expect(warnings[0]?.reason).toContain("@example/demo@1.0.1");
+            expect(warnings[0]?.reason).toContain(error);
+            if (failure === "metadata") {
+              expect(warnings[0]?.reason).toContain("registry could not be reached");
+            }
+            expect(mocks.runtimeError).toHaveBeenCalledWith(warnings[0]?.message);
+          } else {
+            expect(warnings).toEqual([]);
+          }
         }
       });
     },
   );
 
   it("waits for plugin availability before preparing a package update", async () => {
-    const available = createDeferred();
+    const available = createDeferred<[]>();
     mocks.pluginPreflight.mockImplementation(() => available.promise);
     const execution = executeMutableUpdate(executionParams("package"));
     try {
@@ -665,7 +732,7 @@ describe("mutable update execution", () => {
       expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
       expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
     } finally {
-      available.resolve();
+      available.resolve([]);
     }
     expect((await execution)?.result).toBe(successfulUpdate);
     expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
@@ -675,6 +742,7 @@ describe("mutable update execution", () => {
     let configChanged = false;
     mocks.pluginPreflight.mockImplementation(async () => {
       configChanged = true;
+      return [];
     });
     mocks.revalidateSchemaContext.mockImplementation(async (context) => {
       if (configChanged) {
@@ -781,20 +849,43 @@ describe("mutable update execution", () => {
     },
   );
 
-  it("reports activation exceptions without retrying a fallback package updater", async () => {
-    const failure = new Error("activation failed");
-    mocks.runPackageUpdate.mockRejectedValue(failure);
+  it.each(["activation", "requester revocation", "service ownership"])(
+    "reports %s exceptions without retrying a fallback package updater",
+    async (kind) => {
+      const failure =
+        kind === "requester revocation"
+          ? new UpdateRequesterRevokedError()
+          : kind === "service ownership"
+            ? new GatewayServiceUpdateOwnershipError(
+                "Service manager returned EACCES.",
+                undefined,
+                "service-manager-access-denied",
+              )
+            : new Error("activation failed");
+      mocks.runPackageUpdate.mockRejectedValue(failure);
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(executionParams("package"));
 
-    expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
-    expect(execution?.failure?.cause).toBe(failure);
-    expect(execution?.result).toMatchObject({
-      status: "error",
-      reason: "update-failed",
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    });
-  });
+      expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+      expect(execution?.failure?.cause).toBe(failure);
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: kind === "requester revocation" ? "requester-revoked" : "update-failed",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        steps: [expect.objectContaining({ name: "update", exitCode: 1 })],
+      });
+      expect(mocks.verifyPackageRecovery).not.toHaveBeenCalled();
+      if (kind === "service ownership") {
+        expect(execution?.result.steps[0]?.failureFacts).toEqual([
+          {
+            check: "managed-service",
+            code: "service-manager-access-denied",
+            message: "Service manager returned EACCES.",
+          },
+        ]);
+      }
+    },
+  );
 
   it("keeps Git candidate selection online and delegates its later activation", async () => {
     const events: string[] = [];
@@ -825,5 +916,56 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
     expect(execution?.result.mode).toBe("git");
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+  });
+
+  it("retains rejected Git canary findings in the terminal result", async () => {
+    const fact = {
+      check: "core/doctor/config-readable",
+      code: "doctor-failed",
+      message: "The configured state directory is not readable.",
+      affectedKey: "stateDir",
+    };
+    mocks.validateCanary.mockResolvedValue({
+      status: "error",
+      reason: "doctor-failed",
+      phase: "doctor",
+      durationMs: 1,
+      logTail: [fact.message],
+      steps: [
+        {
+          name: "candidate doctor",
+          command: "openclaw doctor",
+          cwd: "/candidate",
+          durationMs: 1,
+          exitCode: 1,
+          stderrTail: fact.message,
+          failureFacts: [fact],
+        },
+      ],
+    });
+    const repair = await import("./update-command-repair.js");
+    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
+      status: "unavailable",
+      attempts: [],
+      finalValidation: { ok: false, score: 0, summary: fact.message },
+    });
+    mocks.runGitUpdate.mockImplementation(
+      async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
+        if (!params.validateCandidate) {
+          throw new Error("Expected the Git candidate validation callback");
+        }
+        await params.validateCandidate("/candidate");
+        return { ...successfulUpdate, mode: "git" };
+      },
+    );
+
+    const execution = await executeMutableUpdate(executionParams("git"));
+
+    expect(execution?.result).toMatchObject({
+      status: "error",
+      reason: "doctor-failed",
+      steps: [{ failureFacts: [fact] }],
+    });
+    expect(mocks.serviceStopped).toBe(false);
   });
 });

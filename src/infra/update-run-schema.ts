@@ -6,8 +6,22 @@ import {
   UPDATE_RUN_STEP_STATUSES,
   UPDATE_RUN_TRIGGERS,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import {
+  UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigWriteRefusalSchema,
+} from "./update-doctor-config-schema.js";
+import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
+import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
-const text = z.string().max(1024);
+export const UpdateFailureFactSchema = z.object({
+  check: z.string().max(128),
+  code: z.string().max(80),
+  message: z.string().max(200).optional(),
+  affectedKey: z.string().max(128).optional(),
+  pluginId: z.string().max(80).optional(),
+});
+
+const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
 const version = z.object({
   version: text.nullable().optional(),
@@ -21,6 +35,32 @@ const UpdateRunStepSchema = z.object({
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
   detail: text.optional(),
+  failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
+  configChange: z
+    .discriminatedUnion("kind", [
+      UpdateDoctorConfigChangeSchema.options[0].extend({ key: text }),
+      UpdateDoctorConfigChangeSchema.options[1].extend({ message: text }),
+    ])
+    .optional(),
+  configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.extend({
+    reason: text,
+    message: text,
+    keys: z.array(text).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+  }).optional(),
+  snapshotCapacity: UpdateSnapshotCapacitySchema.extend({
+    candidates: z
+      .array(
+        UpdateSnapshotCapacitySchema.shape.candidates.element.extend({
+          directory: text,
+          allocationError: text.optional(),
+        }),
+      )
+      .max(3),
+    selection: UpdateSnapshotCapacitySchema.shape.selection
+      .unwrap()
+      .extend({ directory: text })
+      .nullable(),
+  }).optional(),
 });
 
 const driver = z.object({

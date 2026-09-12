@@ -386,7 +386,7 @@ describe("buildStatusText prepared context windows", () => {
     {
       name: "canonical default with absent agent configuration",
       cfg: {},
-      expectedModel: "openai/gpt-5.6-sol",
+      expectedModel: "openai/gpt-6-astra",
     },
     {
       name: "literal self-provider prefix in a prepared model ID",

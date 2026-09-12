@@ -18,6 +18,10 @@ This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
 
+When [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
+is enabled, older transcript payloads also live in immutable compressed files.
+Use an OpenClaw backup command to capture those payloads with the database.
+
 Never copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a backup.
 The databases are written while the Gateway runs, and raw file copies of a
 live database can be torn or corrupt. Every supported path below captures
@@ -34,7 +38,7 @@ committed state safely.
 
 ## Choose a path
 
-- One-off, everything, portable: `openclaw backup create` archive.
+- One-off state and workspace archive: `openclaw backup create`.
 - One database, compact and verified: `openclaw backup sqlite create`.
 - Versioned and incremental by content: `openclaw backup git create`.
 - Regular protection: provision the Gateway-owned backup automation.
@@ -44,6 +48,11 @@ committed state safely.
   `sqlite3_rsync`.
 
 ## Full archives
+
+Absolute symbolic links keep their original target locations, including links
+to separately backed-up config or credentials. Review these links before
+activating state on another host or at another path; see the
+[backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 
 ```bash
 openclaw backup create --output ~/Backups/openclaw --verify
@@ -96,6 +105,37 @@ agent to exist in the current configuration.
 Snapshot repositories are local directories. Scheduling, upload, retention,
 and restore-on-boot are intentionally left to the operator; the sections
 below cover them.
+
+### Cold transcript backups
+
+Full archives, per-database SQLite snapshots, and Git backups include every
+cold transcript referenced by their captured database. Before publication,
+the backup owner reads each immutable archive, verifies its size and SHA-256,
+and embeds the compressed bytes in the private snapshot. It does not change
+the live database's storage policy. A missing or corrupt archive fails backup
+creation rather than producing a successful backup with incomplete history.
+
+The resulting database is self-contained: restoring it on another machine
+does not need the source `sessions/cold/` directory. Embedded compressed
+payloads add backup bytes and can make a backup larger than the live database;
+compaction may still make it smaller overall. Full archives may also contain
+retained immutable files alongside their self-contained database snapshots.
+
+After restore, the compressed payloads initially remain inside SQLite. If cold
+storage is enabled, the background worker publishes and verifies their archive
+files before releasing the embedded database bytes. The restored history stays
+available throughout this transition. Settings distinguishes embedded archive
+bytes, which are included in the database size, from archive file bytes, and
+reports how many embedded archives moved back to files.
+
+Litestream and `sqlite3_rsync` copy database bytes only and do not perform this
+embedding step. If any file-backed cold archives remain, also capture the
+immutable `cold/` directory under each agent's session artifact directory,
+even if automatic archival is disabled. Capture the database first, then the
+files, and retain every file referenced by that database
+snapshot. A database replica without its referenced cold files is incomplete.
+Prefer the supported OpenClaw snapshot commands when you need one portable
+recovery artifact.
 
 ## Schedule backups
 
@@ -317,7 +357,7 @@ openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 
 The target must not exist or must be empty, and it must not be inside the live
 state directory or any configured live agent directory. OpenClaw verifies
-archive structure, the manifest, hardlinks, symbolic-link containment, and
+archive structure, the manifest, hardlinks, symbolic-link entries, and
 SQLite databases before it writes the target. A non-empty target is refused,
 and a failed extraction cleans its incomplete output. The command never writes
 into live state or agent roots and has no force or in-place mode. Treat the

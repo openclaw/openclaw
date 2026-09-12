@@ -4,6 +4,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -311,6 +312,20 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   }
   try {
     assertAdmission();
+    const configuredOwner = resolveConfiguredOwner(context.owners, input);
+    const catalogOwner =
+      configuredOwner &&
+      ownerKey({
+        ...configuredOwner.input,
+        loadRuntimePlugins: false,
+        runtimePluginSelections: undefined,
+      }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
+        ? configuredOwner
+        : owner;
+    snapshot = capturePreparedModelRuntimeCatalog(
+      snapshot,
+      catalogOwner.snapshot?.readPublishedModels?.(),
+    );
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
       return {

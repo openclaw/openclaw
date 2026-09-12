@@ -240,7 +240,7 @@ export function loadRuntimePluginCandidate(params: {
     enableStateEnabled: enableState.enabled,
     shouldLoadModules: context.shouldLoadModules,
     validateOnly: params.validateOnly,
-    shouldActivate: context.shouldActivate,
+    runtimeSideEffects: context.runtimeSideEffects,
     manifestRecord,
     cfg: context.cfg,
     env: context.env,

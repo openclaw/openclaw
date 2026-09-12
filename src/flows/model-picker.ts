@@ -920,6 +920,7 @@ export async function promptDefaultModel(
   });
   const hasAuth = createProviderAuthChecker({
     cfg,
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: pickerAgentDir,
     env: params.env,
@@ -1158,6 +1159,7 @@ export async function promptModelAllowlist(params: {
     configuredRaw.length > 0;
   const hasAuth = createProviderAuthChecker({
     cfg,
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: pickerAgentDir,
     env: params.env,

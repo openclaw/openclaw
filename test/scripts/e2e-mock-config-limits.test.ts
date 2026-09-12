@@ -300,13 +300,14 @@ describe("mock OpenAI response markers", () => {
           }
 
           const finalStartedAt = performance.now();
-          const final = await request([
+          const completedTurn = [
             user,
             ...assistant,
             api === "responses"
               ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
               : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
-          ]);
+          ];
+          const final = await request(completedTurn);
           if (api === "responses") {
             const response = stream
               ? final.find((event) => event.type === "response.completed").response
@@ -323,6 +324,32 @@ describe("mock OpenAI response markers", () => {
                 .join(""),
             ).toBe("OPENCLAW_E2E_DRAFTPROOF");
             taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
+          }
+
+          const followup = await request([
+            ...completedTurn,
+            { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
+            { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
+          ]);
+          if (api === "responses") {
+            const items = stream
+              ? followup
+                  .filter((event) => event.type === "response.output_item.done")
+                  .map((event) => event.item)
+              : followup[0].output;
+            taskExpect(items).toContainEqual(
+              taskExpect.objectContaining({ type: "function_call", name: "exec" }),
+            );
+          } else {
+            const calls = followup.flatMap((chunk) => {
+              const message = stream ? chunk.choices[0].delta : chunk.choices[0].message;
+              return message.tool_calls ?? [];
+            });
+            taskExpect(calls).toContainEqual(
+              taskExpect.objectContaining({
+                function: taskExpect.objectContaining({ name: "exec" }),
+              }),
+            );
           }
         },
       );

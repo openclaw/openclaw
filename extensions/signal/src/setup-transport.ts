@@ -1,11 +1,12 @@
 // Signal setup owns transport discovery and canonical account writes.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountEntry, signalAccountKeyPolicy } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   listSignalAccountIds,
@@ -85,7 +86,10 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
     if (normalizeAccountId(accountId) === targetAccountId) {
       continue;
     }
-    const accountEntry = resolveAccountEntry(params.cfg.channels?.signal?.accounts, accountId);
+    const accountEntry = resolveSignalAccountEntry(
+      params.cfg.channels?.signal?.accounts,
+      accountId,
+    );
     if (accountEntry?.enabled === false) {
       continue;
     }
@@ -115,8 +119,9 @@ export function resolveConfiguredSignalTransport(
   const signal = cfg.channels?.signal;
   const normalizedAccountId = normalizeAccountId(accountId);
   return normalizedAccountId === DEFAULT_ACCOUNT_ID
-    ? (signal?.transport ?? resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
-    : resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
+    ? (signal?.transport ??
+        resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
+    : resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
 }
 
 function alignManagedConnectionUrlAfterBindChange(params: {
@@ -308,6 +313,7 @@ export function writeSignalAccountTransport(params: {
     channel: "signal",
     accountId: params.accountId,
     patch: { transport },
+    setupSurface: { accountKeyPolicy: signalAccountKeyPolicy },
   });
   const canonical = clearLegacySignalTransportFieldsForAccount({
     cfg: next,

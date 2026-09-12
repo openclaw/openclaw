@@ -806,6 +806,8 @@ export function createChangedCheckPlan(
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
+    add("release changelog artifacts", ["changelog:check"]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);

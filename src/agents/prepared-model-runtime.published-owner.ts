@@ -1,3 +1,4 @@
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   normalizePreparedModelRuntimeInput,
@@ -22,7 +23,7 @@ export function retainPublishedModelRuntimeOwner(
     throw new Error("Published model runtime has no plugin generation");
   }
   return {
-    snapshot,
+    snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot.readPublishedModels?.()),
     pluginGeneration,
     [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
   };

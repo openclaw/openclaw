@@ -21,6 +21,7 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
+import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
   shouldMergeConsecutiveUserTurns,
@@ -52,7 +53,11 @@ type AnthropicToolResultContentBlock = {
   tool_call_id?: unknown;
 };
 
-function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
+function isReplaySafeThinkingTurn(
+  content: unknown[],
+  allowedToolNames: Set<string> | undefined,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
+): boolean {
   const seenToolCallIds = new Set<string>();
   for (const block of content) {
     if (!isReplayToolCallBlock(block)) {
@@ -65,7 +70,11 @@ function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<str
     }
     seenToolCallIds.add(toolCallId);
     const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
-    const resolvedName = resolveReplayToolCallName(rawName, toolCallId, allowedToolNames);
+    const resolvedName = resolveReplayToolCallName(
+      rawName,
+      toolCallId,
+      isCompleted(replayBlock) ? undefined : allowedToolNames,
+    );
     if (!resolvedName || replayBlock.name !== resolvedName) {
       return false;
     }
@@ -138,6 +147,7 @@ function sanitizeReplayToolCallInputs(
   const out: AgentMessage[] = [];
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
+  const isCompleted = createCompletedToolCallPredicate(messages);
 
   for (const [index, message] of messages.entries()) {
     if (!message) {
@@ -160,7 +170,7 @@ function sanitizeReplayToolCallInputs(
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
-        isReplaySafeThinkingTurn(message.content, allowedToolNames) &&
+        isReplaySafeThinkingTurn(message.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
@@ -198,7 +208,11 @@ function sanitizeReplayToolCallInputs(
       }
 
       const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
-      const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
+      const resolvedName = resolveReplayToolCallName(
+        rawName,
+        replayBlock.id,
+        isCompleted(replayBlock) ? undefined : allowedToolNames,
+      );
       if (!resolvedName) {
         changed = true;
         messageChanged = true;

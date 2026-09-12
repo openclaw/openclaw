@@ -39,6 +39,7 @@ import type { GatewayRequestContext } from "./types.js";
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
+  abortSignal: AbortSignal;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
   session: Pick<
     PreparedChatSendSession,
@@ -159,6 +160,7 @@ export function createChatSendMessageInjectionStarter(params: {
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,
+        abortSignal: params.abortSignal,
         ...(debounceMs !== undefined ? { debounceMs } : {}),
         taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
@@ -209,11 +211,6 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
 }): Promise<boolean> {
   const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
-  // Terminal-receipt admission is fenced at the injection-start boundary
-  // (createChatSendMessageInjectionStarter), before the steer is queued, so
-  // no attempt ever exists for a fail-closed session. The only rejection
-  // left here is the runtime refusing the queued steer, which also means
-  // nothing was enqueued — the fallback to follow-up dispatch is safe.
   const finalizedCtx = finalizeInboundContext(ctx);
   const finalization = await finalizeReplyMessageInjectionAttempt({
     attempt: params.attempt,
@@ -221,6 +218,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     inboundAudio: hasInboundAudio(finalizedCtx),
   });
   if (finalization.status === "rejected") {
+    // Rejection also covers withdrawing a canceled queued steer. Fallback
+    // dispatch retains the source run's abort signal and skips canceled input.
     return false;
   }
   recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });

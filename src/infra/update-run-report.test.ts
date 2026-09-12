@@ -198,7 +198,7 @@ describe("update run report", () => {
     if (reason === "requester-revoked") {
       expect(report.markdown).toContain("Further recovery requires a current command owner.");
     } else if (reason === "repair-requires-config-change") {
-      expect(report.markdown).toContain("Rehearsal config changes were not promoted.");
+      expect(report.markdown).toContain("Doctor could not promote config changes.");
     }
   });
 

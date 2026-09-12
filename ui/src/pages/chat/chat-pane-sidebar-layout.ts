@@ -16,6 +16,7 @@ import type {
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   activatePanel,
   toggleSidebarPanelExpanded,
@@ -142,6 +143,7 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
   availableSlots: SidebarSlotId[];
@@ -197,6 +199,7 @@ export function renderSidebarRegion(params: {
           : null
         : html`<openclaw-chat-sidebar-region
             .layout=${params.layout}
+            .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
             .panelTemplates=${panelTemplates ?? params.panelTemplates}
             .panelActions=${params.panelActions}

@@ -156,7 +156,7 @@ export function parseOpenClawNpmPostpublishVerifyArgs(
     throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
   }
   const extraArg = args[1]?.trim();
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
   }
   return { help: false, version };

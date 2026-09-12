@@ -21,9 +21,6 @@ const payloadMocks = vi.hoisted(() => ({
 vi.mock("./payloads.js", () => ({
   buildEmbeddedRunPayloads: payloadMocks.buildEmbeddedRunPayloads,
 }));
-vi.mock("./run-attempt-result.js", () => ({
-  buildTraceToolSummary: () => undefined,
-}));
 
 function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
   return {

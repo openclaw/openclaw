@@ -494,7 +494,7 @@ describe("Team Reports HTTP responses", () => {
     try {
       const response = await fetchPath("/reports/");
       expect(response.status).toBe(503);
-      expect(response.body).toContain("Start or restart the Gateway service");
+      expect(response.body).toContain("Check plugin configuration and reload the plugin");
     } finally {
       available = true;
     }

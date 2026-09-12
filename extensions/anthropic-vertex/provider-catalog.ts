@@ -14,8 +14,14 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveAnthropicVertexBaseUrl,
+  resolveAnthropicVertexClientRegion,
+} from "./region-endpoint.js";
 import { resolveAnthropicVertexRegion } from "./region.js";
 /** Default Anthropic Vertex model used for implicit provider catalogs. */
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
@@ -40,12 +46,12 @@ function buildAnthropicVertexModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
-  input: ModelDefinitionConfig["input"];
-  cost: ModelDefinitionConfig["cost"];
+  input: ProviderRuntimeModel["input"];
+  cost: ProviderRuntimeModel["cost"];
   maxTokens: number;
   mediaInput?: ModelDefinitionConfig["mediaInput"];
   thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
-}): ModelDefinitionConfig {
+}) {
   return {
     id: params.id,
     name: params.name,
@@ -56,10 +62,10 @@ function buildAnthropicVertexModel(params: {
     maxTokens: params.maxTokens,
     ...(params.mediaInput ? { mediaInput: params.mediaInput } : {}),
     ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
-  };
+  } satisfies ModelDefinitionConfig;
 }
 
-function resolveOpus5Cost(region: string): ModelDefinitionConfig["cost"] | undefined {
+function resolveOpus5Cost(region: string): ProviderRuntimeModel["cost"] | undefined {
   const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
   if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
     return undefined;
@@ -67,7 +73,7 @@ function resolveOpus5Cost(region: string): ModelDefinitionConfig["cost"] | undef
   return normalizedRegion === "global" ? OPUS_5_COST.global : OPUS_5_COST.multiRegion;
 }
 
-function resolveSonnet5Cost(region: string): ModelDefinitionConfig["cost"] | undefined {
+function resolveSonnet5Cost(region: string): ProviderRuntimeModel["cost"] | undefined {
   const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
   if (!CLAUDE_5_SUPPORTED_REGIONS.has(normalizedRegion)) {
     return undefined;
@@ -75,7 +81,7 @@ function resolveSonnet5Cost(region: string): ModelDefinitionConfig["cost"] | und
   return normalizedRegion === "global" ? SONNET_5_COST.global : SONNET_5_COST.multiRegion;
 }
 
-function buildAnthropicVertexCatalog(region: string): ModelDefinitionConfig[] {
+function buildAnthropicVertexCatalog(region: string) {
   const opus5Cost = resolveOpus5Cost(region);
   const opus5 = opus5Cost
     ? [
@@ -162,6 +168,19 @@ function buildAnthropicVertexCatalog(region: string): ModelDefinitionConfig[] {
   ];
 }
 
+/** Resolve a missing runtime row using the same regional inventory as discovery. */
+export function resolveAnthropicVertexDynamicModel(
+  modelId: string,
+  baseUrl?: string,
+): ProviderRuntimeModel | undefined {
+  const endpoint = normalizeOptionalString(baseUrl) ?? resolveAnthropicVertexBaseUrl();
+  const region = resolveAnthropicVertexClientRegion({ baseUrl: endpoint });
+  const model = buildAnthropicVertexCatalog(region).find((entry) => entry.id === modelId);
+  return model
+    ? { ...model, provider: "anthropic-vertex", api: "anthropic-messages", baseUrl: endpoint }
+    : undefined;
+}
+
 /** Restore required generation metadata after explicit models replace an implicit row. */
 export function normalizeAnthropicVertexResolvedModel(
   modelId: string,
@@ -226,12 +245,7 @@ export function buildAnthropicVertexProvider(params?: {
   nowMs?: number;
 }): ModelProviderConfig {
   const region = resolveAnthropicVertexRegion(params?.env);
-  const baseUrl =
-    normalizeLowercaseStringOrEmpty(region) === "global"
-      ? "https://aiplatform.googleapis.com"
-      : region === "us" || region === "eu"
-        ? `https://aiplatform.${region}.rep.googleapis.com`
-        : `https://${region}-aiplatform.googleapis.com`;
+  const baseUrl = resolveAnthropicVertexBaseUrl(params?.env);
 
   return {
     baseUrl,

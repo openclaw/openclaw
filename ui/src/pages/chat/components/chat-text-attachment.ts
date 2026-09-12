@@ -1,6 +1,12 @@
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { cache } from "lit/directives/cache.js";
+import { keyed } from "lit/directives/keyed.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import {
   renderAttachmentPreviewSkeleton,
@@ -112,6 +118,44 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   override render() {
+    const mimeType = this.mimeType.split(";", 1)[0]?.trim().toLowerCase();
+    const markdown =
+      mimeType === "text/markdown" ||
+      mimeType === "text/x-markdown" ||
+      /\.(?:md|markdown)$/i.test(this.label);
+    // Cache detaches the reader before identity or validated-text changes replace it.
+    const reader =
+      this.text === null
+        ? renderAttachmentPreviewSkeleton()
+        : html`${keyed(
+            this.sourceIdentity || this.loadVersion,
+            html`${keyed(
+              this.text,
+              markdown
+                ? html`<article
+                    class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
+                    dir=${detectTextDirection(this.text)}
+                    aria-label=${this.label}
+                    ${markdownBlocks()}
+                  >
+                    ${unsafeHTML(
+                      toSanitizedMarkdownHtml(this.text, {
+                        // The fetch already bounds document size; do not apply chat-message
+                        // truncation or let an attachment load remote tracking images.
+                        mode: "document",
+                        remoteImages: false,
+                        codeBlockInteraction: "interactive",
+                      }),
+                    )}
+                  </article>`
+                : html`<pre
+                    class="sidebar-attachment-preview__text"
+                    tabindex="0"
+                    aria-label=${this.label}
+                  >
+${this.text}</pre>`,
+            )}`,
+          )}`;
     return html`
       ${renderCompactAttachmentCard({
         kind: "document",
@@ -124,14 +168,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
       ${
         this.failed
           ? html`<p class="muted" role="status">${t("chat.attachments.textPreviewUnavailable")}</p>`
-          : this.text === null
-            ? renderAttachmentPreviewSkeleton()
-            : html`<pre
-                class="sidebar-attachment-preview__text"
-                tabindex="0"
-                aria-label=${this.label}
-              >
-${this.text}</pre>`
+          : cache(reader)
       }
     `;
   }

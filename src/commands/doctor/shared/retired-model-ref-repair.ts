@@ -55,7 +55,19 @@ export type ModelRefRepairResolver = (params: {
   agentId?: string;
   authProfileId?: string;
   authProfileSource?: SessionEntry["authProfileOverrideSource"];
+  authProfileOnly?: boolean;
 }) => ModelRefRepair;
+
+export function repairModelRefAuthProfile(
+  modelRef: string,
+  profileIdMap: ReadonlyMap<string, string> | undefined,
+): ModelRefRepair {
+  const parsed = splitTrailingAuthProfile(modelRef);
+  const profile = parsed.profile ? profileIdMap?.get(parsed.profile) : undefined;
+  return profile && profile !== parsed.profile
+    ? { kind: "replace", modelRef: `${parsed.model}@${profile}`, reason: "reference-preservation" }
+    : { kind: "unchanged" };
+}
 
 /** Metadata and exact profile views stay scoped to Doctor's pre-transaction planning. */
 export function createRetiredModelRefRepairResolver(params: {
@@ -65,6 +77,7 @@ export function createRetiredModelRefRepairResolver(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   agentIds?: readonly string[];
   warnings?: string[];
+  authProfileIdMap?: ReadonlyMap<string, string>;
   /** Persisted overrides cannot grant successor permissions by changing their owner's config. */
   checkModelPolicy?: boolean;
 }): ModelRefRepairResolver {
@@ -146,6 +159,7 @@ export function createRetiredModelRefRepairResolver(params: {
             if (!view) {
               view = createModelAuthAvailabilityResolver({
                 cfg: params.cfg,
+                agentId,
                 agentDir,
                 workspaceDir,
                 env,
@@ -269,10 +283,19 @@ export function createRetiredModelRefRepairResolver(params: {
     });
   };
   return (input) => {
-    if (input.agentId) {
-      return resolveForOwner(input, input.agentId);
+    // The auth owner already proved this identity move; model retirement and
+    // successor policy cannot leave a reference pointing at its removed alias.
+    const authRepair = repairModelRefAuthProfile(input.modelRef, params.authProfileIdMap);
+    if (input.authProfileOnly) {
+      return authRepair;
     }
-    const decisions = agents.map((agentId) => resolveForOwner(input, agentId));
+    const mappedInput =
+      authRepair.kind === "replace" ? { ...input, modelRef: authRepair.modelRef } : input;
+    if (input.agentId) {
+      const decision = resolveForOwner(mappedInput, input.agentId);
+      return decision.kind === "unchanged" ? authRepair : decision;
+    }
+    const decisions = agents.map((agentId) => resolveForOwner(mappedInput, agentId));
     const first = decisions[0];
     // A shared default must remain valid for every inheriting auth owner. Never
     // rewrite a Platform choice because another agent uses a retired subscription route.
@@ -290,7 +313,10 @@ export function createRetiredModelRefRepairResolver(params: {
       );
     }
     if (!consistent) {
-      return { kind: "unchanged" };
+      return authRepair;
+    }
+    if (first.kind === "unchanged") {
+      return authRepair;
     }
     // Shared metadata remains valid if any owner still offers another auth route.
     return "retirementScope" in first &&
@@ -309,6 +335,7 @@ type ModelRefRewriteContext = {
   changes: string[];
   warnings?: string[];
   preservePrimaryWithoutSuccessor?: boolean;
+  authProfileOnly?: boolean;
 };
 type RetiredModelSlotRepair = ModelRefRewriteContext & {
   owner: Record<string, unknown>;
@@ -319,7 +346,11 @@ type RetiredModelSlotRepair = ModelRefRewriteContext & {
 
 function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
   return (modelRef: string, path: string): string | null | undefined => {
-    const decision = params.resolve({ modelRef, agentId: params.agentId });
+    const decision = params.resolve({
+      modelRef,
+      agentId: params.agentId,
+      ...(params.authProfileOnly ? { authProfileOnly: true } : {}),
+    });
     if (decision.kind === "unchanged") {
       return undefined;
     }
@@ -356,12 +387,13 @@ function modelSettingsWithoutAlias(value: unknown): unknown {
 /** Apply the same retirement decision to config selectors and cron payload selectors. */
 export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
   const rewrite = createRetiredModelRefRewriter(params);
-  const rewriteSlot = (container: unknown, key: string, path: string) =>
+  const rewriteAuth = createRetiredModelRefRewriter({ ...params, authProfileOnly: true });
+  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
     rewriteModelReferenceSlot({
       container: asOptionalRecord(container),
       key,
       path,
-      resolve: rewrite,
+      resolve: authProfileOnly ? rewriteAuth : rewrite,
     });
   // Speech and media generation select their own capability provider routes.
   for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
@@ -370,6 +402,15 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     if (selector && Object.keys(selector).length === 0) {
       delete params.owner[key];
     }
+  }
+  rewriteSlot(params.owner, "voiceModel", `${params.path}.voiceModel`, true);
+  for (const capability of ["image", "video", "music"] as const) {
+    rewriteSlot(
+      params.owner.mediaModels,
+      capability,
+      `${params.path}.mediaModels.${capability}`,
+      true,
+    );
   }
   // Cron stores fallback refs beside payload.model, rather than inside its selector.
   rewriteSlot({ selector: params.owner }, "selector", params.path);
@@ -394,16 +435,14 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
       continue;
     }
     const retainAlias = decision.reason === "retirement" && decision.retirementScope === "route";
-    // A shared map can remain on the old route for API accounts. Materialize
-    // the retired owner's settings locally, with authored successor values winning.
+    // Local source policy outranks inherited successor settings; an authored local successor wins.
+    // Retained source aliases stay on their original authentication route.
     const settings = [
-      inherited,
-      models?.[modelRef],
+      retainAlias ? modelSettingsWithoutAlias(inherited) : inherited,
       params.inheritedModels?.[decision.modelRef],
+      retainAlias ? modelSettingsWithoutAlias(models?.[modelRef]) : models?.[modelRef],
       models?.[decision.modelRef],
     ]
-      // A retained model owns its alias; copying it would rebind healthy account selections.
-      .map((value, index) => (retainAlias && index < 2 ? modelSettingsWithoutAlias(value) : value))
       .filter((value) => value !== undefined)
       .reduce<unknown>(mergeAgentModelEntryForConfig, undefined);
     if (JSON.stringify(settings) === JSON.stringify(models?.[decision.modelRef])) {
@@ -543,13 +582,28 @@ export function repairRetiredConfigModelRefs(
     });
   }
   const rewrite = createRetiredModelRefRewriter({ path: "", resolve, changes, warnings });
-  const rewriteSlot = (container: unknown, key: string, path: string) =>
+  const rewriteAuth = createRetiredModelRefRewriter({
+    path: "",
+    resolve,
+    changes,
+    warnings,
+    authProfileOnly: true,
+  });
+  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
     rewriteModelReferenceSlot({
       container: asOptionalRecord(container),
       key,
       path,
-      resolve: rewrite,
+      resolve: authProfileOnly ? rewriteAuth : rewrite,
     });
+  for (const capability of ["image", "audio", "video"] as const) {
+    rewriteSlot(
+      config.tools?.media?.[capability],
+      "preferredModel",
+      `tools.media.${capability}.preferredModel`,
+      true,
+    );
+  }
   rewriteSlot(config.tools?.exec?.reviewer, "model", "tools.exec.reviewer.model");
   rewriteSlot(config.tts, "summaryModel", "tts.summaryModel");
   rewriteSlot(config.hooks?.gmail, "model", "hooks.gmail.model");

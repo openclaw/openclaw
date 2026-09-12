@@ -357,9 +357,8 @@ export function adoptConfigSetAck(
 }
 
 function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unknown>) {
-  const original = cloneConfigObject(
-    state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
-  );
+  const original =
+    state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
   const nextRaw = serializeConfigForm(nextForm);
   const originalRaw = serializeConfigForm(original);
   state.configForm = nextForm;

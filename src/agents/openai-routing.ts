@@ -5,7 +5,10 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../plugin-sdk/provider-model-types.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -15,8 +18,10 @@ import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import {
   resolveAgentRuntimePolicyAgentId,
   resolveModelRuntimePolicy,
+  resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "./model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
@@ -47,6 +52,8 @@ export function resolveOpenAIImplicitAgentRuntime(
     config?: OpenClawConfig;
     env?: Readonly<Record<string, string | undefined>>;
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+    runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
   } & AgentRuntimePolicyScope,
 ): "codex" | "openclaw" | null {
   if (!isOpenAIProvider(params.provider)) {
@@ -54,6 +61,14 @@ export function resolveOpenAIImplicitAgentRuntime(
   }
   const modelId = params.modelId;
   const agentId = resolveAgentRuntimePolicyAgentId(params);
+  const primaryModel = params.config
+    ? resolveDefaultModelForAgent({
+        cfg: params.config,
+        agentId,
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      })
+    : undefined;
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider ?? OPENAI_PROVIDER_ID,
@@ -71,7 +86,10 @@ export function resolveOpenAIImplicitAgentRuntime(
     baseUrl: params.baseUrl,
     config: params.config,
     env: params.env,
+    agentId,
     requestTransportOverrides,
+    primaryModel,
+    routeIntent: params.routeIntent ?? resolveModelRouteIntent({ ...params, primaryModel }),
   });
   if (!resolution) {
     // Endpoint and adapter ownership stays in the provider artifact. Without

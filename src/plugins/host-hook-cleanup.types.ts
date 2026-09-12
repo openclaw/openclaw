@@ -9,4 +9,10 @@ export type PluginHostCleanupFailure = {
 export type PluginHostCleanupResult = {
   cleanupCount: number;
   failures: PluginHostCleanupFailure[];
+  deferredPluginIds?: string[];
 };
+
+export type PluginHostRetirementOptions = { deferConsumers?: true };
+export type PluginHostRegistryRetirement = (
+  options?: PluginHostRetirementOptions,
+) => Promise<PluginHostCleanupResult>;

@@ -1,6 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -60,6 +60,7 @@ export async function runCodexAppServerAttempt(
           resources,
           turnRuntime,
           lifecycle,
+          notifications.waitForNativeTerminalItems,
         );
         const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
           prepareCodexAttemptRoute(
@@ -94,19 +95,38 @@ export async function runCodexAppServerAttempt(
           notifications,
           turnStart.turn,
         );
-        let finalizedResult: EmbeddedRunAttemptResult;
+        let finalizedResult: EmbeddedRunAttemptResult | undefined;
         try {
-          await activeTurn.ready;
-          finalizedResult = await finalizeCodexAttempt(
-            resources,
-            turnRuntime,
-            lifecycle,
-            notifications,
-            turnRequest,
-            activeTurn,
-          );
-        } finally {
-          await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+          try {
+            await activeTurn.ready;
+            finalizedResult = await finalizeCodexAttempt(
+              resources,
+              turnRuntime,
+              lifecycle,
+              notifications,
+              turnRequest,
+              activeTurn,
+            );
+          } finally {
+            await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
+          }
+        } catch (error) {
+          if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
+            throw error;
+          }
+          // A failed handoff still owns completed effects. Return their replay
+          // evidence rather than throwing them away at the cleanup boundary.
+          const original = attemptTerminal.project(finalizedResult.terminal).promptError;
+          finalizedResult.terminal = attemptTerminal.merge(finalizedResult.terminal, {
+            kind: "failed",
+            source: "prompt",
+            error: new AggregateError(
+              original ? [original, error] : [error],
+              "Plugin runtime changed, but native continuation failed. Inspect the existing thread before continuing; do not repeat completed actions.",
+            ),
+          });
+          delete finalizedResult.pluginRuntimeRefreshMessages;
+          delete finalizedResult.settledTurnFinalizationContext;
         }
         // Cleanup retires the execution lease; only then can device loss no longer
         // race the final result captured during asynchronous terminal processing.

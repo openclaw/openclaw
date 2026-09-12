@@ -1,7 +1,9 @@
 // Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { backupCreateCommand } from "./backup.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
@@ -30,14 +32,6 @@ vi.mock("../state/backup-run-records.js", () => ({
   recordBackupRunOutcome: recordBackupRunOutcomeMock,
 }));
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } satisfies RuntimeEnv;
-}
-
 function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
   const call = backupVerifyCommandMock.mock.calls[0];
   if (!call) {
@@ -56,7 +50,7 @@ describe("backupCreateCommand verify wrapper", () => {
     recordBackupRunOutcomeMock.mockReset();
   });
 
-  it("optionally verifies the archive after writing it", async () => {
+  it("verifies the archive and settles outcome recording before reporting completion", async () => {
     createBackupArchiveMock.mockResolvedValue({
       archivePath: "/tmp/openclaw-backup.tar.gz",
       archiveRoot: "openclaw-backup",
@@ -75,8 +69,19 @@ describe("backupCreateCommand verify wrapper", () => {
       archivePath: "/tmp/openclaw-backup.tar.gz",
     });
 
-    const runtime = createRuntime();
-    const result = await backupCreateCommand(runtime, { verify: true });
+    const recording = createDeferred();
+    const recordingStarted = createDeferred();
+    recordBackupRunOutcomeMock.mockImplementationOnce(() => {
+      recordingStarted.resolve();
+      return recording.promise;
+    });
+    const runtime = createTestRuntime();
+    const pending = backupCreateCommand(runtime, { verify: true });
+    await recordingStarted.promise;
+    expect(runtime.log).not.toHaveBeenCalled();
+    recording.resolve();
+    const result = await pending;
+    expect(runtime.log).toHaveBeenCalledWith("backup ok");
 
     expect(result.verified).toBe(true);
     expect(backupVerifyCommandMock).toHaveBeenCalledOnce();
@@ -98,10 +103,8 @@ describe("backupCreateCommand verify wrapper", () => {
   it("does not claim completion when both backup and outcome recording fail", async () => {
     const backupError = new Error("snapshot failed");
     createBackupArchiveMock.mockRejectedValue(backupError);
-    recordBackupRunOutcomeMock.mockImplementation(() => {
-      throw new Error("record failed");
-    });
-    const runtime = createRuntime();
+    recordBackupRunOutcomeMock.mockRejectedValue(new Error("record failed"));
+    const runtime = createTestRuntime();
 
     await expect(backupCreateCommand(runtime)).rejects.toBe(backupError);
 

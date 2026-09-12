@@ -70,15 +70,31 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
     });
   });
 
-  it("rejects missing, option-like, and extra arguments before verification", () => {
+  it.each([
+    { argv: ["2026.3.23", "extra"] },
+    { argv: ["2026.3.23", ""] },
+    { argv: ["2026.3.23", " \t "] },
+    { argv: ["2026.3.23", "", "--unexpected"] },
+    { argv: ["--", "2026.3.23", ""] },
+  ])("rejects excess postpublish argv $argv before verification", ({ argv }) => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(argv)).toThrow(
+      "Unexpected openclaw npm postpublish verifier argument",
+    );
+  });
+
+  it("keeps help ahead of unused operands", () => {
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "--help", ""])).toEqual({
+      help: true,
+      version: "",
+    });
+  });
+
+  it("rejects missing and option-like arguments before verification", () => {
     expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
       openClawNpmPostpublishVerifyUsage(),
     );
     expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
       "Unknown openclaw npm postpublish verifier option: --tag",
-    );
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
-      "Unexpected openclaw npm postpublish verifier argument: extra",
     );
   });
 });

@@ -67,6 +67,9 @@ export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 
+const PROVIDER_CACHE_CONTROL_LIMIT_RE =
+  /^A maximum of (\d{1,6}) blocks with cache_control may be provided\. Found (\d{1,6})\.$/i;
+
 /** Format billing copy with optional provider/model and credential context. */
 export function formatBillingErrorMessage(
   provider?: string,
@@ -96,12 +99,42 @@ export function renderFormatErrorCopy(raw: string): string {
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
   const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
+  if (cacheLimit) {
+    return `LLM request rejected: provider allows at most ${cacheLimit[1]} cache_control blocks; the request contained ${cacheLimit[2]}.`;
+  }
   const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
   const [, value, maximum] = match ?? [];
   if (!value || !maximum) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
   return `LLM request rejected: configured maxTokens is ${value}, above the provider maximum of ${maximum}. Lower maxTokens and try again.`;
+}
+
+/** Share bounded request-limit facts between live failures and persisted chat history. */
+export function renderAssistantFormatFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  for (const raw of [message.errorMessage, message.errorBody]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const info = parseApiErrorInfo(raw);
+    const status = extractErrorHttpStatus(raw)?.code;
+    if (
+      !info?.type?.toLowerCase().includes("invalid_request") &&
+      status !== 400 &&
+      status !== 422
+    ) {
+      continue;
+    }
+    const copy = renderFormatErrorCopy(info?.message ?? raw);
+    if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
+      return copy;
+    }
+  }
+  return undefined;
 }
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
@@ -533,7 +566,7 @@ export function renderMissingApiKeyReplyCopy(params?: {
     return null;
   }
   if (provider === "openai" && params?.providerGuidance) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
     return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';

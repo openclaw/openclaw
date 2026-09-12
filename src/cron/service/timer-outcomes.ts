@@ -49,7 +49,8 @@ function resolveCronRunScheduleOwnership(params: {
   currentJob: CronJob;
   activeJobMarker?: CronActiveJobMarker;
 }): CronScheduleOwnership {
-  return params.activeJobMarker?.scheduleMutated === true ||
+  return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
+    params.activeJobMarker?.scheduleMutated === true ||
     !cronSchedulingInputsEqual(params.admittedJob, params.currentJob)
     ? "stale"
     : "current";
@@ -102,6 +103,8 @@ export function applyJobResult(
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.state.pacedNextRunAtMs = undefined;
   job.state.forcePreservedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -596,6 +599,8 @@ export function applyTriggerNoFireResult(
   const previousForcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.updatedAtMs = result.endedAt;
   if (!result.triggerEval.busy && opts?.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
@@ -690,6 +695,7 @@ export function applyOutcomeToAuthoritativeJob(
   opts?: {
     deferredNotifications?: DeferredCronNotifications;
     emit?: boolean;
+    triggerStateRetired?: boolean;
     // A requested run retains startup bookkeeping even when it advances ordinary cadence.
     request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
   },
@@ -699,11 +705,13 @@ export function applyOutcomeToAuthoritativeJob(
     currentJob: job,
     activeJobMarker: result.activeJobMarker,
   });
-  const triggerOwnership = resolveCronRunTriggerOwnership({
-    admittedJob: result.job,
-    currentJob: job,
-    activeJobMarker: result.activeJobMarker,
-  });
+  const triggerOwnership = opts?.triggerStateRetired
+    ? "stale"
+    : resolveCronRunTriggerOwnership({
+        admittedJob: result.job,
+        currentJob: job,
+        activeJobMarker: result.activeJobMarker,
+      });
 
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,

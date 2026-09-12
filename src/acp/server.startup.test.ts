@@ -172,7 +172,7 @@ vi.mock("../gateway/client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: MockGatewayClient) => {
     client.start();
     return {

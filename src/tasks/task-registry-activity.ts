@@ -4,7 +4,6 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
 import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { cloneTaskRecordForObserver } from "./task-registry-records.js";
 import {
   emitTaskRegistryObserverEvent,
@@ -12,7 +11,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import type { TaskActivityOverlayState } from "./task-registry.process-state.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const MAX_ACTIVITY_CHARS = 200;
 const ACTIVITY_LINE_PREFIX = new RegExp(`^(?:\\s*\\S){1,${MAX_ACTIVITY_CHARS + 1}}`);

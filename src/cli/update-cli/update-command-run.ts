@@ -219,6 +219,7 @@ export async function admitUpdateCommandRun(params: {
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
       trigger: "cli",
+      preview: params.opts.dryRun === true,
       origin: { driver },
       supersedeStaleIdentityless:
         !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",

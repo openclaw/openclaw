@@ -23,16 +23,20 @@ import {
 } from "./helpers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
-import { buildTraceToolSummary } from "./run-attempt-result.js";
+import { buildTraceToolSummary, resolveSuccessfulToolNames } from "./run-attempt-result.js";
 import {
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
   isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+import {
+  mergeAttemptToolMediaPayloads,
+  type createPendingToolMediaCarry,
+} from "./tool-media-payloads.js";
 
 export function prepareEmbeddedRunTerminal(input: {
+  mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
@@ -153,22 +157,6 @@ export function prepareEmbeddedRunTerminal(input: {
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
-  const successfulToolNames = [
-    ...new Set(
-      attempt.toolMetas
-        .filter((entry) => entry.isError === false)
-        .map((entry) => entry.toolName.trim())
-        .filter(Boolean),
-    ),
-  ];
-  const missingNestedToolNames = [
-    ...new Set(
-      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
-    ),
-  ]
-    .filter((name) => !successfulToolNames.includes(name))
-    .toSorted();
-  successfulToolNames.push(...missingNestedToolNames);
   Object.assign(agentMeta, {
     terminalReceipt: {
       runId: runParams.runId,
@@ -180,7 +168,7 @@ export function prepareEmbeddedRunTerminal(input: {
         model: reportedModelRef.model,
         responseModel,
       },
-      successfulToolNames,
+      successfulToolNames: resolveSuccessfulToolNames(attempt),
       sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },
@@ -232,21 +220,25 @@ export function prepareEmbeddedRunTerminal(input: {
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     heartbeatToolResponse: attempt.heartbeatToolResponse,
   });
-  const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
-    payloads,
-    toolMediaUrls: attempt.toolMediaUrls,
-    // Preserve harness provenance through terminal delivery. Without it,
-    // message-tool-only routes silently drop native runtime artifacts.
-    hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
-    toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
-      attempt,
-      attempt.toolMediaUrls,
-      runParams.admittedRunContext?.operationalRunInstance,
-    ),
-    toolAudioAsVoice: attempt.toolAudioAsVoice,
-    toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
-    sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-  });
+  const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
+  const payloadsWithToolMedia = mergeToolMedia(
+    {
+      payloads,
+      toolMediaUrls: attempt.toolMediaUrls,
+      // Preserve harness provenance through terminal delivery. Without it,
+      // message-tool-only routes silently drop native runtime artifacts.
+      hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+      toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+        attempt,
+        attempt.toolMediaUrls,
+        runParams.admittedRunContext?.operationalRunInstance,
+      ),
+      toolAudioAsVoice: attempt.toolAudioAsVoice,
+      toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+    },
+    runParams.admittedRunContext?.operationalRunInstance,
+  );
   const recoveredFinalAssistantTextAfterPromptTimeout =
     timedOutDuringPrompt &&
     !timeoutFinal &&

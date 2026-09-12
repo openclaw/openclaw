@@ -64,6 +64,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  agentId?: string;
   sessionId?: string;
   displayName?: string;
   incognito?: boolean;
@@ -121,6 +122,11 @@ export type SidebarRecentSession = {
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
+  /** Own attention remains distinct from the collapsed-tree projection. */
+  ownAttention?: SidebarSessionAttention;
+  childAttention?: readonly SidebarSessionAttention[];
+  unreadChildCount?: number;
+  queuedChildCount?: number;
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -186,6 +192,10 @@ export function rowDemandsVisibility(
         row.containsActiveDescendant ||
         row.hasActiveRun ||
         row.runningChildCount > 0 ||
+        row.failedChildCount > 0 ||
+        (row.workspaceConflictCount ?? 0) > 0 ||
+        row.unread ||
+        (row.unreadChildCount ?? 0) > 0 ||
         row.attention.kind !== "none";
 }
 

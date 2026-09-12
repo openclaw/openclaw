@@ -27,7 +27,7 @@ import {
 } from "./model-catalog-browse.js";
 import {
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -57,6 +57,10 @@ export function createModelCatalogView(params: {
   }
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     variantsByKey.get(resolveModelCatalogIdentityKey(entry));
+  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
+    cfg: params.cfg,
+    policy: openAIModelCatalogRoutePolicy,
+  });
   return {
     logicalEntries: dedupeByKey(params.catalog, resolveModelCatalogIdentityKey),
     variantsOf,
@@ -72,11 +76,7 @@ export function createModelCatalogView(params: {
               }
             : { kind: "unresolved", policy: openAIModelCatalogRoutePolicy };
       const variants = variantsOf(entry);
-      const overrides = resolveConfiguredModelCatalogOverrides({
-        cfg: params.cfg,
-        entry,
-        policy: openAIModelCatalogRoutePolicy,
-      });
+      const overrides = resolveOverrides(entry);
       return projectModelCatalogEntryForRoute({
         entry,
         projection,

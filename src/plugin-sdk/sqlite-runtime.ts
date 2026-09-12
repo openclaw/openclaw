@@ -27,6 +27,7 @@ export {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";

@@ -83,7 +83,6 @@ import {
   resolveSandboxedSessionCreation,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -703,9 +702,7 @@ async function resolveRequestedChannel(params: {
     };
   }
   const sourceCfg = params.context.getRuntimeConfig();
-  const cfg = resolveGatewayPluginConfig({
-    config: sourceCfg,
-  });
+  const cfg = sourceCfg;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -793,7 +790,7 @@ function resolveMessageActionRuntimeConfig(params: {
   });
   // Message actions must use the hot runtime snapshot when it matches the caller's source config.
   if (selected === runtimeConfig && selected !== params.cfg) {
-    return resolveGatewayPluginConfig({ config: selected });
+    return selected;
   }
   return params.cfg;
 }

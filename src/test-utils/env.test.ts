@@ -36,17 +36,28 @@ describe("env test utils", () => {
     expect(process.env[keyB]).toBe(prevB);
   });
 
-  it("captureFullEnv restores added keys and baseline values", () => {
-    const key = "OPENCLAW_ENV_TEST_ADDED";
-    const prevHome = process.env.HOME;
-    const snapshot = captureFullEnv();
-    setTestEnvValue(key, "1");
-    deleteTestEnvValue("HOME");
+  it.each([
+    ["OPENCLAW_ENV_TEST_ADDED", "HOME"],
+    ["constructor", "toString"],
+    ["toString", "constructor"],
+  ])("captureFullEnv removes added %s and restores baseline %s", (addedKey, baselineKey) => {
+    const original = captureFullEnv();
+    try {
+      deleteTestEnvValue(addedKey);
+      setTestEnvValue(baselineKey, "baseline");
+      const snapshot = captureFullEnv();
+      setTestEnvValue(addedKey, "added");
+      deleteTestEnvValue(baselineKey);
 
-    snapshot.restore();
+      snapshot.restore();
 
-    expect(process.env[key]).toBeUndefined();
-    expect(process.env.HOME).toBe(prevHome);
+      expect(Object.hasOwn(process.env, addedKey)).toBe(false);
+      expect(process.env[baselineKey]).toBe("baseline");
+    } finally {
+      deleteTestEnvValue(addedKey);
+      deleteTestEnvValue(baselineKey);
+      original.restore();
+    }
   });
 
   it("withEnv applies values only inside callback", () => {

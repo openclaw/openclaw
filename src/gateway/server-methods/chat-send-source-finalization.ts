@@ -15,7 +15,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantReplyContent,
-  extractAssistantDisplayTextFromContent,
+  extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
   hasVisibleAssistantFinalMessage,
@@ -295,7 +295,7 @@ async function finalizeChatSendAgentReplyPayloads(
   }
 
   const displayReply =
-    extractAssistantDisplayTextFromContent(sourceReplyBroadcastContent) ??
+    extractAssistantDisplayText(sourceReplyBroadcastContent) ??
     buildTranscriptReplyText(finalPayloads);
   if (!sourceReplyBroadcastContent.length && !displayReply) {
     return { kind: "dropped", reason: "no-visible-content" };
@@ -408,7 +408,7 @@ async function finalizeChatSendAgentReplyPayloads(
       return state.broadcastContent;
     })
     .filter((block): block is AssistantDisplayContentBlock => Boolean(block));
-  const sourceReplyTextFromContent = extractAssistantDisplayTextFromContent(sourceReplyContent);
+  const sourceReplyTextFromContent = extractAssistantDisplayText(sourceReplyContent);
   const sourceReplyText =
     sourceReplyTextFromContent ?? (sourceReplyContent.length === 0 ? displayReply : undefined);
   const message = {

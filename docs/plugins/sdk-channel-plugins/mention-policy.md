@@ -38,6 +38,32 @@ Good fit for the shared helper:
 - command bypass
 - final skip decision
 
+For a qualified group-thread entry, compute explicit participant mention facts
+once with `resolveGroupThreadMentionFacts({ cfg, channel, peerId, text, sessionKey, acpBinding })`
+from `openclaw/plugin-sdk/channel-inbound`, including direct conversations. Pass
+the resolved session key and whether a configured ACP binding owns the route.
+It returns `undefined` for an exclusive ACP route or when no qualified entry
+applies, otherwise the resolved group and `mentionedAgentIds`. If routing changes
+after preparation, use `isGroupThreadRouteExclusive({ sessionKey, acpBinding })`
+to discard participant facts for an ACP-owned destination and reevaluate admission
+using only the final route’s ordinary mention and command facts.
+Merge a non-empty participant match with the routed agent’s local mention facts before
+the ordinary gate, and carry the same selection facts into dispatch. A mention
+of a non-routed participant must not be dropped by a single-agent gate.
+Participant selection requires an `@`-style match; a bare name or emoji does not
+select an agent. Keep sender authorization and command policy unchanged.
+
+Set the optional `replyOptions.groupThreadReplyFormatter(text, participant)` to
+apply the adapter’s participant label to source-conversation message-tool replies.
+The participant contains `agentId` and `name`; reuse the same transport formatter
+used for ordinary replies with participant delivery metadata.
+
+For plugin-owned sends, read `getGroupThreadDeliverySession()` from the same SDK
+at delivery entry. When present, use its `agentId` and `sessionKey` for media
+roots, internal hooks, and transcript mirrors, including unlabeled single-agent
+groups. Keep transport account ownership unchanged. Shared durable delivery
+selects the active participant context and run identity in core.
+
 Preferred flow:
 
 1. Compute local mention facts.

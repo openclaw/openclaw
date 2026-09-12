@@ -10,6 +10,7 @@ import {
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -65,6 +66,29 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
   } satisfies PluginManifestActivation;
 
   return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+export function normalizeChannelAccountKeyPolicies(
+  value: unknown,
+  channels: readonly string[],
+): Record<string, ChannelAccountKeyPolicy> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const policies: Record<string, ChannelAccountKeyPolicy> = Object.create(null);
+  for (const channel of channels) {
+    if (isBlockedObjectKey(channel) || !Object.hasOwn(value, channel)) {
+      continue;
+    }
+    const entry = value[channel];
+    const field = isRecord(entry)
+      ? normalizeOptionalString(entry.canonicalAliasesRequireOwnField)
+      : undefined;
+    if (field && !isBlockedObjectKey(field)) {
+      policies[channel] = { canonicalAliasesRequireOwnField: field };
+    }
+  }
+  return Object.keys(policies).length ? policies : undefined;
 }
 
 export function normalizeManifestCliCommands(

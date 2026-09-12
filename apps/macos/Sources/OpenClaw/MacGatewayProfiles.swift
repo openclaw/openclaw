@@ -598,7 +598,60 @@ actor MacGatewayConnectionFleet {
     }
 
     func existingConnection(profileID: String) -> GatewayConnection? {
-        self.connections[profileID]?.connection
+        self.connections["profile:\(profileID)"]?.connection
+    }
+
+    func existingLocalConnection() -> GatewayConnection? {
+        self.connections["local"]?.connection
+    }
+
+    func localConnection() -> GatewayConnection {
+        self.localBinding().connection
+    }
+
+    func localBinding() -> Binding {
+        if let owner = self.connections["local"] {
+            return Binding(connection: owner.connection, chatStoreID: owner.chatStoreID)
+        }
+        let chatStoreID = MacChatTranscriptCache.gatewayID(
+            mode: .local,
+            localStateDir: OpenClawConfigFile.stateDirURL(),
+            remoteTransport: .ssh,
+            directURL: nil,
+            sshTarget: "",
+            sshRemotePort: 0)!
+        let active = LockIsolated(true)
+        let connection = GatewayConnection(
+            endpointProvider: {
+                let generation = await MainActor.run { () -> UInt64? in
+                    let state = AppStateStore.shared
+                    guard active.value, state.connectionMode == .remote,
+                          state.hostsLocalGatewayWithRemotePrimary,
+                          state.gatewayConfigIsCurrentForRouting
+                    else { return nil }
+                    return state.gatewayRoutingGeneration
+                }
+                guard let generation else { throw URLError(.notConnectedToInternet) }
+                let root = OpenClawConfigFile.loadDict()
+                guard ConnectionModeResolver.resolve(root: root).mode == .remote else { throw CancellationError() }
+                let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true, root: root)
+                let isCurrent = await MainActor.run {
+                    let state = AppStateStore.shared
+                    return active.value && state.connectionMode == .remote &&
+                        state.hostsLocalGatewayWithRemotePrimary && state.gatewayConfigIsCurrentForRouting &&
+                        state.gatewayRoutingGeneration == generation
+                }
+                guard isCurrent else { throw CancellationError() }
+                return endpoint
+            },
+            supportsSharedEndpointRecovery: false)
+        self.connections["local"] = Owner(chatStoreID: chatStoreID, active: active, connection: connection)
+        self.ownerRevision &+= 1
+        return Binding(connection: connection, chatStoreID: chatStoreID)
+    }
+
+    func disconnectLocal(ifCurrent: @Sendable () -> Bool = { true }) async {
+        await self.connections["local"]?.connection.shutdown(ifCurrent: ifCurrent)
     }
 
     func connection(profileID: String) async -> GatewayConnection {
@@ -616,7 +669,7 @@ actor MacGatewayConnectionFleet {
             // A delayed lookup cannot retire an owner admitted after it began,
             // including remove/re-add cycles with the same principal.
             guard revision == self.ownerRevision else { continue }
-            if let owner = self.connections[profileID] {
+            if let owner = self.connections["profile:\(profileID)"] {
                 if owner.chatStoreID == chatStoreID {
                     return Binding(connection: owner.connection, chatStoreID: chatStoreID)
                 }
@@ -633,7 +686,10 @@ actor MacGatewayConnectionFleet {
                     return endpoint
                 },
                 supportsSharedEndpointRecovery: false)
-            self.connections[profileID] = Owner(chatStoreID: chatStoreID, active: active, connection: connection)
+            self.connections["profile:\(profileID)"] = Owner(
+                chatStoreID: chatStoreID,
+                active: active,
+                connection: connection)
             self.ownerRevision &+= 1
             return Binding(connection: connection, chatStoreID: chatStoreID)
         }
@@ -642,7 +698,7 @@ actor MacGatewayConnectionFleet {
     func remove(profileID: String, ifCurrent: @Sendable () -> Bool = { true }) async -> GatewayConnection? {
         guard ifCurrent() else { return nil }
         self.ownerRevision &+= 1
-        guard let owner = self.connections.removeValue(forKey: profileID) else { return nil }
+        guard let owner = self.connections.removeValue(forKey: "profile:\(profileID)") else { return nil }
         // Revocation is permanent: signing back into the same account must not
         // revive a retained transport from a closed window or deleted profile.
         owner.active.withValue { $0 = false }
@@ -652,7 +708,7 @@ actor MacGatewayConnectionFleet {
 
     func disconnect(profileID: String, ifCurrent: @Sendable () -> Bool = { true }) async {
         // Renewals retain observers; changing principal retires the owner instead.
-        await self.connections[profileID]?.connection.shutdown(ifCurrent: ifCurrent)
+        await self.connections["profile:\(profileID)"]?.connection.shutdown(ifCurrent: ifCurrent)
     }
 
     func shutdown() async -> [GatewayConnection] {

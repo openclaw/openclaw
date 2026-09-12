@@ -327,10 +327,10 @@ type ResolvedRepository = {
   fingerprint: string;
 };
 
-async function resolveRepositoryFromRealPath(
+async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<ResolvedRepository> {
+): Promise<string> {
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
   if (rootResult.code !== 0) {
     if (insideGitCheckout(requested)) {
@@ -347,6 +347,14 @@ async function resolveRepositoryFromRealPath(
       `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
     );
   }
+  return sourceRoot;
+}
+
+async function resolveRepositoryFromRealPath(
+  requested: string,
+  requestedLabel: string,
+): Promise<ResolvedRepository> {
+  const sourceRoot = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
   const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
   const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
@@ -1227,22 +1235,27 @@ export class ManagedWorktreeService {
     repoRoot: string,
     options: { includeRepositoryStatus?: boolean } = {},
   ): Promise<ManagedWorktreeBranchesResult> {
-    let repository: ResolvedRepository;
-    if (options.includeRepositoryStatus) {
-      try {
-        const requested = await fs.realpath(repoRoot);
+    let sourceRoot: string;
+    try {
+      const requested = await fs.realpath(repoRoot).catch(() => {
+        throw new Error(`repository does not exist: ${repoRoot}`);
+      });
+      if (options.includeRepositoryStatus) {
         if (!(await fs.stat(requested)).isDirectory()) {
           return { branches: [], repositoryStatus: "unavailable" };
         }
         if (!insideGitCheckout(requested)) {
           return { branches: [], repositoryStatus: "not_git" };
         }
-        repository = await resolveRepositoryFromRealPath(requested, repoRoot);
-      } catch {
+      }
+      // Ref discovery needs this checkout's HEAD, not allocation identity or a
+      // full inventory of sibling worktrees rooted at the primary checkout.
+      sourceRoot = await resolveCheckoutRootFromRealPath(requested, repoRoot);
+    } catch (error) {
+      if (options.includeRepositoryStatus) {
         return { branches: [], repositoryStatus: "unavailable" };
       }
-    } else {
-      repository = await resolveRepository(repoRoot);
+      throw error;
     }
     // Keep canonical refs for identity and Git's strict short names for selection.
     // A branch named like a tag may need heads/ or remotes/ to remain unambiguous.
@@ -1251,7 +1264,7 @@ export class ManagedWorktreeService {
     for (const prefix of ["refs/remotes/", "refs/heads/"]) {
       try {
         for (const entry of await listRepositoryBranchRefs(
-          repository.repoRoot,
+          sourceRoot,
           prefix,
           BRANCH_SUGGESTIONS_PER_KIND,
         )) {
@@ -1263,13 +1276,13 @@ export class ManagedWorktreeService {
         branchesUnavailable = true;
       }
     }
-    const remoteHead = await runGit(repository.repoRoot, [
+    const remoteHead = await runGit(sourceRoot, [
       "symbolic-ref",
       "--quiet",
       "refs/remotes/origin/HEAD",
     ]);
     const defaultRef = remoteHead.code === 0 ? remoteHead.stdout.trim() : undefined;
-    const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "HEAD"]);
+    const head = await runGit(sourceRoot, ["symbolic-ref", "--quiet", "HEAD"]);
     const headRef = head.code === 0 ? head.stdout.trim() : undefined;
     const resolveBranch = async (ref: string | undefined) => {
       if (!ref) {
@@ -1281,7 +1294,7 @@ export class ManagedWorktreeService {
       }
       try {
         // Patterns can match descendants; only the exact priority ref is eligible.
-        return (await listRepositoryBranchRefs(repository.repoRoot, ref, 1)).find(
+        return (await listRepositoryBranchRefs(sourceRoot, ref, 1)).find(
           (entry) => entry.ref === ref,
         );
       } catch {

@@ -12,6 +12,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
  * back into runtime output blocks, and applies provider request policy.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicOptions } from "../provider-options.js";
@@ -43,6 +44,7 @@ import {
   type AnthropicToolProjection,
 } from "../providers/anthropic-tool-projection.js";
 import { adjustMaxTokensForThinking } from "../providers/simple-options.js";
+import { redactDiagnosticText } from "../utils/credential-redaction.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
   buildAnthropicReplayPlan,
@@ -81,7 +83,6 @@ import {
 import {
   createAbortError as createNamedAbortError,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-  parseRetryAfterSeconds,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
 } from "./transport-utils.js";
@@ -403,29 +404,27 @@ function createAnthropicMessagesClient(params: {
   };
 }
 
-function formatAnthropicMessagesHttpError(response: Response, detail: string): string {
-  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
-  // Keep retry timing in the canonical error text so every retry owner sees the
-  // same bounded signal without extending the public AssistantMessage contract.
-  const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
-    ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
-    : "";
-  return `HTTP ${response.status}: ${detail || "Anthropic Messages request failed"}${retryAfterSuffix}`;
-}
-
-async function readAnthropicMessagesErrorBodySnippet(response: Response): Promise<string> {
+async function readAnthropicMessagesErrorBody(response: Response): Promise<unknown> {
   try {
-    return (
+    const text =
       (await readResponseTextSnippet(response, {
         maxBytes: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
-        maxChars: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS,
+        maxChars: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
         chunkTimeoutMs: ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS,
         onIdleTimeout: ({ chunkTimeoutMs }) =>
           new Error(
             `Anthropic Messages error response stalled: no data received for ${chunkTimeoutMs}ms`,
           ),
-      })) ?? ""
-    );
+      })) ?? "";
+    try {
+      // Keep complete JSON for structured redaction; clipping first erases useful errors.
+      return JSON.parse(text);
+    } catch {
+      const redacted = redactDiagnosticText(text);
+      return redacted.length > ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS
+        ? `${truncateUtf16Safe(redacted, ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS)}…`
+        : redacted;
+    }
   } catch (error: unknown) {
     if (
       error instanceof Error &&
@@ -688,7 +687,7 @@ function resolveAnthropicTransportOptions(
   if (!reasoning) {
     resolved.thinkingEnabled = defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
-      resolved.effort = "high";
+      resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
     }
     return resolved;
   }
@@ -772,8 +771,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         await notifyProviderHttpResponse({ options: transportOptions, response, model });
         if (!response.ok) {
-          const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(formatAnthropicMessagesHttpError(response, detail));
+          const errorBody = await readAnthropicMessagesErrorBody(response);
+          throw Object.assign(new Error(`${response.status} status code (no body)`), {
+            status: response.status,
+            headers: response.headers,
+            errorBody,
+          });
         }
         await consumeAnthropicStream({
           events: anthropicStream,
@@ -800,7 +803,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             } else {
               output.content = output.content.filter((block) => block.type !== "toolCall");
             }
-            if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
+            if (usedCompactionReplay && isAnthropicReplayRejection(output)) {
               suppressAnthropicCompaction(output, model, options);
             }
             for (const block of output.content) {

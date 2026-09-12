@@ -171,6 +171,8 @@ function commitStartupCatchupRows(params: {
           }
           if (ownership.markerAtMs === job.state.runningAtMs) {
             delete job.state.runningAtMs;
+            delete job.state.runningReceiptId;
+            delete job.state.runningScheduleChangeId;
             changed = true;
           }
         }

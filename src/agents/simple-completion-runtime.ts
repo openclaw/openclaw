@@ -25,6 +25,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   fingerprintAuthProfileCredential,
@@ -39,28 +40,30 @@ import {
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModelCore,
-  resolveApiKeyForProviderCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveModelRouteIntent } from "./model-runtime-policy.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
+import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import {
-  buildProviderModelAuthDirectSource,
-  buildProviderModelAuthSourcePlan,
-} from "./provider-model-auth-source-plan.js";
+import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
-import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
+import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+import {
+  resolvePreparedRuntimeAuthAttempts,
+  resolvePreparedRuntimeModelAuth,
+} from "./runtime-plan/resolve-auth.js";
+import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import {
   createPreparedSimpleCompletionResolverContext,
@@ -237,138 +240,136 @@ async function prepareSimpleCompletionModelCore(
   }
   const initialModel = resolved.model;
   let resolvedModel = initialModel;
-
-  const routeResolution = resolveOpenAIModelRoutes({
-    provider: initialModel.provider,
-    modelId: initialModel.id,
-    api: initialModel.api,
-    baseUrl: initialModel.baseUrl,
-    config: params.cfg,
-    env: process.env,
-  });
-  const resolvesAuthBeforePhysicalRoute =
-    routeResolution?.kind === "routes" && routeResolution.routes.length > 1;
-
+  let authStore: AuthProfileStore | undefined;
   let auth: ResolvedProviderAuth;
-  const authStore = params.bindAuthOwner
-    ? ensureAuthProfileStore(params.agentDir, {
-        readOnly: true,
-        allowKeychainPrompt: false,
-        config: params.cfg,
-        profileId: params.profileId,
-      })
-    : undefined;
   try {
-    auth = resolvesAuthBeforePhysicalRoute
-      ? await resolveApiKeyForProviderCore({
-          provider: initialModel.provider,
+    authStore =
+      params.bindAuthOwner || initialModel.provider === "openai"
+        ? ensureAuthProfileStore(params.agentDir, {
+            readOnly: true,
+            allowKeychainPrompt: false,
+            config: params.cfg,
+            profileId: params.profileId,
+          })
+        : undefined;
+
+    const primaryModel = params.cfg
+      ? resolveDefaultModelForAgent({
           cfg: params.cfg,
-          agentDir: params.agentDir,
-          workspaceDir,
-          profileId: params.profileId,
-          preferredProfile: params.preferredProfile,
-          ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
-          modelId: initialModel.id,
-          secretSentinels: true,
+          agentId: params.agentId,
+          allowManifestNormalization: false,
+          allowPluginNormalization: false,
         })
-      : await getApiKeyForModelCore({
-          model: initialModel,
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-          workspaceDir,
-          profileId: params.profileId,
-          preferredProfile: params.preferredProfile,
-          ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
-          secretSentinels: true,
+      : undefined;
+    const resolveProfileAuthMode = (profileId: string) => authStore?.profiles[profileId]?.type;
+    const routeIntent = params.agentRuntimeId
+      ? { runtimeId: params.agentRuntimeId, source: "explicit" as const }
+      : resolveModelRouteIntent({
+          config: params.cfg,
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          agentId: params.agentId,
+          primaryModel,
+          resolveProfileAuthMode,
         });
-    if (routeResolution?.kind === "routes") {
-      const source = auth.profileId
-        ? {
-            kind: "profile" as const,
-            profileId: auth.profileId,
+    const routeResolution = resolveOpenAIModelRoutes({
+      provider: initialModel.provider,
+      modelId: initialModel.id,
+      api: initialModel.api,
+      baseUrl: initialModel.baseUrl,
+      config: params.cfg,
+      agentId: params.agentId,
+      routeIntent,
+      resolveProfileAuthMode,
+      pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+        params.profileId ? authStore?.profiles[params.profileId]?.type : undefined,
+      ),
+      env: process.env,
+    });
+    const preparedAuth =
+      routeResolution?.kind === "routes"
+        ? prepareAgentRuntimeAuth({
             provider: initialModel.provider,
-            mode: auth.mode,
-            readiness: "ready" as const,
-            cooldown: "clear" as const,
-          }
-        : buildProviderModelAuthDirectSource({
-            mode: auth.mode,
-            availability: true,
-            evidence: "runtime",
-            // The credential is already resolved by the caller and wrapped as
-            // required provider-binding ownership below, so it is not an
-            // ambient discovery competing with declared profiles.
-            authorization: "declared",
-          });
-      const routeAuthDecision = selectOpenAIModelRouteAuth({
-        resolution: routeResolution,
-        sourcePlan: buildProviderModelAuthSourcePlan({
-          ownership: { reason: "provider-binding", source },
-          profiles: [],
-        }),
-      });
-      if (routeAuthDecision.kind !== "selected") {
-        throw new Error(
-          routeAuthDecision.kind === "rejected"
-            ? routeAuthDecision.message
-            : "OpenAI route selection unexpectedly deferred after auth was resolved.",
-        );
-      }
-      const route = routeAuthDecision.selection.route;
-      const plan = buildAgentRuntimeAuthPlan({
+            modelId: initialModel.id,
+            modelApi: initialModel.api,
+            modelBaseUrl: initialModel.baseUrl,
+            config: params.cfg,
+            agentId: params.agentId,
+            routeIntent,
+            agentDir: params.agentDir,
+            workspaceDir,
+            authProfileStore: authStore,
+            metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+            sessionAuthProfileId: params.profileId ?? params.preferredProfile,
+            sessionAuthProfileSource: params.profileId ? "user" : "auto",
+            ...(params.bindAuthOwner && params.profileId
+              ? { allowAuthProfileFallback: false }
+              : {}),
+          })
+        : undefined;
+    const materializeModel = async ({
+      plan,
+      model,
+      forceResolve,
+    }: {
+      plan: AgentRuntimeAuthPlan;
+      model: Model;
+      forceResolve?: boolean;
+    }) =>
+      (await materializePreparedRuntimeModel({
+        plan,
         provider: initialModel.provider,
         modelId: initialModel.id,
-        authProfileProvider: initialModel.provider,
-        authProfileMode: auth.mode,
-        sessionAuthProfileId: auth.profileId,
-        sessionAuthProfileSource: params.profileId ? "user" : "auto",
-        modelRoute: {
-          provider: initialModel.provider,
-          modelId: initialModel.id,
-          api: route.api,
-          baseUrl: route.baseUrl,
-          authRequirement: route.authRequirement,
-          requestTransportOverrides: route.requestTransportOverrides,
-          runtimePolicy: route.runtimePolicy,
-        },
         config: params.cfg,
         workspaceDir,
+        metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+        model,
+        forceResolve,
+        resolveModel: ({ config, authProfileId, authProfileMode }) =>
+          modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
+            modelIdSource: "selected",
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            skipAgentDiscovery: true,
+            allowBundledStaticCatalogFallback: true,
+            preferBundledStaticCatalogTransport: true,
+            authProfileId,
+            authProfileMode,
+          }),
+      })) ?? model;
+    if (preparedAuth && authStore) {
+      const resolvedAuth = await resolvePreparedRuntimeAuthAttempts({
+        attempts: preparedAuth.attempts,
+        store: authStore,
+        modelId: initialModel.id,
+        model: initialModel,
+        materializeModel,
+        resolveAuth: ({ attempt, model }) =>
+          resolvePreparedRuntimeModelAuth({
+            plan: attempt.plan,
+            model,
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+            workspaceDir,
+            store: authStore,
+            allowAuthProfileFallback: attempt.allowAuthProfileFallback,
+            secretSentinels: true,
+          }),
+        errorMessage: "Simple completion auth attempts could not be resolved.",
       });
-      resolvedModel =
-        (await materializePreparedRuntimeModel({
-          plan,
-          provider: initialModel.provider,
-          modelId: initialModel.id,
-          config: params.cfg,
-          workspaceDir,
-          metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
-          model: initialModel,
-          resolveModel: ({ config, authProfileId, authProfileMode }) =>
-            modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
-              modelIdSource: "selected",
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-              skipAgentDiscovery: true,
-              allowBundledStaticCatalogFallback: true,
-              preferBundledStaticCatalogTransport: true,
-              authProfileId,
-              authProfileMode,
-            }),
-        })) ?? initialModel;
-      if (resolvesAuthBeforePhysicalRoute) {
-        auth = await getApiKeyForModelCore({
-          model: resolvedModel,
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-          workspaceDir,
-          profileId: auth.profileId,
-          preferredProfile: params.preferredProfile,
-          ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
-          secretSentinels: true,
-        });
-      }
+      auth = resolvedAuth.auth;
+      resolvedModel = resolvedAuth.model;
+    } else {
+      auth = await getApiKeyForModelCore({
+        model: initialModel,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir,
+        profileId: params.profileId,
+        preferredProfile: params.preferredProfile,
+        ...(authStore ? { store: authStore } : {}),
+        ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+        secretSentinels: true,
+      });
     }
   } catch (err) {
     return {

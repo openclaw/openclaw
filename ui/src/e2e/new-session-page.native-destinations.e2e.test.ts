@@ -89,11 +89,13 @@ suite.define(() => {
       await page.keyboard.press("Control+Backquote");
       await dock.locator(".tp-host canvas").waitFor();
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-      expect(await dock.locator(".tabstrip-tab").count()).toBe(1);
-      expect(await dock.locator(".tabstrip-tab").textContent()).not.toContain("codex");
+      const terminalTab = page.locator('[data-region-header="side"] .tabstrip-tab.is-live');
+      await terminalTab.waitFor();
+      expect(await terminalTab.count()).toBe(1);
+      expect(await terminalTab.locator(".tabstrip-tab__label").textContent()).toBe("zsh");
       expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
       await page.keyboard.press("Control+Backquote");
-      await dock.locator(".tp-header").waitFor({ state: "hidden" });
+      await terminalTab.waitFor({ state: "hidden" });
 
       await page.goBack();
       await page.waitForURL(`${suite.server.baseUrl}terminal/native-cli`);

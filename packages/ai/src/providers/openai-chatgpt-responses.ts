@@ -1680,7 +1680,7 @@ function parseErrorResponse(raw: string, response: Response): CodexApiError {
 
   const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
   // The canonical projection retains HTTP status; retry owners read its bounded
-  // terminal text for pacing, matching formatAnthropicMessagesHttpError.
+  // terminal text for pacing, matching Anthropic HTTP error projection.
   const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
     ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
     : "";

@@ -56,9 +56,13 @@ export function listEffectiveModelAuthProviders(
         ? candidate
         : worst,
     );
+    // An API key configured on any alias is a fact of the merged provider, not of
+    // the worst-status record alone; dropping it would fake a sign-in gap.
+    const apiKey = group.find((provider) => provider.apiKey)?.apiKey;
     return Object.assign({}, selected, {
       provider: id,
       profiles: group.flatMap((provider) => provider.profiles),
+      ...(apiKey ? { apiKey } : {}),
     });
   });
 }

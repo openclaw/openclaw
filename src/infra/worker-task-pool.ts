@@ -462,12 +462,14 @@ export class WorkerTaskPool<Input, Output> {
     this.dispatch();
   }
 
-  // A separate scope keeps the idle timer from retaining the completed task/result.
+  // Reply handling restores the caller's context; idle retirement must leave it behind.
   private idle(slot: Slot<Input, Output>): void {
     slot.worker?.unref();
     const idleMs = this.options.idleTimeoutMs ?? 60_000;
     if (idleMs > 0) {
-      slot.idleTimer = this.setTimeoutFn(() => void this.retire(slot), idleMs);
+      slot.idleTimer = runInWorkerPoolContext(() =>
+        this.setTimeoutFn(() => void this.retire(slot), idleMs),
+      );
       slot.idleTimer.unref();
     }
   }

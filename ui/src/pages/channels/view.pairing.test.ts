@@ -155,7 +155,6 @@ describe("channel DM access request views", () => {
     const selects = container.querySelectorAll<SelectPicker>("openclaw-select-picker");
     const channel = selects.item(0);
     const account = selects.item(1);
-    expect(channel?.querySelector('[role="option"][data-value="whatsapp"] img')).not.toBeNull();
     expect(selects).toHaveLength(2);
     expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
     expect(

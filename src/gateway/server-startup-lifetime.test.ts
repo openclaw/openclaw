@@ -13,6 +13,11 @@ import {
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
 } from "../agents/prepared-model-runtime.lifecycle.js";
+import {
+  closeSwarmScheduler,
+  enqueueSwarmRun,
+  releaseSwarmRun,
+} from "../agents/subagents/swarm/swarm-scheduler.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
 import {
@@ -45,6 +50,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 
 const startupTraceEventLoopDelay = vi.hoisted(() => ({
@@ -138,6 +144,7 @@ describe("Gateway startup lifetime", () => {
     `,
       );
       const config: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
         gateway: { auth: { mode: "token", token }, controlUi: { enabled: false } },
         plugins: {
           enabled: mode === "donor",
@@ -152,6 +159,7 @@ describe("Gateway startup lifetime", () => {
       const bootstrapModule = await import("./server-startup-bootstrap.js");
       const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
       const registries: ReturnType<typeof loadAndActivateRootPluginRegistry>[] = [];
+      const gatewayResolvers: GatewayContextResolver[] = [];
       const bootstrapSpy = vi
         .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
         .mockImplementation(async (...args) => {
@@ -164,12 +172,23 @@ describe("Gateway startup lifetime", () => {
           });
           result.pluginBootstrap.pluginRegistry = registry;
           registries.push(registry);
+          gatewayResolvers.push(result.resolvePluginGatewayContext);
           return result;
         });
       const caches: ReturnType<typeof createPluginCache>[] = [];
       const servers: GatewayServer[] = [];
       let stopRetirementProbe: (() => void) | undefined;
       const leases: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>[] = [];
+      const queuedDisposalEntered = createDeferred();
+      const releaseQueuedDisposal = createDeferred();
+      const queuedStart = vi.fn(async () => undefined);
+      const survivorStart = vi.fn(async () => undefined);
+      const queuedDispose = vi.fn(async (_reason: string) => {
+        queuedDisposalEntered.resolve();
+        await releaseQueuedDisposal.promise;
+      });
+      const survivorDispose = vi.fn(async (_reason: string) => undefined);
+      let donorDisposalStarted = false;
       let closing: Promise<void> | undefined;
       const input = (id: string) => ({
         config,
@@ -213,6 +232,23 @@ describe("Gateway startup lifetime", () => {
         if (mode === "donor") {
           assert(donor);
           expect(donor.hasRetainedConsumers).toBe(true);
+          for (const [index, id, start, dispose] of [
+            [0, "closing", queuedStart, queuedDispose],
+            [1, "survivor", survivorStart, survivorDispose],
+          ] as const) {
+            const lifecycleOwner = gatewayResolvers[index];
+            assert(lifecycleOwner);
+            enqueueSwarmRun({
+              groupId: `startup-lifetime-${id}`,
+              runId: `startup-lifetime-${id}`,
+              maxConcurrent: 1,
+              activeRunIds: [`startup-lifetime-${id}-capacity`],
+              lifecycleOwner,
+              start,
+              onStartFailure: () => true,
+              onRemoved: dispose,
+            });
+          }
         }
         const idle = await acquireAgentRunPreparedModelRuntime(input("closing"), {
           retainIdleRunOwner: true,
@@ -249,6 +285,7 @@ describe("Gateway startup lifetime", () => {
         if (donor) {
           const dispose = donor.dispose.bind(donor);
           const spy = vi.spyOn(donor, "dispose").mockImplementation((...args) => {
+            donorDisposalStarted = true;
             disposalEntered.resolve();
             return dispose(...args);
           });
@@ -266,6 +303,18 @@ describe("Gateway startup lifetime", () => {
           stopRetirementProbe = () => spy.mockRestore();
         }
         closing = closingServer.close();
+        if (mode === "donor") {
+          const firstDisposal = await Promise.race([
+            queuedDisposalEntered.promise.then(() => "queued launch"),
+            disposalEntered.promise.then(() => "plugin"),
+            closing.then(() => "closed"),
+          ]);
+          expect(firstDisposal).toBe("queued launch");
+          expect(queuedDispose).toHaveBeenCalledExactlyOnceWith("shutdown");
+          expect(donorDisposalStarted).toBe(false);
+          expect(survivorDispose).not.toHaveBeenCalled();
+          releaseQueuedDisposal.resolve();
+        }
         await disposalEntered.promise;
         // Registry retirement must revoke its cached publication without closing the survivor.
         await expect(
@@ -281,6 +330,11 @@ describe("Gateway startup lifetime", () => {
         await closing;
         if (donor) {
           expect(donor.hasRetainedConsumers).toBe(false);
+          expect(queuedStart).not.toHaveBeenCalled();
+          expect(survivorStart).not.toHaveBeenCalled();
+          expect(releaseSwarmRun("startup-lifetime-survivor-capacity")).toBe(true);
+          await vi.waitFor(() => expect(survivorStart).toHaveBeenCalledOnce());
+          expect(survivorDispose).not.toHaveBeenCalled();
         }
         expect(await prepareModelRuntimeSnapshot(input("survivor"))).toBe(survivor.snapshot);
         const presenter = survivor.snapshot.pluginRegistry?.widgetPresenters[0]?.presenter;
@@ -295,6 +349,14 @@ describe("Gateway startup lifetime", () => {
         leases.push(admitted);
         expect(admitted.snapshot).toBe(survivor.snapshot);
       } finally {
+        releaseQueuedDisposal.resolve();
+        for (const resolver of gatewayResolvers) {
+          await closeSwarmScheduler(resolver);
+        }
+        for (const id of ["closing", "survivor"]) {
+          releaseSwarmRun(`startup-lifetime-${id}-capacity`);
+          releaseSwarmRun(`startup-lifetime-${id}`);
+        }
         // A failing assertion still releases only this fixture's model claims before joining close.
         for (const lease of leases) {
           await lease[Symbol.asyncDispose]();

@@ -14,13 +14,18 @@ user.
 Before drafting focus areas, read real release evidence:
 
 1. GitHub release body, or the immutable tag and publish run for extended-stable.
-2. `CHANGELOG.md` section for the released base version.
+2. The released base version's `CHANGELOG/<version>.md` and contribution
+   record, resolved with `node scripts/release-changelog.mjs read --version <version> [--ref <sha-or-tag>]`
+   (add `--record` for accounting). The shared
+   resolver reads historical monolithic tags; current `CHANGELOG.md` is an
+   index. After approved docs publication, read the complete docs mirror and
+   frozen record rather than treating the compact GitHub body as full notes.
 3. Commits since the previous shipped version or the operator-specified base.
 4. Registry/package metadata for the exact version and current dist-tag.
 5. Validation status that is relevant to user confidence.
 
 Do not claim a full changelog audit unless you did it. If you only read the
-generated release notes or top changelog section, say that and either audit
+generated release notes or selected changelog section, say that and either audit
 properly or draft with that limitation.
 
 For beta focus areas, prioritize user-observable changes over internal test or

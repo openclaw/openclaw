@@ -369,6 +369,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   images: ImageContent[];
+  imageFactIndexes: Array<number | null>;
   detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
   loadedCount: number;
   skippedCount: number;

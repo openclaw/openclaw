@@ -33,6 +33,40 @@ afterAll(() => {
 });
 
 describe("app-tool-stream approval lifecycle", () => {
+  it("preserves producer parent identity through live completion without reading arguments", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "child",
+        parentToolCallId: "outer",
+        args: { command: "gh auth login", parentToolCallId: "argument-is-not-provenance" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 2, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "child",
+        isError: true,
+        result: { content: [{ type: "text", text: "gh: command not found" }] },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    expect(extractToolCardsCached(entry?.message)).toMatchObject([
+      {
+        callId: "child",
+        runId: "nested-run",
+        parentToolCallId: "outer",
+        completed: true,
+        isError: true,
+      },
+    ]);
+  });
+
   it("carries browser tab details through the completed live result, including empty text", () => {
     const host = createHost();
     handleAgentEvent(

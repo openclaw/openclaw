@@ -54,6 +54,8 @@ export type ProviderModelRouteResolution =
   | {
       kind: "routes";
       routes: readonly [ProviderModelRouteCandidate, ...ProviderModelRouteCandidate[]];
+      /** Preference for automatic selection only when both authentication classes are eligible. */
+      preferredAuthRequirement?: ProviderModelRouteAuthRequirement;
       /** Advisory only; authored agentRuntime policy remains authoritative. */
       defaultRuntimeId?: string;
     }
@@ -75,6 +77,12 @@ export type ProviderResolveModelRoutesContext = {
   requestTransportOverrides?: ProviderRouteOverridePresence;
   configuredModel?: ProviderModelRouteSource;
   configuredProvider?: ProviderModelRouteSource;
+  /** Prepared consumer intent; credentials and runtime compatibility remain independently owned. */
+  routeIntent?: {
+    runtimeId?: string;
+    authRequirement?: ProviderModelRouteAuthRequirement;
+    source: "explicit" | "inherited";
+  };
   /** Environment view; the provider owns interpretation of its variables. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Physical route facts for one logical model; input order is not preference. */

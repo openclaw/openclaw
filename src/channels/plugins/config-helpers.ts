@@ -4,6 +4,11 @@
  * Updates account enabled state and detects configured secret-like values.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveAccountKey,
+  resolveChannelAccountKey,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
@@ -72,12 +77,21 @@ export function setAccountEnabledInConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   enabled: boolean;
   allowTopLevel?: boolean;
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const accountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+    { allowMissing: true },
+  );
   const hasAccounts = Boolean(base?.accounts);
   if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
@@ -102,23 +116,33 @@ export function deleteAccountFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   clearBaseFields?: string[];
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const accountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+  );
   if (!base) {
     return params.cfg;
   }
 
   const accounts = base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : {};
-  if (accountKey === DEFAULT_ACCOUNT_ID && Object.keys(accounts).length === 0) {
+  if (accountId === DEFAULT_ACCOUNT_ID && Object.keys(accounts).length === 0) {
     return writeChannelSection(params.cfg, params.sectionKey, undefined);
   }
 
-  delete accounts[accountKey];
+  if (accountKey !== undefined) {
+    delete accounts[accountKey];
+  }
   const baseRecord = { ...(base as Record<string, unknown>) };
-  if (accountKey === DEFAULT_ACCOUNT_ID) {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
     // Deleting the default account can also clear root-level credential fields that represented
     // the legacy default account.
     for (const field of params.clearBaseFields ?? []) {
@@ -138,7 +162,9 @@ export function deleteAccountFromConfigSection(params: {
  */
 export function clearAccountEntryFields<TAccountEntry extends object>(params: {
   accounts?: Record<string, TAccountEntry>;
+  channelId?: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   fields: string[];
   isValueSet?: (value: unknown) => boolean;
   markClearedOnFieldPresence?: boolean;
@@ -147,10 +173,19 @@ export function clearAccountEntryFields<TAccountEntry extends object>(params: {
   changed: boolean;
   cleared: boolean;
 } {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountKey = params.channelId
+    ? resolveChannelAccountKey(
+        params.accounts,
+        accountId,
+        params.channelId,
+        (id) => id,
+        params.accountKeyPolicy,
+      )
+    : resolveAccountKey(params.accounts, accountId, (id) => id, params.accountKeyPolicy);
   const baseAccounts =
     params.accounts && typeof params.accounts === "object" ? { ...params.accounts } : undefined;
-  if (!baseAccounts || !(accountKey in baseAccounts)) {
+  if (!baseAccounts || accountKey === undefined) {
     return { nextAccounts: baseAccounts, changed: false, cleared: false };
   }
 
@@ -197,6 +232,7 @@ export function clearAccountFieldsFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   fields: string[];
   markClearedOnFieldPresence?: boolean;
 }): { nextConfig: OpenClawConfig; changed: boolean; cleared: boolean } {
@@ -217,6 +253,8 @@ export function clearAccountFieldsFromConfigSection(params: {
   }
   const accountCleanup = clearAccountEntryFields({
     accounts: nextSection.accounts,
+    channelId: params.sectionKey,
+    accountKeyPolicy: params.accountKeyPolicy,
     accountId: params.accountId,
     fields: params.fields,
     markClearedOnFieldPresence: params.markClearedOnFieldPresence,

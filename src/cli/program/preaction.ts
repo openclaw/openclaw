@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
+import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
@@ -16,10 +17,7 @@ import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import {
-  resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
-} from "../plugin-install-config-policy.js";
+import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
@@ -151,10 +149,16 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
-    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const commandPath = getCommanderCommandPath(actionCommand);
+    const nativeUpdateCapabilityProbe =
+      commandPath.length === 2 &&
+      (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
+      ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.getOptionValue("updateExecutor") === "check";
+    const jsonOutputMode =
+      nativeUpdateCapabilityProbe || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const commandPath = getCommanderCommandPath(actionCommand);
     const startupPolicy = resolveCliStartupPolicy({
       argv,
       commandPath,
@@ -175,7 +179,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+    // Capability discovery precedes staged-update admission and must not migrate live state.
+    if (
+      nativeUpdateCapabilityProbe ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
     await runStateStoreGuard(commandPath);

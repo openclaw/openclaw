@@ -17,10 +17,7 @@ import type {
 } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import {
-  withPluginRuntimePluginScope,
-  withPluginRuntimeRegistryScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
@@ -33,6 +30,7 @@ export class PluginInstance {
   readonly lifecycle: PluginInstanceLifecycle;
   toolRegistrationComplete = false;
   controlPlaneInitialized = false;
+  sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private moduleSourceExists?: (source: string) => boolean;
   private accepting = true;
@@ -116,6 +114,29 @@ export class PluginInstance {
       throw new Error(`Plugin ${this.pluginId} was reloaded or disabled; use its current tools.`);
     }
     return this.invoke(run, this.lease(true, registry));
+  }
+
+  /** Associates an identity-sensitive public value without replacing it with a view. */
+  adopt<T>(value: T): T {
+    const seen = new WeakSet<object>();
+    const visit = (candidate: unknown) => {
+      if (
+        !candidate ||
+        (typeof candidate !== "object" && typeof candidate !== "function") ||
+        seen.has(candidate)
+      ) {
+        return;
+      }
+      seen.add(candidate);
+      valueInstances.set(candidate, this);
+      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+        if ("value" in descriptor) {
+          visit(descriptor.value);
+        }
+      }
+    };
+    visit(value);
+    return value;
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
@@ -225,7 +246,13 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T): T {
-    const invoke = () => invocation.run({ instance: this, token }, run);
+    const current = invocation.getStore();
+    // Node can reuse an identical store instead of copying the entire async context map.
+    const invoke = () =>
+      invocation.run(
+        current?.instance === this && current.token === token ? current : { instance: this, token },
+        run,
+      );
     if (!this.owner) {
       return invoke();
     }
@@ -237,16 +264,15 @@ export class PluginInstance {
       this.consumers.get(token)?.registry ??
       this.calls.get(token) ??
       (generation?.plugins.includes(record) ? generation : this.owner.registry);
-    return withPluginRuntimeRegistryScope(registry, () =>
-      withPluginRuntimePluginScope(
-        {
-          pluginId: record.id,
-          pluginSource: record.source,
-          pluginOrigin: record.origin,
-          pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-        },
-        invoke,
-      ),
+    return withPluginRuntimePluginScope(
+      {
+        pluginId: record.id,
+        pluginSource: record.source,
+        pluginOrigin: record.origin,
+        pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+      },
+      invoke,
+      registry,
     );
   }
 
@@ -403,8 +429,7 @@ export class PluginInstance {
       }
     }
     const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
-    const reason = new Error(`Plugin ${this.pluginId} is retiring`);
-    this.controller.abort(reason);
+    this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`));
     for (const cleanup of Array.from(this.cleanups).toReversed()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

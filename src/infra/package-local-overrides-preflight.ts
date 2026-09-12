@@ -11,7 +11,6 @@ import {
   resolveSafePackagePath,
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
-  type LocalPackageOverrideTargetProbe,
 } from "./package-local-overrides-shared.js";
 
 function buildCurrentInventoryMap(entries: PackageDistContentInventoryEntry[] | null) {
@@ -32,12 +31,10 @@ export async function preflightLocalOverrides(params: {
     symlinks: "reject",
   });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
-  const targetProbes = new Map<string, LocalPackageOverrideTargetProbe>();
   for (const change of params.plan.changes) {
     const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
     const nextEntry = nextInventory.get(change.path);
     const targetProbe = await probeLocalOverrideTarget(targetPath);
-    targetProbes.set(change.path, targetProbe);
     if (targetProbe.status === "error") {
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
       continue;

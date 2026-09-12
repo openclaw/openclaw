@@ -82,7 +82,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   } = connection;
   const { toolBridge } = attemptTools;
   let contextImages: ImageContent[] = [];
-  const currentUserTurnIdempotencyKey = params.userTurnTranscriptRecorder?.message?.idempotencyKey;
+  // A refreshed native thread receives the original admitted user as historical context.
+  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
+    ? undefined
+    : params.userTurnTranscriptRecorder?.message?.idempotencyKey;
   const assertProjectionCurrent = () => {
     params.hostCapabilities.assertActive();
     connection.assertCurrent();
@@ -125,6 +128,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
+      toolPayloadMode: params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
     });
@@ -188,7 +192,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
       maxRenderedContextChars: codexContextProjectionMaxChars,
-      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
+      toolPayloadMode:
+        contextEngineProjection || params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
       ...(projectionDecision.project ? { prepareFileContext } : {}),
       currentUserTurnIdempotencyKey,
     });
@@ -230,7 +235,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         runtime.nativeToolSurfaceEnabled ? mutable.startupBinding : undefined,
       );
     } catch (assembleErr) {
-      if (assembleErr instanceof CodexContextAttachmentError) {
+      if (
+        assembleErr instanceof CodexContextAttachmentError ||
+        params.pluginRuntimeRefreshMessages
+      ) {
         throw assembleErr;
       }
       assertProjectionCurrent();
@@ -468,7 +476,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         (action === "started" &&
           (message.role === "compactionSummary" || message.role === "branchSummary")),
     );
-    if (activeContextEngine || !hasContinuity) {
+    if (activeContextEngine || (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length)) {
       return false;
     }
     if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {
@@ -532,7 +540,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       try {
         await applyActiveContextEngineProjection(undefined);
       } catch (assembleErr) {
-        if (assembleErr instanceof CodexContextAttachmentError) {
+        if (
+          assembleErr instanceof CodexContextAttachmentError ||
+          params.pluginRuntimeRefreshMessages
+        ) {
           throw assembleErr;
         }
         assertProjectionCurrent();

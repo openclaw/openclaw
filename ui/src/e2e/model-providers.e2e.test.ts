@@ -145,7 +145,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
         expect.objectContaining({
-          params: { agentId: "main", view: "configured" },
+          params: { agentId: "main", view: "configured", includeDefaultModels: true },
         }),
       ]);
       expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
@@ -642,7 +642,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
         expect.objectContaining({
-          params: { agentId: "main", view: "configured" },
+          params: { agentId: "main", view: "configured", includeDefaultModels: true },
         }),
       ]);
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");

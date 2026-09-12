@@ -26,6 +26,7 @@ import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
@@ -66,6 +67,7 @@ type OwnedPluginService = {
   diagnosticsExporter: boolean;
   stop?: () => unknown;
   startup?: Promise<void>;
+  startupConsumer?: PluginInstanceConsumer;
   stopping?: Promise<unknown>;
   reloading?: Promise<void>;
   cleaned: boolean;
@@ -78,6 +80,7 @@ type OwnedPluginService = {
 
 type PluginServicesOwner = {
   services: OwnedPluginService[];
+  attempts: WeakMap<PluginServiceRegistration, OwnedPluginService>;
   registrations: Set<PluginServiceRegistration>;
   stopped: Set<PluginServiceRegistration>;
   closed: boolean;
@@ -101,27 +104,32 @@ export async function startPluginServices(
 ): Promise<PluginServicesHandle> {
   // Failed starts still own their cleanup and remain selectable for a later retry.
   const ownedServices: OwnedPluginService[] = [];
+  const previous = params.previous && serviceOwners.get(params.previous);
   const owner: PluginServicesOwner = {
     services: ownedServices,
+    attempts: previous?.attempts ?? new WeakMap(),
     registrations: new Set(params.registry.services),
     stopped: new Set(),
     closed: false,
   };
-  const previous = params.previous && serviceOwners.get(params.previous);
   if (previous) {
     for (const registration of owner.registrations) {
       previous.registrations.delete(registration);
-      const entry = previous.services.find((service) => service.registration === registration);
+      const entry = owner.attempts.get(registration);
       if (!entry) {
         continue;
       }
-      previous.services.splice(previous.services.indexOf(entry), 1);
+      // Rollback can reclaim an earlier attempt that the rejected candidate did not select.
+      const source = entry.owner;
+      source.registrations.delete(registration);
+      source.services.splice(source.services.indexOf(entry), 1);
       // Explicitly stopped, fully cleaned registrations can start again in a new
       // generation. Failed attempts stay in the inventory until an explicit reload.
-      if (previous.stopped.has(registration) && entry.cleaned && !entry.startup) {
+      if (source.stopped.has(registration) && entry.cleaned && !entry.startup) {
+        owner.attempts.delete(registration);
         continue;
       }
-      if (previous.stopped.has(registration)) {
+      if (source.stopped.has(registration)) {
         owner.stopped.add(registration);
       }
       entry.owner = owner;
@@ -192,7 +200,13 @@ export async function startPluginServices(
           try {
             // A caller can stop waiting, but raw startup must finish before the one final cleanup.
             const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
-            const stopping = ready ? ready.then(invokeStop) : Promise.resolve(invokeStop());
+            const stop = () => (ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
+            // A timed-out start loses execution authority now, but still owns its final stop.
+            const stopping = entry.startupConsumer
+              ? entry.startupConsumer.close(async () => {
+                  await stop();
+                })
+              : stop();
             entry.stopping = stopping;
             // Completion follows the attempt across handoff, independently of an observer's deadline.
             void stopping.then(
@@ -542,19 +556,24 @@ export async function startPluginServices(
       );
       ownedServices.splice(following < 0 ? ownedServices.length : following, 0, ownedService);
     }
+    owner.attempts.set(entry, ownedService);
     try {
       const invokeStart = async () => {
         const settled = createDeferredCore();
         ownedService.startup = settled.promise;
         try {
+          ownedService.startupConsumer = instance?.retainConsumer();
           const start = () => service.start(serviceContext);
           await withPluginHttpRouteRegistry(
             params.registry,
-            () => (instance ? instance.run(start) : start()),
+            () =>
+              ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
             lease,
           );
         } finally {
           // Failed-start rollback waits on raw work, never on the rollback that follows it.
+          ownedService.startupConsumer?.release();
+          ownedService.startupConsumer = undefined;
           ownedService.startup = undefined;
           settled.resolve();
         }

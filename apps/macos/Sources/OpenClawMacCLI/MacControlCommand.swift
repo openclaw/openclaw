@@ -83,8 +83,8 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
     if operation == "status", !primaryOnly {
         let status = try decoder.decode(MacControlStatus.self, from: data)
         print("OpenClaw \(status.app.version) (\(status.app.build)) · profile \(status.app.profile)")
-        print("NAME\tCONNECTION\tURL")
-        print("Primary (\(status.primary.mode))\t\(status.primary.connection.state)\t\(status.primary.url)")
+        print("NAME\tKIND\tCONNECTION\tURL")
+        print("Primary\t\(status.primary.mode)\t\(status.primary.connection.state)\t\(status.primary.url)")
         for gateway in status.gateways {
             printMacControlGateway(gateway)
         }
@@ -93,7 +93,7 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
         print("MODE\tTRANSPORT\tCONNECTION\tURL")
         print("\(primary.mode)\t\(primary.transport ?? "—")\t\(primary.connection.state)\t\(primary.url)")
     } else if operation == "gateway.list" {
-        print("NAME\tCONNECTION\tURL")
+        print("NAME\tKIND\tCONNECTION\tURL")
         for gateway in try decoder
             .decode([MacControlGatewayStatus].self, from: data)
         {
@@ -107,7 +107,7 @@ private func printMacControlResult(_ data: Data, operation: String, primaryOnly:
 }
 
 private func printMacControlGateway(_ gateway: MacControlGatewayStatus) {
-    print("\(gateway.name)\t\(gateway.connection.state)\t\(gateway.url)")
+    print("\(gateway.name)\t\(gateway.kind)\t\(gateway.connection.state)\t\(gateway.url)")
     if let identity = gateway.identity {
         print("  \(identity.subject) · expires \(identity.expiresAt)")
     }

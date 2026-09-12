@@ -302,7 +302,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
-/** Lines that need the operator's attention even when routine tool rows are hidden. */
+/** Approvals and failures that can start a draft when their rows are visible. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -1234,33 +1234,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 
 export function mergeChannelProgressDraftLineForStreaming<
   TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine, params: { maxLines: number; toolProgress: boolean }): TLine[] {
-  return mergeProgressDraftLine(
-    lines,
-    line,
-    params.maxLines,
-    params.toolProgress ? isChannelProgressPriorityLine : isChannelProgressAttentionLine,
-  );
-}
-
-/**
- * Removes the stored line an event addresses, matched the way the merge path
- * matches it. A stored line can carry the id of an earlier item family for the
- * same tool call (`tool:<call>` while the event arrives as `command:<call>`),
- * so an id-only comparison would miss it.
- */
-export function removeChannelProgressDraftLineForStreaming<
-  TLine extends string | ChannelProgressDraftLine,
->(lines: TLine[], line: TLine): TLine[] {
-  const lineKeys = resolveProgressDraftLineMergeKeys(line);
-  if (lineKeys.length === 0) {
-    return lines;
-  }
-  const next = lines.filter(
-    (entry) => !resolveProgressDraftLineMergeKeys(entry).some((key) => lineKeys.includes(key)),
-  );
-  // Reference equality is part of the caller contract; redraw work only runs after a real removal.
-  return next.length === lines.length ? lines : next;
+>(lines: TLine[], line: TLine, params: { maxLines: number }): TLine[] {
+  return mergeProgressDraftLine(lines, line, params.maxLines, isChannelProgressPriorityLine);
 }
 
 function mergeProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1401,7 +1376,7 @@ type ChannelProgressDraftTextParams = {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
-  /** Short narration paragraph; when present it replaces the tool lines. */
+  /** Status headline rendered above the plan and activity rows. */
   narration?: string;
   /** Latest full plan snapshot, rendered independently from rolling tool lines. */
   plan?: readonly AgentPlanStep[];
@@ -1413,14 +1388,9 @@ export function formatChannelProgressDraftText(params: ChannelProgressDraftTextP
 }
 
 export function formatChannelProgressDraftTextForStreaming(
-  params: ChannelProgressDraftTextParams & { toolProgress: boolean },
+  params: ChannelProgressDraftTextParams,
 ): string {
-  return formatProgressDraftText(
-    params,
-    params.toolProgress && params.presentation !== "summary"
-      ? isChannelProgressPriorityLine
-      : isChannelProgressAttentionLine,
-  );
+  return formatProgressDraftText(params, isChannelProgressPriorityLine);
 }
 
 function formatProgressDraftText(

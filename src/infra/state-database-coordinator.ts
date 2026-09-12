@@ -61,21 +61,35 @@ export function resolveStateLifecycleRuntimeDirectory(): string {
     : "/tmp";
 }
 
-function resolveLifecycleCoordinatorPath(
-  family: CoordinatorFamily,
-  params: { databasePath: string; runtimeDirectory: string; uid: number | undefined },
-): string {
+function resolveLifecycleCoordinatorBase(params: {
+  databasePath: string;
+  runtimeDirectory: string;
+  uid: number | undefined;
+}) {
   const canonicalDatabasePath = resolvePathViaExistingAncestorSync(params.databasePath);
   const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync(params.runtimeDirectory);
   // The predecessor state-local coordinator shipped only in v2026.8.1-beta.2.
   // Keep one current stable runtime path; beta-only peers are not upgrade-compatible.
   const suffix =
     params.uid === undefined ? "openclaw-state-locks" : `openclaw-state-locks-${params.uid}`;
-  return path.join(
-    canonicalRuntimeDirectory,
-    suffix,
-    `${family}.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
-  );
+  return {
+    directory: path.join(canonicalRuntimeDirectory, suffix),
+    databaseHash: sha256HexPrefixCore(canonicalDatabasePath, 8),
+  };
+}
+
+function buildLifecycleCoordinatorPath(
+  family: CoordinatorFamily,
+  base: ReturnType<typeof resolveLifecycleCoordinatorBase>,
+): string {
+  return path.join(base.directory, `${family}.${base.databaseHash}.lock.sqlite`);
+}
+
+function resolveLifecycleCoordinatorPath(
+  family: CoordinatorFamily,
+  params: Parameters<typeof resolveLifecycleCoordinatorBase>[0],
+): string {
+  return buildLifecycleCoordinatorPath(family, resolveLifecycleCoordinatorBase(params));
 }
 
 export function resolveStateDatabaseCoordinatorPath(params: {
@@ -157,21 +171,28 @@ export function retainHeldStateDatabaseCoordinator(databasePath: string) {
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
   // Lifecycle ownership is reentrant for nested transactions. File publication
   // is not: even this process must refuse before ownership probes touch SQLite.
-  const handlesPath = resolveLifecycleCoordinatorPath("state-handles", {
+  const base = resolveLifecycleCoordinatorBase({
     databasePath: params.databasePath,
     runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
     uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
   });
+  const handlesPath = buildLifecycleCoordinatorPath("state-handles", base);
   const writeScope = canonicalWriteScopes.getStore()?.get(handlesPath);
   if (writeScope) {
     if (!writeScope.active) {
       throw new SqliteCoordinatorError("SQLite binding write scope is no longer current");
     }
     writeScope.assertCurrent();
+    // Authority callbacks can change paths; resolve again after their checks.
+    return acquireLifecycleCoordinator("state-lifecycle", params);
   } else if (heldCoordinators.has(handlesPath)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }
-  return acquireLifecycleCoordinator("state-lifecycle", params);
+  return acquireLifecycleCoordinator("state-lifecycle", {
+    ...params,
+    coordinatorPath:
+      params.coordinatorPath ?? buildLifecycleCoordinatorPath("state-lifecycle", base),
+  });
 }
 
 /** Fence schema mutation against another process's live Gateway owner. */

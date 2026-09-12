@@ -136,6 +136,22 @@ Register each capability inside `register(api)` alongside your existing
     An explicitly selected alias still overrides canonical config without inheriting
     settings from other aliases.
 
+    `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
+    `agentId`, `surface` (`browser-session`, `gateway-relay`, or `bridge`),
+    `autoRespondToAudio`, and `requiredCapabilities.supportsVideoFrames`. Use this
+    context to choose account- and session-compatible defaults while preserving
+    explicit models. An omitted surface retains bridge behavior. Browser session
+    creation supplies `supportsVideoFrames: true` for camera-capable callers and
+    `false` for audio-only callers; catalog discovery leaves the requirement
+    unspecified. OpenAI selects GPT-Live by account unless the caller requires
+    video or manual responses. Talk sets `autoRespondToAudio: false`
+    when Gateway relay policy controls responses. `talk.catalog` resolves the
+    provider's discovery default for the configured Talk agent and provider
+    settings, excluding an explicit model; readiness and capabilities use the
+    effective model overrides.
+    Optional `talk.catalog` inputs `provider` and `model` resolve capabilities
+    for a specific realtime launch without changing saved configuration.
+
     ```typescript
     api.registerRealtimeVoiceProvider({
       id: "acme-ai",
@@ -201,6 +217,16 @@ Register each capability inside `register(api)` alongside your existing
     bridge can expose. Gateway relay sessions wait for that promise before
     confirming a final result or clearing the linked run; reject it when
     submission fails.
+    `close` may return `void` for synchronous disposal or a `Promise<void>`
+    that settles after provider finalization and resource cleanup. Stop audio,
+    tool, and delegation admission immediately. Final transcript callbacks may
+    drain until completion; consumers must await it before sealing transcript
+    queues or reporting logical session closure. Report the provider's terminal
+    reason through `onClose`, and reject the promise on cleanup failure. The
+    session facade preserves synchronous disposal. Once the provider returns
+    a promise, repeated closes return the same pending completion. Reentrant
+    close calls during the provider invocation are no-ops; terminal callbacks
+    must not wait for their own disposal.
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
     internal forced-consult and cancellation results, and rejects direct

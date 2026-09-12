@@ -23,7 +23,7 @@ function parseArgs(argv) {
     throw new Error(`Unknown package dist import check option: ${packageRootArg}`);
   }
   const extraArg = args[1]?.trim();
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`Unexpected package dist import check argument: ${extraArg}`);
   }
   return {

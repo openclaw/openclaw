@@ -72,6 +72,17 @@ has consumed it.
 
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
+## Canceling a pending steer
+
+An authorized Gateway client can withdraw a message still waiting in the OpenClaw
+runtime's steering queue, before delivery starts, with `chat.abort({ sessionKey,
+runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
+that message without stopping the active run or retrying it as a followup.
+
+Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
+work. If delivery cannot be confirmed, the existing steering safeguards can stop
+the active run to avoid replaying input whose consumption is uncertain.
+
 ## Debounce
 
 The built-in queue debounce applies to queued `followup` and `collect` delivery. In `steer` mode with the native Codex harness, it also sets the quiet window before sending batched `turn/steer`. OpenClaw active steering does not use the debounce timer; at tool-launch and model boundaries it drains FIFO according to the runtime's configured steering drain mode.

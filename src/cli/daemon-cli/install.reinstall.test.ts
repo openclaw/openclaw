@@ -9,6 +9,7 @@ const {
   expectFields,
   expectLastEmittedResult,
   installDaemonServiceAndEmitMock,
+  readConfigFileSnapshotMock,
   readFirstInstallPlanArg,
   readFirstNodeStartupTlsEnvironmentArg,
   replaceConfigFileMock,
@@ -22,24 +23,41 @@ const {
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
 
-  it("returns already-installed when the service already has the expected TLS env", async () => {
-    service.isLoaded.mockResolvedValue(true);
-    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
-      NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
-      NODE_USE_SYSTEM_CA: undefined,
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: {
-        NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
-      },
-    } as never);
-
-    await runDaemonInstall({ json: true });
-
-    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    expectLastEmittedResult("already-installed");
-  });
+  it.each([
+    { mode: "local", installedOverride: false, plannedOverride: false },
+    { mode: "remote", installedOverride: true, plannedOverride: true },
+    { mode: "local", installedOverride: true, plannedOverride: false },
+  ])(
+    "refreshes only changed service start mode with $mode primary",
+    async ({ mode, installedOverride, plannedOverride }) => {
+      service.isLoaded.mockResolvedValue(true);
+      readConfigFileSnapshotMock.mockResolvedValue({
+        valid: true,
+        sourceConfig: { gateway: { mode, auth: { mode: "token" } } },
+      });
+      const command = (override: boolean) =>
+        ["openclaw", "gateway", "run"].concat(override ? ["--allow-unconfigured"] : []);
+      const environment = { NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt" };
+      resolveNodeStartupTlsEnvironmentMock.mockReturnValue(environment);
+      service.readCommand.mockResolvedValue({
+        programArguments: command(installedOverride),
+        environment,
+      });
+      buildGatewayInstallPlanMock.mockResolvedValue({
+        programArguments: command(plannedOverride),
+        environment,
+        workingDirectory: "/tmp",
+      });
+      await runDaemonInstall({ json: true });
+      expect(actionState.failed).toEqual([]);
+      if (installedOverride !== plannedOverride) {
+        expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+      } else {
+        expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+        expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+      }
+    },
+  );
 
   it.each([
     { failure: "probe", message: "openclaw gateway install --force" },

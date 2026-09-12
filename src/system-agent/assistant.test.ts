@@ -79,6 +79,15 @@ describe("OpenClaw assistant", () => {
     });
   });
 
+  it.each([
+    ['[0] {"reply":"Ready."}', { reply: "Ready." }],
+    ['{"reply":"A } brace."} {"reply":"Later."}', { reply: "A } brace." }],
+    ['prefix "{not-json}" {"reply":"Later."}', null],
+    ['{"reply":"First.","extra":{"nested":true}} trailing }', { reply: "First." }],
+  ])("preserves object-only, first-object extraction: %s", (input, expected) => {
+    expect(parseSystemAgentAssistantPlanText(input)).toEqual(expected);
+  });
+
   it("rejects non-JSON and empty plans but accepts chat-only replies", () => {
     expect(parseSystemAgentAssistantPlanText("I would edit config directly.")).toBeNull();
     expect(parseSystemAgentAssistantPlanText("{}")).toBeNull();

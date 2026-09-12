@@ -23,7 +23,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import {
+  resolveNormalizedAccountEntry,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -194,6 +197,7 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
 function resolveManifestChannelAccount(params: {
   cfg: OpenClawConfig;
   channelId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId?: string | null;
 }): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
   const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
@@ -202,7 +206,12 @@ function resolveManifestChannelAccount(params: {
   const config =
     asOptionalRecord(
       accounts
-        ? resolveNormalizedAccountEntry(accounts, accountId, normalizeManifestAccountConfigKey)
+        ? resolveNormalizedAccountEntry(
+            accounts,
+            accountId,
+            normalizeManifestAccountConfigKey,
+            params.accountKeyPolicy,
+          )
         : undefined,
     ) ?? channelConfig;
   return {
@@ -309,7 +318,12 @@ function createManifestChannelPlugin(params: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
       resolveAccount: (cfg, accountId) =>
-        resolveManifestChannelAccount({ cfg, channelId: params.channelId, accountId }),
+        resolveManifestChannelAccount({
+          cfg,
+          channelId: params.channelId,
+          accountId,
+          accountKeyPolicy: params.record.channelAccountKeyPolicies?.[params.channelId],
+        }),
       isEnabled: (account, cfg) =>
         getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
         account.config.enabled !== false,

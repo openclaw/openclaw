@@ -24,7 +24,10 @@ import {
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
 import { pluginIdFromContextEngineOwner } from "./registry-adoption.js";
-import { describeResolvedContextEngineContractError } from "./registry-contract.js";
+import {
+  describeResolvedContextEngineContractError,
+  projectContextEngineHostParams,
+} from "./registry-contract.js";
 import {
   recordContextEngineRegistrationSource,
   createContextEngineWithResources,
@@ -63,14 +66,12 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
     " ",
   ),
 );
-export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
-  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal".split(" "),
-);
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
   sourceEngine?: ContextEngine;
-  ownedSource?: ContextEngineFactoryResources;
+  source?: ContextEngineFactoryResources;
+  ownsSource?: boolean;
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
@@ -90,27 +91,8 @@ function inheritCompactionWatchdogOwnership(
   return inheritRuntimeCompactionDelegate(compact, wrappedCompact);
 }
 
-function projectContextEngineHostParams(
-  engine: ContextEngine,
-  methodName: PropertyKey,
-  params: Record<string, unknown>,
-): Record<string, unknown> {
-  const accepted = engine.info.acceptedHostParams;
-  if (!accepted) {
-    return params;
-  }
-  return Object.fromEntries(
-    Object.entries(params).filter(
-      ([key]) =>
-        accepted.includes(key) ||
-        !CONTEXT_ENGINE_HOST_PARAMS.has(key) ||
-        (methodName === "compact" && key === "abortSignal"),
-    ),
-  );
-}
-
 function wrapResolvedContextEngine(
-  engine: ContextEngine,
+  rawEngine: ContextEngine,
   metadata: ResolvedContextEngineMetadata & {
     factory: ContextEngineFactory;
     defaultEngineId?: string;
@@ -118,6 +100,8 @@ function wrapResolvedContextEngine(
   },
 ): ContextEngine {
   let disposal: Promise<void> | undefined;
+  const source = metadata.source;
+  const engine = source?.wrap(rawEngine) ?? rawEngine;
   const fallback =
     metadata.defaultEngineId &&
     metadata.factoryCtx &&
@@ -134,12 +118,12 @@ function wrapResolvedContextEngine(
         const resolve = () =>
           resolveDefaultContextEngine(fallback.defaultEngineId, fallback.factoryCtx);
         // Failed factories return before cleanup; capture that work in this engine's source owner.
-        return await (fallbackEnginePromise ??= (
-          metadata.ownedSource ? metadata.ownedSource.run(resolve) : resolve()
-        ).then((resolved) => {
-          resolvedFallbackEngine = resolved;
-          return resolved;
-        }));
+        return await (fallbackEnginePromise ??= (source ? source.run(resolve) : resolve()).then(
+          (resolved) => {
+            resolvedFallbackEngine = resolved;
+            return resolved;
+          },
+        ));
       }
     : undefined;
   const disposeOwned = () => {
@@ -156,10 +140,9 @@ function wrapResolvedContextEngine(
           : { status: "fulfilled", value: resolvedFallbackEngine };
       const fallbackEngine =
         fallbackResult.status === "fulfilled" ? fallbackResult.value : undefined;
-      const sources = metadata.ownedSource ? [metadata.ownedSource] : [];
+      const sources = metadata.ownsSource && source ? [source] : [];
       const shared = fallbackEngine && hasSameContextEngineInstance(wrapped, fallbackEngine);
-      const fallbackSource =
-        fallbackEngine && resolvedEngineMetadata.get(fallbackEngine)?.ownedSource;
+      const fallbackSource = fallbackEngine && resolvedEngineMetadata.get(fallbackEngine)?.source;
       if (shared && fallbackSource) {
         sources.push(fallbackSource);
       }
@@ -171,11 +154,17 @@ function wrapResolvedContextEngine(
       })();
       // Shared raw engines dispose once with both source claims held; independent cleanup all runs.
       const results = await Promise.allSettled([
-        disposeContextEngineSources(engine, sources, () =>
-          runPluginCleanup(metadata.factory, async () => {
-            await engine.dispose?.();
-          }),
-        ),
+        (async () => {
+          if (source && !metadata.ownsSource) {
+            await source.runCleanup(() => rawEngine.dispose?.());
+          } else {
+            await disposeContextEngineSources(rawEngine, sources, () =>
+              source
+                ? rawEngine.dispose?.()
+                : runPluginCleanup(metadata.factory, () => rawEngine.dispose?.()),
+            );
+          }
+        })(),
         fallbackCleanup,
       ]);
       for (const result of [...results, fallbackResult]) {
@@ -191,7 +180,7 @@ function wrapResolvedContextEngine(
     Object.create(engine, { info: { get: () => engine.info } }) as ContextEngine,
     {
       get(_target, property) {
-        if (property === "dispose" && (metadata.ownedSource || fallback)) {
+        if (property === "dispose" && (source || fallback)) {
           return disposeOwned;
         }
         if (property === "info") {
@@ -568,9 +557,10 @@ async function createOwnedContextEngine(
     if (contractError) {
       throw new Error(`${options.contractErrorPrefix ?? ""}${contractError}`);
     }
-    return wrapResolvedContextEngine(options.source?.wrap(engine) ?? engine, {
+    return wrapResolvedContextEngine(engine, {
       sourceEngine: resolvedEngineMetadata.get(engine)?.sourceEngine ?? engine,
-      ownedSource: options.ownsSource ? options.source : undefined,
+      source: options.source,
+      ownsSource: options.ownsSource,
       engineId,
       owner: entry.owner,
       factory: entry.factory,
@@ -578,9 +568,13 @@ async function createOwnedContextEngine(
       factoryCtx,
     });
   } catch (error) {
-    const dispose = () => runPluginCleanup(entry.factory, () => engine?.dispose?.());
+    const dispose = () => engine?.dispose?.();
     await Promise.resolve()
-      .then(() => (options.source ? options.source.runCleanup(dispose) : dispose()))
+      .then(() =>
+        options.source
+          ? options.source.runCleanup(dispose)
+          : runPluginCleanup(entry.factory, dispose),
+      )
       .catch(() => undefined);
     throw error;
   }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   link,
   mkdir,
@@ -13,8 +14,13 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_RESULT_BYTES,
+  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
+  type SqliteWorkerReply,
+} from "./sqlite-worker-contract.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
@@ -71,6 +77,109 @@ function read(store: SqliteWorkerStore<FixtureOperations>) {
 const nodeIt = process.versions.bun ? it.skip : it;
 
 describe("SQLite worker store", () => {
+  it.each(["read", "client close", "global close", "abort", "failed frame"] as const)(
+    "preserves a complete large result through %s",
+    async (action) => {
+      const file = databasePath();
+      const store = await open(file);
+      const values = Array.from(
+        { length: 3 },
+        (_, index) => `${"x".repeat(24 * 1024 * 1024)}é-${index}`,
+      );
+      const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+      const inlineReplies: string[][] = [];
+      const frames: Array<{ bytes: number; backingBytes: number }> = [];
+      const aborted = new AbortController();
+      let closing: Promise<void> | undefined;
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker below.
+      const originalEmit = Worker.prototype.emit;
+      const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+        this: Worker,
+        event: string | symbol,
+        reply: SqliteWorkerReply,
+      ) {
+        if (event === "message" && reply.ok) {
+          if (!reply.transfer) {
+            inlineReplies.push(Object.keys(reply).toSorted());
+          } else if (reply.transfer === "frame") {
+            frames.push({
+              bytes: reply.value.byteLength,
+              backingBytes: reply.value.buffer.byteLength,
+            });
+            if (frames.length === 1) {
+              if (action === "client close") {
+                closing = store.close();
+              }
+              if (action === "global close") {
+                closing = drainGlobalSingletonLifecycleState("restart");
+              }
+              if (action === "abort") {
+                aborted.abort(new Error("Canceled after read dispatch"));
+              }
+              if (action === "failed frame") {
+                return Reflect.apply(originalEmit, this, [
+                  event,
+                  { ...reply, value: new Uint8Array([0]) },
+                ]);
+              }
+            }
+          }
+        }
+        return Reflect.apply(originalEmit, this, [event, reply]);
+      });
+      const requests = vi.spyOn(Worker.prototype, "postMessage");
+      try {
+        for (const value of values) {
+          await append(store, value);
+        }
+        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "value"]));
+        requests.mockClear();
+        const reading = store.execute(
+          { type: "read", input: undefined },
+          { signal: aborted.signal },
+        );
+        if (action === "failed frame") {
+          const queued = append(store, "must not be dispatched");
+          expect(await Promise.allSettled([reading, queued])).toEqual([
+            { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
+            { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
+          ]);
+        } else {
+          const result = await reading;
+          expect(result).toHaveLength(values.length);
+          expect(result.map(digest)).toEqual(values.map(digest));
+          expect(frames.length).toBeGreaterThan(8);
+          if (action.endsWith("close")) {
+            expect(closing).toBeDefined();
+          }
+          if (action === "abort") {
+            expect(aborted.signal.aborted).toBe(true);
+          }
+          await closing;
+        }
+        expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(
+          1,
+        );
+        expect(
+          frames.every((frame) => frame.bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024),
+        ).toBe(true);
+        expect(frames.every((frame) => frame.backingBytes <= SQLITE_WORKER_MAX_RESULT_BYTES)).toBe(
+          true,
+        );
+      } finally {
+        messages.mockRestore();
+        requests.mockRestore();
+        await Promise.allSettled([closing, store.close()]);
+        stores.delete(store);
+      }
+      if (action === "failed frame") {
+        const recovered = await open(file);
+        expect((await read(recovered)).map(digest)).toEqual(values.map(digest));
+        expect(await append(recovered, "after recovery")).toMatchObject({ writes: 1 });
+      }
+    },
+  );
+
   it.each(["memory", "absolute memory", "memory URI", "incognito", "empty"] as const)(
     "rejects a %s locator before creating a file or dispatching a worker request",
     async (kind) => {

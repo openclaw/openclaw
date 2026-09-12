@@ -1071,6 +1071,7 @@ describe("worker runtime", () => {
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
     const { gateway, workspaceDir, launch } = await setup();
+    const canonicalWorkspaceDir = await realpath(workspaceDir);
     const promptDir = path.join(workspaceDir, ".openclaw");
     const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
     await mkdir(promptDir);
@@ -1091,8 +1092,8 @@ describe("worker runtime", () => {
       expect(
         openedFiles.mock.calls
           .map(([params]) => params.absolutePath)
-          .filter((filePath) => path.dirname(filePath) === workspaceDir),
-      ).toEqual([path.join(workspaceDir, "AGENTS.md")]);
+          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
+      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
     } finally {
       openedFiles.mockRestore();
     }

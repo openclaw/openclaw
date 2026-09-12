@@ -82,17 +82,24 @@ visibility outcomes distinct.
 
 For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
 receives a `PreparedProviderModelAccess` request and replaces the post-save
-`select` call; it does not apply the choice. Retain that request with the current
-login record from `createProviderLoginFlowRegistry` and
-`reserveProviderLoginFlow`.
+`select` call; it does not apply the choice. Retain the prepared request until
+login finishes. Use `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow` to reserve only the credential exchange.
 
-After login finishes, use `offerProviderLoginModelAccess` with the same record,
-the prepared request, and the login's completion message. Deliver its structured
-reply. Pass the subsequent command to `answerProviderLoginModelAccess` with the
-same registry and flow key. This owner validates the answer, applies the choice,
-returns the final reply, and releases the completed record. Do not reconstruct a
-wildcard write from the button text or reuse a prepared request for a new login.
-Release the record on cancellation or a terminal failure.
+After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
+`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
+the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
+The pending model-access question has its own lifetime and remains answerable
+after that release; it does not block another login.
+
+Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
+`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
+optional. `readConfig` must return the host's current config. The owner validates
+the answer, applies the choice, and consumes that question. Expired or conflicting
+choices receive a fresh question based on current restrictions.
+Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
+Do not reconstruct a wildcard write from button text or reuse a prepared request
+for a new login.
 
 ### Keep hosted writes authorized
 

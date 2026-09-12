@@ -84,7 +84,6 @@ import {
   createGatewayStartupMetadataPluginIdScope,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveGatewayStartupMetadataPluginIds,
-  resolveGatewayStartupPluginIdsFromRegistry,
   resolveGatewayStartupPluginPlanFromRegistry,
 } from "./channel-plugin-ids.js";
 
@@ -419,7 +418,7 @@ function expectStartupPluginIds(params: {
 }) {
   const manifestRegistry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   expect(
-    resolveGatewayStartupPluginIdsFromRegistry({
+    resolveGatewayStartupPluginPlanFromRegistry({
       config: params.config,
       ...(params.activationSourceConfig !== undefined
         ? { activationSourceConfig: params.activationSourceConfig }
@@ -430,7 +429,7 @@ function expectStartupPluginIds(params: {
       ...(params.workerProviderIds !== undefined
         ? { workerProviderIds: params.workerProviderIds }
         : {}),
-    }),
+    }).pluginIds,
   ).toEqual(params.expected);
 }
 
@@ -537,7 +536,7 @@ function createStartupConfig(params: {
   return config as OpenClawConfig;
 }
 
-describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
+describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.hasOwn(config, "channels")) {

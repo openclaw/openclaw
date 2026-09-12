@@ -131,6 +131,8 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: () => undefined,
+  materializePreparedModelCatalogOwner: (owner: object) => owner,
   readPreparedModelCatalog: (...args: unknown[]) =>
     modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {

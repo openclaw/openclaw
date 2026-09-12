@@ -1,5 +1,6 @@
 // Gateway request scope tests cover request-local plugin runtime context propagation.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import {
   requireActivePluginRegistry,
@@ -114,6 +115,72 @@ describe("gateway request scope", () => {
         expectGatewayScope(runtimeScope, { ...TEST_SCOPE, pluginRegistry: requestRegistry });
       });
       expect(requireActivePluginRegistry()).toBe(activeRegistry);
+    });
+  });
+  it("drops generation ownership for re-admission and restores the caller afterward", async () => {
+    const generation = await import("./generation-scope.js");
+    const registry = createEmptyPluginRegistry();
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture", providers: ["fixture-provider"] }],
+    });
+    await withTestGatewayScope(async (runtimeScope) => {
+      await generation.withPluginRuntimeGenerationScope(
+        { metadataSnapshot, pluginRegistry: registry },
+        async () => {
+          const original = runtimeScope.getPluginRuntimeGatewayRequestScope();
+          expect(original?.declaredProviderOwners).toBe(metadataSnapshot.declaredProviderOwners);
+          await generation.runOutsidePluginRuntimeGenerationScope(async () => {
+            await Promise.resolve();
+            expect(generation.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+            expectGatewayScope(runtimeScope, {
+              ...TEST_SCOPE,
+              pluginRegistry: undefined,
+              declaredProviderOwners: undefined,
+            });
+          });
+          expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(original);
+          expect(generation.getPluginRuntimeGenerationRegistry()).toBe(registry);
+        },
+      );
+    });
+  });
+
+  it("isolates combined plugin identities across concurrent registry scopes", async () => {
+    const runtimeScope = await importGatewayRequestScopeModule();
+    const parent = {
+      ...TEST_SCOPE,
+      pluginId: "parent",
+      pluginSource: "parent-source",
+      pluginOrigin: "bundled" as const,
+      pluginTrustedOfficialInstall: true,
+    };
+    const registries = [createEmptyPluginRegistry(), createEmptyPluginRegistry()];
+    await runtimeScope.withPluginRuntimeGatewayRequestScope(parent, async () => {
+      await Promise.all(
+        registries.map((registry, index) =>
+          runtimeScope.withPluginRuntimePluginScope(
+            { pluginId: `child-${index}` },
+            async () => {
+              await Promise.resolve();
+              const scoped = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
+              expect(scoped).toEqual({
+                ...TEST_SCOPE,
+                pluginId: `child-${index}`,
+                pluginRegistry: registry,
+                declaredProviderOwners: undefined,
+              });
+              expect(Object.hasOwn(scoped, "pluginSource")).toBe(false);
+              expect(Object.hasOwn(scoped, "pluginOrigin")).toBe(false);
+              expect(Object.hasOwn(scoped, "pluginTrustedOfficialInstall")).toBe(false);
+              scoped.pluginSource = "child-only";
+              expect(parent.pluginSource).toBe("parent-source");
+              expect(requireActivePluginRegistry()).toBe(registry);
+            },
+            registry,
+          ),
+        ),
+      );
+      expectGatewayScope(runtimeScope, parent);
     });
   });
 });

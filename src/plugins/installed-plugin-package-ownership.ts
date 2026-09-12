@@ -172,7 +172,49 @@ export function createInstalledPluginOwnershipResolver(
       value: { kind: "orphan", installOwner: pluginId, installRecord, pluginIds: [] },
     };
   }
-  return { resolvePackage, resolveLifecycle };
+  function resolveReload(
+    pluginId: string,
+  ): Result<
+    | InstalledPluginLifecycleOwnership
+    | { kind: "discovered"; pluginIds: [string]; installOwner?: never },
+    string
+  > {
+    const target = targets.get(pluginId);
+    // Reload can replace a discovered runtime without mutating its source files.
+    // Any recorded ID, path, or ownership claim still requires strict package validation.
+    if (
+      target &&
+      !isInstalledPluginIndexInstallOwnerAmbiguous(target) &&
+      !resolveInstalledPluginIndexInstallOwner(target) &&
+      !Object.hasOwn(index.installRecords, pluginId) &&
+      !Object.values(index.installRecords).some((record) =>
+        installRecordPathMatchesPluginRoot(record, target.rootDir, env, realpathCache),
+      )
+    ) {
+      return { ok: true, value: { kind: "discovered", pluginIds: [pluginId] } };
+    }
+    return resolveLifecycle(pluginId);
+  }
+  function isSourceInUse(sourcePath: string, loadPaths: readonly string[]): boolean {
+    const target = safeRealpathSync(sourcePath, realpathCache) ?? path.resolve(sourcePath);
+    const paths = [
+      ...loadPaths,
+      ...Object.values(index.installRecords).flatMap((record) => [
+        record.installPath,
+        record.sourcePath,
+      ]),
+      ...index.plugins.flatMap((entry) => [entry.rootDir, entry.source, entry.manifestPath]),
+    ];
+    return paths.some((candidate) => {
+      if (!candidate?.trim()) {
+        return false;
+      }
+      const resolved = path.resolve(resolveUserPath(candidate, env));
+      const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
+      return isPathInside(target, current) || isPathInside(current, target);
+    });
+  }
+  return { resolvePackage, resolveLifecycle, resolveReload, isSourceInUse };
 }
 
 function installRecordPathMatchesPluginRoot(

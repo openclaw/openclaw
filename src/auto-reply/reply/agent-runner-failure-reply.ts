@@ -302,6 +302,9 @@ export function buildExternalRunFailureReply(
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   const providerLoginRecovery = buildProviderLoginRecovery({
+    provider: oauthRefreshFailure
+      ? (oauthRefreshFailure.provider ?? undefined)
+      : failoverFacts.provider,
     oauthReason: oauthRefreshFailure?.reason,
     failoverReason: failoverFacts.reason,
     authMode: failoverFacts.authMode,

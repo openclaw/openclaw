@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonTestResults } from "vitest/node";
+import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./vitest-cli.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
 
@@ -35,9 +36,7 @@ function withoutOutputArgs(args: string[]) {
       return [...result, ...args.slice(index)];
     }
     if (/^--(?:output(?:File|-file)(?:\.[^=]+)?|coverage\.reportsDirectory)(?:=|$)/u.test(arg)) {
-      if (!arg.includes("=")) {
-        index++;
-      }
+      index += vitestOptionConsumesNextArg(arg, args[index + 1]) ? 1 : 0;
     } else {
       result.push(arg);
     }

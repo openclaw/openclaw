@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -55,6 +56,15 @@ export class ControlUiGitHubError extends Error {
 class ControlUiGitHubTransportError extends ControlUiGitHubError {
   constructor(message: string) {
     super(502, message, { retryable: true });
+  }
+}
+
+export class GitHubGraphQLUnavailableError extends ControlUiGitHubError {
+  constructor(upstreamStatus: number) {
+    super(403, "GitHub GraphQL access is unavailable for the selected credential", {
+      upstreamStatus,
+      retryable: false,
+    });
   }
 }
 
@@ -167,12 +177,37 @@ export function githubApiCredentialCacheScope(token: string | undefined): string
 }
 
 function githubApiResource(url: URL): string {
-  // GitHub separates code search, other REST searches, and non-search REST.
-  return url.pathname === "/search/code"
-    ? "code_search"
-    : url.pathname.startsWith("/search/")
-      ? "search"
-      : "core";
+  // GitHub separates GraphQL, code search, other searches, and non-search REST.
+  return url.pathname === "/graphql"
+    ? "graphql"
+    : url.pathname === "/search/code"
+      ? "code_search"
+      : url.pathname.startsWith("/search/")
+        ? "search"
+        : "core";
+}
+
+function retainGitHubCooldown(
+  fetchImpl: typeof fetch,
+  credentialScope: string,
+  resource: string,
+  response: Response,
+  error: ControlUiGitHubError,
+): ControlUiGitHubError {
+  const cooldowns = transportCooldowns.get(fetchImpl) ?? new Map<string, ControlUiGitHubError>();
+  transportCooldowns.set(fetchImpl, cooldowns);
+  // Exhausted primary quota is resource-specific; secondary limits can span APIs.
+  const resourceKey =
+    response.headers.get("x-ratelimit-remaining") === "0"
+      ? (response.headers.get("x-ratelimit-resource") ?? resource)
+      : "*";
+  const key = `${credentialScope}:${resourceKey}`;
+  const previous = activeGitHubCooldown(cooldowns, key);
+  const retained =
+    previous && (previous.retryAfterMs ?? 0) > (error.retryAfterMs ?? 0) ? previous : error;
+  cooldowns.set(key, retained);
+  pruneMapToMaxSize(cooldowns, GITHUB_QUOTA_CACHE_LIMIT);
+  return retained;
 }
 
 function activeGitHubCooldown(
@@ -223,11 +258,15 @@ export async function fetchGitHubApi(
   identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
   etag?: string,
   callerSignal?: AbortSignal,
+  graphql?: { query: string; variables: Record<string, string> },
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
   const initialUrl = safeGitHubApiUrl(rawUrl);
   if (!initialUrl) {
     throw new ControlUiGitHubError(502, "Invalid GitHub API URL");
+  }
+  if (graphql && (initialUrl.href !== `${GITHUB_API_ORIGIN}/graphql` || !token || etag)) {
+    throw new ControlUiGitHubError(502, "Invalid authenticated GitHub GraphQL request");
   }
   let url: URL = initialUrl;
   const credentialScope = githubApiCredentialCacheScope(token);
@@ -257,7 +296,12 @@ export async function fetchGitHubApi(
     let response: Response;
     try {
       response = await fetchImpl(url.href, {
-        headers: { ...githubApiHeaders(token), ...(etag ? { "If-None-Match": etag } : {}) },
+        headers: {
+          ...githubApiHeaders(token),
+          ...(etag ? { "If-None-Match": etag } : {}),
+          ...(graphql ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(graphql ? { method: "POST", body: JSON.stringify(graphql) } : {}),
         redirect: "manual",
         signal,
       });
@@ -268,19 +312,13 @@ export async function fetchGitHubApi(
       );
     }
     if (isGitHubRateLimitResponse(response)) {
-      const error = githubResponseError(response);
-      // Exhausted primary quota is resource-specific. Secondary limits can
-      // span REST resources, so a rate limit without that signal pauses all.
-      const resourceKey =
-        response.headers.get("x-ratelimit-remaining") === "0"
-          ? (response.headers.get("x-ratelimit-resource") ?? resource)
-          : "*";
-      const key = `${credentialScope}:${resourceKey}`;
-      const previous = activeGitHubCooldown(cooldowns, key);
-      const retained =
-        previous && (previous.retryAfterMs ?? 0) > (error.retryAfterMs ?? 0) ? previous : error;
-      cooldowns.set(key, retained);
-      pruneMapToMaxSize(cooldowns, GITHUB_QUOTA_CACHE_LIMIT);
+      const retained = retainGitHubCooldown(
+        fetchImpl,
+        credentialScope,
+        resource,
+        response,
+        githubResponseError(response),
+      );
       await discardResponse(response);
       throw retained;
     }
@@ -298,6 +336,9 @@ export async function fetchGitHubApi(
     // callers still verify the final response repository before returning it.
     await discardResponse(response);
     await beforeRedirect?.(nextUrl);
+    if (graphql) {
+      throw new ControlUiGitHubError(502, "GitHub GraphQL returned an unexpected redirect");
+    }
     url = nextUrl;
   }
 }
@@ -339,8 +380,8 @@ function githubResponseErrorStatus(response: Response): number {
   return 502;
 }
 
-function githubResponseError(response: Response): ControlUiGitHubError {
-  const status = githubResponseErrorStatus(response);
+function githubResponseError(response: Response, graphqlRateLimited = false): ControlUiGitHubError {
+  const status = graphqlRateLimited ? 429 : githubResponseErrorStatus(response);
   let retryAtMs: number | undefined;
   if (status === 429) {
     const now = Date.now();
@@ -365,6 +406,72 @@ function githubResponseError(response: Response): ControlUiGitHubError {
     upstreamStatus: response.status,
     retryAtMs,
   });
+}
+
+/** GraphQL can report failed queries and exhausted quota in an HTTP 200 response. */
+export async function readGitHubGraphQLResponse(
+  response: Response,
+  fetchImpl: typeof fetch,
+  token: string,
+  maxBytes?: number,
+): Promise<unknown> {
+  const value =
+    response.status === 403 && !isGitHubRateLimitResponse(response)
+      ? await readGitHubJsonBody(response, maxBytes)
+      : await readGitHubJsonResponse(response, maxBytes);
+  const noData =
+    isRecord(value) &&
+    (value.data === undefined ||
+      value.data === null ||
+      (isRecord(value.data) && Object.values(value.data).every((field) => field === null)));
+  if (isRecord(value) && value.errors !== undefined) {
+    if (
+      Array.isArray(value.errors) &&
+      value.errors.some((error) => isRecord(error) && error.type === "RATE_LIMITED")
+    ) {
+      throw retainGitHubCooldown(
+        fetchImpl,
+        githubApiCredentialCacheScope(token),
+        "graphql",
+        response,
+        githubResponseError(response, true),
+      );
+    }
+    if (
+      Array.isArray(value.errors) &&
+      value.errors.length > 0 &&
+      value.errors.every(
+        (error) =>
+          isRecord(error) && (error.type === "FORBIDDEN" || error.type === "INSUFFICIENT_SCOPES"),
+      ) &&
+      noData
+    ) {
+      throw new GitHubGraphQLUnavailableError(response.status);
+    }
+    if (!Array.isArray(value.errors) || value.errors.length > 0) {
+      throw new ControlUiGitHubError(
+        502,
+        "GitHub GraphQL request failed; check repository access",
+        {
+          retryable: false,
+        },
+      );
+    }
+  }
+  if (!response.ok) {
+    if (
+      response.status === 403 &&
+      noData &&
+      isRecord(value) &&
+      value.errors === undefined &&
+      (value.message === "Resource not accessible by integration" ||
+        value.message === "Resource not accessible by personal access token")
+    ) {
+      throw new GitHubGraphQLUnavailableError(response.status);
+    }
+    throw githubResponseError(response);
+  }
+  return value;
 }
 
 // Optional host auth raises quota and unlocks private-repo reads, but an
@@ -405,6 +512,13 @@ export async function readGitHubJsonResponse(
     await discardResponse(response);
     throw githubResponseError(response);
   }
+  return readGitHubJsonBody(response, maxBytes);
+}
+
+async function readGitHubJsonBody(
+  response: Response,
+  maxBytes = GITHUB_JSON_MAX_BYTES,
+): Promise<unknown> {
   let body: Buffer;
   try {
     body = await readBoundedResponse(response, maxBytes);

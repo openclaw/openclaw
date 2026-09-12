@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -17,7 +18,7 @@ import {
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
@@ -57,6 +58,7 @@ import {
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
+import { renderToolFailures } from "./chat-tool-failure.ts";
 import { shouldAnimateUserTurnEntry } from "./chat-user-turn-entry.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -209,7 +211,7 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
+    : summarizeToolGroup(cards.map((card) => ({ ...card, isError: isToolCardError(card) })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
@@ -265,6 +267,7 @@ export function renderActivityGroup(
         }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
+      ${activityExpanded ? nothing : renderToolFailures(cards)}
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
         ${
           activityExpanded
@@ -301,6 +304,20 @@ export function resolveMessageGroupSenderLabel(
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  if (normalizedRole === "custom") {
+    const isError = group.messages.every(({ message }) => {
+      const customType = asNullableRecord(message)?.customType;
+      return (
+        customType === "run-failed-before-reply" || customType === "cloud-workspace-recovery-failed"
+      );
+    });
+    if (isError) {
+      return t("chat.messages.errorSender");
+    }
+    return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
+      ? t("chat.workspaceConflict.eventSender")
+      : t("common.system");
+  }
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -317,11 +334,7 @@ export function resolveMessageGroupSenderLabel(
       ? (userLabel ?? assistantName)
       : normalizedRole === "tool"
         ? t("chat.messages.toolSender")
-        : group.messages.every((item) =>
-              Boolean(workspaceResultConflictFromTranscript(item.message)),
-            )
-          ? t("chat.workspaceConflict.eventSender")
-          : normalizedRole;
+        : normalizedRole;
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
@@ -441,9 +454,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? renderForwardedAvatar(group.senderSession?.agentId, opts)
         : renderChatAvatar(
             group.role,
-            { name: assistantName, avatar: opts.assistantAvatar ?? null },
+            {
+              agentId: opts.agentId,
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+              textAvatar: opts.assistantTextAvatar,
+            },
             { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
-            opts.resourceBasePath,
             group.sender,
           )
       : nothing;

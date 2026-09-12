@@ -7,6 +7,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -63,11 +64,17 @@ export function createGateway(
   return {
     gateway,
     emit(event) {
+      if (event === "config.changed" || event === "chat.metadata.changed") {
+        invalidateChatMetadataStore(client);
+      }
       for (const listener of events) {
         listener({ type: "event", event, payload: {} });
       }
     },
     setConnected(nextConnected) {
+      if (!nextConnected) {
+        invalidateChatMetadataStore(client);
+      }
       snapshot = {
         ...snapshot,
         phase: nextConnected ? "connected" : "reconnecting",

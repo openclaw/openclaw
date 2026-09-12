@@ -15,9 +15,9 @@ import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";

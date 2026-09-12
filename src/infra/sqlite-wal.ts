@@ -96,6 +96,11 @@ function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): nu
   return normalizedTimeoutMs;
 }
 
+/** Restrict inspection connections without changing journal or persistence policy. */
+export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
+  db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+}
+
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
 function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {

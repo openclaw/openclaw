@@ -111,6 +111,17 @@ const AgentCreatedViaSchema = Type.Union([
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
+  status: Type.Optional(Type.Literal("degraded")),
+  admissionRefusal: Type.Optional(
+    closedObject({
+      agentId: NonEmptyString,
+      paths: Type.Array(NonEmptyString),
+      embeddedOwnerId: NonEmptyString,
+      code: Type.Literal("agent-database-ownership-mismatch"),
+      reason: NonEmptyString,
+      repairHint: NonEmptyString,
+    }),
+  ),
   kind: Type.Optional(AgentKindSchema),
   createdVia: Type.Optional(AgentCreatedViaSchema),
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -294,6 +305,8 @@ export const ModelsListParamsSchema = Type.Object(
     provider: Type.Optional(NonEmptyString),
     includeDetails: Type.Optional(Type.Boolean()),
     includeProviderCapabilities: Type.Optional(Type.Boolean()),
+    /** Include global default-model previews, independent of agent/session overrides. */
+    includeDefaultModels: Type.Optional(Type.Boolean()),
     /** Reuse prepared/cached facts without starting provider discovery. */
     preparedOnly: Type.Optional(Type.Boolean()),
     /** Force replacement of a completed full-catalog generation. */
@@ -361,7 +374,14 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  defaultModels: Type.Optional(
+    closedObject({
+      /** Auto preview from agents.defaults.model, even when utility routing is explicit or disabled. */
+      automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
+    }),
+  ),
   refreshFailed: Type.Optional(Type.Boolean()),
+  pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });

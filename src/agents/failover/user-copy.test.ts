@@ -71,6 +71,15 @@ describe("failover user copy", () => {
     expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
   });
 
+  it.each([
+    "A maximum of 4 blocks with cache_control may be provided. Found 5. PRIVATE_CANARY",
+    "A maximum of many blocks with cache_control may be provided. Found 5.",
+  ])("does not echo arbitrary cache-limit error text: %s", (raw) => {
+    expect(renderFormatErrorCopy(raw)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+
   it("keeps overlong provider-controlled limit text generic", () => {
     const raw = `400 max_tokens (384000) exceeds ${"x".repeat(301)} maximum output tokens (65536)`;
     expect(renderFormatErrorCopy(raw)).toBe(

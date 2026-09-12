@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveLogbookConfig } from "./config.js";
 import { LogbookService } from "./service.js";
 
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+
 type NodeRecord = { nodeId: string; displayName?: string; commands: string[] };
 
 const quietLogger = {
@@ -38,6 +40,7 @@ async function makeService(params: {
       fullConfig: (params.fullConfig ?? {}) as never,
       logger: quietLogger as never,
       dataDir,
+      workerModuleUrl,
     },
   );
   await service.start();

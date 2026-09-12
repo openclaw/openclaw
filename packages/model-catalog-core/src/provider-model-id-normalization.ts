@@ -120,9 +120,9 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   ) {
     return normalizeGooglePreviewModelId(model);
   }
-  if (normalizedProvider === "openrouter") {
+  if (normalizedProvider === "openrouter" || normalizedProvider === "nvidia") {
     const trimmed = model.trim();
-    return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
+    return trimmed && !trimmed.includes("/") ? `${normalizedProvider}/${trimmed}` : model;
   }
   if (normalizedProvider === "anthropic") {
     // Mirror the Anthropic manifest aliases for callers that skip manifest normalization.
@@ -142,11 +142,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    const anthropicPrefix = "anthropic/";
-    const normalizedModel = normalizeLowercaseStringOrEmpty(model);
-    const providerModel = normalizedModel.startsWith(anthropicPrefix)
-      ? model.trim().slice(anthropicPrefix.length)
-      : model;
+    const providerModel = stripSelfProviderModelPrefix(normalizedProvider, model);
     return anthropicAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
   }
   if (normalizedProvider === "vercel-ai-gateway") {
@@ -167,10 +163,6 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       ? model.slice(prefix.length)
       : model;
   }
-  if (normalizedProvider === "nvidia") {
-    const trimmed = model.trim();
-    return trimmed && !trimmed.includes("/") ? `nvidia/${trimmed}` : model;
-  }
   if (normalizedProvider === "xai") {
     const xaiAliases: Record<string, string> = {
       "grok-4.3-latest": "grok-4.3",
@@ -180,9 +172,6 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4-1-fast-reasoning": "grok-4-1-fast",
     };
     return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
-  }
-  if (normalizedProvider === "openai") {
-    return model;
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);

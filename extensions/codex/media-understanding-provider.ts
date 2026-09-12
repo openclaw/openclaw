@@ -15,7 +15,7 @@ import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
 
 const CODEX_MEDIA_PROVIDER_ID = "codex";
-const DEFAULT_CODEX_IMAGE_MODEL = "gpt-5.6-sol";
+const DEFAULT_CODEX_IMAGE_MODEL = "gpt-6-astra";
 const DEFAULT_CODEX_IMAGE_PROMPT = "Describe the image.";
 
 type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;

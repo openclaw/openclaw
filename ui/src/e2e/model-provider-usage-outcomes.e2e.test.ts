@@ -171,11 +171,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("models.list")).length)
           .toBeGreaterThan(0);
+        const catalogWarning = page.locator('.model-providers__catalog-progress[role="alert"]');
 
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
-          const phase =
-            (await page.locator(".provider-usage-error").count()) === 0 ? "before" : "after";
+          const phase = (await catalogWarning.count()) === 0 ? "before" : "after";
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -187,8 +187,10 @@ suite.define(() => {
         }
 
         await expect
-          .poll(() => page.locator(".provider-usage-error").textContent(), { timeout: 5_000 })
-          .toContain("Model catalog temporarily unavailable");
+          .poll(() => catalogWarning.textContent(), { timeout: 5_000 })
+          .toContain("More models could not be discovered.");
+        await catalogWarning.getByRole("button", { name: "Retry", exact: true }).waitFor();
+        expect(await page.locator(".provider-usage-error").count()).toBe(0);
         expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);
         const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
         await expect.poll(() => pickerValue(primary)).toBe("openai/gpt-5.5");
@@ -198,6 +200,7 @@ suite.define(() => {
         });
         await page.getByRole("button", { name: "Refresh", exact: true }).click();
 
+        await expect.poll(() => catalogWarning.count()).toBe(0);
         await expect.poll(() => page.locator(".provider-usage-error").count()).toBe(0);
         await expect.poll(() => card.textContent()).toContain("API key set in config");
         await expect.poll(() => pickerValue(primary)).toBe("openai/gpt-5.5");

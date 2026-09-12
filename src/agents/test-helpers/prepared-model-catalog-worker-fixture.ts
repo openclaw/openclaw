@@ -72,6 +72,7 @@ export function writeSyntheticAuthDiscoveryFixture(params: {
   unrelatedId: string;
   pluginVersion: string;
   asyncSyntheticAuth?: boolean;
+  syntheticAuthAvailable?: boolean;
 }): void {
   const probePath = path.join(params.root, "synthetic-auth-probes.txt");
   fs.writeFileSync(
@@ -109,7 +110,7 @@ module.exports = {
         : ""
     }
     fs.appendFileSync(${JSON.stringify(probePath)}, provider + "\\n");
-    return provider === ${JSON.stringify(params.harnessId)}
+    return ${params.syntheticAuthAvailable !== false} && provider === ${JSON.stringify(params.harnessId)}
       ? { apiKey: "native-login-not-real", source: "fixture native login", mode: "oauth" }
       : undefined;
   },

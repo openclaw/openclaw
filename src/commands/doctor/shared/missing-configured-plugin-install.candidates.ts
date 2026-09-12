@@ -8,6 +8,7 @@ import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
 } from "../../../infra/update-channels.js";
+import { isBundledPluginInsideDevSourceRoot } from "../../../plugins/dev-source-root.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
@@ -57,6 +58,7 @@ export type DownloadableInstallCandidate = {
 export type BundledPluginPackageDescriptor = {
   name?: string;
   packageName?: string;
+  preserveExternalInstallRecord?: boolean;
 };
 
 /** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
@@ -91,9 +93,24 @@ export async function resolveConfiguredPluginInstallContext(params: {
     configuredChannelIds: params.configuredChannelIds,
   });
   const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
-    currentBundledPlugins
-      .filter((plugin) => !isExternallyDistributedPlugin(plugin))
-      .map((plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const),
+    currentBundledPlugins.flatMap((plugin) => {
+      const external = isExternallyDistributedPlugin(plugin);
+      const sourceCheckout = isBundledPluginInsideDevSourceRoot({
+        rootDir: plugin.rootDir,
+        env: params.env,
+      });
+      return !external || sourceCheckout
+        ? [
+            [
+              plugin.pluginId,
+              {
+                packageName: plugin.packageName,
+                preserveExternalInstallRecord: external && sourceCheckout,
+              },
+            ] as const,
+          ]
+        : [];
+    }),
   );
   const configuredPluginIdsWithStaleDescriptors =
     collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({

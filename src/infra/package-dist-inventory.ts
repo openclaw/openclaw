@@ -1,5 +1,4 @@
 // Collects and verifies package dist inventory metadata.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -9,6 +8,7 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
   comparePackageDistContentInventory,
+  createPackageDistContentInventoryEntry,
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -440,12 +440,11 @@ export async function collectPackageDistContentInventory(
           nonBlockingRead: true,
           symlinks: "reject",
         });
-        return {
-          path: normalizeRelativePath(relativePath),
-          sha256: createHash("sha256").update(current.buffer).digest("hex"),
-          mode: current.stat.mode & 0o777,
-          size: current.buffer.length,
-        } satisfies PackageDistContentInventoryEntry;
+        return createPackageDistContentInventoryEntry(
+          relativePath,
+          current.buffer,
+          current.stat.mode,
+        );
       }),
     ),
   );

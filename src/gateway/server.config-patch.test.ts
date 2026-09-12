@@ -419,6 +419,277 @@ describe("gateway config methods", () => {
     expect(response.error?.message).toContain("config changed since last load");
   });
 
+  it.each(["config.patch", "config.set", "config.apply"])(
+    "%s rejects an include-only stale draft and accepts a reloaded draft",
+    async (method) => {
+      const original = await getCurrentConfigObject();
+      const includePath = path.join(path.dirname(original.path), "logging.json5");
+      await writeJsonFile(includePath, { level: "info" });
+      const root = { ...original.config, logging: { $include: "./logging.json5" } };
+      await writeJsonFile(original.path, root);
+      await expect
+        .poll(async () => (await getCurrentConfigObject()).config.logging)
+        .toEqual({
+          level: "info",
+        });
+      const draft = await getCurrentConfigObject();
+      const raw = JSON.stringify(
+        method === "config.patch"
+          ? { logging: { level: "debug" } }
+          : { ...draft.config, logging: { level: "debug" } },
+      );
+      await writeJsonFile(includePath, { level: "warn" });
+
+      const stale = await rpcReq(requireClient(), method, { raw, baseHash: draft.hash });
+
+      expect(stale.ok).toBe(false);
+      expect(stale.error?.message).toContain("config changed since last load");
+      expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "warn" });
+      await expect.poll(getConfigHash).not.toBe(draft.hash);
+      const fresh = await rpcReq<{ hash: string }>(requireClient(), method, {
+        raw,
+        baseHash: await getConfigHash(),
+      });
+      expect(fresh.ok, fresh.error?.message).toBe(true);
+      expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
+      expect(JSON.parse(await fs.readFile(original.path, "utf8"))).toEqual(root);
+      await expect.poll(getConfigHash).toBe(fresh.payload?.hash);
+    },
+  );
+
+  it.each(["plain", "unrelated-include", "include-only"] as const)(
+    "openclaw.changes.list preserves an approved %s operation without a duplicate write",
+    async (layout) => {
+      const { executeSystemAgentOperation } = await import("../system-agent/operations.js");
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const original = await getCurrentConfigObject();
+      const model = "openai/gpt-4.1-mini";
+      const agents = {
+        entries: { main: { default: true } },
+        defaults: { model: { primary: "openai/gpt-4.1" } },
+      };
+      const includePath = path.join(path.dirname(original.path), "audit-include.json");
+      await writeJsonFile(includePath, layout === "include-only" ? agents : { level: "info" });
+      const root = {
+        ...original.config,
+        agents: layout === "include-only" ? { $include: "./audit-include.json" } : agents,
+        ...(layout === "unrelated-include"
+          ? { logging: { $include: "./audit-include.json" } }
+          : {}),
+      };
+      await writeJsonFile(original.path, root);
+      const rootBefore = await fs.readFile(original.path, "utf8");
+      const includeBefore = await fs.readFile(includePath, "utf8");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      // Only inference is supplied: config reads, approved writes, and both journals are real.
+      const result = await executeSystemAgentOperation(
+        { kind: "set-default-model", model },
+        runtime,
+        {
+          approved: true,
+          deps: {
+            verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
+          },
+        },
+      );
+      expect(result).toEqual({ applied: true });
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
+        primary: model,
+      });
+      const history = await rpcReq<{
+        entries: Array<{ kind: string; source: string; summary: string; changedPaths?: string[] }>;
+      }>(requireClient(), "openclaw.changes.list", { limit: 100 });
+      expect(history.ok).toBe(true);
+      const operations = history.payload?.entries.filter((entry) => entry.kind === "operation");
+      expect.soft(operations).toEqual([
+        expect.objectContaining({
+          source: "system-agent",
+          summary: `Set default model to ${model}`,
+          ...(layout === "include-only"
+            ? {}
+            : { changedPaths: expect.arrayContaining(["agents.defaults.model.primary"]) }),
+        }),
+      ]);
+      expect(history.payload?.entries.filter((entry) => entry.kind === "config-write")).toEqual([]);
+      if (layout === "include-only") {
+        expect(await fs.readFile(original.path, "utf8")).toBe(rootBefore);
+        expect(operations?.[0]?.changedPaths).toBeUndefined();
+      } else {
+        expect(await fs.readFile(includePath, "utf8")).toBe(includeBefore);
+      }
+    },
+  );
+
+  it("config.set pairs the canonical config and revision while another writer waits", async () => {
+    const configFactory = await import("../config/io.factory.js");
+    const { KeyedAsyncQueue } = await import("../plugin-sdk/keyed-async-queue.js");
+    const original = await getCurrentConfigObject();
+    await writeJsonFile(original.path, {
+      ...original.config,
+      gateway: {
+        ...requireConfigObject(original.config.gateway ?? {}, "gateway config"),
+        reload: { mode: "off" },
+      },
+    });
+    invalidateConfigGetResponseCache();
+    const draft = await getCurrentConfigObject();
+    const canonicalRead = createDeferredCore();
+    const releaseCanonicalRead = createDeferredCore();
+    const competingLock = createDeferredCore();
+    let rootWritten = false;
+    let pauseCanonicalRead = true;
+    let observeCompetingLock = false;
+    let competingWriterStarted = false;
+    const createIO = configFactory.createConfigIO;
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with its queue receiver.
+    const enqueue = KeyedAsyncQueue.prototype.enqueue;
+
+    // Retain real IO and locks; pause only the post-write receipt read so the
+    // competing authenticated request has a deterministic contention window.
+    const ioObservation = vi
+      .spyOn(configFactory, "createConfigIO")
+      .mockImplementation((options) => {
+        const io = createIO(options);
+        return {
+          ...io,
+          writeConfigFile: async (...args) => {
+            const written = await io.writeConfigFile(...args);
+            if (io.configPath === original.path) {
+              rootWritten = true;
+            }
+            return written;
+          },
+          readConfigFileSnapshotForWrite: async (...args) => {
+            if (io.configPath === original.path && rootWritten && pauseCanonicalRead) {
+              pauseCanonicalRead = false;
+              canonicalRead.resolve();
+              await releaseCanonicalRead.promise;
+            }
+            return await io.readConfigFileSnapshotForWrite(...args);
+          },
+        };
+      });
+    const lockObservation = vi
+      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
+      .mockImplementation(function <T>(
+        this: InstanceType<typeof KeyedAsyncQueue>,
+        ...args: Parameters<typeof enqueue<T>>
+      ): Promise<T> {
+        const enqueueTask = enqueue<T>;
+        if (args[0] !== original.path || !observeCompetingLock) {
+          return enqueueTask.call(this, ...args);
+        }
+        observeCompetingLock = false;
+        const [lockPath, write, hooks] = args;
+        const waiting = enqueueTask.call(
+          this,
+          lockPath,
+          async () => {
+            competingWriterStarted = true;
+            return await write();
+          },
+          hooks,
+        );
+        competingLock.resolve();
+        return waiting;
+      });
+    type Receipt = { config: Record<string, unknown>; hash: string };
+    const pending: Array<ReturnType<typeof rpcReq<Receipt>>> = [];
+    const started = performance.now();
+    try {
+      const first = rpcReq<Receipt>(
+        requireClient(),
+        "config.set",
+        {
+          raw: JSON.stringify({ ...draft.config, logging: { level: "debug" } }),
+          baseHash: draft.hash,
+        },
+        2_000,
+      );
+      pending.push(first);
+      await withTestTimeout(
+        Promise.race([
+          canonicalRead.promise,
+          first.then(() => {
+            throw new Error("write settled before its canonical receipt read");
+          }),
+        ]),
+        2_000,
+        "root write did not reach its canonical receipt read",
+      );
+
+      // An external editor need not take the config lock. Make the receipt
+      // distinguishable from both the submitted config and the writer result.
+      const written = JSON.parse(await fs.readFile(original.path, "utf8"));
+      expect(written.logging.level).toBe("debug");
+      await writeJsonFile(original.path, { ...written, ui: { prefs: { locale: "fr" } } });
+      invalidateConfigGetResponseCache();
+      const canonical = await getCurrentConfigObject();
+      expect(canonical.config).toMatchObject({
+        logging: { level: "debug" },
+        ui: { prefs: { locale: "fr" } },
+      });
+
+      observeCompetingLock = true;
+      const second = rpcReq<Receipt>(
+        requireClient(),
+        "config.set",
+        {
+          raw: JSON.stringify({
+            ...canonical.config,
+            logging: { level: "debug", consoleLevel: "warn" },
+          }),
+          baseHash: canonical.hash,
+        },
+        2_000,
+      );
+      pending.push(second);
+      await withTestTimeout(
+        Promise.race([
+          competingLock.promise,
+          second.then(() => {
+            throw new Error("competing write settled without waiting on the config lock");
+          }),
+        ]),
+        2_000,
+        "competing write did not attempt the config lock",
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(competingWriterStarted).toBe(false);
+      releaseCanonicalRead.resolve();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      const elapsedMs = performance.now() - started;
+      expect(elapsedMs).toBeLessThan(2_000);
+      expect(firstResult.ok, firstResult.error?.message).toBe(true);
+      expect(secondResult.ok, secondResult.error?.message).toBe(true);
+      expect(competingWriterStarted).toBe(true);
+      expect({ config: firstResult.payload?.config, hash: firstResult.payload?.hash }).toEqual({
+        config: canonical.config,
+        hash: canonical.hash,
+      });
+      const after = await getCurrentConfigObject();
+      expect({ config: secondResult.payload?.config, hash: secondResult.payload?.hash }).toEqual({
+        config: after.config,
+        hash: after.hash,
+      });
+      expect(after.hash).not.toBe(canonical.hash);
+      expect(JSON.parse(await fs.readFile(original.path, "utf8"))).toMatchObject({
+        logging: { level: "debug", consoleLevel: "warn" },
+        ui: { prefs: { locale: "fr" } },
+      });
+    } finally {
+      releaseCanonicalRead.resolve();
+      await Promise.allSettled(pending);
+      ioObservation.mockRestore();
+      lockObservation.mockRestore();
+      await restoreConfigFileForTest(original);
+      invalidateConfigGetResponseCache();
+    }
+  });
+
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);
@@ -690,40 +961,45 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("invalidates a warm config.get response when config.set commits", async () => {
-    const current = await getCurrentConfigObject();
-    const nextConfig = structuredClone(current.config);
-    delete nextConfig.meta;
-    const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
-    const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
-    const locale = prefs.locale === "de" ? "en" : "de";
-    prefs.locale = locale;
+  it.each(["config.patch", "config.set", "config.apply"])(
+    "invalidates a warm config.get response when %s commits a canonical root receipt",
+    async (method) => {
+      const current = await getCurrentConfigObject();
+      const nextConfig = structuredClone(current.config);
+      delete nextConfig.meta;
+      const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
+      const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
+      const locale = prefs.locale === "de" ? "en" : "de";
+      prefs.locale = locale;
 
-    const res = await rpcReq<{
-      ok?: boolean;
-      config?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.set", {
-      ...configRawPayload(nextConfig, current.hash),
-    });
-    expect(res.error).toBeUndefined();
-    expect(res.ok, res.error?.message).toBe(true);
+      const res = await rpcReq<{
+        ok?: boolean;
+        config?: Record<string, unknown>;
+        hash?: string;
+      }>(requireClient(), method, {
+        ...configRawPayload(nextConfig, current.hash),
+      });
+      expect(res.error).toBeUndefined();
+      expect(res.ok, res.error?.message).toBe(true);
 
-    const after = await rpcReq<{
-      config?: Record<string, unknown>;
-      sourceConfig?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.get", {});
-    expect(after.ok).toBe(true);
-    expect(res.payload?.config).toEqual(after.payload?.sourceConfig);
-    expect(res.payload?.hash).toBe(after.payload?.hash);
-    expect(after.payload?.hash).not.toBe(current.hash);
-    expect(
-      ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
-        ?.locale,
-    ).toBe(locale);
-    requireConfigObject(res.payload?.config, "response config");
-  });
+      const after = await rpcReq<{
+        config?: Record<string, unknown>;
+        sourceConfig?: Record<string, unknown>;
+        hash?: string;
+      }>(requireClient(), "config.get", {});
+      expect(after.ok).toBe(true);
+      expect({ config: res.payload?.config, hash: res.payload?.hash }).toEqual({
+        config: after.payload?.sourceConfig,
+        hash: after.payload?.hash,
+      });
+      expect(after.payload?.hash).not.toBe(current.hash);
+      expect(
+        ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
+          ?.locale,
+      ).toBe(locale);
+      requireConfigObject(res.payload?.config, "response config");
+    },
+  );
 
   it("accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted", async () => {
     const { createConfigIO } = await import("../config/config.js");

@@ -21,6 +21,14 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+[Cold transcript storage](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
+requires agent schema 20 even though it adds a companion table. Older readers
+would interpret extracted transcript rows as missing history and cannot safely
+ignore the new representation. The supported updater's Doctor phase performs
+the schema migration; changing the cold-storage age setting afterward needs no
+Gateway restart. These are separate operations: live configuration reload does
+not authorize an active schema migration.
+
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
 first-use ensure add it when needed; the schema version stays 19. The column
@@ -29,6 +37,45 @@ so the supported beta upgrade runs Doctor from 2026.8.2 or newer. Intermediate b
 already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
+
+Cron run receipts use the optional `cron_run_trigger_state_retirements` companion
+without changing state schema 17 or the released receipt table's shape. Its only
+column is `receipt_id`, a primary key referencing the existing receipt with
+`ON DELETE CASCADE`. A committed condition, script-payload, or shared-state edit
+creates a retirement row in the same transaction as the job edit. This includes
+an exact receipt already closed by an agent-owner edit but still awaiting run
+reconciliation. Normal completion and restart recovery preserve the replacement's
+state while retaining the old run's history. The first eligible edit creates the
+table; queued edits do not retire a future evaluation. The job's private runtime
+state retains the exact running receipt ID until scheduler reconciliation, including
+when an agent-owner edit closes the receipt first. Recovery and later state edits
+use that association even when run timestamps collide. Receipt pruning preserves
+that pending receipt; ordinary history retains its existing 64-receipt bound and
+deletes retirement rows with their receipts.
+
+Rows written before this association was recorded retain their legacy recovery
+fallback. The association adds no SQL table, column, or schema version. Current
+builds omit it from public job state and the public state-patch schema.
+
+A missing table or row means no recorded retirement; earlier edits cannot be
+reconstructed from the final job definition. Older compatible readers ignore the
+companion but do not enforce this protection. To preserve edited watcher state,
+complete active runs and pending scheduler reconciliation on the current build
+before downgrading. A terminal task or receipt can still leave job state
+unreconciled.
+
+Scheduling edits made while a run awaits reconciliation record a private
+`runningScheduleChangeId` in the existing job runtime state, in the same
+transaction as the edit. The fresh value distinguishes successive committed
+edits even when a passive editor's snapshot spans two runs. Completion and
+recovery preserve the edited scheduling state; a new run and pending-run cleanup
+clear the marker. This adds no table, column, or public job field.
+
+Pending runs without this marker retain their previous recovery behavior.
+Edits acknowledged by older builds cannot be reconstructed reliably from
+timestamps or the final schedule. New edits to those pending jobs record the
+marker normally. Older compatible readers ignore it; finish pending runs before
+downgrading if their edited cadence must be preserved.
 
 Worker preparation uses the same-version rule for the bare nullable
 `worker_environments.preparation_purpose TEXT` column in the shared state

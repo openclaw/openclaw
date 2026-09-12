@@ -16,6 +16,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { handleDryRunPreflightError, printUpdateDryRun } from "./update-command-dry-run.js";
+import type { RefuseUpdate } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -77,7 +78,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageTargetVersion?: string;
   packageInstallSpec?: string | null;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
-  refuseUpdate: (reason: string, message?: string) => Promise<void>;
+  refuseUpdate: RefuseUpdate;
 }): Promise<
   { packageSchemaPreflight: OpenClawDatabaseSchemaPreflight; preflightNotes: string[] } | undefined
 > {
@@ -150,19 +151,20 @@ export async function preflightUpdateCommandSchemas(params: {
           const { preflightConfiguredNpmPluginTargets } =
             await import("./update-command-plugin-preflight.js");
           const context = admission.contexts.at(-1)!;
-          await preflightConfiguredNpmPluginTargets({
+          const pluginWarnings = await preflightConfiguredNpmPluginTargets({
             config: context.configSnapshot.sourceConfig,
             env: context.env,
             targetVersion: params.packageTargetVersion ?? null,
             channel,
             timeoutMs: updateStepTimeoutMs,
           });
+          preflightNotes.push(...pluginWarnings.map((warning) => warning.message));
         }
       }
     } catch (error) {
       if (!opts.dryRun) {
         if (error instanceof UpdatePreMutationError) {
-          await refuseUpdate(error.reason, error.message);
+          await refuseUpdate(error.reason, error.message, error.failureFacts);
           return undefined;
         }
         throw error;

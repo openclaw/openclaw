@@ -115,16 +115,23 @@ export function resolvePluginRootPublicSurfacePath(params: {
     artifactBasename,
     ...sourceArtifacts.filter((artifact) => !isTypeScriptPackageEntry(artifact)),
   ];
-  return (
-    [
-      ...(entryDir ? entryArtifacts.map((artifact) => path.join(entryDir, artifact)) : []),
-      ...preferredArtifacts.map((artifact) => path.join(pluginRoot, artifact)),
-      path.join(pluginRoot, artifactBasename),
-      path.join(pluginRoot, "dist", artifactBasename),
-      ...(entryDir ? sourceArtifacts.map((artifact) => path.join(entryDir, artifact)) : []),
-      ...sourceArtifacts.map((artifact) => path.join(pluginRoot, artifact)),
-    ].find(exists) ?? null
-  );
+  for (const [directory, artifacts] of [
+    [entryDir, entryArtifacts],
+    [pluginRoot, [...preferredArtifacts, artifactBasename, path.join("dist", artifactBasename)]],
+    [entryDir, sourceArtifacts],
+    [pluginRoot, sourceArtifacts],
+  ] as const) {
+    if (!directory) {
+      continue;
+    }
+    for (const artifact of artifacts) {
+      const candidate = path.join(directory, artifact);
+      if (exists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
 }
 
 function resolvePublicSurfaceFromBundledDir(params: {

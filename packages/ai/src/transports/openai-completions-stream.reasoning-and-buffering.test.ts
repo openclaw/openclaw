@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   createAssistantOutput,
@@ -177,16 +176,7 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
@@ -209,13 +199,7 @@ describe("openai completions stream", () => {
       }),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.content).toHaveLength(3);
     expectRecordFields(output.content[0], { type: "text", text: "Visible first." });
@@ -289,16 +273,7 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
@@ -318,13 +293,7 @@ describe("openai completions stream", () => {
       }),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.content).toHaveLength(2);
     expectRecordFields(output.content[0], { type: "text", text: "Visible answer." });

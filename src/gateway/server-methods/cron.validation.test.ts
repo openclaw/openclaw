@@ -7,12 +7,18 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import {
+  applyLegacyCronStoreRepair,
+  loadLegacyCronRepairState,
+} from "../../commands/doctor/cron/legacy-repair.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
+import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -23,6 +29,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -725,6 +732,55 @@ describe("cron method validation", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
+
+  it.each(["add", "add-current", "update", "wake"] as const)(
+    "returns database admission refusal before cron %s prepares or mutates the target",
+    async (operation) => {
+      const refusal = {
+        agentId: "cleaner",
+        paths: ["/synthetic/cleaner/openclaw-agent.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch" as const,
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Inspect the divergent copy and restart after repair.",
+      };
+      recordAgentDatabaseAdmissions([refusal]);
+      try {
+        const { context, respond } =
+          operation === "wake"
+            ? await invokeWake({ mode: "now", text: "hello", agentId: "cleaner" })
+            : operation === "update"
+              ? await invokeCronUpdate(
+                  { id: "cron-1", patch: { agentId: "cleaner" } },
+                  createCronJob(),
+                )
+              : await invokeCronAdd(
+                  agentTurnCronParams({
+                    agentId: "cleaner",
+                    ...(operation === "add-current"
+                      ? { sessionTarget: "current", sessionKey: "agent:cleaner:main" }
+                      : {}),
+                  }),
+                );
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: `${refusal.reason}\n${refusal.repairHint}`,
+            details: refusal,
+          }),
+        );
+        expect(resolveCronDeliveryPreview).not.toHaveBeenCalled();
+        expect(context.cron.add).not.toHaveBeenCalled();
+        expect(context.cron.update).not.toHaveBeenCalled();
+        expect(context.cron.wake).not.toHaveBeenCalled();
+        expect(loadGatewaySessionEntry).not.toHaveBeenCalled();
+      } finally {
+        recordAgentDatabaseAdmissions([]);
+      }
+    },
+  );
 
   it("accepts threadId on announce delivery add params", async () => {
     setRuntimeConfig(telegramConfig());
@@ -2859,24 +2915,113 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("rejects agent-runtime edits that leave a tool-runtime job capless", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: { payload: { kind: "agentTurn", message: "updated" } },
-      },
-      createCronJob({
-        agentId: "ops",
-        payload: { kind: "agentTurn", message: "legacy" },
-      }),
-      { client: callerClient("ops") },
-    );
+  it.each([undefined, { agentId: "ops", sessionKey: "agent:ops:discord:group:ops" }])(
+    "rejects capless prompt edits without a proven owner account: %j",
+    async (owner) => {
+      const { context, respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: { payload: { kind: "agentTurn", message: "updated" } },
+        },
+        createCronJob({
+          agentId: "ops",
+          owner,
+          payload: { kind: "agentTurn", message: "legacy" },
+        }),
+        { client: callerClient("ops", undefined, owner?.sessionKey) },
+      );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "explicit payload.toolsAllow cap",
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "explicit payload.toolsAllow cap",
+      });
+    },
+  );
+
+  it("updates a legacy creator's prompt through the tool after Doctor without adopting permissions", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionKey = "agent:ops:discord:work:direct:user-1";
+    const legacy = createCronJob({
+      enabled: false,
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey },
+      payload: { kind: "agentTurn", message: "legacy" },
     });
+    await saveCronStore(storePath, { version: 1, jobs: [legacy] });
+    const cfg: OpenClawConfig = { agents: { entries: { ops: {} } } };
+    const state = expectDefined(
+      await loadLegacyCronRepairState({ cfg, storePath }),
+      "legacy cron repair state",
+    );
+    const repair = await applyLegacyCronStoreRepair({ cfg, state });
+    const cron = new CronService({
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "ops",
+      log: cronLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const context = createCronContext();
+    context.cron.readJob.mockImplementation((id) => cron.readJob(id));
+    context.cron.updateWithPrecondition.mockImplementation((...args) =>
+      cron.updateWithPrecondition(...args),
+    );
+    let client = callerClient("ops", "work", sessionKey);
+    const edit = async (payload: Record<string, unknown>) =>
+      await updateCronJobFromAgentTool({
+        id: legacy.id,
+        patch: { payload },
+        creatorToolAllowlist: [{ name: "read" }],
+        gatewayOpts: {},
+        callGateway: async (method, _opts, params) => {
+          if (method !== "cron.get" && method !== "cron.update") {
+            throw new Error(`unexpected method: ${method}`);
+          }
+          const { respond } = await invokeCron(method, requireRecord(params, "cron params"), {
+            context,
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+          if (!ok) {
+            throw new Error(error.message);
+          }
+          return result;
+        },
+      });
+    try {
+      await expect(edit({ message: "updated" })).resolves.toMatchObject({
+        owner: { ...legacy.owner, accountId: "work" },
+        payload: { kind: "agentTurn", message: "updated" },
+      });
+      const updated = expectDefined((await loadCronStore(storePath)).jobs[0], "updated cron job");
+      expect(updated.payload).toEqual({ kind: "agentTurn", message: "updated" });
+      expect(updated.scheduledToolPolicy).toBeUndefined();
+      expect(repair.changes).toContain(
+        "Reconciled 1 cron job owner account from persisted creator identity; existing tool permissions were preserved.",
+      );
+      client = callerClient("ops", "personal", sessionKey);
+      await expect(edit({ message: "foreign" })).rejects.toThrow("cron job not found: cron-1");
+      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
+      client = callerClient("ops", "work", "agent:ops:discord:work:direct:user-2");
+      await expect(edit({ message: "another session" })).rejects.toThrow(
+        "explicit payload.toolsAllow cap",
+      );
+      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
+      client = callerClient("ops", "work", sessionKey);
+      await expect(edit({ kind: "agentTurn", toolsAllow: ["read"] })).resolves.toMatchObject({
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: sessionKey,
+          ownerAccountId: "work",
+        },
+      });
+    } finally {
+      cron.stop();
+    }
   });
 
   it("allows agent-runtime non-policy edits to legacy capless jobs", async () => {

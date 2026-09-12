@@ -12,7 +12,7 @@ import {
   type ClaudeCliProjectEntry,
   parseClaudeCliHistoryEntry,
   redactClaudeCliHistoryMessage,
-  resolveClaudeCliSessionFilePath,
+  resolveClaudeCliSessionFilePathAsync,
 } from "./cli-session-history.claude.js";
 
 const YIELD_BYTES = 256 * 1024;
@@ -132,7 +132,7 @@ function fingerprint(stats: fs.Stats): string {
 async function resolveSource(
   params: HistoryParams,
 ): Promise<readonly [filePath: string, cacheKey: string] | undefined> {
-  const candidate = resolveClaudeCliSessionFilePath(params);
+  const candidate = await resolveClaudeCliSessionFilePathAsync(params);
   if (!candidate) {
     return undefined;
   }

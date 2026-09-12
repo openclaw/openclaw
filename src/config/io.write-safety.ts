@@ -4,7 +4,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
-import { hashConfigRaw, parseConfigJson5, resolveConfigSnapshotHash } from "./io.read-helpers.js";
+import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
@@ -66,7 +66,7 @@ export function assertBaseSnapshotStillCurrent(
   if (snapshot.readError) {
     return;
   }
-  const expectedHash = resolveConfigSnapshotHash(snapshot);
+  const expectedHash = snapshot.raw === null ? null : hashConfigRaw(snapshot.raw);
   let currentRaw: string | null = null;
   let currentExists = true;
   try {

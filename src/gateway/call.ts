@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -55,7 +56,6 @@ import {
   resolveGatewayClientBootstrap,
   resolveGatewayUrlOverride,
 } from "./client-bootstrap.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
@@ -115,6 +115,8 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
 
 type CallGatewayBaseOptions = {
   url?: string;
+  /** Require this resolved endpoint without overriding target selection or authentication. */
+  expectUrl?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -1160,6 +1162,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const connectionDetails = bootstrap.connectionDetails;
   const url = bootstrap.url;
+  if (opts.expectUrl !== undefined && url !== opts.expectUrl) {
+    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
+  }
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;

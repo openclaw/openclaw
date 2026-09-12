@@ -15,10 +15,8 @@ import {
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
-import {
-  bindTaskRunExecution,
-  listTaskRecordsByRuntimeSourceIdInDatabase,
-} from "../../tasks/task-registry.store.sqlite.js";
+import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.kernel.js";
+import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
@@ -173,6 +171,20 @@ function createCronTaskRunId(
   return `${createCronExecutionId(jobId, startedAt)}:${discriminator}${publicSuffix}`;
 }
 
+function receiptIdFromCronTaskRunId(
+  taskRunId: string | undefined,
+  jobId: string,
+  startedAt: number,
+): string | undefined {
+  const prefix = `${createCronExecutionId(jobId, startedAt)}:`;
+  if (!taskRunId?.startsWith(prefix)) {
+    return undefined;
+  }
+  // Receipt-backed IDs use the first discriminator; optional public IDs follow
+  // it. Legacy public/random discriminators must still match a real receipt row.
+  return taskRunId.slice(prefix.length).split(":", 1)[0] || undefined;
+}
+
 function findLatestCronTaskRunForRecoveryFromRecords(
   records: readonly TaskRecord[],
   jobId: string,
@@ -265,7 +277,7 @@ export function findCronTaskRunRecoveryInDatabase(params: {
   startedAt: number;
   storeKey: string;
   receiptId?: string;
-}): { taskRunId?: string; finalized?: FinalizedCronTaskRun } {
+}): { taskRunId?: string; receiptId?: string; finalized?: FinalizedCronTaskRun } {
   const task = findLatestCronTaskRunForRecoveryFromRecords(
     listTaskRecordsByRuntimeSourceIdInDatabase(params.database, "cron", params.jobId),
     params.jobId,
@@ -274,8 +286,10 @@ export function findCronTaskRunRecoveryInDatabase(params: {
     params.receiptId,
   );
   const finalized = finalizedCronTaskRun(task, params.jobId);
+  const receiptId = receiptIdFromCronTaskRunId(task?.runId, params.jobId, params.startedAt);
   return {
     ...(task?.runId ? { taskRunId: task.runId } : {}),
+    ...(receiptId ? { receiptId } : {}),
     ...(finalized ? { finalized } : {}),
   };
 }
@@ -287,11 +301,11 @@ function tryCreateCronTaskRunRecord(params: {
   startedAt: number;
   runId: string;
   childSessionKey?: string;
-  ownerlessManualRun?: true;
+  ownerlessRun?: true;
 }): { runId: string; taskId: string; flowId?: string } | undefined {
   try {
     const childSessionKey = params.childSessionKey;
-    const agentId = params.ownerlessManualRun
+    const agentId = params.ownerlessRun
       ? undefined
       : params.job
         ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
@@ -404,8 +418,8 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
-    /** An acknowledged rejection needs history without claiming an agent executed. */
-    ownerlessManualRun?: true;
+    /** An ownerless attempt needs history without claiming an agent executed. */
+    ownerlessRun?: true;
     errorClassification?: CronRunErrorClassification;
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
@@ -431,7 +445,7 @@ export function tryFinishCronTaskRun(
             startedAt,
             runId: candidateRunId,
             childSessionKey: entry.sessionKey,
-            ownerlessManualRun: result.ownerlessManualRun,
+            ownerlessRun: result.ownerlessRun,
           });
     const taskRunId = existingCandidate?.runtime === "cron" ? candidateRunId : created?.runId;
     if (!taskRunId) {
@@ -507,7 +521,7 @@ export function tryFinishCronTaskRun(
           startedAt,
           runId: taskRunId,
           childSessionKey: entry.sessionKey,
-          ownerlessManualRun: result.ownerlessManualRun,
+          ownerlessRun: result.ownerlessRun,
         });
         if (recreated) {
           updated = finalize(recreated.runId);

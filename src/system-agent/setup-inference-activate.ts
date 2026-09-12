@@ -13,6 +13,8 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
 } from "../commands/onboard-inference.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -122,7 +124,6 @@ async function stageCodexCandidate(ctx: StageContext): Promise<StagedCandidate |
       prompter: ctx.params.prompter ?? createQuickstartNotePrompter(ctx.params.runtime),
       runtime: ctx.params.runtime,
       workspaceDir: ctx.workspace,
-      reviewOfficialArtifacts: true,
       beforePersistentEffect: ctx.beforePersistentEffect,
     });
     if (!ensured.ok) {
@@ -432,6 +433,7 @@ async function verifyAndActivateCandidate(
           model: staged.modelRef,
           ...(params.agentId ? { targetAgentId: routeAgentId } : {}),
           ...(staged.agentRuntimeId ? { agentRuntimeId: staged.agentRuntimeId } : {}),
+          runtimeInDefaults: !params.agentId && !hasResolvedRosterBeforeMigrations(snapshot),
           ...(staged.authProfileId ? { authProfileId: staged.authProfileId } : {}),
         });
   const buildCandidate = (base: OpenClawConfig) => {
@@ -683,8 +685,8 @@ async function verifyAndActivateCandidate(
         operation: "openclaw.setup",
         summary: "Verified and configured AI access through OpenClaw setup",
         configPath: after?.path ?? snapshot.path,
-        configHashBefore: snapshot.hash ?? null,
-        configHashAfter: after?.hash ?? null,
+        configHashBefore: hashConfigRaw(snapshot.raw),
+        configHashAfter: after ? hashConfigRaw(after.raw) : null,
         details: { modelRef: staged.modelRef, inferenceKind: params.kind },
       });
     } catch (error) {

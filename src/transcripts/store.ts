@@ -66,6 +66,13 @@ export class TranscriptsSummaryChangedError extends Error {
 
 type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
 
+export class TranscriptSessionConflictError extends Error {
+  constructor() {
+    super("Transcript session ID conflicts with another capture on this date; use a new ID.");
+    this.name = "TranscriptSessionConflictError";
+  }
+}
+
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
   constructor(
@@ -368,6 +375,18 @@ export class TranscriptsStore {
     condition?: { expectedInputRevision?: string; assertCurrent?: () => void },
   ): Promise<void> {
     ensureMeetingTranscriptsSchema(this.databaseOptions);
+    const selector = transcriptSessionSelector(session);
+    const assertSelectorAvailable = (database = this.database().db) => {
+      const owner = this.readCanonicalSelectorRow(database, selector);
+      if (
+        owner &&
+        (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)
+      ) {
+        throw new TranscriptSessionConflictError();
+      }
+    };
+    // Classify the existing constraint before export checks, then recheck under write admission.
+    assertSelectorAvailable();
     if (
       !this.readSessionByIdentity(session) &&
       !(await hasAliasedCanonicalTranscriptExportPathOwner({
@@ -380,7 +399,7 @@ export class TranscriptsStore {
       const legacySelector = legacyTranscriptSessionSelector(session);
       if (legacySelector !== undefined) {
         const legacySessionDir = path.join(this.exportRootDir, legacySelector);
-        const legacyRow = this.readCanonicalSelectorRow(this.database(), legacySelector);
+        const legacyRow = this.readCanonicalSelectorRow(this.database().db, legacySelector);
         const legacyOwner = legacyRow ? sessionFromRow(legacyRow) : undefined;
         const legacyPathIsCanonical =
           legacyOwner !== undefined &&
@@ -394,7 +413,7 @@ export class TranscriptsStore {
       }
     }
     const sessionValues = {
-      selector: transcriptSessionSelector(session),
+      selector,
       export_key: transcriptSessionExportKey(session),
       session_slug: safeTranscriptPathSegment(session.sessionId),
       provider_id: session.source.providerId,
@@ -412,6 +431,7 @@ export class TranscriptsStore {
       ) {
         throw new TranscriptsSummaryChangedError();
       }
+      assertSelectorAvailable(database);
       const previous = executeSqliteQueryTakeFirstSync(
         database,
         meetingTranscriptSessionQuery(database, session).selectAll(),
@@ -475,10 +495,10 @@ export class TranscriptsStore {
     return entry;
   }
 
-  private readCanonicalSelectorRow(database: OpenClawStateDatabase, selector: string) {
+  private readCanonicalSelectorRow(database: OpenClawStateDatabase["db"], selector: string) {
     return executeSqliteQueryTakeFirstSync(
-      database.db,
-      meetingTranscriptDb(database.db)
+      database,
+      meetingTranscriptDb(database)
         .selectFrom("meeting_transcript_sessions")
         .selectAll()
         .where("selector", "=", selector),
@@ -503,7 +523,7 @@ export class TranscriptsStore {
     });
     const entries = (selection: typeof query) =>
       executeSqliteQuerySync(database.db, selection).rows.map(matchedEntry);
-    const canonical = this.readCanonicalSelectorRow(database, value);
+    const canonical = this.readCanonicalSelectorRow(database.db, value);
     const date = value.match(/^(\d{4}-\d{2}-\d{2})\//u)?.[1];
     const qualified = canonical
       ? [matchedEntry(canonical)]

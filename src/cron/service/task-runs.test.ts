@@ -263,15 +263,15 @@ describe("cron task run terminal records", () => {
   });
 
   it.each([
-    { owner: "assigned", agentId: "finn", ownerlessManualRun: undefined },
-    { owner: "ownerless manual", agentId: undefined, ownerlessManualRun: true as const },
+    { owner: "assigned", agentId: "finn", ownerlessRun: undefined },
+    { owner: "ownerless", agentId: undefined, ownerlessRun: true as const },
   ])("creates terminal history for an $owner skipped-only event", async (testCase) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-skipped-task-" },
       async () => {
         resetTaskRegistryForTests();
         const startedAt = 1_000;
-        const error = testCase.ownerlessManualRun
+        const error = testCase.ownerlessRun
           ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
           : "cron: job execution timed out";
         const job: CronJob = {
@@ -301,7 +301,7 @@ describe("cron task run terminal records", () => {
 
         tryFinishCronTaskRun(state, {
           job,
-          ownerlessManualRun: testCase.ownerlessManualRun,
+          ownerlessRun: testCase.ownerlessRun,
           event: {
             jobId: job.id,
             action: "finished",

@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   getPluginInstance,
   getPluginValueInstance,
@@ -70,6 +71,31 @@ export class PluginInvocationScope {
     }
     const instance = getPluginValueInstance(value);
     return instance ? (this.lookup(instance)?.wrap(value) ?? value) : value;
+  }
+
+  /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
+  beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
+    this.assertOpen();
+    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys(), {
+      retained: this.consumers.size > 0,
+      parent: this,
+    });
+    const finished = createDeferredCore();
+    // Retirement may already await these exact consumers. Revoke their callbacks
+    // now, but keep their physical completion until the cleanup owner drains.
+    const closed = Promise.all(
+      [...this.consumers.values()].map((consumer) => consumer.close(() => finished.promise)),
+    );
+    void closed.catch(() => {});
+    this.closed = true;
+    return {
+      scope: cleanup,
+      release: async () => {
+        cleanup.release();
+        finished.resolve();
+        await closed;
+      },
+    };
   }
 
   release(): void {

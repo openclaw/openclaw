@@ -1,8 +1,6 @@
 // Deepgram Flux voice-note transcription uses the provider's one-shot WebSocket protocol.
-import {
-  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-  resolveFfmpegBin,
-} from "openclaw/plugin-sdk/media-runtime";
+import { open } from "node:fs/promises";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -15,14 +13,13 @@ import {
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 
 const DEEPGRAM_FLUX_SAMPLE_RATE = 16_000;
 // Deepgram recommends 80 ms chunks. 16 kHz mono linear16 contains 32 bytes per millisecond.
 const DEEPGRAM_FLUX_AUDIO_CHUNK_BYTES = 2_560;
 const DEEPGRAM_FLUX_MAX_MESSAGE_BYTES = 1024 * 1024;
 const DEEPGRAM_FLUX_MAX_TRANSCRIPT_BYTES = 256 * 1024;
-const DEEPGRAM_FLUX_MAX_PCM_BYTES =
-  DEEPGRAM_FLUX_SAMPLE_RATE * 2 * MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS;
 const DEEPGRAM_FLUX_QUERY_KEYS = new Set([
   "eager_eot_threshold",
   "eot_threshold",
@@ -128,9 +125,10 @@ function sendSocketFrame(socket: DeepgramFluxSocket, data: Buffer | string): Pro
 
 async function decodeDeepgramFluxAudio(params: {
   buffer: Buffer;
+  outputPath: string;
   signal?: AbortSignal;
   timeoutMs: number;
-}): Promise<Buffer> {
+}): Promise<void> {
   const result = await runCommandBuffered(
     [
       resolveFfmpegBin(),
@@ -139,8 +137,6 @@ async function decodeDeepgramFluxAudio(params: {
       "error",
       "-i",
       "pipe:0",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
       "-vn",
       "-sn",
       "-dn",
@@ -152,21 +148,18 @@ async function decodeDeepgramFluxAudio(params: {
       "1",
       "-f",
       "s16le",
-      "pipe:1",
+      params.outputPath,
     ],
     {
       input: params.buffer,
-      maxOutputBytes: { stdout: DEEPGRAM_FLUX_MAX_PCM_BYTES, stderr: 64 * 1024 },
+      maxOutputBytes: 64 * 1024,
       signal: params.signal,
       terminateOnOutputError: true,
       timeoutMs: params.timeoutMs,
     },
   );
   if (result.termination === "exit" && result.code === 0) {
-    return result.stdout;
-  }
-  if (result.termination === "output-limit") {
-    throw new Error("Audio transcription failed: decoded audio exceeds size limit");
+    return;
   }
   const detail = result.stderr.toString("utf8").trim();
   throw new Error(
@@ -188,12 +181,20 @@ export async function transcribeDeepgramFluxAudio(params: {
     deadline,
     defaultTimeoutMs: params.request.timeoutMs,
   });
-  const pcm = await decodeDeepgramFluxAudio({
+  // Keep complete decoded audio off the heap; the workspace owns cleanup on every exit.
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "audio-transcription-",
+  });
+  const pcmPath = workspace.path("audio.pcm");
+  await decodeDeepgramFluxAudio({
     buffer: params.request.buffer,
+    outputPath: pcmPath,
     signal: params.request.signal,
     timeoutMs: resolveTimeoutMs(),
   });
-  if (pcm.byteLength === 0) {
+  await using pcm = await open(pcmPath, "r");
+  if ((await pcm.stat()).size === 0) {
     throw new Error("Audio transcription failed: decoded audio is empty");
   }
 
@@ -240,11 +241,19 @@ export async function transcribeDeepgramFluxAudio(params: {
     socket.on("open", () => {
       void (async () => {
         try {
-          for (let offset = 0; offset < pcm.byteLength; offset += DEEPGRAM_FLUX_AUDIO_CHUNK_BYTES) {
-            await sendSocketFrame(
-              socket,
-              pcm.subarray(offset, offset + DEEPGRAM_FLUX_AUDIO_CHUNK_BYTES),
-            );
+          const frame = Buffer.alloc(DEEPGRAM_FLUX_AUDIO_CHUNK_BYTES);
+          for (;;) {
+            if (settled) {
+              return;
+            }
+            const { bytesRead } = await pcm.read(frame);
+            if (bytesRead === 0 || settled) {
+              break;
+            }
+            await sendSocketFrame(socket, frame.subarray(0, bytesRead));
+          }
+          if (settled) {
+            return;
           }
           await sendSocketFrame(socket, JSON.stringify({ type: "CloseStream" }));
           closeStreamSent = true;

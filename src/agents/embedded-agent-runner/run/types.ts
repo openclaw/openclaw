@@ -15,7 +15,7 @@ import type { CommandQueueTaskDeadline } from "../../../process/command-queue.ty
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
+import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
@@ -223,6 +223,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */
+  pluginRuntimeRefreshPending?: () => boolean;
+  /** Registers the exact attempt owner able to stop before another model request. */
+  registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
+  /** Completed native attempt results excluded by the original admission read fence. */
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;
@@ -344,6 +350,7 @@ export type EmbeddedRunAttemptResult = {
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
   messagesSnapshot: AgentMessage[];
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
   settledTurnFinalizationContext?:
     | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }

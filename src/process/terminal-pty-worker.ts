@@ -76,7 +76,7 @@ process.on("message", (raw: unknown) => {
         finish({ type: "error", message: error instanceof Error ? error.message : String(error) }),
     );
   } else if (message.type === "input") {
-    pty?.write(message.data);
+    pty?.write("data" in message ? message.data : Buffer.from(message.dataBase64, "base64"));
   } else if (message.type === "resize") {
     pty?.resize(message.cols, message.rows);
   } else {

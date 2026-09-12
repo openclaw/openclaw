@@ -257,130 +257,93 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
-  it.each(["acknowledged", "lost on reconnect", "rejected"] as const)(
-    "installs, configures, and handles the final restart acknowledgement (%s)",
-    async (acknowledgement) => {
-      const context = await newContext();
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...pluginMethods, "config.schema", "config.set"],
-        methodResponses: {
-          ...pluginMethodResponses(),
-          "config.schema": matrixConfigSchema,
-          "plugins.list": {
-            sequence: [
-              initialInventory,
-              inventory([...initialInventory.plugins, matrixNeedsSetup]),
-              inventory([...initialInventory.plugins, matrixNeedsSetup]),
-              inventory([...initialInventory.plugins, matrixNeedsSetup]),
-              inventory([...initialInventory.plugins, matrixEnabled]),
-            ],
-          },
-          "plugins.install": {
-            ok: true,
-            plugin: matrixNeedsSetup,
-            restartRequired: true,
-          },
-          "plugins.setEnabled": {
-            ok: true,
-            plugin: matrixEnabled,
-            restartRequired: true,
-          },
-        },
+  it("installs, configures, and enables on the existing Gateway connection", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...pluginMethods, "config.schema", "config.set"],
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "config.schema": matrixConfigSchema,
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const connects = (await gateway.getRequests("connect")).length;
+      const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await wizard.waitFor();
+      expect(await wizard.textContent()).toContain("ClawHub · matrix");
+      expect(await wizard.textContent()).toContain("Matrix messaging");
+      expect(await wizard.textContent()).toContain("running Gateway");
+      await gateway.deferNext("plugins.install");
+      await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
+      expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
+        source: "clawhub",
+        packageName: "matrix",
       });
-
-      try {
-        await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-        await page.getByRole("heading", { level: 1, name: "Matrix", exact: true }).waitFor();
-        await page.getByRole("button", { name: "Install", exact: true }).click();
-
-        const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
-        await wizard.waitFor();
-        expect(await wizard.textContent()).toContain("ClawHub · matrix");
-        expect(await wizard.textContent()).toContain("Gateway restart");
-        expect(await wizard.textContent()).toContain("Matrix messaging");
-        await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-
-        const installRequest = await gateway.waitForRequest("plugins.install");
-        expect(installRequest.params).toEqual({ source: "clawhub", packageName: "matrix" });
-        expect((await gateway.waitForRequest("gateway.restart.request")).params).toEqual({
-          reason: "Apply an installed plugin change",
-        });
-        const cancel = await wizard.evaluate((element) => {
-          const event = new CustomEvent("modal-cancel", { cancelable: true });
-          element.dispatchEvent(event);
-          return event.defaultPrevented;
-        });
-        expect(cancel).toBe(true);
-        expect(await wizard.count()).toBe(1);
-        await reconnectMockGateway(page, gateway, "plugins-install-configuring");
-
-        await expect
-          .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
-            timeout: 5_000,
-          })
-          .toBe("configuring");
-        await expect.poll(() => wizard.textContent(), { timeout: 5_000 }).toContain("Homeserver");
-        await wizard.getByRole("textbox", { name: "Homeserver" }).fill("https://matrix.example");
-        await wizard.getByRole("textbox", { name: "Access token" }).fill("secret-token");
-        await wizard.getByRole("combobox", { name: "Mode" }).selectOption("__null__");
-        await gateway.deferNext("gateway.restart.request");
-        await wizard.getByRole("button", { name: "Save and enable", exact: true }).click();
-
-        const configSet = await gateway.waitForRequest("config.set");
-        expect(JSON.parse(String((configSet.params as { raw?: unknown }).raw))).toEqual({
-          plugins: {
-            entries: {
-              workboard: { enabled: false },
-              matrix: {
-                config: {
-                  homeserver: "https://matrix.example",
-                  accessToken: "secret-token",
-                  mode: null,
-                },
+      const cancelPrevented = await wizard.evaluate((element) => {
+        const event = new CustomEvent("modal-cancel", { cancelable: true });
+        element.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      expect(cancelPrevented).toBe(true);
+      expect(await wizard.count()).toBe(1);
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, matrixNeedsSetup]),
+      );
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: matrixNeedsSetup,
+        restartRequired: false,
+      });
+      await wizard.getByRole("textbox", { name: "Homeserver" }).waitFor();
+      await wizard.getByRole("textbox", { name: "Homeserver" }).fill("https://matrix.example");
+      await wizard.getByRole("textbox", { name: "Access token" }).fill("secret-token");
+      await wizard.getByRole("combobox", { name: "Mode" }).selectOption("__null__");
+      await gateway.deferNext("plugins.setEnabled");
+      await wizard.getByRole("button", { name: "Save and enable", exact: true }).click();
+      const configSet = await gateway.waitForRequest("config.set");
+      expect(JSON.parse(String((configSet.params as { raw?: unknown }).raw))).toEqual({
+        plugins: {
+          entries: {
+            workboard: { enabled: false },
+            matrix: {
+              config: {
+                homeserver: "https://matrix.example",
+                accessToken: "secret-token",
+                mode: null,
               },
             },
           },
-        });
-        await gateway.waitForRequest("plugins.setEnabled");
-        await expect
-          .poll(async () => (await gateway.getRequests("gateway.restart.request")).length)
-          .toBe(2);
-        if (acknowledgement === "rejected") {
-          await gateway.rejectDeferred("gateway.restart.request", {
-            code: "INVALID_REQUEST",
-            message: "Restart request rejected",
-          });
-          await wizard
-            .getByRole("alert")
-            .getByText("Restart request rejected", { exact: true })
-            .waitFor();
-        } else if (acknowledgement === "acknowledged") {
-          await gateway.resolveDeferred("gateway.restart.request");
-        }
-        await reconnectMockGateway(page, gateway, "plugins-install-enabled");
-        if (acknowledgement === "lost on reconnect") {
-          await gateway.resolveDeferred("gateway.restart.request");
-        }
-        if (acknowledgement === "rejected") {
-          await wizard
-            .getByRole("alert")
-            .getByText("Restart request rejected", { exact: true })
-            .waitFor();
-          expect(await wizard.getByRole("button", { name: "Try again", exact: true }).count()).toBe(
-            1,
-          );
-        } else {
-          await wizard.getByText("Plugin ready", { exact: true }).waitFor();
-          expect(await wizard.textContent()).toContain("Matrix is installed and enabled.");
-        }
-        expect(await gateway.getRequests("config.set")).toHaveLength(1);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      } finally {
-        await context.close();
-      }
-    },
-  );
+        },
+      });
+      expect((await gateway.waitForRequest("plugins.setEnabled")).params).toEqual({
+        pluginId: "matrix",
+        enabled: true,
+      });
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, matrixEnabled]),
+      );
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: matrixEnabled,
+        restartRequired: false,
+      });
+      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
+      expect(await wizard.textContent()).toContain("Matrix is installed and enabled.");
+      expect(await gateway.getRequests("config.set")).toHaveLength(1);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+      expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
+      expect(await gateway.getRequests("connect")).toHaveLength(connects);
+    } finally {
+      await context.close();
+    }
+  });
 
   it("discards staged plugin configuration when installation is cancelled", async () => {
     const context = await newContext();
@@ -390,18 +353,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       methodResponses: {
         ...pluginMethodResponses(),
         "config.schema": matrixConfigSchema,
-        "plugins.list": {
-          sequence: [
-            initialInventory,
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-            inventory([...initialInventory.plugins, matrixNeedsSetup]),
-          ],
-        },
         "plugins.install": {
           ok: true,
           plugin: matrixNeedsSetup,
-          restartRequired: true,
+          restartRequired: false,
         },
       },
     });
@@ -411,9 +366,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Install", exact: true }).click();
 
       const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, matrixNeedsSetup]),
+      );
       await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-      await gateway.waitForRequest("gateway.restart.request");
-      await reconnectMockGateway(page, gateway, "plugins-install-cancel-configuring");
 
       await expect
         .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
@@ -424,7 +381,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await wizard.getByRole("textbox", { name: "Access token" }).fill("cancel-secret");
       await wizard.getByText("Cancel", { exact: true }).click();
 
-      await page.waitForTimeout(1_000);
+      await wizard.waitFor({ state: "detached" });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
@@ -432,25 +389,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
-  it("installs and enables a no-config local plugin through the same restart-safe wizard", async () => {
+  it("installs and enables a no-config local plugin without reconnecting", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
         ...pluginMethodResponses(),
-        "plugins.list": {
-          sequence: [
-            initialInventory,
-            inventory([...initialInventory.plugins, localCalendarDisabled]),
-            inventory([...initialInventory.plugins, localCalendarDisabled]),
-            inventory([...initialInventory.plugins, localCalendarEnabled]),
-          ],
-        },
         "plugins.install": {
           ok: true,
           plugin: localCalendarDisabled,
-          restartRequired: true,
+          restartRequired: false,
         },
         "plugins.setEnabled": {
           ok: true,
@@ -467,17 +416,33 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
       const wizard = page.locator('openclaw-modal-dialog[label="Install Local Calendar"]');
       await wizard.getByText("Official · local-calendar", { exact: true }).waitFor();
+      const connects = (await gateway.getRequests("connect")).length;
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, localCalendarDisabled]),
+      );
+      await gateway.deferNext("plugins.setEnabled");
       await wizard.getByRole("button", { name: "Install Local Calendar", exact: true }).click();
       expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
         source: "official",
         pluginId: "local-calendar",
       });
 
-      await reconnectMockGateway(page, gateway, "plugins-local-installed");
       await gateway.waitForRequest("plugins.setEnabled");
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, localCalendarEnabled]),
+      );
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: localCalendarEnabled,
+        restartRequired: false,
+      });
       await wizard.getByText("Plugin ready", { exact: true }).waitFor();
       expect(await wizard.textContent()).not.toContain("Complete the required settings");
       expect(await wizard.textContent()).toContain("Local Calendar is installed and enabled.");
+      expect(await gateway.getRequests("connect")).toHaveLength(connects);
+      expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -517,62 +482,31 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
-  it("turns a stalled Gateway restart into an actionable retry", async () => {
+  it("recovers an installation after a real connection loss from authoritative inventory", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
-      methodResponses: {
-        ...pluginMethodResponses(),
-        "plugins.list": {
-          sequence: [initialInventory, inventory([...initialInventory.plugins, matrixEnabled])],
-        },
-        "plugins.install": {
-          ok: true,
-          plugin: matrixNeedsSetup,
-          restartRequired: true,
-        },
-        "gateway.restart.request": { ok: true, status: "deferred" },
-      },
+      methodResponses: pluginMethodResponses(),
     });
 
     try {
       await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-      await page.clock.install();
       await page.getByRole("button", { name: "Install", exact: true }).click();
       const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
+      await gateway.deferNext("plugins.install");
       await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
-      await expect
-        .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"))
-        .toBe("reconnecting");
-
-      await page.clock.runFor(30_000);
-      await wizard.getByText("Installation did not complete", { exact: true }).waitFor();
-      expect(await wizard.getByRole("alert").textContent()).toContain(
-        "The Gateway did not reconnect after installation. Check the Gateway status, then retry.",
+      await gateway.waitForRequest("plugins.install");
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([...initialInventory.plugins, matrixEnabled]),
       );
-      expect(await wizard.getByRole("button", { name: "Try again", exact: true }).count()).toBe(1);
-
-      const restartCount = (await gateway.getRequests("gateway.restart.request")).length;
-      await gateway.deferNext("gateway.restart.request");
-      await wizard.getByRole("button", { name: "Try again", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("gateway.restart.request")).length)
-        .toBe(restartCount + 1);
-      expect(await wizard.locator(".plugin-install-wizard").getAttribute("data-stage")).toBe(
-        "reconnecting",
-      );
-      expect(await wizard.getByText("Plugin ready", { exact: true }).count()).toBe(0);
-
-      await gateway.resolveDeferred("gateway.restart.request", { ok: true, status: "deferred" });
-      await page.clock.runFor(0);
-      await page.clock.resume();
-      await reconnectMockGateway(page, gateway, "plugins-stalled-restart-recovered");
-      await expect
-        .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
-          timeout: 5_000,
-        })
-        .toBe("success");
+      await reconnectMockGateway(page, gateway);
+      await wizard.getByText("Plugin ready", { exact: true }).waitFor();
+      expect(await wizard.textContent()).toContain("Matrix is installed and enabled.");
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+      expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+      expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
     } finally {
       await context.close();
     }

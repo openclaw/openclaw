@@ -1,8 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
-} from "../../../auto-reply/heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -589,8 +588,12 @@ describe("attempt result projection", () => {
 
       expect(payloads).toHaveLength(1);
       expect(payloads[0]?.text).toBe(expectedText);
-      expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual(publicResponse);
-      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(scratch);
+      const selected = expectDefined(
+        selectHeartbeatToolResponse(payloads),
+        "expected the carried heartbeat response",
+      );
+      expect(selected.response).toEqual(publicResponse);
+      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
       expect(JSON.stringify(payloads)).not.toContain(scratch);
       expect(JSON.stringify(payloads)).not.toContain("Internal retry fallback.");
     },
@@ -620,8 +623,11 @@ describe("attempt result projection", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("The new task is still running.");
-    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toBeUndefined();
-    expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBeUndefined();
+    expect(selectHeartbeatToolResponse(payloads)).toBeUndefined();
+    expect(
+      getReplyPayloadMetadata(expectDefined(payloads[0], "expected the fresh-run payload"))
+        ?.heartbeatScratchProposal,
+    ).toBeUndefined();
   });
 
   it("keeps completed client tool calls in reserved source order", () => {

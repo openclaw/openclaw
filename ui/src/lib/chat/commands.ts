@@ -706,6 +706,10 @@ export function isChatControlCommand(text: string): boolean {
   return normalizeLowercaseStringOrEmpty(text.trim()) === "/stop" || key === "approve";
 }
 
+export function canSubmitBeforeChatHistory(text: string): boolean {
+  return !text.trimStart().startsWith("/") || isChatControlCommand(text);
+}
+
 export function isModelIndependentChatCommand(text: string): boolean {
   const parsed = parseSlashCommand(text);
   if (!parsed) {

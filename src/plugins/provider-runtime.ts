@@ -188,6 +188,7 @@ export {
 };
 
 function resolveProviderPluginsForCatalogHooks(params: {
+  providerIds?: readonly string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -204,16 +205,21 @@ function resolveProviderPluginsForCatalogHooks(params: {
     env,
     metadataSnapshot: params.metadataSnapshot,
   });
-  if (onlyPluginIds.length === 0) {
+  if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
     return [];
   }
-  return resolveProviderPluginsForHooks({
+  const providers = resolveProviderPluginsForHooks({
     ...params,
     workspaceDir,
     env,
     onlyPluginIds,
+    providerRefs: params.providerIds,
     pluginMetadataSnapshot: params.metadataSnapshot,
   });
+  const providerIds = params.providerIds;
+  return providerIds
+    ? providers.filter((provider) => matchesAnyProviderPluginRef(provider, providerIds))
+    : providers;
 }
 
 export const runProviderDynamicModel = normalizedRuntimeHook("resolveDynamicModel");
@@ -973,6 +979,7 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
 }
 
 export async function augmentModelCatalogWithProviderPlugins(params: {
+  providerIds?: readonly string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;

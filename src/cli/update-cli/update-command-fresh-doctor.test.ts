@@ -13,6 +13,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -169,6 +170,39 @@ describe("post-plugin update readiness", () => {
     ]);
   });
 
+  it("runs recorded deferred retirement when the published driver flag is false", async () => {
+    await withTempHome(async () => {
+      const run = createUpdateRun({ trigger: "cli" });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      recordUpdateRunStep(run.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "skipped",
+        detail: "Model retirement repair deferred until plugin convergence.",
+      });
+      const beforeDoctor = vi.fn(async () => undefined);
+
+      await completePostCorePluginUpdate({
+        ...updateOptions,
+        pluginUpdate: { ...pluginUpdate, changed: false },
+        freshDoctorRequired: false,
+        beforeDoctor,
+      });
+
+      expect(beforeDoctor).toHaveBeenCalledOnce();
+      expect(mocks.runExec.mock.calls[0]?.[1]).toEqual([
+        "/opt/openclaw/dist/index.js",
+        "doctor",
+        "--repair",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        "--yes",
+      ]);
+      expect(mocks.runExec.mock.calls[0]?.[2]).toMatchObject({
+        env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+      });
+    });
+  });
+
   it.each([false, true])(
     "preserves an unconfigured install through finalization (Doctor: %s)",
     async (freshDoctorRequired) => {
@@ -271,6 +305,38 @@ describe("post-plugin update readiness", () => {
       }
     },
   );
+
+  it("carries the Doctor's failing check through fresh-process convergence", async () => {
+    const failureFacts = [
+      {
+        check: "state.session-participants",
+        code: "step-refused",
+        message: "Required session migration could not acquire its writer.",
+      },
+    ];
+    const runNormally = mocks.runExec.getMockImplementation()!;
+    mocks.runExec.mockImplementation(async (command, args: string[], options) => {
+      if (!args.includes("--repair")) {
+        return await runNormally(command, args, options);
+      }
+      await writeUpdatePostInstallDoctorResult({
+        resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+        result: { status: "error", failureFacts },
+      });
+      throw Object.assign(new Error("Doctor exited"), {
+        exitCode: 1,
+        stderr: "Last cleanup message",
+      });
+    });
+    await expect(
+      runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase: "pre-plugin",
+      }),
+    ).rejects.toMatchObject({ failureFacts });
+    const result = await completePostCorePluginUpdate(updateOptions);
+    expect(result.pluginUpdate).toMatchObject({ status: "error", failureFacts });
+  });
 
   it("requires the lifecycle owner before starting fresh Doctor maintenance", async () => {
     const beforeDoctor = vi.fn(async () => undefined);
@@ -395,6 +461,38 @@ describe("post-plugin update readiness", () => {
           guidance: [
             "Run `openclaw models --agent main auth login --provider llama-cpp --method local`.",
           ],
+        },
+      ],
+    });
+  });
+
+  it("retains posture warnings while accepting post-plugin readiness", async () => {
+    mocks.runExec.mockImplementation(async (_command, args: string[]) => ({
+      stdout: args.includes("--lint")
+        ? JSON.stringify({
+            ok: true,
+            checksRun: 1,
+            findings: [],
+            warnings: [
+              {
+                checkId: "core/doctor/security",
+                severity: "warning",
+                message: "Open group policy permits mention-gated requests.",
+                fixHint: "Review the group allowlist.",
+              },
+            ],
+          })
+        : "",
+      stderr: "",
+    }));
+    const result = await completePostCorePluginUpdate(updateOptions);
+    expect(result.pluginUpdate).toMatchObject({
+      status: "warning",
+      warnings: [
+        {
+          reason: "doctor-advisory",
+          message: "Open group policy permits mention-gated requests.",
+          guidance: ["Review the group allowlist."],
         },
       ],
     });

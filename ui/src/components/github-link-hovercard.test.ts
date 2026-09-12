@@ -578,6 +578,40 @@ describe("openclaw-github-link-hovercard-provider", () => {
     },
   );
 
+  it.each(["pointer", "focus"])(
+    "uses only the nearest provider's agent for nested %s intent",
+    async (trigger) => {
+      const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+      const client = { request } as unknown as GatewayBrowserClient;
+      const outer = createLink(ISSUE_HREF);
+      outer.provider.client = client;
+      outer.provider.agentId = "selected-agent";
+      const inner = createLink(ISSUE_HREF);
+      inner.provider.client = client;
+      inner.provider.agentId = "row-agent";
+      outer.provider.append(inner.provider);
+
+      if (trigger === "pointer") {
+        await hover(inner.anchor);
+      } else {
+        inner.anchor.focus();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "row-agent" });
+      expect(document.querySelectorAll(".github-link-hovercard")).toHaveLength(1);
+      expect(titleLinkInCard()?.textContent).toBe("Keep hover previews reachable");
+      inner.anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+      expect(hovercard()).toBeNull();
+
+      await hover(outer.anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "selected-agent" });
+      expect(document.querySelectorAll(".github-link-hovercard")).toHaveLength(1);
+    },
+  );
+
   it("shares the first displayed success across providers while suppressing cached failures", async () => {
     const first = createDeferred<ReturnType<typeof issuePreviewResponse>>();
     const failure = createDeferred<ReturnType<typeof issuePreviewResponse>>();
@@ -812,7 +846,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(hovercard()).toBeNull();
   });
 
-  it("moves keyboard focus through the card's links and hands it back at the edges", async () => {
+  it.each([false, true])("hands focus back at Tab edges (shiftKey=%s)", async (shiftKey) => {
     const { anchor } = createIssueLink();
 
     anchor.focus();
@@ -832,11 +866,11 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(insideTab.defaultPrevented).toBe(false);
     expect(hovercard()).not.toBeNull();
 
-    // Leaving the last link returns focus to the trigger with the card closed,
+    // Leaving either outer edge returns focus to the trigger with the card closed,
     // and that returned focus must not immediately reopen what was dismissed.
-    const last = cardLinks().at(-1);
-    last?.focus();
-    last?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+    const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
+    edge?.focus();
+    edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
     expect(hovercard()).toBeNull();
     expect(document.activeElement).toBe(anchor);
     await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS * 2);

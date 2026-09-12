@@ -14,12 +14,6 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
   "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
   "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
-type AdvertisedLanHostCandidate = {
-  interfaceName: string;
-  address: string;
-  order: number;
-};
-
 type AdvertisedLanRouteHint = {
   interfaceName: string;
 };
@@ -65,42 +59,6 @@ function normalizeMetric(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
-}
-
-function listAdvertisedLanHostCandidates(
-  snapshot: NetworkInterfacesSnapshot | undefined,
-): AdvertisedLanHostCandidate[] {
-  return listExternalInterfaceAddresses(snapshot, "IPv4")
-    .filter((entry) => isRfc1918Ipv4Address(entry.address))
-    .map((entry, order) => ({
-      interfaceName: entry.name,
-      address: entry.address,
-      order,
-    }));
-}
-
-function selectAdvertisedLanHost(
-  candidates: AdvertisedLanHostCandidate[],
-  routeHints: AdvertisedLanRouteHint[] = [],
-): string | null {
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  for (const hint of routeHints) {
-    const hintedName = normalizeInterfaceName(hint.interfaceName);
-    if (!hintedName) {
-      continue;
-    }
-    const routed = candidates.find(
-      (candidate) => normalizeInterfaceName(candidate.interfaceName) === hintedName,
-    );
-    if (routed) {
-      return routed.address;
-    }
-  }
-
-  return candidates[0]?.address ?? null;
 }
 
 function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
@@ -215,11 +173,12 @@ async function resolveDefaultRouteHints(params: {
 export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
-  const candidates = listAdvertisedLanHostCandidates(
+  const candidates = listExternalInterfaceAddresses(
     safeNetworkInterfaces(options.networkInterfaces),
-  );
-  if (candidates.length === 0) {
-    return null;
+    "IPv4",
+  ).filter((entry) => isRfc1918Ipv4Address(entry.address));
+  if (candidates.length <= 1) {
+    return candidates[0]?.address ?? null;
   }
 
   const routeHints = await resolveDefaultRouteHints({
@@ -227,5 +186,18 @@ export async function resolveAdvertisedLanHostCore(
     runCommandWithTimeout: options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
     timeoutMs: options.timeoutMs ?? DEFAULT_ROUTE_HINT_TIMEOUT_MS,
   });
-  return selectAdvertisedLanHost(candidates, routeHints);
+  for (const hint of routeHints) {
+    const hintedName = normalizeInterfaceName(hint.interfaceName);
+    if (!hintedName) {
+      continue;
+    }
+    const routed = candidates.find(
+      (candidate) => normalizeInterfaceName(candidate.name) === hintedName,
+    );
+    if (routed) {
+      return routed.address;
+    }
+  }
+
+  return candidates[0]?.address ?? null;
 }

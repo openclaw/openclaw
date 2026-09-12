@@ -287,7 +287,7 @@ describe("reply directive resolution", () => {
       blockStreamingEnabled: result.result.blockStreamingEnabled,
       blockReplyPipeline: null,
       directlySentBlockKeys: new Set(),
-      directlySentBlockPayloads: [],
+      directBlockDeliveries: [],
     });
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "media-caption-directives",

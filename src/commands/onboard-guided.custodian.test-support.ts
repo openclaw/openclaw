@@ -63,6 +63,7 @@ const localOnboarding = vi.hoisted(() => {
       (params: {
         configPath: string;
         workspace: string;
+        teamCoordinatorId?: string;
         securityAcknowledgedAt: string;
         replace?: boolean;
         expectedRunId?: string;
@@ -78,6 +79,7 @@ const localOnboarding = vi.hoisted(() => {
           runId: params.runId,
           configPath: params.configPath,
           workspace: params.workspace,
+          ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
           securityAcknowledgedAt: params.securityAcknowledgedAt,
           startedAtMs: 1,
         };

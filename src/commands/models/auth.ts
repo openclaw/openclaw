@@ -392,6 +392,27 @@ async function pickProviderTokenMethod(params: {
     .then((id) => tokenMethods.find((method) => method.id === id) ?? null);
 }
 
+async function refreshProviderAuthAfterLogin(
+  params: Pick<
+    ModelsAuthLoginFlowOptions,
+    "refreshAfterLogin" | "runtime" | "signal" | "assertCurrent"
+  > & {
+    agentId: string;
+  },
+): Promise<ModelAuthRefreshOutcome> {
+  if (!params.refreshAfterLogin) {
+    return refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+  }
+  try {
+    await params.refreshAfterLogin(params.agentId);
+    return "refreshed";
+  } catch {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    return "gateway-rejected";
+  }
+}
+
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
@@ -405,6 +426,7 @@ async function persistProviderAuthResult(params: {
   env?: NodeJS.ProcessEnv;
   beforePersistentEffect?: () => void | Promise<void>;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
 }): Promise<{ profiles: ProviderAuthResult["profiles"]; authRefresh: ModelAuthRefreshOutcome }> {
   const defaultModel = params.result.defaultModel
@@ -499,13 +521,7 @@ async function persistProviderAuthResult(params: {
       logConfigUpdated(params.runtime);
     }
 
-    let authRefresh: ModelAuthRefreshOutcome;
-    if (params.refreshAfterLogin) {
-      await params.refreshAfterLogin(params.agentId);
-      authRefresh = "refreshed";
-    } else {
-      authRefresh = await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
-    }
+    const authRefresh = await refreshProviderAuthAfterLogin(params);
 
     for (const profile of persistedProfiles) {
       params.runtime.log(
@@ -659,6 +675,7 @@ async function runProviderAuthMethod(params: {
     result: connectionResult,
     profiles,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
     config: params.config,
     configSnapshot: params.configSnapshot,
     agentId: params.agentId,
@@ -1181,13 +1198,7 @@ export async function runModelsAuthLoginFlowCore(
       provider: imported.provider,
       profileId: imported.profileId,
     });
-    let authRefresh: ModelAuthRefreshOutcome;
-    if (opts.refreshAfterLogin) {
-      await opts.refreshAfterLogin(context.agentId);
-      authRefresh = "refreshed";
-    } else {
-      authRefresh = await refreshRunningGatewayAuthState(context.agentId, "login", opts.runtime);
-    }
+    const authRefresh = await refreshProviderAuthAfterLogin({ ...opts, agentId: context.agentId });
     if (imported.configUpdated) {
       logConfigUpdated(opts.runtime);
     }

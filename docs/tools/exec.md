@@ -301,7 +301,7 @@ Paste (bracketed by default):
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.6-sol"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-6-astra"] },
     },
   },
 }

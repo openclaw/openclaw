@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -276,7 +276,7 @@ describe("live update executor", () => {
 
   it("preserves an unreadable existing coordination database without repairing it", async () => {
     const database = path.join(temporary, "managed-update-handoffs.sqlite");
-    fs.writeFileSync(database, "unreadable native owner");
+    fs.writeFileSync(database, "unreadable native owner", { mode: 0o600 });
     const before = fs.readFileSync(database);
     await expect(
       withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),
@@ -362,6 +362,70 @@ describe("live update executor", () => {
 
 describe("candidate executor delegation", () => {
   const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
+  it("refuses a revoked requester before delegated Doctor changes operator config", async () => {
+    const configPath = path.join(root, "openclaw.json");
+    const original = JSON.stringify({
+      commands: { ownerAllowFrom: ["replacement"] },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(configPath, original);
+    const workerUrl = new URL("../../infra/update-migrated-finalize.worker.ts", import.meta.url);
+    const resultUrl = new URL("../../infra/update-doctor-result.ts", import.meta.url);
+    const childProgram = `
+      import fs from "node:fs";
+      import {createUpdatePostInstallDoctorResultPath, UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV} from ${JSON.stringify(resultUrl.href)};
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV] = resultPath;
+      process.argv[2] = "--doctor";
+      process.once("exit", () => {
+        if (fs.existsSync(resultPath)) {
+          process.stdout.write(fs.readFileSync(resultPath, "utf8"));
+          fs.rmSync(resultPath);
+        }
+      });
+      await import(${JSON.stringify(workerUrl.href)});
+    `;
+    const runId = randomUUID();
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [
+            process.execPath,
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            "--input-type=module",
+            "-e",
+            childProgram,
+          ],
+          {
+            input: JSON.stringify({
+              executor: grant,
+              runId,
+              root,
+              configInputHash: createHash("sha256").update(original).digest("hex"),
+              requester: { channel: "synthetic", senderId: "owner" },
+              repair: true,
+            }),
+            beforeInput,
+            env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+            timeoutMs: 15_000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        ),
+      );
+      expect(result.code).toBe(1);
+      expect(result.stdout, result.stderr).toContain('"reason":"requester-revoked"');
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status: "error",
+        configWriteRefusal: { reason: "requester-revoked", keys: [] },
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      fence.assertCurrent();
+    });
+  });
+
   const program = `
     import fs from "node:fs";
     import {spawn} from "node:child_process";

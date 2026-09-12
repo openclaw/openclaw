@@ -484,6 +484,43 @@ describe("stable release closeout", () => {
     );
   });
 
+  it("allows mirrored prose changes only with unchanged frozen release accounting", () => {
+    const section = extractStableChangelogSection(changelog, "2026.6.8");
+    const record =
+      "## 2026.6.8\n\n### Complete contribution record\n\n- Shipped fix. (#123) Thanks @author.\n";
+    const params = {
+      ...validCloseoutParams,
+      mainRelease: {
+        section: "## 2026.6.8\n\nClearer published documentation.\n",
+        format: "docs-mirror",
+        record,
+      },
+      tagRelease: { section, format: "initial", record },
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    };
+    const result = verifyStableMainCloseout(params);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.changelogSha256).toBe(sha256(section!));
+    for (const changedRecord of [null, "Changed accounting"]) {
+      expect(
+        verifyStableMainCloseout({
+          ...params,
+          mainRelease: { ...params.mainRelease, record: changedRecord },
+        }).errors,
+      ).toContain(
+        "main changelog 2026.6.8 frozen contribution record does not match the shipped release accounting.",
+      );
+    }
+    expect(
+      verifyStableMainCloseout({
+        ...params,
+        mainRelease: { ...params.mainRelease, format: "initial" },
+      }).errors,
+    ).toContain(
+      "main CHANGELOG.md ## 2026.6.8 does not exactly match the shipped release section.",
+    );
+  });
+
   it("rejects prerelease main state", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,

@@ -1,5 +1,6 @@
 // Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
@@ -14,6 +15,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   buildAllPluginInspectReports,
   withPluginDiagnosticsReportForInspection,
@@ -191,7 +193,19 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (pluginsCommand.action === "install") {
-      return await withPluginLifecycleLease({}, async () => {
+      const resolveContext =
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx) ??
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      const context = resolveContext?.();
+      const assertInvokerOwned = () => {
+        params.commandInvocationSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        if (resolveContext && (!context || resolveContext() !== context)) {
+          throw new Error("The Gateway that admitted this command is no longer available.");
+        }
+      };
+      assertInvokerOwned();
+      return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
         const loadedConfig = await loadPluginCommandConfig();
         if (!loadedConfig.ok) {
           return commandReply(`⚠️ ${loadedConfig.error}`);
@@ -201,13 +215,16 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: loadedConfig.snapshot,
+          applyRuntime: context?.applyPluginLifecycleChange,
+          beforePersistentApply: assertInvokerOwned,
+          signal: params.opts?.abortSignal,
         });
         if (!installed.ok) {
           return commandReply(`⚠️ ${installed.error}`);
         }
         return commandReply(
           [
-            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            `🔌 Installed plugin "${installed.pluginId}". ${installed.application ? `Applied in Gateway generation ${installed.application.generation}.` : "Saved for the next Gateway start."}`,
             ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
           ].join("\n"),
         );

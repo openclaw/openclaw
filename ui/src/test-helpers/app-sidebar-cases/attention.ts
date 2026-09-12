@@ -59,6 +59,26 @@ function agentAttentionRow(
 }
 
 describe("AppSidebar session attention", () => {
+  it("redacts local paths from failed-run previews", async () => {
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [
+      failedRow(sessionKey, {
+        lastRunError:
+          "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
+      }),
+    ]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+
+    expect(row?.textContent).toContain(
+      "Cannot find module '[redacted path]' imported from [redacted path]",
+    );
+    expect(row?.textContent).not.toContain("/Users/example");
+  });
+
   it("projects canonical attention onto Home across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const client = {

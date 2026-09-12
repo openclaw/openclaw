@@ -2,6 +2,8 @@ import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
+export const UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME = "plugin-copy-plan.json";
+
 /**
  * One projection identity per locator, matching the raw canonical-spelling
  * eligibility of the rebase branch in resolveUpdateCandidateStatePath: only

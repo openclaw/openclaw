@@ -79,6 +79,26 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
+  it.each([false, true])(
+    "reads the selected linked checkout's HEAD (detached: %s)",
+    async (detached) => {
+      const linked = path.join(root, "linked");
+      await git(repo, "worktree", "add", "-b", "selected-work", linked, "HEAD");
+      if (detached) {
+        await git(linked, "switch", "--detach");
+      }
+      const nested = path.join(linked, "packages", "app");
+      await fs.mkdir(nested, { recursive: true });
+
+      for (const includeRepositoryStatus of [false, true]) {
+        const result = await service.listRepositoryBranches(nested, { includeRepositoryStatus });
+        expect(result.headBranch).toBe(detached ? undefined : "selected-work");
+        expect(result.branches).toContainEqual({ name: "main", kind: "local" });
+        expect(result.branches).toContainEqual({ name: "selected-work", kind: "local" });
+      }
+    },
+  );
+
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
     const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
     const commit = stdout.trim();

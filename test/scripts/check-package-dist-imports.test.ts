@@ -59,16 +59,35 @@ describe("check-package-dist-imports", () => {
     expect(extra.stderr).not.toContain("missing dist directory");
   });
 
-  it("accepts a minimal package dist root", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
+  it.each([
+    { leading: [], tail: [], accepted: true },
+    { leading: ["--"], tail: [], accepted: true },
+    { leading: [], tail: [""], accepted: false },
+    { leading: [], tail: [" \t "], accepted: false },
+    { leading: [], tail: ["", "extra"], accepted: false },
+    { leading: [], tail: ["", "--unexpected"], accepted: false },
+    { leading: ["--"], tail: [""], accepted: false },
+  ])(
+    "enforces one dist root with leading $leading and tail $tail",
+    ({ leading, tail, accepted }) => {
+      const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+      mkdirSync(join(root, "dist"), { recursive: true });
+      writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
 
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+      const result = spawnSync(process.execPath, [CHECK_SCRIPT, ...leading, root, ...tail], {
+        encoding: "utf8",
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
-  });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      if (accepted) {
+        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+      } else {
+        expect(result.stderr).toContain("Unexpected package dist import check argument");
+        expect(result.stdout).not.toContain("OpenClaw package dist import closure passed.");
+      }
+    },
+  );
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
     const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");

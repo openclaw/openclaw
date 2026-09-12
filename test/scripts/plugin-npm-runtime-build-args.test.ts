@@ -46,6 +46,40 @@ describe("plugin npm runtime build args", () => {
     ).toThrow(/unexpected/u);
   });
 
+  it.each([
+    { argv: ["extensions/slack", ""] },
+    { argv: ["extensions/slack", " \t "] },
+    { argv: ["extensions/slack", "", "extra"] },
+    { argv: ["extensions/slack", "", "--unexpected"] },
+    { argv: ["--", "extensions/slack", ""] },
+    { argv: ["--prepare-native-import", "extensions/slack", ""] },
+    { argv: ["extensions/slack", "", "--prepare-native-import"] },
+    { argv: ["extensions/slack", "--prepare-native-import", "", "--unexpected"] },
+    { argv: ["--", "--prepare-native-import", "extensions/slack", ""] },
+    { argv: ["--prepare-native-import", "extensions/slack", "", "--prepare-native-import"] },
+  ])("rejects excess runtime build argv $argv after extracting its mode", ({ argv }) => {
+    expect(() => parseSingleBuildArgs(argv)).toThrow(
+      "unexpected plugin npm runtime build argument",
+    );
+  });
+
+  it("preserves help, literal targets, and the bulk builder's separate grammar", () => {
+    expect(parseSingleBuildArgs(["--", "--help", ""])).toEqual({ help: true, packageDir: "" });
+    expect(parseSingleBuildArgs(["--prepare-native-import", "--help"])).toEqual({
+      help: true,
+      packageDir: "",
+    });
+    expect(parseSingleBuildArgs([" extensions/slack "])).toEqual({
+      packageDir: " extensions/slack ",
+    });
+    expect(parseSingleBuildArgs(["--", "extensions/slack", "--prepare-native-import"])).toEqual({
+      packageDir: "extensions/slack",
+      prepareNativeImport: true,
+    });
+    expect(() => parseBulkBuildArgs(["--package", "extensions/slack", ""])).toThrow(/usage:/u);
+    expect(() => parseBulkBuildArgs(["--package", ""])).toThrow("missing value for --package");
+  });
+
   it("rejects missing or option-looking package targets", () => {
     expect(() => parseBulkBuildArgs(["--package"])).toThrow("missing value for --package");
     expect(() => parseBulkBuildArgs(["--package", "--package", "extensions/slack"])).toThrow(

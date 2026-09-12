@@ -44,14 +44,14 @@ import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
-export function recordBackupOutcomeBestEffort(
+export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
   params: Parameters<typeof recordBackupRunOutcome>[0],
-): void {
+): Promise<void> {
   try {
     // A rejected private input must not be reopened for best-effort outcome writes.
     assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-    recordBackupRunOutcome(params);
+    await recordBackupRunOutcome(params);
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(

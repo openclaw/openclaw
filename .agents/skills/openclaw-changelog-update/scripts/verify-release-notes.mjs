@@ -14,6 +14,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  findReleaseChangelog,
+  loadChangelogCollection,
+  loadReleaseChangelog,
+  writeReleaseChangelog,
+} from "../../../../scripts/lib/release-changelog.mjs";
+import {
   extractChangelogReleaseSections,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
@@ -86,7 +92,7 @@ function printUsage() {
 Required:
   --base <ref>          Release range start.
   --target <ref>        Release range end.
-  --version <version>   CHANGELOG.md version heading to verify.
+  --version <version>   Release changelog version heading to verify.
 
 Options:
   --manifest <path>     Read or write the complete contribution record ledger.
@@ -100,7 +106,7 @@ Options:
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
-  --write-ledger        Write the verified ledger back into CHANGELOG.md.
+  --write-ledger        Write the verified split release entry and contribution record.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
   --json                Emit machine-readable verification output.
@@ -667,7 +673,9 @@ function verifiedMultiRevertedHashes(hash, subject, body) {
     }
     return targets;
   } catch (error) {
-    fail(`could not verify explicit multi-commit revert ${hash}: ${error.message}`);
+    throw new Error(`could not verify explicit multi-commit revert ${hash}: ${error.message}`, {
+      cause: error,
+    });
   } finally {
     if (temporaryDirectory) {
       rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -822,8 +830,13 @@ function shippedBaselineFor(ref) {
   const version = releaseNotesVersionForTag(ref);
   const tagRef = `refs/tags/${ref}`;
   git(["rev-parse", `${tagRef}^{commit}`]);
-  const changelog = git(["show", `${tagRef}:CHANGELOG.md`]);
-  completeContributionRecord(sectionFor(changelog, version), `shipped baseline ${ref}`);
+  const rootDir = process.cwd();
+  const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
+  const source = loadReleaseChangelog({ rootDir, ref: tagRef, version });
+  completeContributionRecord(
+    sectionFor(source.record ?? source.section, version),
+    `shipped baseline ${ref}`,
+  );
   return {
     ref,
     pullRequests: cumulativeShippedPullRequests(changelog, `shipped baseline ${ref}`),
@@ -1236,11 +1249,11 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     const message = `${subject}\n${body}`;
     const targets = revertedHashesFor(hash, subject, body);
     const targetStates = targets.flatMap(
-      (target) => revertedCommitStatesFor(target, new Set(seen)) ?? [],
+      (revertedTarget) => revertedCommitStatesFor(revertedTarget, new Set(seen)) ?? [],
     );
     const states =
       targetStates.length > 0
-        ? targetStates.map((state) => ({ ...state, depth: state.depth + 1 }))
+        ? targetStates.map((state) => Object.assign({}, state, { depth: state.depth + 1 }))
         : [{ depth: 0, hash, references: referencesIn(message) }];
     revertedCommitStates.set(hash, states);
     return states;
@@ -1725,12 +1738,12 @@ function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
     if (!source.references.includes(number) || nodes.has(number) || required.has(number)) {
       continue;
     }
-    const run = githubApi([`repos/${repo}/actions/runs/${number}`]);
-    if (run?.id === number && run.repository?.full_name === repo) {
+    const workflowRun = githubApi([`repos/${repo}/actions/runs/${number}`]);
+    if (workflowRun?.id === number && workflowRun.repository?.full_name === repo) {
       runs.push({ id: number, repository: repo });
     }
   }
-  const runIds = new Set(runs.map((run) => run.id));
+  const runIds = new Set(runs.map((workflowRun) => workflowRun.id));
   source.references = source.references.filter((number) => !runIds.has(number));
   for (const commit of source.activeCommits) {
     commit.references = commit.references.filter((number) => !runIds.has(number));
@@ -2551,7 +2564,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   };
 }
 
-function releaseChecks(changelog, version, releaseTags) {
+function releaseChecks(changelog, version, releaseTags, contributionRecordPath) {
   const checks = [];
   for (const tag of releaseTags) {
     const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
@@ -2561,6 +2574,7 @@ function releaseChecks(changelog, version, releaseTags) {
       version,
       tag,
       repository: repo,
+      contributionRecordPath,
     });
     checks.push({
       tag,
@@ -2593,8 +2607,16 @@ function main() {
     printUsage();
     return;
   }
+  const rootDir = process.cwd();
+  const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });
+  if (releaseSource.format !== "initial") {
+    fail("docs-mirrored release notes must be verified by the docs-publication workflow");
+  }
+  if (options.writeLedger && releaseSource.layout !== "split") {
+    fail("split the changelog before writing a release contribution record");
+  }
   githubSnapshotState = initializeGithubSnapshot(options);
-  const changelog = readFileSync("CHANGELOG.md", "utf8");
+  const changelog = releaseSource.section;
   const section = sectionFor(changelog, options.version);
   const source = sourceCommits(
     options.base,
@@ -2602,10 +2624,14 @@ function main() {
     options.mainRef ?? "origin/main",
     options.releaseProvenance,
   );
-  const committedSection = optionalSectionFor(
-    git(["show", `${source.target}:CHANGELOG.md`]),
-    options.version,
-  );
+  const committedSource = findReleaseChangelog({
+    rootDir,
+    ref: source.target,
+    version: options.version,
+  });
+  const committedSection = committedSource
+    ? sectionFor(committedSource.record ?? committedSource.section, options.version)
+    : undefined;
   const committedRecord = committedSection
     ? contributionRecordFor(committedSection)
     : { legacyIssues: new Map(), pullRequests: new Map() };
@@ -2652,8 +2678,12 @@ function main() {
   );
   let priorRecord = { legacyIssues: new Map(), pullRequests: new Map() };
   if (options.seedRef) {
-    const seedChangelog = git(["show", `${options.seedRef}:CHANGELOG.md`]);
-    const seedSection = sectionFor(seedChangelog, options.version);
+    const seedSource = loadReleaseChangelog({
+      rootDir,
+      ref: options.seedRef,
+      version: options.version,
+    });
+    const seedSection = sectionFor(seedSource.record ?? seedSource.section, options.version);
     priorRecord = contributionRecordFor(seedSection);
   }
   priorRecord = withoutExcludedContributionRecords(priorRecord, excludedRecordedReferences);
@@ -2692,7 +2722,7 @@ function main() {
     ...legacyIssuePullRequests,
   ]);
   source.workflowRuns = workflowRuns;
-  const workflowRunIds = new Set(workflowRuns.map((run) => run.id));
+  const workflowRunIds = new Set(workflowRuns.map((workflowRun) => workflowRun.id));
   references = references.filter((number) => !workflowRunIds.has(number));
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
@@ -2817,7 +2847,12 @@ function main() {
     source.shippedBaselines,
   );
   const github = options.checkGithub
-    ? releaseChecks(candidateChangelog, options.version, options.releaseTags)
+    ? releaseChecks(
+        candidateChangelog,
+        options.version,
+        options.releaseTags,
+        releaseSource.recordPath ?? undefined,
+      )
     : [];
   for (const check of github) {
     if (!check.matches) {
@@ -2828,7 +2863,7 @@ function main() {
   }
   if (errors.length === 0) {
     if (options.writeLedger) {
-      writeFileAtomic("CHANGELOG.md", candidateChangelog);
+      writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
     }
   }
 

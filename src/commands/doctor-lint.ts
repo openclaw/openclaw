@@ -36,7 +36,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
+import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -261,6 +261,11 @@ async function executeDoctorLint(
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
   const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
+  const warnings = isUpdateDoctorLintPass(stateView.sourceEnv)
+    ? result.findings.filter(
+        (finding) => finding.severity === "warning" && !healthFindingMeetsSeverity(finding, sevMin),
+      )
+    : [];
   const exitCode = exitCodeFromFindings(result.findings, sevMin);
   return {
     exitCode,
@@ -273,6 +278,7 @@ async function executeDoctorLint(
           checksRun: result.checksRun,
           checksSkipped: result.checksSkipped,
           findings: visible,
+          warnings,
         });
         return;
       }
@@ -475,6 +481,7 @@ function writeJsonResult(result: {
   checksRun: number;
   checksSkipped: number;
   findings: readonly HealthFinding[];
+  warnings?: readonly HealthFinding[];
 }): void {
   process.stdout.write(
     JSON.stringify({
@@ -482,6 +489,8 @@ function writeJsonResult(result: {
       checksRun: result.checksRun,
       checksSkipped: result.checksSkipped,
       findings: result.findings.map(toJsonFinding),
+      // Shipped updater gates require findings to be empty on success.
+      ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
     }) + "\n",
   );
 }

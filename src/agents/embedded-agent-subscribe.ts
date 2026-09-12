@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
@@ -78,37 +79,29 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   } = replyDelivery;
 
   // Suppress duplicate block replies only after confirmed messaging-tool delivery.
-  const MAX_MESSAGING_SENT_TEXTS = 200;
-  const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
-  const MAX_MESSAGING_SENT_TARGETS = 200;
-  const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
-  const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
   const trimMessagingToolSent = () => {
-    if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
-      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
+    if (messagingToolSentTexts.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
     }
     if (
-      state.currentSourceMessagingToolSentTextsNormalized.length >
-      MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS
+      state.currentSourceMessagingToolSentTextsNormalized.length > MAX_MESSAGING_HISTORY_ENTRIES
     ) {
       const overflow =
-        state.currentSourceMessagingToolSentTextsNormalized.length -
-        MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS;
+        state.currentSourceMessagingToolSentTextsNormalized.length - MAX_MESSAGING_HISTORY_ENTRIES;
       state.currentSourceMessagingToolSentTextsNormalized.splice(0, overflow);
     }
-    if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
-      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
+    if (messagingToolSentTargets.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentTargets.splice(0, overflow);
     }
-    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
-      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
+    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentMediaUrls.splice(0, overflow);
     }
-    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_SOURCE_REPLY_PAYLOADS) {
-      const overflow =
-        messagingToolSourceReplyPayloads.length - MAX_MESSAGING_SOURCE_REPLY_PAYLOADS;
+    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSourceReplyPayloads.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSourceReplyPayloads.splice(0, overflow);
     }
   };

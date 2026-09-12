@@ -274,7 +274,7 @@ struct MacGatewayChatTransportMappingTests {
             sessionKey: "global",
             agentID: "reviewer",
             patch: OpenClawChatSessionSettingsPatch(
-                model: .some("openai/gpt-5.6-sol"),
+                model: .some("openai/gpt-5.6-luna"),
                 thinkingLevel: .some(nil),
                 fastMode: .some(.on),
                 verboseLevel: .some("full")))
@@ -282,7 +282,7 @@ struct MacGatewayChatTransportMappingTests {
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-luna")
         #expect(request.params["thinkingLevel"]?.value is NSNull)
         #expect(request.params["fastMode"]?.value as? Bool == true)
         #expect(request.params["verboseLevel"]?.value as? String == "full")

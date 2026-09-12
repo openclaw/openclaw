@@ -48,7 +48,9 @@ unicast DNS-SD domain for cross-network discovery.
 
 The **Gateway** advertises its WS endpoint via Bonjour when the bundled
 `bonjour` plugin is enabled; clients browse and show a "pick a Gateway" list,
-then store the chosen endpoint.
+then apply their connection trust policy. On macOS, a selection opens the
+connection editor; it does not save the advertised endpoint. See
+[Configure in the app](/platforms/mac/remote#configure-in-the-app).
 
 Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 
@@ -110,9 +112,9 @@ stable tailnet IP.
 
 If the Gateway detects it is running under Tailscale, it publishes
 `tailnetDns` as an optional hint for clients (including wide-area beacons).
-The macOS app prefers MagicDNS names over raw Tailscale IPs for Gateway
-discovery, which stays reliable when tailnet IPs change (node restarts,
-CGNAT reassignment) since MagicDNS resolves to the current IP automatically.
+For a configured macOS connection, prefer a trusted MagicDNS name over a raw
+Tailscale IP so the name resolves to the current address. Discovery does not
+replace the saved address.
 
 For mobile node pairing, discovery hints never relax transport security on
 tailnet/public routes:
@@ -133,10 +135,16 @@ connect via SSH by forwarding the loopback Gateway port. See
 
 ## Transport selection (client policy)
 
+The macOS app uses its configured direct or SSH transport. Discovery does not
+replace that route or select a fallback. For a new connection, the user supplies
+a trusted address, SSH target, or setup code in the connection editor and saves it.
+
+Discovery-based client selection follows this policy:
+
 1. If a paired direct endpoint is configured and reachable, use it.
 2. Else, if discovery finds a Gateway on `local.` or the configured wide-area
-   domain, offer a one-tap "Use this Gateway" choice and save it as the
-   direct endpoint.
+   domain, offer setup for that candidate. Apply the client's trust policy
+   before saving a direct endpoint; discovery alone is not authorization.
 3. Else, if a tailnet DNS/IP is configured, try direct. For mobile nodes on
    tailnet/public routes, direct means a secure endpoint, not plaintext
    remote `ws://`.
@@ -155,8 +163,8 @@ The Gateway is the source of truth for node/client admission:
 
 - **Gateway**: advertises discovery beacons, owns pairing decisions, hosts
   the WS endpoint.
-- **macOS app**: helps you pick a Gateway, shows pairing prompts, uses SSH
-  only as a fallback.
+- **macOS app**: edits trusted Gateway connections, shows pairing prompts,
+  and uses the configured direct or SSH transport.
 - **iOS/Android nodes**: browse Bonjour as a convenience, connect to the
   paired Gateway WS.
 

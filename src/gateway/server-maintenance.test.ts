@@ -162,6 +162,7 @@ async function stopMaintenanceTimers(timers: {
   dedupeCleanup: NodeJS.Timeout;
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<"drained" | "timed-out">;
+  stopSessionColdStorageMaintenance: () => Promise<void>;
   worktreeCleanup: NodeJS.Timeout;
 }) {
   clearInterval(timers.tickInterval);
@@ -169,6 +170,7 @@ async function stopMaintenanceTimers(timers: {
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
   await timers.stopMediaCleanup();
+  await timers.stopSessionColdStorageMaintenance();
 }
 
 describe("startGatewayMaintenanceTimers", () => {

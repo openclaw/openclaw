@@ -23,7 +23,10 @@ const {
   suiteRuntimeLoads: { count: 0 },
 }));
 
-vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({ listQaRunnerCliContributions }));
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
+  listQaRunnerCliContributions,
+}));
 vi.mock("./shared/live-transport-suite.runtime.js", () => {
   suiteRuntimeLoads.count += 1;
   return {

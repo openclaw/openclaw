@@ -58,6 +58,9 @@ export function useConfigCliIntegrationHarness() {
     vi.spyOn(defaultRuntime, "log").mockImplementation((...values: unknown[]) => {
       registeredRuntimeLogs.push(values.map(String).join(" "));
     });
+    vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value: string) => {
+      registeredRuntimeLogs.push(value);
+    });
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
       registeredRuntimeLogs.push(JSON.stringify(value, null, space));
     });

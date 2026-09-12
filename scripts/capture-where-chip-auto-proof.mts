@@ -54,12 +54,12 @@ try {
     await installMockGateway(page, {
       ...(remoteExec
         ? {
-            agentModel: "openai/gpt-5.6-sol",
+            agentModel: "openai/gpt-5.6-luna",
             models: [
               {
                 available: true,
-                id: "gpt-5.6-sol",
-                name: "GPT-5.6 Sol",
+                id: "gpt-5.6-luna",
+                name: "GPT-5.6 Luna",
                 provider: "openai",
                 agentRuntime: {
                   id: "codex",
