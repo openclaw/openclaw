@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -774,67 +775,94 @@ it.each([false, true])(
   },
 );
 
-it("keeps the real result when reset retention replaces a synthetic missing result", async () => {
-  await withOpenClawTestState({ label: "model-pairing" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "pairing",
-      sessionKey: "agent:main:pairing",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(scope);
-    const firstKept = source.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "repeat", name: "read", arguments: {} }],
-      }),
-    );
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      isError: true,
-      content: [{ type: "text", text: "missing" }],
-      details: { openclawSyntheticMissingToolResult: true },
-      timestamp: 1,
-    });
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      isError: false,
-      content: [{ type: "text", text: "real output" }],
-      timestamp: 2,
-    });
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "orphan",
-      toolName: "read",
-      isError: false,
-      content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
-      timestamp: 3,
-    });
-    source.appendResetBoundary("new", firstKept);
-    const originalParse = JSON.parse;
-    let orphanBytes = 0;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (typeof text === "string" && text.includes("orphan-body:")) {
-        orphanBytes += text.length;
+it.each(["details", "text", "duplicate-object", "late-array-call"])(
+  "keeps real tool output across reset (%s)",
+  async (marker) => {
+    await withOpenClawTestState({ label: "model-pairing" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "pairing",
+        sessionKey: "agent:main:pairing",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      const firstKept = source.appendMessage(
+        makeAgentAssistantMessage({
+          content: [
+            ...Array.from({ length: marker === "late-array-call" ? 16 : 1 }, () => ({
+              type: "text" as const,
+              text: "Reading the file",
+            })),
+            { type: "toolCall", id: "repeat", name: "read", arguments: { path: "synthetic.txt" } },
+          ],
+        }),
+      );
+      const missingResult = source.appendMessage({
+        role: "toolResult",
+        toolCallId: "repeat",
+        toolName: "read",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: marker === "details" ? "missing" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+          },
+        ],
+        ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
+        timestamp: 1,
+      });
+      source.appendMessage({
+        role: "toolResult",
+        toolCallId: "repeat",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "real output" }],
+        timestamp: 2,
+      });
+      source.appendMessage({
+        role: "toolResult",
+        toolCallId: "orphan",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
+        timestamp: 3,
+      });
+      source.appendResetBoundary("new", firstKept);
+      if (marker === "duplicate-object") {
+        await waitForSessionTranscriptProjection(scope);
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+        // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
+        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(DEFAULT_MISSING_TOOL_RESULT_TEXT)}}}`;
+        database.db
+          .prepare(
+            "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",
+          )
+          .run(content, scope.sessionId, missingResult);
       }
-      return originalParse(text, reviver);
+      const originalParse = JSON.parse;
+      let orphanBytes = 0;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes("orphan-body:")) {
+          orphanBytes += text.length;
+        }
+        return originalParse(text, reviver);
+      });
+      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+      try {
+        messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
+      } finally {
+        spy.mockRestore();
+      }
+      expect(orphanBytes).toBe(0);
+      expect(
+        messages
+          .filter((message) => message.role === "toolResult")
+          .map((message) => message.content),
+      ).toEqual([[{ type: "text", text: "real output" }]]);
     });
-    let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
-    try {
-      messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
-    } finally {
-      spy.mockRestore();
-    }
-    expect(orphanBytes).toBe(0);
-    expect(
-      messages.filter((message) => message.role === "toolResult").map((message) => message.content),
-    ).toEqual([[{ type: "text", text: "real output" }]]);
-  });
-});
+  },
+);
 
 it.each(["reset", "compaction"])(
   "does not acquire checkpoints invalidated by %s",

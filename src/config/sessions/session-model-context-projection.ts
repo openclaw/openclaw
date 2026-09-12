@@ -29,6 +29,17 @@ function pickJsonObject(value: Expression<string>, keys: readonly string[]): Raw
     ELSE value END) FROM json_each(${value}) WHERE key IN (${sql.join(keys)}))`;
 }
 
+function contentPropertySql(
+  event: Expression<string>,
+  property: "type" | "id" | "name" | "text",
+): RawBuilder<unknown> {
+  // Root lookups rescan array prefixes, so keep them bounded. Later elements and
+  // potentially duplicated object keys retain their own json_each value.
+  return /* kysely-allow-raw: bounded array paths avoid serializing and reparsing whole content objects. */ sql`CASE WHEN typeof(key) = 'integer' AND key < 8
+    THEN json_extract(${event}, fullkey || ${`.${property}`})
+    ELSE json_extract(value, ${`$.${property}`}) END`;
+}
+
 const TRANSCRIPT_NAVIGATION_KEYS = [
   "type",
   "id",
@@ -98,13 +109,13 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
     "display",
   ]);
   const calls = /* kysely-allow-raw: pairing needs call identities, never tool arguments or result bodies. */ sql<string>`(SELECT json_group_array(json_object(
-    'type', json_extract(value, '$.type'), 'id', json_extract(value, '$.id'),
-    'name', json_extract(value, '$.name')))
+    'type', ${contentPropertySql(event, "type")}, 'id', ${contentPropertySql(event, "id")},
+    'name', ${contentPropertySql(event, "name")}))
     FROM json_each(${event}, '$.message.content') WHERE type = 'object'
-    AND json_extract(value, '$.type') IN ('toolCall', 'toolUse', 'functionCall'))`;
+    AND ${contentPropertySql(event, "type")} IN ('toolCall', 'toolUse', 'functionCall'))`;
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
-    AND json_extract(value, '$.type') = 'text' AND json_extract(value, '$.text') = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
+    AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
   return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
