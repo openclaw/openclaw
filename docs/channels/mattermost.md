@@ -587,6 +587,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
       - the callback is hitting the wrong gateway/account
       - Mattermost still has old commands pointing at a previous callback target
       - the gateway restarted without reactivating slash commands
+    - HTTP 429 under load: callbacks using an outgoing OAuth connection or a proxy that strips the `Authorization` header carry the command token only in the body. They share the bounded anonymous request pool and can be throttled when it is saturated. Preserve Mattermost's original `Authorization: Token` header through proxies so recognized command credentials receive separate capacity.
     - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
     - If `callbackUrl` is omitted and logs warn that the callback resolved to a loopback URL like `http://localhost:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
 
