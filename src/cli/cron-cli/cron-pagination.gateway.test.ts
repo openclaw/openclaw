@@ -329,6 +329,25 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
   });
 
+  it("rejects a truncated canonical terminal single page that does not reach total", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
+      transformListPage(page) {
+        const response = page as Record<string, unknown>;
+        // A canonical terminal page advertises total=2 but returns only one job
+        // from offset 0; scripts must not treat a partial page as complete.
+        return {
+          ...response,
+          jobs: [response.jobs[0]],
+          total: 2,
+          hasMore: false,
+          nextOffset: null,
+        };
+      },
+    });
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
+  });
+
   it("keeps a legacy single-page total unknown instead of fabricating one", async () => {
     installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
       transformListPage(page) {
