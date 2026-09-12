@@ -1,4 +1,4 @@
-import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
+export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {

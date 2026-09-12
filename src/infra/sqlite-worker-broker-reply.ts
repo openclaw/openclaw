@@ -4,12 +4,12 @@ import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
+  type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-contract.js";
 import {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
 
 export function prepareSqliteWorkerRequest(job: Job): SqliteWorkerRequest {
