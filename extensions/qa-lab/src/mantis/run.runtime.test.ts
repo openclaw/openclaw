@@ -583,6 +583,7 @@ describe("mantis before/after runtime", () => {
     }
     const outputRoot = await root(outputDir);
     const publicationError = new Error("candidate publication failed");
+    const restorationError = new Error("baseline restoration failed");
 
     await expect(
       publishMantisRunOutput({
@@ -594,6 +595,9 @@ describe("mantis before/after runtime", () => {
             if (from === `${staging.relative}/candidate` && to === "candidate") {
               throw publicationError;
             }
+            if (from === `.mantis-previous-test/baseline` && to === "baseline") {
+              throw restorationError;
+            }
             await outputRoot.move(from, to, options);
           }),
           remove: outputRoot.remove.bind(outputRoot),
@@ -602,23 +606,29 @@ describe("mantis before/after runtime", () => {
         runId: "test",
         staging,
       }),
-    ).rejects.toBe(publicationError);
-
-    for (const lane of ["baseline", "candidate"]) {
-      await expect(fs.readFile(path.join(outputDir, lane, "old.txt"), "utf8")).resolves.toBe(
-        `old ${lane}`,
+    ).rejects.toSatisfy((error) => {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual(
+        expect.arrayContaining([publicationError, restorationError]),
       );
-    }
+      expect((error as Error).message).toContain(".mantis-previous-*");
+      return true;
+    });
+
+    await expect(fs.readFile(path.join(outputDir, "candidate", "old.txt"), "utf8")).resolves.toBe(
+      "old candidate",
+    );
     for (const fileName of stableFiles) {
       await expect(fs.readFile(path.join(outputDir, fileName), "utf8")).resolves.toBe(
         `old ${fileName}`,
       );
     }
     expect(
-      (await fs.readdir(outputDir)).filter(
-        (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
-      ),
+      (await fs.readdir(outputDir)).filter((entry) => entry.startsWith(".mantis-staged-")),
     ).toEqual([]);
+    await expect(
+      fs.readFile(path.join(outputDir, ".mantis-previous-test", "baseline", "old.txt"), "utf8"),
+    ).resolves.toBe("old baseline");
   });
 
   it("retains the owned worktree and writes diagnostics when cleanup fails", async () => {

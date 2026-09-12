@@ -1216,7 +1216,7 @@ const waitForSpawnedProcess = async (
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
-        if (forwardedSignal && !cleanedForwardedSignalGroup) {
+        if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
@@ -1235,9 +1235,9 @@ const waitForSpawnedProcess = async (
   }
 };
 
-const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
+const getInterruptedSpawnExitCode = (res: SpawnedProcessResult, platform: NodeJS.Platform) => {
   if (res.exitSignal) {
-    return getSignalExitCode(res.exitSignal);
+    return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
@@ -1266,7 +1266,7 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   );
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
-  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res, deps.platform);
   if (interruptedExitCode !== null) {
     return interruptedExitCode;
   }
@@ -1751,7 +1751,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnExitCode(result) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnExitCode(result, deps.platform) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
@@ -1767,7 +1767,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
-    .then((code) => process.exit(code))
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
     .catch((err: unknown) => {
       console.error(err);
       process.exit(1);
