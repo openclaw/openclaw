@@ -117,6 +117,7 @@ type ChatDisplayProjectionResult = {
   turnBoundaryPending: boolean;
   assistantErrorPending: boolean;
   assistantErrorRecoveryObserved: boolean;
+  commentaryFallbacksObserved?: true;
 };
 
 const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
@@ -460,21 +461,25 @@ export function projectChatDisplayMessagesWithState(
     options?.assistantErrorPending,
   );
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
+  const sanitizedMessages = toProjectedMessages(
+    sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+      includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+    }),
+  );
+  const commentaryFallbacksObserved =
+    options?.includeCommentaryFallbacks === true &&
+    sanitizedMessages.some(
+      (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
+    );
   const filtered = filterVisibleProjectedHistoryMessages(
-    projectSessionsSendInterSessionMessages(
-      toProjectedMessages(
-        sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
-          includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
-        }),
-      ),
-    ),
+    projectSessionsSendInterSessionMessages(sanitizedMessages),
     options?.turnBoundaryPending,
   );
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   ) as Array<Record<string, unknown>>;
-  return {
+  const result: ChatDisplayProjectionResult = {
     messages: projectCurrentUserProfileAvatars(
       displayMessages,
       options?.resolveCurrentUserProfileDisplay,
@@ -483,6 +488,10 @@ export function projectChatDisplayMessagesWithState(
     assistantErrorPending: recoveredErrors.pending,
     assistantErrorRecoveryObserved: recoveredErrors.recoveryObserved,
   };
+  if (commentaryFallbacksObserved) {
+    result.commentaryFallbacksObserved = true;
+  }
+  return result;
 }
 
 export function projectChatDisplayMessages(

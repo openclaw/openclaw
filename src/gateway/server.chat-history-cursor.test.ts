@@ -597,6 +597,80 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test.each([
+    { name: "no sibling", sibling: [] },
+    {
+      name: "a tool sibling",
+      sibling: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+    },
+    {
+      name: "a final-answer sibling",
+      sibling: [
+        {
+          type: "text",
+          text: "final answer",
+          textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+        },
+      ],
+    },
+  ])("keeps heartbeat boundaries after filtered commentary with $name", async ({ sibling }) => {
+    const { context, storePath } = await createCursorSession();
+    const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
+    expect(cached.ok).toBe(true);
+    expect(cached.payload?.deltaCursor).toEqual(expect.any(String));
+    const scope = currentScope(storePath);
+    await appendTranscriptMessage(scope, {
+      eventId: "heartbeat",
+      parentId: "cached",
+      message: { role: "user", content: HEARTBEAT_PROMPT, timestamp: 2 },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "commentary",
+      parentId: "heartbeat",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "ANNOUNCE_SKIP REPLY_SKIP",
+            textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+          },
+          ...sibling,
+        ],
+        timestamp: 3,
+      },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "after-commentary",
+      parentId: "commentary",
+      message: { role: "assistant", content: "visible after commentary", timestamp: 4 },
+    });
+
+    const delta = await callChat<{
+      kind: string;
+      messages: Array<{ messageId: string; message: Record<string, unknown> }>;
+    }>(context, "chat.history", { cursor: cached.payload?.deltaCursor });
+    expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
+    // Full history currently consumes this boundary on the subsequently dropped fallback.
+    // The cursor contract preserves it on the first surviving message instead.
+    expect(
+      delta.payload?.messages.map(({ messageId, message }) => ({
+        messageId,
+        content: message.content,
+        turnBoundary: asOptionalRecord(message["__openclaw"])?.turnBoundary === true,
+      })),
+    ).toEqual([
+      ...(sibling.length > 0
+        ? [{ messageId: "commentary", content: sibling, turnBoundary: true }]
+        : []),
+      {
+        messageId: "after-commentary",
+        content: "visible after commentary",
+        turnBoundary: sibling.length === 0,
+      },
+    ]);
+  });
+
+  test.each([
     {
       name: "plain messages",
       append: async (storePath: string) => {
