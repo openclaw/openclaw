@@ -56,10 +56,6 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   return { type: "object", properties: {} };
 }
 
-function resolveBeforeToolCallRunId(tool: AnyAgentTool): string | undefined {
-  return getBeforeToolCallHookContext(tool)?.runId;
-}
-
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   const wrappedTools = tools.map((tool) => {
     if (isToolWrappedWithBeforeToolCallHook(tool)) {
@@ -71,7 +67,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   });
   const toolMap = new Map<string, { tool: AnyAgentTool; runId: string | undefined }>();
   for (const tool of wrappedTools) {
-    toolMap.set(tool.name, { tool, runId: resolveBeforeToolCallRunId(tool) });
+    toolMap.set(tool.name, { tool, runId: getBeforeToolCallHookContext(tool)?.runId });
   }
   // "cron" remains an inbound scheduler alias (owner decision, RFC 0026).
   // Capture the first advertised name without adding another listTools entry;

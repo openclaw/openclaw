@@ -23,7 +23,7 @@ import {
 } from "./helpers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
-import { buildTraceToolSummary } from "./run-attempt-result.js";
+import { buildTraceToolSummary, resolveSuccessfulToolNames } from "./run-attempt-result.js";
 import {
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
@@ -153,22 +153,6 @@ export function prepareEmbeddedRunTerminal(input: {
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
-  const successfulToolNames = [
-    ...new Set(
-      attempt.toolMetas
-        .filter((entry) => entry.isError === false)
-        .map((entry) => entry.toolName.trim())
-        .filter(Boolean),
-    ),
-  ];
-  const missingNestedToolNames = [
-    ...new Set(
-      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
-    ),
-  ]
-    .filter((name) => !successfulToolNames.includes(name))
-    .toSorted();
-  successfulToolNames.push(...missingNestedToolNames);
   Object.assign(agentMeta, {
     terminalReceipt: {
       runId: runParams.runId,
@@ -180,7 +164,7 @@ export function prepareEmbeddedRunTerminal(input: {
         model: reportedModelRef.model,
         responseModel,
       },
-      successfulToolNames,
+      successfulToolNames: resolveSuccessfulToolNames(attempt),
       sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },

@@ -16,6 +16,7 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
+import { continueAgentAfterPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -145,31 +146,11 @@ export async function runPreparedEmbeddedLoop(
     } = preparedRuntime.snapshot());
   };
   const traceAttempts: TraceAttempt[] = [];
-  const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
-    attempt.result === "rotate_profile" || attempt.result === "fallback_model";
   const resolveRuntimeFallbackReason = (): string | null => {
     const fallbackAttempt = traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
     );
     return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
-  };
-  const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
-    tokenBudget?: number | null;
-    maxOutputTokens?: number | null;
-    degradedReason?: string | null;
-  }) => {
-    return buildContextEngineRuntimeSettings({
-      contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-      provider,
-      requestedModel: preparedRuntime.requestedModelId,
-      resolvedModel: modelId,
-      selectedContextEngineId: contextEngine.info.id,
-      contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
-      promptTokenBudget: settingsParams.tokenBudget,
-      maxOutputTokens: settingsParams.maxOutputTokens,
-      fallbackReason: resolveRuntimeFallbackReason(),
-      degradedReason: settingsParams.degradedReason,
-    });
   };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -279,9 +260,6 @@ export async function runPreparedEmbeddedLoop(
         }),
       { config: params.config },
     ));
-  const ownedContextEngineLease = ownsContextEngineLogicalTurnLease
-    ? contextEngineLogicalTurnLease
-    : undefined;
   selectContextEngineForTranscriptHost({
     lease: contextEngineLogicalTurnLease,
     host: {
@@ -300,9 +278,6 @@ export async function runPreparedEmbeddedLoop(
     sessionTarget: params.sessionTarget,
   });
   const contextEngine = contextEngineLogicalTurnLease.begin().engine;
-  const resolveContextEnginePluginId = () =>
-    contextEngineLogicalTurnLease.effectiveEnginePluginId ??
-    resolveContextEngineOwnerPluginId(contextEngine);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
@@ -438,7 +413,7 @@ export async function runPreparedEmbeddedLoop(
         dispatchedAttempt.rawAttempt.providerRetryMaxRetries,
       );
       attemptCarryover.apply(dispatchedAttempt.rawAttempt);
-      const normalizedAttempt = await normalizeEmbeddedRunAttempt({
+      const normalization = {
         runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
@@ -453,7 +428,16 @@ export async function runPreparedEmbeddedLoop(
         contextRecoveryState,
         replayState: accumulatedReplayState,
         lastRetryFailoverReason,
-      });
+      };
+      const normalizedAttempt = await normalizeEmbeddedRunAttempt(normalization);
+      const continuation = continueAgentAfterPluginRuntimeRefresh(
+        normalization,
+        assertAdmittedActive,
+        turnTaintState.isTainted,
+      );
+      if (continuation) {
+        return continuation;
+      }
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
       }
@@ -499,8 +483,22 @@ export async function runPreparedEmbeddedLoop(
         compactionRuntime,
         contextEngine,
         contextRecoveryState,
-        resolveContextEnginePluginId,
-        buildRuntimeSettings: buildEmbeddedContextEngineRuntimeSettings,
+        resolveContextEnginePluginId: () =>
+          contextEngineLogicalTurnLease.effectiveEnginePluginId ??
+          resolveContextEngineOwnerPluginId(contextEngine),
+        buildRuntimeSettings: (settingsParams) =>
+          buildContextEngineRuntimeSettings({
+            contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+            provider,
+            requestedModel: preparedRuntime.requestedModelId,
+            resolvedModel: modelId,
+            selectedContextEngineId: contextEngine.info.id,
+            contextEngineSelectionSource:
+              contextEngine.info.id === "legacy" ? "default" : "configured",
+            promptTokenBudget: settingsParams.tokenBudget,
+            fallbackReason: resolveRuntimeFallbackReason(),
+            degradedReason: settingsParams.degradedReason,
+          }),
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
         usageAccumulator,
         lastRunPromptUsage,
@@ -698,7 +696,8 @@ export async function runPreparedEmbeddedLoop(
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,
         traceAttempts,
-        traceAttemptUsesFallback,
+        traceAttemptUsesFallback: (traceAttempt) =>
+          traceAttempt.result === "rotate_profile" || traceAttempt.result === "fallback_model",
         thinkLevel,
         contextRecoveryState,
       });
@@ -722,7 +721,9 @@ export async function runPreparedEmbeddedLoop(
         durable: durableCompactionAccounting,
         authority: accountingAuthority,
       },
-      ownedContextEngineLease,
+      ownedContextEngineLease: ownsContextEngineLogicalTurnLease
+        ? contextEngineLogicalTurnLease
+        : undefined,
     });
   }
 }

@@ -256,45 +256,49 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     });
   });
 
-  it("preserves signed-thinking replay ids when requested by provider policy", () => {
-    const rawId = "call_1";
-    const out = sanitizeReplayToolCallIdsForStream({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-            { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
-          ],
-        } as never,
-        {
-          role: "toolResult",
-          toolCallId: rawId,
-          toolUseId: rawId,
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        } as never,
-      ],
-      mode: "strict",
-      preserveReplaySafeThinkingToolCallIds: true,
-      repairToolUseResultPairing: true,
-    });
+  it.each([undefined, new Set(["other_tool"])])(
+    "preserves signed-thinking replay ids with current tools %s",
+    (allowedToolNames) => {
+      const rawId = "call_1";
+      const out = sanitizeReplayToolCallIdsForStream({
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+              { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
+            ],
+          } as never,
+          {
+            role: "toolResult",
+            toolCallId: rawId,
+            toolUseId: rawId,
+            toolName: "read",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+          } as never,
+        ],
+        mode: "strict",
+        allowedToolNames,
+        preserveReplaySafeThinkingToolCallIds: true,
+        repairToolUseResultPairing: true,
+      });
 
-    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
-    expect(requireAssistantMessage(out[0]).content[1]).toMatchObject({
-      type: "toolUse",
-      id: "call_1",
-      name: "read",
-    });
-    expect(toolResultSummary(out[1])).toEqual({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolUseId: "call_1",
-      toolName: "read",
-      isError: false,
-    });
-  });
+      expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+      expect(requireAssistantMessage(out[0]).content[1]).toMatchObject({
+        type: "toolUse",
+        id: "call_1",
+        name: "read",
+      });
+      expect(toolResultSummary(out[1])).toEqual({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolUseId: "call_1",
+        toolName: "read",
+        isError: false,
+      });
+    },
+  );
 
   it("synthesizes missing tool results after strict id sanitization", () => {
     const rawId = "call_function_av7cbkigmk7x1";
@@ -405,6 +409,29 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it.each(["openai-responses", "anthropic-messages", "google-generative-ai"])(
+    "preserves completed removed-tool history without advertising it to %s",
+    (api) => {
+      const assistant = {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "old_call", name: "removed_plugin", arguments: {} }],
+      };
+      const result = textToolResult("old_call", "removed_plugin", "completed-action-id", {
+        isError: false,
+      });
+      const tools = [{ name: "read", parameters: { type: "object", properties: {} } }];
+      const baseFn = vi.fn((_model: unknown, _context: unknown) =>
+        createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+      );
+      const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+      void wrapped({ api } as never, { messages: [assistant, result], tools } as never);
+      const context = baseFn.mock.calls[0]?.[1] as { messages: AgentMessage[]; tools: unknown };
+      expect(context.messages).toEqual([assistant, result]);
+      expect(context.tools).toBe(tools);
+    },
+  );
+
   it("preserves valid Bedrock tool calls while merging appended user turns", () => {
     const assistant = {
       role: "assistant",
