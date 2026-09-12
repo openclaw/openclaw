@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import { withCommandPluginMetadata } from "../commands/config-validation.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -24,6 +25,7 @@ import {
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
 import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
@@ -708,8 +710,12 @@ describe("hosted channel post-write hooks", () => {
     const resolveMetadata = vi
       .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
       .mockImplementation(({ config, workspaceDir }) => fixture.readMetadata(config, workspaceDir));
-    const readAccount = (config: OpenClawConfig, accountId = "work-phone") =>
-      resolveChannelAccountEntry(config.channels?.signal?.accounts, accountId, "signal");
+    const readAccount: ChannelPlugin["config"]["resolveAccount"] = (config, accountId) =>
+      resolveChannelAccountEntry(
+        config.channels?.signal?.accounts,
+        normalizeAccountId(accountId),
+        "signal",
+      );
     bindPluginMetadataSnapshotCache(metadataSnapshot, bootCache);
     const pluginRegistry = createEmptyPluginRegistry();
     const bootInstance = new PluginInstance("gateway-boot");
@@ -745,7 +751,10 @@ describe("hosted channel post-write hooks", () => {
       accountId: "work-phone",
       run: async ({ cfg }: { cfg: OpenClawConfig }) => {
         expect(hasPluginLifecycleLease()).toBe(false);
-        expect(readAccount(cfg)).toEqual({ account: "+12025550123", name: "Work calls" });
+        expect(readAccount(cfg, "work-phone")).toEqual({
+          account: "+12025550123",
+          name: "Work calls",
+        });
         events.push("after-write");
         hookStarted.resolve();
         await finishHook.promise;
@@ -776,7 +785,7 @@ describe("hosted channel post-write hooks", () => {
       ) => {
         recordPhase("setup");
         await withCommandPluginMetadata({ config }, () => {
-          expect(readAccount(config)).toBeUndefined();
+          expect(readAccount(config, "work-phone")).toBeUndefined();
         });
         await withPluginLifecycleLease({ env: fixture.env }, async () => {
           fixture.installPolicy();

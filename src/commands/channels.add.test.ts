@@ -1938,8 +1938,12 @@ describe("channelsAddCommand", () => {
     bindPluginMetadataSnapshotCache(bootSnapshot, bootCache);
     const bootInstance = new PluginInstance("gateway-boot");
     bootCache.instances.add(bootInstance);
-    const readAccount = (cfg: OpenClawConfig, accountId = "work-phone") =>
-      resolveChannelAccountEntry(cfg.channels?.signal?.accounts, accountId, "signal");
+    const readAccount: ChannelPlugin["config"]["resolveAccount"] = (cfg, accountId) =>
+      resolveChannelAccountEntry(
+        cfg.channels?.signal?.accounts,
+        normalizeAccountId(accountId),
+        "signal",
+      );
     const bootPlugin = createChannelTestPluginBase({
       id: "signal",
       config: { resolveAccount: bootInstance.wrap(readAccount) },
@@ -1990,7 +1994,7 @@ describe("channelsAddCommand", () => {
       },
     });
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementationOnce(async ({ cfg }) => {
-      expect(readAccount(cfg)).toBeUndefined();
+      expect(readAccount(cfg, "work-phone")).toBeUndefined();
       await withPluginLifecycleLease({ env: fixture.env }, async () => {
         fixture.installPolicy();
         events.push("installed");
