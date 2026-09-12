@@ -162,6 +162,10 @@ Start agent work in the background: hook-dispatched turns for external content, 
     Warmed task and flow SQL queries run in the worker. A result describes its
     query snapshot and may be superseded by a later mutation.
 
+    The shared worker uses the canonical database opener and preserves classified
+    schema and ownership errors. Closing the shared database waits for in-flight
+    worker results and native cleanup before releasing its connection ownership.
+
     Lists sort newest first. Equal task timestamps sort by task ID descending;
     equal flow timestamps sort by flow ID ascending. Run-ID lookup retains its
     runtime preference and oldest-first selection, then uses task ID ascending

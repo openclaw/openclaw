@@ -19,7 +19,10 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  resolveStateLifecycleRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -70,6 +73,7 @@ export function openUnpublishedStateDatabase(params: {
   recordOpenFailure: (pathname: string, error: Error) => void;
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
+  const runtimeDirectory = resolveStateLifecycleRuntimeDirectory();
   ensureOpenClawStatePermissions(params.pathname, params.env);
   const db = openTrackedStateDatabase(params.pathname);
   let walMaintenance: SqliteWalMaintenance | undefined;
@@ -95,7 +99,11 @@ export function openUnpublishedStateDatabase(params: {
           databasePath: params.pathname,
           runMaintenance: (operation) =>
             runWithSqliteCoordinator(
-              acquireStateDatabaseCoordinator({ databasePath: params.pathname, busyTimeoutMs: 0 }),
+              acquireStateDatabaseCoordinator({
+                databasePath: params.pathname,
+                runtimeDirectory,
+                busyTimeoutMs: 0,
+              }),
               "shared-state WAL maintenance",
               operation,
             ),

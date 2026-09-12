@@ -69,8 +69,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
             readDatabasePathIdentitySync(candidate.identity.canonicalPath).key === identity.key
           );
         } catch {
-          // Unpublished prospective paths have no admitted worker. Keep their
-          // records without making unrelated identity lookup failures contagious.
+          // Creation can still be opening in a worker. Keep its custody until
+          // publication or drainage without spreading unrelated lookup failures.
           return false;
         }
       });

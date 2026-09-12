@@ -1,21 +1,160 @@
+import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
+import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
   resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+  tryCreateGatewaySchemaFenceDelegate,
+  withStateDatabaseCoordinatorRuntimeDirectory,
   withStateSchemaFence,
 } from "./state-database-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("state database coordinator", () => {
+  it("retains final-reference cleanup without treating its rolled-back handle as ownership", () => {
+    const root = tempDirs.make("openclaw-coordinator-reference-retry-");
+    const params = { databasePath: path.join(root, "state.sqlite"), runtimeDirectory: root };
+    const { result: first, database } = captureCoordinatorDatabase(() =>
+      acquireGatewayLifecycleCoordinator(params),
+    );
+    const last = acquireGatewayLifecycleCoordinator(params);
+    const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+      throw new Error("Fixture native close remains open");
+    });
+    try {
+      first.release();
+      expect(first.closed).toBe(true);
+      expect(close).not.toHaveBeenCalled();
+      expect(() => last.release()).toThrow("failed to release gateway-lifecycle coordinator");
+      expect(last.closed).toBe(false);
+      expect(database.isOpen).toBe(true);
+      expect(database.isTransaction).toBe(false);
+      expect(() => acquireGatewayLifecycleCoordinator(params)).toThrow("cleanup is pending");
+      expect(
+        tryCreateGatewaySchemaFenceDelegate({ ...params, actorId: "pending" }),
+      ).toBeUndefined();
+      first.release();
+      expect(close).toHaveBeenCalledTimes(1);
+      last.release();
+      expect(last.closed).toBe(true);
+      expect(close).toHaveBeenCalledTimes(2);
+      acquireGatewayLifecycleCoordinator(params).release();
+    } finally {
+      close.mockRestore();
+      first.release();
+      last.release();
+    }
+  });
+
+  it("retains a Gateway worker fence until worker exit while sealing shutdown admission", async () => {
+    const root = tempDirs.make("openclaw-gateway-worker-fence-");
+    const params = {
+      databasePath: path.join(root, "state", "openclaw.sqlite"),
+      runtimeDirectory: path.join(root, "runtime"),
+      actorId: "shared-state-test",
+    };
+    // An actor can open before Gateway startup without opening a coordinator on main.
+    expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+    expect(fsSync.existsSync(params.runtimeDirectory)).toBe(false);
+    expect(
+      withStateSchemaFence(params, () => tryCreateGatewaySchemaFenceDelegate(params)),
+    ).toBeUndefined();
+
+    const gateway = acquireGatewayLifecycleCoordinator(params);
+    const nestedGateway = acquireGatewayLifecycleCoordinator(params);
+    const delegation = tryCreateGatewaySchemaFenceDelegate(params);
+    expect(delegation).toBeDefined();
+    if (!delegation) {
+      nestedGateway.release();
+      gateway.release();
+      throw new Error("Gateway did not retain its worker fence");
+    }
+    const worker = new Worker(
+      new URL("./state-database-coordinator.worker.test-support.mjs", import.meta.url),
+      {
+        execArgv: [],
+        workerData: {
+          params,
+          port: delegation.port,
+          sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
+          coordinatorUrl: new URL("./state-database-coordinator.ts", import.meta.url).href,
+        },
+        transferList: [delegation.port],
+      },
+    );
+    const ask = async (message: string) => {
+      const response = once(worker, "message");
+      worker.postMessage(message, []);
+      return (await response)[0];
+    };
+    try {
+      expect(await once(worker, "message")).toEqual(["ready"]);
+      expect(await ask("plain")).toEqual({ error: "StateSchemaMutationConflictError" });
+      expect(await ask("delegated")).toEqual({ result: "schema admitted" });
+
+      gateway.release();
+      expect(await ask("delegated")).toEqual({ result: "schema admitted" });
+      nestedGateway.release();
+      expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+      expect(await ask("delegated")).toEqual({ error: "StateSchemaMutationConflictError" });
+      expect(tryAcquireExclusiveSqliteCoordinator(gateway.path)).toBeNull();
+
+      const exited = once(worker, "exit");
+      worker.postMessage("close", []);
+      expect(await exited).toEqual([0]);
+      // Port closure alone does not release broker-owned custody.
+      expect(tryAcquireExclusiveSqliteCoordinator(gateway.path)).toBeNull();
+      delegation.release();
+      const next = tryAcquireExclusiveSqliteCoordinator(gateway.path);
+      expect(next).not.toBeNull();
+      next?.release();
+    } finally {
+      await worker.terminate();
+      delegation.release();
+      nestedGateway.release();
+      gateway.release();
+    }
+  });
+
+  it("uses the captured coordinator runtime directory across worker preparation", async () => {
+    const root = tempDirs.make("openclaw-coordinator-runtime-scope-");
+    const original = resolveStateLifecycleRuntimeDirectory();
+    await withStateDatabaseCoordinatorRuntimeDirectory(root, async () => {
+      await Promise.resolve();
+      const params = {
+        databasePath: path.join(root, "state", "openclaw.sqlite"),
+      };
+      const { result: coordinator, database } = captureCoordinatorDatabase(() =>
+        acquireStateDatabaseCoordinator(params),
+      );
+      try {
+        expect(coordinator.path).toBe(
+          resolveStateDatabaseCoordinatorPath({
+            ...params,
+            runtimeDirectory: root,
+            uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+          }),
+        );
+      } finally {
+        coordinator.release();
+        expect(database.isOpen).toBe(false);
+      }
+    });
+    expect(resolveStateLifecycleRuntimeDirectory()).toBe(original);
+  });
+
   it.each([
     [false, false],
     [false, true],

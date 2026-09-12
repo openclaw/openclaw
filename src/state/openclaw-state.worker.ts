@@ -1,5 +1,10 @@
+import {
+  readStableSqliteFileGeneration,
+  sameSqliteFileGeneration,
+} from "../infra/sqlite-file-generation.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { mapTaskFlowView } from "../tasks/task-domain-views.js";
 import { normalizeRestoredFlowRecord } from "../tasks/task-flow-registry.records.js";
 import {
@@ -16,22 +21,50 @@ import {
   readTaskViewRecordInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
-import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  clearOpenClawStateDatabaseOpenFailure,
+} from "./openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import type {
+  OpenClawStateWorkerOperations,
+  OpenClawStateWorkerInspectionOperations,
+} from "./openclaw-state-worker-contract.js";
 
-/** Schema admission remains with the canonical state owner before this existing-only open. */
+export function createSqliteWorkerBackend(
+  _input: undefined,
+  context: { databasePath: string },
+): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+  openOpenClawStateDatabase({
+    path: context.databasePath,
+    env: getSqliteWorkerStateContext().environment,
+  });
+  return openExistingSqliteWorkerBackend(undefined, context);
+}
+
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations> {
-  const connection = openOpenClawStateReadConnection(context.databasePath, context.databasePath);
-  const { db } = connection.database;
-  const listFlows = (ownerKey: string) =>
+): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+  const open = () =>
+    openOpenClawStateDatabase({
+      path: context.databasePath,
+      env: getSqliteWorkerStateContext().environment,
+    });
+  const listFlows = (db: ReturnType<typeof open>["db"], ownerKey: string) =>
     listTaskFlowRecordsForOwnerReadInDatabase(db, ownerKey).map(normalizeRestoredFlowRecord);
   const ownedFlow = (flow: ReturnType<typeof readTaskFlowRecord>, ownerKey: string) =>
     flow?.ownerKey.trim() === ownerKey ? normalizeRestoredFlowRecord(flow) : undefined;
   return {
     execute(command) {
+      if (command.type === "database.generationMatches") {
+        // Unavailable inspection retains the known failure; only a stable mismatch expires it.
+        return sameSqliteFileGeneration(
+          command.input.generation,
+          readStableSqliteFileGeneration(context.databasePath),
+        );
+      }
+      const { db } = open();
       return runSqliteDeferredTransactionSync(db, () => {
         switch (command.type) {
           case "tasks.get":
@@ -47,7 +80,7 @@ export function openExistingSqliteWorkerBackend(
             };
           }
           case "flows.list":
-            return listFlows(command.input.ownerKey);
+            return listFlows(db, command.input.ownerKey);
           case "flows.views":
             return listTaskFlowViewRecordsForOwnerInDatabase(db, command.input.ownerKey)
               .map(normalizeRestoredFlowRecord)
@@ -68,7 +101,7 @@ export function openExistingSqliteWorkerBackend(
               !flow &&
               (lookup === "latest" || (lookup === "resolve" && token?.trim() === ownerKey))
             ) {
-              const flows = listFlows(ownerKey);
+              const flows = listFlows(db, ownerKey);
               flow =
                 lookup === "resolve"
                   ? (flows.find((candidate) => !isTerminalTaskFlow(candidate)) ?? flows[0])
@@ -87,7 +120,8 @@ export function openExistingSqliteWorkerBackend(
       });
     },
     close() {
-      connection.close();
+      closeOpenClawStateDatabaseByPath(context.databasePath);
+      clearOpenClawStateDatabaseOpenFailure(context.databasePath);
     },
   };
 }

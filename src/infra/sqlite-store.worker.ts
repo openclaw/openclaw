@@ -2,6 +2,7 @@ import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerBackend,
@@ -12,10 +13,18 @@ import {
 } from "./sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import {
+  runWithSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
+import {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import {
+  attachGatewaySchemaFenceDelegate,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "./state-database-coordinator.js";
 
 const port = parentPort;
 if (!port) {
@@ -31,7 +40,26 @@ type StagedInput = {
   command: unknown;
 };
 let pendingInput: StagedInput | undefined;
+const actorPaths = new Map<number, string>();
+const stateContexts = new Map<number, SqliteWorkerStateContext>();
+const gatewayFences = new Map<
+  number,
+  Awaited<ReturnType<typeof attachGatewaySchemaFenceDelegate>>
+>();
 let sourceLoaderRegistered = false;
+
+function runInActorContext<T>(actor: number, operation: () => T): T {
+  const context = stateContexts.get(actor);
+  if (!context) {
+    return operation();
+  }
+  return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
+    runWithSqliteWorkerStateContext(context, () => {
+      const delegate = gatewayFences.get(actor);
+      return delegate ? delegate.run(operation) : operation();
+    }),
+  );
+}
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
   let reply: SqliteWorkerReply;
@@ -41,13 +69,40 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let inputNext = false;
   try {
     let value: unknown;
+    if (request.type !== "result-next" && request.type !== "execute-frame") {
+      if (request.stateContext) {
+        stateContexts.set(request.actor, request.stateContext);
+      }
+      if (request.gatewaySchemaFence) {
+        retire = true;
+        if (gatewayFences.has(request.actor) || !request.stateContext) {
+          throw new Error("Gateway schema delegate does not match an admitting shared-state actor");
+        }
+        const databasePath =
+          request.type === "open" ? request.databasePath : actorPaths.get(request.actor);
+        if (!databasePath) {
+          throw new Error("Gateway schema delegate requires its open actor");
+        }
+        gatewayFences.set(
+          request.actor,
+          await attachGatewaySchemaFenceDelegate(request.gatewaySchemaFence, {
+            databasePath,
+            runtimeDirectory: request.stateContext.coordinatorRuntime.directory,
+            actorId: String(request.actor),
+          }),
+        );
+        retire = false;
+      }
+    }
     const executeCommand = (command: unknown) => {
       const backend = actors.get(request.actor);
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
       }
-      // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
-      value = backend.execute(command as SqliteWorkerCommand<SqliteWorkerOperations>);
+      value = runInActorContext(request.actor, () => ({
+        // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
+        result: backend.execute(command as SqliteWorkerCommand<SqliteWorkerOperations>),
+      })).result;
       executed = true;
       completeResult = true;
       if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
@@ -142,13 +197,16 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (!isRecord(module) || typeof module[factoryName] !== "function") {
         throw new Error(`SQLite worker module must export ${factoryName}`);
       }
+      const factory = module[factoryName];
       // Module loading can yield before the factory opens native state.
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      const backend: unknown = await module[factoryName](deserialize(request.input), {
-        databasePath: request.databasePath,
-      });
+      const backend: unknown = await runInActorContext(request.actor, () =>
+        factory(deserialize(request.input), {
+          databasePath: request.databasePath,
+        }),
+      );
       if (
         !isRecord(backend) ||
         typeof backend.execute !== "function" ||
@@ -158,13 +216,18 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       // SAFETY: The validated backend and its typed client own the private command contract.
       actors.set(request.actor, backend as SqliteWorkerBackend<SqliteWorkerOperations>);
+      actorPaths.set(request.actor, request.databasePath);
     } else if (request.type === "close") {
       const backend = actors.get(request.actor);
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
       }
-      await backend.close();
+      await runInActorContext(request.actor, () => backend.close());
       actors.delete(request.actor);
+      actorPaths.delete(request.actor);
+      stateContexts.delete(request.actor);
+      gatewayFences.get(request.actor)?.close();
+      gatewayFences.delete(request.actor);
     } else {
       executeCommand(deserialize(request.input));
     }
@@ -193,6 +256,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     pendingInput = undefined;
     const failure = error instanceof Error ? error : new Error(String(error));
     const code = executed ? "outcome-unknown" : "code" in failure ? failure.code : undefined;
+    const errorContext =
+      request.stateContext ??
+      (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
+    const sharedState =
+      errorContext && !executed ? encodeOpenClawStateWorkerError(failure) : undefined;
     reply = {
       id: request.id,
       ok: false,
@@ -201,6 +269,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         name: executed ? "SqliteWorkerError" : failure.name,
         message: failure.message,
         ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
+        ...(sharedState ? { sharedState } : {}),
       },
     };
   }
