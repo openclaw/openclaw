@@ -2,6 +2,7 @@
 // auto-enable behavior, model defaults, and recovery diagnostics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfigInput } from "../config/types.models.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
@@ -365,6 +366,50 @@ describe("gateway startup config validation", () => {
     expectPluginAutoEnableFor(sourceConfig);
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it.each<{ name: string; overlay: ModelProviderConfigInput }>([
+    { name: "API key", overlay: { apiKey: "test-key" } },
+    { name: "timeout", overlay: { timeoutSeconds: 600 } },
+    { name: "headers", overlay: { headers: { "X-Test": "test-header" } } },
+    { name: "empty models", overlay: { models: [] } },
+  ])("preserves materialized $name provider overlays after auto-enable", async ({ overlay }) => {
+    // Snapshot source retains authored omissions; its runtime pair has already passed validation.
+    const sourceConfig = {
+      gateway: { mode: "local" },
+      agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+      models: { providers: { anthropic: overlay } },
+      channels: { telegram: { botToken: "test-token" } },
+    } as OpenClawConfig;
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      models: { providers: { anthropic: { baseUrl: "", models: [], ...overlay } } },
+      channels: { telegram: { ...sourceConfig.channels?.telegram, dmPolicy: "pairing" } },
+      messages: { ackReactionScope: "group-mentions" },
+    };
+    const snapshot = buildRuntimeSnapshot(sourceConfig, runtimeConfig);
+    mockStartupSnapshot(snapshot);
+    mockRuntimeAutoEnable({
+      ...sourceConfig,
+      channels: { telegram: { ...sourceConfig.channels?.telegram, enabled: true } },
+      plugins: { entries: { anthropic: { enabled: true } } },
+    });
+
+    const result = await loadTestStartup({ minimalTestGateway: false });
+
+    expect(result.snapshot.runtimeConfig).toEqual({
+      ...runtimeConfig,
+      channels: { telegram: { ...runtimeConfig.channels?.telegram, enabled: true } },
+      plugins: { entries: { anthropic: { enabled: true } } },
+    });
+    expect(result.snapshot.config).toBe(result.snapshot.runtimeConfig);
+    expect(result.snapshot.sourceConfig).toBe(sourceConfig);
+    expect(result.snapshot.sourceConfig.models?.providers?.anthropic).toEqual(overlay);
+    expectPluginAutoEnableFor(sourceConfig);
+    expect(runtimeConfig.channels?.telegram?.enabled).toBeUndefined();
+    expect(result.wroteConfig).toBe(false);
+    expect(configIo.writeConfigFile).not.toHaveBeenCalled();
+    expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("reuses a CLI preflight snapshot without rereading config", async () => {

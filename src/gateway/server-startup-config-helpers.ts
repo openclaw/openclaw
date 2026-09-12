@@ -14,6 +14,7 @@ import {
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "../config/legacy.default-agent-roles.js";
+import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -138,9 +139,14 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
   );
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(configSnapshot.sourceConfig);
+  // Apply only the authored auto-enable delta so materialized runtime defaults survive.
+  const autoEnabledRuntimeConfig = applyMergePatch(
+    configSnapshot.runtimeConfig,
+    createMergePatch(configSnapshot.sourceConfig, autoEnable.config),
+  ) as OpenClawConfig; // SAFETY: Only typed auto-enable settings are patched onto validated config.
   const runtimeConfig = legacyDefaultAgentId
-    ? materializeLegacyDefaultAgentRoles(autoEnable.config, legacyDefaultAgentId).config
-    : autoEnable.config;
+    ? materializeLegacyDefaultAgentRoles(autoEnabledRuntimeConfig, legacyDefaultAgentId).config
+    : autoEnabledRuntimeConfig;
   retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
   return {
     snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
