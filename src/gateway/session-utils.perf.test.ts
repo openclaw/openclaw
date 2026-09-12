@@ -40,11 +40,63 @@ import * as rowProjection from "./session-utils-row.js";
  */
 describe("session list resolver cache", () => {
   test.each([
-    { rowWorkMs: 0, shouldYield: false },
-    { rowWorkMs: 20, shouldYield: true },
+    {
+      name: "cheap rows",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 100,
+      shouldYield: false,
+    },
+    {
+      name: "expensive rows",
+      rowWorkMs: 20,
+      storeWorkMs: 0,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 100,
+      shouldYield: true,
+    },
+    {
+      name: "one row after expensive preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 1,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "an empty page after expensive preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 0,
+      preparationWorkMs: 1,
+      keepRows: false,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "one row after combined loading and preparation",
+      rowWorkMs: 0,
+      storeWorkMs: 8,
+      preparationWorkMs: 0.25,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
+    {
+      name: "one row after expensive store loading",
+      rowWorkMs: 0,
+      storeWorkMs: 20,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
   ])(
-    "yields for row work rather than row count ($rowWorkMs ms)",
-    async ({ rowWorkMs, shouldYield }) => {
+    "shares the event loop for $name",
+    async ({ rowWorkMs, storeWorkMs, preparationWorkMs, keepRows, limit, shouldYield }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -57,7 +109,8 @@ describe("session list resolver cache", () => {
             { sessionId: `budget-${index}`, updatedAt: index + 1 },
           ]),
         );
-        let workMs = 0;
+        let workMs = storeWorkMs;
+        let controlBeforePreparation: boolean | undefined;
         const buildRow = rowProjection.buildGatewaySessionRow;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
         const rows = vi
@@ -77,12 +130,21 @@ describe("session list resolver cache", () => {
         try {
           const result = await listSessionFixture({
             cfg,
+            workStartedAt: 0,
             storePath: path.join(stateDir, "sessions.json"),
             store,
-            opts: {},
+            entryFilter: () => {
+              controlBeforePreparation ??= controlRan;
+              workMs += preparationWorkMs;
+              return keepRows;
+            },
+            opts: { limit },
           });
-          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(result.sessions.map((row) => row.key)).toEqual(
+            keepRows ? Object.keys(store).toReversed().slice(0, limit) : [],
+          );
           expect(controlRan).toBe(shouldYield);
+          expect(controlBeforePreparation).toBe(false);
         } finally {
           rows.mockRestore();
           clock.mockRestore();
@@ -421,11 +483,11 @@ describe("session list resolver cache", () => {
         expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(scenario.enriched);
         const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
         expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "title 0",
+          derivedTitle: "Title 0",
           lastMessagePreview: "last 0",
         });
         expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
-          derivedTitle: `title ${scenario.sharedTail}`,
+          derivedTitle: `Title ${scenario.sharedTail}`,
           lastMessagePreview: `last ${scenario.sharedTail}`,
         });
 

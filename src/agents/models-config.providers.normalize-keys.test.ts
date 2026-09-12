@@ -7,12 +7,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
+  materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-} from "./models-config.providers.normalize.js";
+} from "./models-config.providers.catalog.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
@@ -117,63 +120,156 @@ describe("normalizeProviders", () => {
     }
   });
 
-  it("normalizes retired Google Gemini model ids before emitting provider config", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-        google: {
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-          api: "google-generative-ai",
-          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
-          models: [
-            createModel({
-              id: "gemini-3-pro-preview",
-              name: "Gemini 3 Pro",
-            }),
-          ],
-        },
-        "google-gemini-cli": {
-          baseUrl: "openclaw://google-gemini-cli",
-          models: [
-            createModel({
-              id: "gemini-3-pro-preview",
-              name: "Gemini CLI 3 Pro",
-            }),
-          ],
-        },
-        openrouter: {
-          baseUrl: "https://openrouter.ai/api/v1",
-          api: "openai-completions",
-          apiKey: "OPENROUTER_API_KEY", // pragma: allowlist secret
-          models: [
-            createModel({
-              id: "google/gemini-3-pro-preview",
-              name: "Gemini 3 Pro via OpenRouter",
-            }),
-          ],
-        },
-      };
+  it.each([
+    ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    ["google-gemini-cli", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    ["openrouter", "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["custom", "proxy/google/gemini-3-pro-preview", "proxy/google/gemini-3.1-pro-preview"],
+    ["together", "moonshotai/Kimi-K2.5", "moonshotai/Kimi-K2.6"],
+  ])("publishes the named %s retirement %s as %s", (provider, id, expected) => {
+    const providers = {
+      [provider]: { baseUrl: "https://models.example/v1", models: [createModel({ id })] },
+    };
+    const normalized = normalizeProviderCatalogModelsForConfig(providers);
+    expect(normalized?.[provider]?.models).toEqual([createModel({ id: expected })]);
+  });
 
-      const normalized = normalizeProviders({ providers, agentDir });
+  const manifestPlugins = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "catalog-identity-fixture",
+        providers: ["custom"],
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              aliases: {
+                latest: "middle",
+                middle: "final",
+                "alias-a": "target",
+                "alias-b": "target",
+              },
+            },
+          },
+        },
+      },
+    ],
+  });
+  const exactSparseRow = { id: "target", name: "Exact" };
+  const populatedAlias = createModel({ id: "alias-a", input: ["text", "image"] });
 
-      expect(normalized?.google?.models?.map((model) => model.id)).toEqual([
-        "gemini-3.1-pro-preview",
-      ]);
-      expect(normalized?.["google-gemini-cli"]?.models?.map((model) => model.id)).toEqual([
-        "gemini-3.1-pro-preview",
-      ]);
-      expect(normalized?.openrouter?.models?.map((model) => model.id)).toEqual([
-        "google/gemini-3.1-pro-preview",
-      ]);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+  it.each([
+    {
+      name: "one alias step",
+      models: [{ id: "latest", name: "Authored" }],
+      expected: [{ id: "middle", name: "Authored" }],
+    },
+    {
+      name: "alias-chain membership without raw lookup keys",
+      models: ["latest", "middle", "final"].map((id) => ({ id, name: id })),
+      expected: [
+        { id: "middle", name: "middle" },
+        { id: "final", name: "final" },
+      ],
+    },
+    {
+      name: "reversed alias-chain membership",
+      models: ["final", "middle", "latest"].map((id) => ({ id, name: id })),
+      expected: [
+        { id: "final", name: "final" },
+        { id: "middle", name: "middle" },
+      ],
+    },
+    {
+      name: "exact omissions before an alias",
+      models: [exactSparseRow, populatedAlias],
+      expected: [exactSparseRow],
+    },
+    {
+      name: "exact omissions after an alias",
+      models: [populatedAlias, exactSparseRow],
+      expected: [exactSparseRow],
+    },
+    {
+      name: "first-equivalent omissions without an exact row",
+      models: [{ id: "alias-b", name: "First" }, populatedAlias],
+      expected: [{ id: "target", name: "First" }],
+    },
+    {
+      name: "same-spelling partial costs and input omissions",
+      models: [
+        { id: "latest", name: "First", cost: { input: 7 } },
+        { id: "latest", name: "Second", input: ["image"], cost: { input: 9, output: 8 } },
+        { id: "latest", name: "Third", input: ["text"], cost: { cacheRead: 0.5 } },
+      ],
+      expected: [
+        {
+          id: "middle",
+          name: "First",
+          input: ["image"],
+          cost: { input: 7, output: 8, cacheRead: 0.5 },
+        },
+      ],
+    },
+    {
+      name: "invalid row positions between normalized members",
+      models: [
+        { id: "latest", name: "Alias" },
+        { id: "", name: "Blank" },
+        { id: " \t ", name: "Whitespace" },
+        { id: 23, name: "Non-string" },
+        { id: "middle", name: "Exact" },
+      ],
+      expected: [
+        { id: "middle", name: "Exact" },
+        { id: "", name: "Blank" },
+        { id: " \t ", name: "Whitespace" },
+        { id: 23, name: "Non-string" },
+        { id: "final", name: "Exact" },
+      ],
+    },
+  ])("materializes $name before discovery", ({ models, expected }) => {
+    // Raw authored rows intentionally omit fields that discovery will supply.
+    const providers = {
+      custom: { baseUrl: "https://models.example/v1", models },
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+    const original = structuredClone(providers);
+    const materialized = materializeConfiguredProviderCatalogModels(providers, { manifestPlugins });
+    expect(materialized?.custom?.models).toStrictEqual(expected);
+    expect(providers).toStrictEqual(original);
+  });
+
+  it("preserves emitted aliases, case, whitespace, and self-provider namespaces during publication", () => {
+    const ids: Array<[string, string[]]> = [
+      ["custom", ["latest", "middle", "Model", "model", "custom/Model", " model "]],
+      ["anthropic", ["sonnet", "anthropic/sonnet"]],
+      ["google", [" unrelated-model "]],
+      ["huggingface", ["huggingface/vendor/model"]],
+      ["openrouter", ["auto"]],
+      ["nvidia", ["Model"]],
+      ["together", [" unrelated-model "]],
+    ];
+    const providers = Object.fromEntries(
+      ids.map(([provider, models]) => [
+        provider,
+        { baseUrl: "https://models.example/v1", models: models.map((id) => createModel({ id })) },
+      ]),
+    );
+    const published = withPluginMetadataSnapshotScope(manifestPlugins, () =>
+      normalizeProviderCatalogModelsForConfig(providers),
+    );
+    expect(published).toBe(providers);
+    expect(
+      Object.entries(published ?? {}).map(([provider, value]) => [
+        provider,
+        value.models.map((model) => model.id),
+      ]),
+    ).toEqual(ids);
   });
 
   it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
-      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      const providers = {
         google: {
           baseUrl: "https://generativelanguage.googleapis.com/v1beta",
           api: "google-generative-ai",
@@ -195,13 +291,15 @@ describe("normalizeProviders", () => {
           ],
         },
         custom: { baseUrl: "https://models.example/v1", models: [] },
-      };
+      } satisfies NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
       const normalized = normalizeProviders({ providers, agentDir, env: {} });
+      expect(normalized?.google?.models).toBe(providers.google.models);
+      const published = normalizeProviderCatalogModelsForConfig(normalized);
 
-      expect(normalized?.google?.models).toHaveLength(1);
+      expect(published?.google?.models).toHaveLength(1);
       // The first normalized row wins so explicit config details are not replaced by discovery.
-      const model = normalized?.google?.models?.[0];
+      const model = published?.google?.models?.[0];
       expect(model?.id).toBe("gemini-3.1-pro-preview");
       expect(model?.name).toBe("Pinned Gemini");
       expect(model?.contextWindow).toBe(12345);
@@ -209,8 +307,7 @@ describe("normalizeProviders", () => {
       expect(model?.reasoning).toBe(false);
       expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
 
-      const published = normalizeProviderCatalogModelsForConfig(normalized);
-      expect(published).toBe(normalized);
+      expect(normalizeProviderCatalogModelsForConfig(published)).toBe(published);
       const secretRefManagedProviders = new Set<string>();
       const repeated = normalizeProviders({
         providers: published,

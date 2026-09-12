@@ -64,7 +64,6 @@ const LockPayloadSchema = z.object({
 type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
-  configPath: string;
   stateDir: string;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
@@ -603,7 +602,6 @@ async function acquireLockFile(
         });
         return {
           lockPath,
-          configPath,
           release: async () => {
             let releaseError: unknown;
             try {

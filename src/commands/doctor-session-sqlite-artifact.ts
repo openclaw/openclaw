@@ -67,6 +67,19 @@ export function isPendingMigrationArtifactClaim(
   );
 }
 
+function formatMigrationArtifactRefusal(filePath: string, stat: fs.BigIntStats): string {
+  if (!stat.isFile() || stat.nlink <= 1n) {
+    return "artifact is not an unaliased regular file";
+  }
+  return (
+    `Artifact ${filePath} is not an unaliased regular file ` +
+    `(nlink=${stat.nlink}, dev=${stat.dev}, inode=${stat.ino}): ` +
+    "another hard link references this inode; the migration refuses aliased inputs so a snapshot copy cannot be rewritten in place. " +
+    "Stop the Gateway and make a verified backup, then follow the recovery guidance: " +
+    "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#hard-linked-legacy-artifacts"
+  );
+}
+
 /** Descriptor reads are bounded; identity and content are checked before and after hashing. */
 export function readMigrationArtifactIdentity(
   filePath: string,
@@ -75,7 +88,7 @@ export function readMigrationArtifactIdentity(
 ): MigrationArtifactIdentity {
   const before = fs.lstatSync(filePath, { bigint: true });
   if (!before.isFile() || before.nlink !== expectedLinks) {
-    throw new Error("artifact is not an unaliased regular file");
+    throw new Error(formatMigrationArtifactRefusal(filePath, before));
   }
   if (
     importedFingerprint &&

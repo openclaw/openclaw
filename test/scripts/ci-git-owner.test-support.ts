@@ -262,6 +262,7 @@ export async function runCiGitStep(options: {
         env.GITHUB_SHA = candidate;
         // Never let a caller's credential reach fixture command reports.
         env.OPENCLAW_DOCS_SYNC_TOKEN = "fixture-docs-token";
+        env.OPENCLAW_DOCS_MDX_CACHE = path.join(root, "docs-mdx-cache.json");
         mkdirSync(path.join(workspace, "clawhub-source/.git"), { recursive: true });
         const publish = path.join(workspace, "publish");
         if (options.publishPath === "file") {
@@ -570,8 +571,6 @@ ${run}`;
         ),
         rebases: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "rebase"),
         pushes: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "push"),
-        go: report.commands.filter(({ tool }) => tool === "go"),
-        crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
         ),

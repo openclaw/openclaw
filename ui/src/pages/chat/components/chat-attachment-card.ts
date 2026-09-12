@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -20,6 +20,8 @@ export type AttachmentCardHeaderOptions = {
   mimeType?: string;
   sizeBytes?: number;
   downloadHref?: string;
+  downloadPending?: boolean;
+  loading?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
@@ -33,6 +35,18 @@ export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions
     @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
   >
     ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
+  </div>`;
+}
+
+export function renderAttachmentPreviewSkeleton() {
+  return html`<div
+    class="sidebar-attachment-preview__loading"
+    role="status"
+    aria-label=${t("common.loading")}
+  >
+    <div class="skeleton skeleton-line" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -79,16 +93,19 @@ export function renderAttachmentCardIcon(options: {
   mimeType?: string;
   visualMode?: AttachmentFileVisualMode;
   unavailable?: boolean;
+  loading?: boolean;
 }) {
   return renderAttachmentFileIcon({
     filename: options.label,
     mimeType: options.mimeType,
     mode: options.visualMode ?? "large-placeholder",
     unavailable: options.unavailable,
+    loading: options.loading,
   });
 }
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
+  const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
     options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
@@ -112,13 +129,14 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
           label: options.label,
           mimeType: options.mimeType,
           visualMode: options.visualMode,
+          loading: options.loading,
         })}
         <span
           class="chat-assistant-attachment-card__details ${
             compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
           }"
         >
-          <span class="chat-assistant-attachment-card__title" title=${options.label}
+          <span class="chat-assistant-attachment-card__title ${skeleton}" title=${options.label}
             >${options.label}</span
           >
           ${
@@ -126,7 +144,9 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               ? formattedSize
                 ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                       >·</span
-                    ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
+                    ><span class="chat-assistant-attachment-card__meta ${skeleton}"
+                      >${formattedSize}</span
+                    >`
                 : null
               : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`
           }
@@ -141,10 +161,12 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadHref
+          options.downloadHref || options.downloadPending
             ? html`<a
-                class=${downloadClass}
-                href=${options.downloadHref}
+                class=${`${downloadClass} ${skeleton}`}
+                href=${options.downloadPending ? nothing : options.downloadHref}
+                aria-disabled=${options.downloadPending ? "true" : nothing}
+                role="link"
                 download=${options.label}
                 target="_blank"
                 rel="noreferrer"

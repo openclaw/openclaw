@@ -85,6 +85,7 @@ describe("worker transcript claim fences", () => {
           writerHeld.resolve();
           await releaseWriter.promise;
         },
+        "session.transcript.batch",
       );
       let replacement: WorkerSessionTurnClaim | undefined;
       try {

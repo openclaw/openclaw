@@ -18,7 +18,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -39,6 +39,7 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import {
@@ -55,6 +56,7 @@ import {
   type SessionTranscriptTree,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 type MessageCut = {
   status: "cut";
@@ -238,42 +240,52 @@ async function mutateSqliteSessionAtMessage(
           lifecycleRevision: preparedEntry.lifecycleRevision,
         }
       : undefined);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    let databasePath: string | undefined;
-    const result = runOpenClawAgentWriteTransaction((database) => {
-      params.commitGuard?.();
-      databasePath = database.path;
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
-        entryId: params.entryId,
-        canonicalSourceKey,
-        creation: params.creation,
-        mode,
-        expectedState: preparedExpectedState,
-        repositoryWorkspaceId: params.repositoryWorkspaceId,
-        sourceKey,
-        targetKey,
-      });
-      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      return mutationResult;
-    }, toDatabaseOptions(resolved));
-    if (result.status === "created" && databasePath) {
-      invalidateSessionBranchCache(databasePath, [
-        ...[...previousIdentity.values()].flatMap((entry) =>
-          entry.sessionId ? [entry.sessionId] : [],
-        ),
-        ...(result.entry.sessionId ? [result.entry.sessionId] : []),
-      ]);
-    }
-    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
-    return result;
-  });
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      let previousIdentity = new Map<string, SessionEntry>();
+      const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
+        params.commitGuard?.();
+        const identityKeys = uniqueStrings([
+          ...collectSessionEntryLookupKeys(database, sourceKey),
+          ...collectSessionEntryLookupKeys(database, targetKey),
+        ]);
+        previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
+          entryId: params.entryId,
+          canonicalSourceKey,
+          creation: params.creation,
+          mode,
+          expectedState: preparedExpectedState,
+          repositoryWorkspaceId: params.repositoryWorkspaceId,
+          sourceKey,
+          targetKey,
+        });
+        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        return {
+          databasePath: database.path,
+          result: mutationResult,
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          ),
+        };
+      }, toDatabaseOptions(resolved));
+      if (result.status === "created") {
+        invalidateSessionBranchCache(databasePath, [
+          ...[...previousIdentity.values()].flatMap((entry) =>
+            entry.sessionId ? [entry.sessionId] : [],
+          ),
+          ...(result.entry.sessionId ? [result.entry.sessionId] : []),
+        ]);
+      }
+      publish();
+      return result;
+    },
+    "session.message-cut.mutate",
+  );
 }
 
 function mutateSqliteSessionAtMessageInTransaction(
@@ -336,6 +348,7 @@ function mutateSqliteSessionAtMessageInTransaction(
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
+    version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
   });
   const nextEvents =
     params.mode === "fork" && cut?.status === "cut"

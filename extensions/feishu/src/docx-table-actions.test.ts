@@ -7,9 +7,8 @@ import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const toolAccountModule = await import("./tool-account.js");
-vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
-  createFeishuClientMock(),
-);
+const clientModule = await import("./client.js");
+vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
 vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
   doc: true,
   chat: false,
@@ -77,7 +76,11 @@ function createClient(httpInstance?: Lark.HttpInstance) {
 
 function resolveTool(client: Lark.Client) {
   createFeishuClientMock.mockReturnValue(client);
-  const harness = createToolFactoryHarness({});
+  const harness = createToolFactoryHarness({
+    channels: {
+      feishu: { enabled: true, appId: "table-app", appSecret: "table-placeholder" }, // pragma: allowlist secret
+    },
+  });
   registerFeishuDocTools(harness.api);
   return harness.resolveTool("feishu_doc");
 }

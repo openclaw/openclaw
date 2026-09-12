@@ -67,6 +67,7 @@ test/vitest/vitest.extension-voice-call-paths.mjs
 test/vitest/vitest.extension-whatsapp-paths.mjs
 test/vitest/vitest.extension-zalo-paths.mjs
 test/vitest/vitest.gateway-server-paths.mjs
+test/vitest/vitest.package-contract-paths.mjs
 test/vitest/vitest.pattern-file.ts
 test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs

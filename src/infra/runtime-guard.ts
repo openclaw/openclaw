@@ -1,31 +1,24 @@
-// Validates the current runtime against OpenClaw's Node engine floor.
+// Validates the current runtime before OpenClaw startup.
 import process from "node:process";
 import { format } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
+  detectCurrentSqliteCapabilities,
+  nodeRuntimeFailure,
+  nodeRuntimeNote,
+  type SqliteCapabilities,
+} from "../../node-sqlite.mjs";
+import {
+  canRunOpenClawNodeDiagnostics,
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
   isSupportedOpenClawNodeVersion,
   parseNodeReleaseVersion,
 } from "../../node-version.mjs";
-import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  detectCurrentRuntimeSqliteVersion,
-  isSqliteWalResetSafeVersion,
-} from "./sqlite-runtime-version.js";
-
-// Runtime validation precedes console capture. Keep this direct sink aligned
-// with configured JSONL output without pulling in the full logger.
-const defaultRuntime: RuntimeEnv = {
-  log: (...args) => console.log(...args),
-  error: (...args) => {
-    const message = format(...args);
-    process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
-  },
-  exit: (code) => {
-    process.exit(code);
-  },
-};
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
+import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
 type RuntimeKind = "bun" | "node" | "unknown";
 
@@ -48,9 +41,12 @@ type RuntimeDetails = {
   pathEnv: string;
   hasNodeSqlite: boolean;
   sqliteVersion: string | null;
+  sqliteSelectionError?: string;
+  sqliteProbe?: SqliteCapabilities;
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
+let diagnosticWarningPrinted = false;
 
 /** Parses the first major/minor/patch triple from a runtime or package version label. */
 export function parseSemver(version: string | null): Semver | null {
@@ -84,12 +80,11 @@ function isAtLeast(version: Semver | null, minimum: Semver): boolean {
 }
 
 /** Reads current process runtime metadata for startup support checks. */
-function detectRuntime(): RuntimeDetails {
+export function detectRuntime(): RuntimeDetails {
   const bunVersion = process.versions?.bun;
   const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
   const version = bunVersion ?? process.versions?.node ?? null;
-  const sqlite =
-    kind === "bun" ? detectCurrentRuntimeSqlite() : { available: false, version: null };
+  const sqlite = detectCurrentRuntimeSqlite();
 
   return {
     kind,
@@ -98,13 +93,29 @@ function detectRuntime(): RuntimeDetails {
     pathEnv: process.env.PATH ?? "(not set)",
     hasNodeSqlite: sqlite.available,
     sqliteVersion: sqlite.version,
+    sqliteSelectionError: sqlite.selectionError,
+    sqliteProbe: sqlite.probe,
   };
 }
 
-function detectCurrentRuntimeSqlite(): { available: boolean; version: string | null } {
+function detectCurrentRuntimeSqlite(): {
+  available: boolean;
+  version: string | null;
+  selectionError?: string;
+  probe?: SqliteCapabilities;
+} {
   try {
-    const version = detectCurrentRuntimeSqliteVersion();
-    return { available: version !== null, version };
+    ensureSqliteLibrarySelected();
+  } catch (error) {
+    return {
+      available: false,
+      version: null,
+      selectionError: error instanceof Error ? error.message : String(error),
+    };
+  }
+  try {
+    const probe = detectCurrentSqliteCapabilities();
+    return { available: probe.available, version: probe.version, probe };
   } catch {
     return { available: false, version: null };
   }
@@ -112,8 +123,13 @@ function detectCurrentRuntimeSqlite(): { available: boolean; version: string | n
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
 function runtimeSatisfies(details: RuntimeDetails): boolean {
+  if (details.sqliteSelectionError) {
+    return false;
+  }
   if (details.kind === "node") {
-    return isSupportedNodeVersion(details.version);
+    return Boolean(
+      details.sqliteProbe && !nodeRuntimeFailure(details.version, details.sqliteProbe),
+    );
   }
   if (details.kind === "bun") {
     return (
@@ -194,22 +210,81 @@ export function nodeVersionSatisfiesEngine(
 }
 
 /** Exits through the provided runtime when the current Node runtime is unsupported. */
-export function assertSupportedRuntime(
-  runtime: RuntimeEnv = defaultRuntime,
+export async function assertSupportedRuntime(
+  providedRuntime?: RuntimeEnv,
   details: RuntimeDetails = detectRuntime(),
-): void {
+  argv?: readonly string[],
+  emitDiagnosticWarning = true,
+  recoveryEnv?: NodeJS.ProcessEnv,
+): Promise<void> {
   if (runtimeSatisfies(details)) {
+    const note =
+      details.kind === "node" && details.sqliteProbe
+        ? nodeRuntimeNote(details.version, details.sqliteProbe)
+        : null;
+    if (note) {
+      if (providedRuntime) {
+        providedRuntime.error(note);
+      } else {
+        process.stderr.write(`${note}\n`);
+      }
+    }
     return;
+  }
+  // Only startup callers with a pre-dotenv snapshot may select another runtime.
+  if (details.kind === "node" && argv && recoveryEnv) {
+    const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
+    await recoverNodeRuntime({ env: recoveryEnv });
+  }
+  if (
+    details.kind === "node" &&
+    canRunOpenClawNodeDiagnostics(details.version, details.hasNodeSqlite) &&
+    argv &&
+    classifyUnsupportedNodeCommand(argv)
+  ) {
+    if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
+      const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
+      if (providedRuntime) {
+        providedRuntime.error(warning);
+      } else {
+        process.stderr.write(`${warning}\n`);
+      }
+      diagnosticWarningPrinted = true;
+    }
+    return;
+  }
+  let runtime = providedRuntime;
+  // Healthy starts need no diagnostic graph; a supplied runtime already owns its error sink.
+  if (!runtime) {
+    const { formatConsoleDiagnosticBlock } = await import("../logging/json-console-line.js");
+    runtime = {
+      log: (...args) => console.log(...args),
+      error: (...args) => {
+        const message = format(...args);
+        process.stderr.write(
+          formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
+        );
+      },
+      exit: (code) => process.exit(code),
+    };
   }
 
   const versionLabel = details.version ?? "unknown";
   const runtimeLabel =
     details.kind === "unknown" ? "unknown runtime" : `${details.kind} ${versionLabel}`;
   const execLabel = details.execPath ?? "unknown";
+  if (details.sqliteSelectionError) {
+    runtime.error(
+      `${details.sqliteSelectionError}\nDetected: ${runtimeLabel} (exec: ${execLabel}).`,
+    );
+    runtime.exit(1);
+    return;
+  }
   const requirement =
     details.kind === "bun"
       ? "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
-      : "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.";
+      : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
+        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.";
   const retryHint =
     details.kind === "bun"
       ? "Upgrade Bun or run OpenClaw with a supported Node release."

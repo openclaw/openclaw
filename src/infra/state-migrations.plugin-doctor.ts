@@ -171,7 +171,11 @@ export async function runPluginDoctorStateMigrationPlans(params: {
       ? refreshedPlans
       : (params.detected.pluginPlans?.plans ?? []);
   const migrated = await migratePluginDoctorStatePlans(input, plans);
-  return { ...migrated, warnings: [...warnings, ...migrated.warnings] };
+  return {
+    ...migrated,
+    warnings: [...warnings, ...migrated.warnings],
+    ...(hasDetectorFailure ? { warningDisposition: undefined } : {}),
+  };
 }
 
 async function migratePluginDoctorStatePlans(
@@ -182,6 +186,7 @@ async function migratePluginDoctorStatePlans(
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
+  let hasRefusal = false;
   if (plans.length === 0) {
     return { changes, warnings };
   }
@@ -234,12 +239,21 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
         warnings.push(...result.warnings);
+        if (result.warnings.length > 0 && result.warningDisposition !== "recoverable") {
+          hasRefusal = true;
+        }
         notices.push(...(result.notices ?? []));
       } catch (err) {
+        hasRefusal = true;
         warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
       }
     }
-    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(notices.length > 0 ? { notices } : {}),
+      ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
+    };
   };
   // Session repair already holds the Gateway lock and cross-process database fences.
   if (repairAuthority) {
@@ -318,7 +332,11 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       };
     }
     const result = await migratePluginDoctorStatePlans(input, plans, repairAuthority);
-    return { ...result, warnings: [...warnings, ...result.warnings] };
+    return {
+      ...result,
+      warnings: [...warnings, ...result.warnings],
+      ...(warnings.length > 0 ? { warningDisposition: undefined } : {}),
+    };
   };
   const maintenance = params.maintenanceAuthority;
   if (!maintenance) {
@@ -362,6 +380,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     return {
       ...completed,
       warnings: [...completed.warnings, `Plugin session repair did not settle: ${String(error)}.`],
+      warningDisposition: undefined,
     };
   }
 }

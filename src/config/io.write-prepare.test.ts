@@ -558,6 +558,226 @@ const writeCases: WriteCase[] = [
     },
   },
   {
+    name: "adds a root-owned agent beside an unchanged keyed entry include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+  },
+  {
+    name: "preserves multiple keyed entry includes while adding one root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          ops: { workspace: "/w/ops" },
+        },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          ops: { $include: "./ops.json5" },
+        },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          ops: { workspace: "/w/ops" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: {
+      keyedAgentEntryIncludePaths: [
+        ["agents", "entries", "tony"],
+        ["agents", "entries", "ops"],
+      ],
+    },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          ops: { $include: "./ops.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+  },
+  {
+    name: "removes a root-owned agent beside an unchanged keyed entry include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { $include: "./tony.json5" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    options: {
+      allowedAgentRosterRemovals: ["worker"],
+      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+    },
+    expected: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+  },
+  {
+    name: "rejects array-shaped entries containing an include",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: [{ $include: "./tony.json5" }],
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "rejects an agents.entries include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { $include: "./agents.json5" },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "rejects changing a keyed entry include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          tony: { workspace: "/w/tony-next" },
+          worker: { workspace: "/w/worker" },
+        },
+      },
+    },
+    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
+    error: "Config write would flatten $include-owned config at agents.entries.tony",
+  },
+  {
+    name: "rejects deleting a keyed entry include while adding a root-owned agent",
+    current: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { workspace: "/w/tony" } },
+      },
+    },
+    authored: {
+      agents: {
+        ownership: "explicit",
+        entries: { tony: { $include: "./tony.json5" } },
+      },
+    },
+    next: {
+      agents: {
+        ownership: "explicit",
+        entries: { worker: { workspace: "/w/worker" } },
+      },
+    },
+    options: {
+      allowedAgentRosterRemovals: ["tony"],
+      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+    },
+    error: "Config write would flatten $include-owned config at agents.entries.tony",
+  },
+  {
     name: "allows removing root-authored sibling keys beside an include",
     current: { gateway: { mode: "local", legacyKey: true } },
     authored: { gateway: { $include: "./config/gateway.json", legacyKey: true } },
@@ -769,18 +989,12 @@ const writeCases: WriteCase[] = [
     next: { gateway: { mode: "local", port: 18789 } },
     error: "Config write would flatten $include-owned config at <root>",
   },
-  {
-    name: "does not restore root $schema when the next config explicitly clears it",
+  ...[null, 123].map((value) => ({
+    name: `preserves invalid $schema ${value} for write validation`,
     current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { $schema: null, gateway: { mode: "local", port: 18789 } },
-    expected: { gateway: { mode: "local", port: 18789 } },
-  },
-  {
-    name: "does not restore root $schema when the next config sets an invalid value",
-    current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { $schema: 123, gateway: { mode: "local", port: 18789 } },
-    expected: { $schema: 123, gateway: { mode: "local", port: 18789 } },
-  },
+    next: { $schema: value, gateway: { mode: "local", port: 18789 } },
+    expected: { $schema: value, gateway: { mode: "local", port: 18789 } },
+  })),
 ];
 
 function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
@@ -1103,13 +1317,20 @@ describe("config io write prepare", () => {
     ).toEqual({ agents: { defaults, entries: { main: {}, ops: {} } }, gateway: { mode: "local" } });
   });
 
-  it("preserves authored Google model params under normalized config keys", () => {
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["together/moonshotai/Kimi-K2.5", "together/moonshotai/Kimi-K2.6"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])("preserves separate authored model params when writing %s", (authored, canonical) => {
     const params = { thinking: { level: "high" } };
     const sourceConfig = {
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3-pro-preview": { alias: "Gemini", params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: {
+            [authored]: { alias: "Selected", params },
+            "custom/model": { alias: "Control" },
+          },
         },
       },
     };
@@ -1118,9 +1339,10 @@ describe("config io write prepare", () => {
         runtimeConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
               models: {
-                "google/gemini-3.1-pro-preview": { alias: "Gemini", params },
+                [canonical]: { alias: "Selected", params },
+                "custom/model": { alias: "Control" },
               },
             },
           },
@@ -1129,8 +1351,8 @@ describe("config io write prepare", () => {
         nextConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
-              models: { "google/gemini-3.1-pro-preview": {} },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
+              models: { [canonical]: {}, "custom/model": { alias: "Control" } },
             },
           },
         },
@@ -1138,8 +1360,8 @@ describe("config io write prepare", () => {
     ).toEqual({
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3.1-pro-preview": { params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: { [canonical]: { params }, "custom/model": { alias: "Control" } },
         },
       },
     });

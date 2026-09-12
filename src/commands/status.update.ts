@@ -2,6 +2,7 @@
 // Wraps registry/git update checks and formats compact update rows/hints.
 
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -43,7 +44,7 @@ export async function getUpdateCheckResult(params: {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  return await checkUpdateStatus({
+  const update = await checkUpdateStatus({
     root,
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
@@ -55,6 +56,15 @@ export async function getUpdateCheckResult(params: {
         git,
       }),
   });
+  if (update.installKind === "git" && update.git && !params.fetchGit) {
+    const stale = await import("../infra/update-run-ledger.js")
+      .then(({ getLatestUpdateFetchFailure }) => getLatestUpdateFetchFailure())
+      .catch(() => undefined);
+    if (stale) {
+      update.git = { ...update.git, stale, countsCached: true };
+    }
+  }
+  return update;
 }
 
 type UpdateAvailability = {
@@ -94,7 +104,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
   const details: string[] = [];
   if (availability.hasGitUpdate && availability.gitBehind != null) {
-    details.push(`git behind ${availability.gitBehind}`);
+    details.push(
+      `git behind ${availability.gitBehind}${update.git?.countsCached ? " (cached)" : ""}`,
+    );
   }
   if (availability.hasRegistryUpdate && availability.latestVersion) {
     details.push(`npm ${availability.latestVersion}`);
@@ -165,7 +177,15 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.dirty === true) {
       parts.push("dirty");
     }
-    if (update.git.behind != null && update.git.ahead != null) {
+    if (update.git.stale) {
+      const { failedAtMs, detail } = update.git.stale;
+      parts.push(
+        `update check stale: last update fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
+      );
+      if (update.git.behind != null && update.git.ahead != null) {
+        parts.push(`cached: ahead ${update.git.ahead}, behind ${update.git.behind}`);
+      }
+    } else if (update.git.behind != null && update.git.ahead != null) {
       if (update.git.behind === 0 && update.git.ahead === 0) {
         parts.push("up to date");
       } else if (update.git.behind > 0 && update.git.ahead === 0) {

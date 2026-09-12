@@ -1,16 +1,37 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-snapshot-source.js";
+import { withSqliteSourceHandle } from "../infra/sqlite-source-handle.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { openDanglingWorkshopIndexReadAdmission } from "./openclaw-state-db-dangling-workshop-index.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+const artifactPreservingReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.artifactPreservingStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Admission scopes every nested reader without changing normal live-read semantics. */
+export function withArtifactPreservingStateReads<T>(operation: () => T): T {
+  return artifactPreservingReads.run(true, operation);
+}
+
+export function isArtifactPreservingStateRead(): boolean {
+  return artifactPreservingReads.getStore() === true;
+}
 
 type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
@@ -55,12 +76,17 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     return { reused: false };
   }
   try {
-    // Process-local terminal failures evict this handle. Persisted quarantine
-    // is checked on the next physical open so hot reads do not poll metadata.
-    // A newer build can migrate this file while the handle stays open, so the
-    // forward-compatibility gate still runs before any reused read.
-    assertSupportedStateSchemaVersion(opened.db, pathname);
-    return { reused: true, value: operation(opened) };
+    const closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(opened.db);
+    try {
+      // Process-local terminal failures evict this handle. Persisted quarantine
+      // is checked on the next physical open so hot reads do not poll metadata.
+      // A newer build can migrate this file while the handle stays open, so the
+      // forward-compatibility gate still runs before any reused read.
+      assertSupportedStateSchemaVersion(opened.db, pathname);
+      return { reused: true, value: operation(opened) };
+    } finally {
+      closeSchemaReadAdmission?.();
+    }
   } catch (error) {
     openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
     throw error;
@@ -71,27 +97,53 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
-  location = pathname,
 ): T {
   const env = options.env ?? process.env;
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  const db = openNodeSqliteDatabase(location, { readOnly: true });
+  // Even read-only SQLite opens can create a missing WAL. The existing worker
+  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
+  const prepared = isArtifactPreservingStateRead()
+    ? prepareSqliteReadOnlyLocationSync(pathname)
+    : undefined;
   try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedStateSchemaVersion(db, pathname);
-    return operation({ db, path: pathname });
+    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared?.location ?? pathname);
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
+    prepared?.cleanup();
   }
 }
 
-/**
- * Read shared state without joining the writable lifecycle.
- *
- * CLI metadata reads can overlap a live Gateway. Keep them off schema repair,
- * journal-mode setup, checkpoints, and permission mutation owned by writers.
- */
+function withOpenClawStateReadOnlyLocation<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  pathname: string,
+  location: string,
+): T {
+  const read = () => {
+    // node:sqlite opens without a busy handler, so a timeout installed by a
+    // later PRAGMA leaves the first statement — legacy catalog admission's
+    // sqlite_schema read — failing outright on any transient lock.
+    const db = openNodeSqliteDatabase(location, {
+      readOnly: true,
+      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    });
+    let closeSchemaReadAdmission: (() => void) | undefined;
+    try {
+      closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
+      assertSupportedStateSchemaVersion(db, pathname);
+      return operation({ db, path: pathname });
+    } finally {
+      try {
+        closeSchemaReadAdmission?.();
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(db);
+        db.close();
+      }
+    }
+  };
+  // Only live-source descriptors join handle custody; snapshots remain private.
+  return location === pathname ? withSqliteSourceHandle(pathname, read) : read();
+}
+
+/** Read shared state without joining writers; admission inherits artifact preservation. */
 export function withOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
@@ -129,26 +181,36 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
-  const pathname = resolveReadOnlyPath(options);
-  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
-  if (reused.reused) {
-    return reused.value;
-  }
-  const existingPath = existingPathOrUndefined(pathname);
-  if (existingPath === undefined) {
-    return undefined;
-  }
-  // Cache absence cannot rule out caller-owned SQLite handles. Copy in a child
-  // so closing a source descriptor cannot release this process's POSIX locks.
-  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
-  try {
-    return withFreshOpenClawStateDatabaseReadOnly(
-      operation,
-      options,
-      existingPath,
-      prepared.location,
-    );
-  } finally {
-    prepared.cleanup();
-  }
+  return withArtifactPreservingStateReads(() =>
+    withExistingOpenClawStateDatabaseReadOnly(operation, options),
+  );
+}
+
+/** Preserve source artifacts while allowing the caller to progress during snapshot preparation. */
+export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<T | undefined> {
+  return withArtifactPreservingStateReads(async () => {
+    const pathname = resolveReadOnlyPath(options);
+    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    if (reused.reused) {
+      return reused.value;
+    }
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return undefined;
+    }
+    const env = options.env ?? process.env;
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      preserveSourceArtifacts: true,
+    });
+    try {
+      // Verification can quarantine the live path while the snapshot child is running.
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+      return withOpenClawStateReadOnlyLocation(operation, pathname, prepared.location);
+    } finally {
+      prepared.cleanup();
+    }
+  });
 }

@@ -25,14 +25,11 @@ const DEFAULT_IDLE_MINUTES = 0;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {
-  const normalizedAtHour = normalizeResetAtHour(atHour);
-  const resetAt = new Date(now);
-  resetAt.setHours(normalizedAtHour, 0, 0, 0);
-  if (now < resetAt.getTime()) {
-    // Before today's reset hour, the active reset boundary is yesterday's scheduled reset.
-    resetAt.setDate(resetAt.getDate() - 1);
-  }
-  return resetAt.getTime();
+  const hour = normalizeResetAtHour(atHour);
+  const today = new Date(now).setHours(hour, 0, 0, 0);
+  // Resolve each calendar day's authored hour from now; reusing today's date
+  // can carry a spring-forward adjustment into yesterday.
+  return now < today ? new Date(now).setHours(hour - 24, 0, 0, 0) : today;
 }
 
 /** Resolves the effective reset policy for direct, group, or thread sessions. */

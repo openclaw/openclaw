@@ -68,7 +68,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(),
+  readPreparedModelCatalog: vi.fn(),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],
@@ -209,7 +209,6 @@ vi.mock("../agents/model-selection.js", () => {
           hasProviderWildcards: wildcardModelKeys.size > 0,
           allowConfigPath: policy.configPath,
           allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
-          allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
           allowsByWildcard: ({ provider, model }: ModelRef) =>
             isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),
@@ -299,16 +298,11 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
   buildSkillSnapshot: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../skills/loading/workspace-skill-loader.js")
-  >("../skills/loading/workspace-skill-loader.js");
+vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   return {
     filterWorkspaceSkills: (entries: unknown[]) => entries,
-    loadMergedWorkspaceSkills: vi.fn(() => []),
     loadVisibleSkills: vi.fn(() => []),
     loadWorkspaceSkills: vi.fn(() => []),
-    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
   };
 });
 

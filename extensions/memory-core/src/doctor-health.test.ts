@@ -1,13 +1,17 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HealthCheck, HealthCheckContext } from "openclaw/plugin-sdk/health";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
   registerMemoryCoreDoctorChecks,
 } from "./doctor-health.js";
+import { collectVectorProviderFindings } from "./doctor-vector-index-provider.js";
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
@@ -277,7 +281,7 @@ describe("managed local embedding setup health check", () => {
     },
   );
 
-  it("reads an active WAL index without changing the live SQLite family", async () => {
+  it("reads an active WAL index without changing committed database or WAL bytes", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-live-wal-"));
     roots.add(stateDir);
     const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -296,7 +300,8 @@ describe("managed local embedding setup health check", () => {
           "memory_index_meta_v1",
           JSON.stringify({ model: "embeddinggemma-300m", vectorDims: 768 }),
         );
-      const familyPaths = ["", "-wal", "-shm"].map((suffix) => `${databasePath}${suffix}`);
+      // Ordinary SQLite readers may update read marks in the shared-memory sidecar.
+      const familyPaths = ["", "-wal"].map((suffix) => `${databasePath}${suffix}`);
       const before = await Promise.all(familyPaths.map(async (file) => await fs.readFile(file)));
       const check = captureCheck(async (params) => ({
         provider: params.provider,
@@ -316,6 +321,89 @@ describe("managed local embedding setup health check", () => {
       writer.close();
     }
   });
+
+  it("verifies the stored vector model while the live agent database receives continuous commits", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-readiness-writer-"));
+    roots.add(stateDir);
+    const model = "embeddinggemma-300m";
+    const databasePath = await createSemanticIndex(stateDir, model);
+    const seed = openNodeSqliteDatabase(databasePath);
+    try {
+      // A 64 MiB main file makes a raw copy overlap many real WAL commits.
+      seed.exec(`
+        CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
+        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 1024)
+        INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
+        CREATE TABLE heartbeat (value INTEGER NOT NULL) STRICT;
+        INSERT INTO heartbeat VALUES (0);
+      `);
+    } finally {
+      seed.close();
+    }
+
+    // A separate process keeps committing even when a synchronous inspector blocks Node.
+    const writer = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      import { DatabaseSync } from "node:sqlite";
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; PRAGMA synchronous = NORMAL;");
+      const write = db.prepare("UPDATE heartbeat SET value = value + 1");
+      write.run();
+      setInterval(() => write.run(), 1);
+      process.stdout.write("ready\\n");
+      setTimeout(() => process.exit(2), 25000);
+    `,
+        databasePath,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    writer.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const closed = once(writer, "close");
+    try {
+      await Promise.race([
+        once(writer.stdout, "data"),
+        closed.then(() => {
+          throw new Error(`SQLite writer exited before readiness: ${stderr}`);
+        }),
+      ]);
+      const checkContext = context(stateDir, "local");
+      const config = checkContext.cfg;
+      const env = checkContext.env!;
+      const check = captureCheck(async () => null);
+      await expect(check.detect(checkContext)).resolves.toEqual([]);
+      await expect(
+        collectVectorProviderFindings({ config, env, stateDir }, async () => ({
+          provider: "local",
+          reason: "Synthetic provider setup requirement",
+        })),
+      ).resolves.toEqual([
+        {
+          agentId: "main",
+          model,
+          provider: "local",
+          configPrefix: "memory.search",
+          reason: "Synthetic provider setup requirement",
+        },
+      ]);
+      expect(writer.exitCode).toBeNull();
+      const reader = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(reader.prepare("SELECT value FROM heartbeat").get()?.value).toBeGreaterThan(1);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      writer.kill();
+      await closed;
+    }
+  }, 30_000);
 
   it("returns a structured non-ready result when an agent database cannot be inspected", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-unreadable-"));

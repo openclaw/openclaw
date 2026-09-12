@@ -2,6 +2,14 @@ import { findSourceImportBackedges } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 describe("OpenAI model construction imports", () => {
+  it("loads model route policy without the transport host", async () => {
+    expect(
+      await findSourceImportBackedges("extensions/openai/provider-policy-api.ts", [
+        "packages/ai/src/host.ts",
+      ]),
+    ).toEqual([]);
+  });
+
   it("constructs auth descriptors without loading credential stores", async () => {
     expect(
       await findSourceImportBackedges("extensions/openai/openai-provider.ts", [
