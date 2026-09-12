@@ -1,4 +1,5 @@
 // Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -123,6 +124,9 @@ export type SessionRecentConversationText = {
   text: string;
   timestamp?: number;
   sourceChannel?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
 };
 
 type ReadRecentSessionConversationTextOptions = {
@@ -254,7 +258,15 @@ function parseRecentConversationText(
     message.provenance && typeof message.provenance === "object"
       ? (message.provenance as { sourceChannel?: unknown })
       : undefined;
+  const metadata = message.role === "user" ? asOptionalRecord(message["__openclaw"]) : undefined;
+  const sender = Object.fromEntries(
+    ["senderId", "senderName", "senderUsername"].flatMap((key) => {
+      const value = metadata?.[key];
+      return typeof value === "string" && value.trim() ? [[key, value.trim()]] : [];
+    }),
+  );
   return {
+    ...sender,
     ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
     text,
