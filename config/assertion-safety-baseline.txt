@@ -567,7 +567,6 @@ extensions/irc/src/setup-surface.ts	31
 extensions/kilocode/provider-models.ts	4
 extensions/kilocode/stream.ts	1
 extensions/kimi-coding/index.ts	2
-extensions/kimi-coding/provider-catalog.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/kimi-coding/stream.ts	11
 extensions/line/src/accounts.ts	3

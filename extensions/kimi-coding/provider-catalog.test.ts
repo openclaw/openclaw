@@ -1,5 +1,7 @@
 // Kimi Coding tests cover provider catalog plugin behavior.
+import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { isKimiK3ModelId, KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
@@ -74,15 +76,24 @@ describe("kimi provider catalog", () => {
     expect(thinkingRows).toEqual([...KIMI_K3_MODEL_IDS]);
   });
 
-  it("normalizes legacy Kimi coding model ids to the stable API model id", () => {
-    expect(normalizeKimiCodingModelId("kimi-code")).toBe("kimi-for-coding");
-    expect(normalizeKimiCodingModelId("k2p5")).toBe("kimi-for-coding");
-    expect(normalizeKimiCodingModelId("kimi-for-coding")).toBe("kimi-for-coding");
-    expect(normalizeKimiCodingModelId("k3")).toBe("k3");
-    expect(normalizeKimiCodingModelId("k3[1m]")).toBe("k3");
-    expect(normalizeKimiCodingModelId("kimi-for-coding-highspeed")).toBe(
-      "kimi-for-coding-highspeed",
-    );
+  it.each([
+    ["kimi-code", "kimi-for-coding"],
+    ["k2p5", "kimi-for-coding"],
+    ["kimi-for-coding", "kimi-for-coding"],
+    ["k3", "k3"],
+    ["k3[1m]", "k3"],
+    ["kimi-for-coding-highspeed", "kimi-for-coding-highspeed"],
+  ])("normalizes %s to %s through the helper and static manifest", (input, expected) => {
+    expect(normalizeKimiCodingModelId(input)).toBe(expected);
+    expect(
+      parseModelRef(`kimi/${input}`, "kimi", {
+        manifestPlugins: [manifest],
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "kimi", model: expected });
+  });
+
+  it("recognizes K3 thinking-policy models", () => {
     expect(isKimiK3ModelId("k3")).toBe(true);
     expect(isKimiK3ModelId("K3-256K")).toBe(true);
     expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
