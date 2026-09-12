@@ -127,7 +127,24 @@ export async function prepareEmbeddedRunRuntime(input: {
         })
       : undefined;
     const resolvedModel = preparedThinkingCompat
-      ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
+      ? (() => {
+          const nextCompat: Record<string, unknown> = {
+            // SAFETY: candidate.compat is a model compatibility object; spreading into a record preserves existing flags
+            ...(candidate.compat as Record<string, unknown> | undefined),
+          };
+          if (preparedThinkingCompat.thinkingFormat) {
+            nextCompat.thinkingFormat = preparedThinkingCompat.thinkingFormat;
+          }
+          if (Array.isArray(preparedThinkingCompat.supportedReasoningEfforts)) {
+            nextCompat.supportedReasoningEfforts = [
+              ...preparedThinkingCompat.supportedReasoningEfforts,
+            ];
+          } else if (preparedThinkingCompat.supportedReasoningEfforts === null) {
+            delete nextCompat.supportedReasoningEfforts;
+          }
+          // SAFETY: nextCompat preserves candidate.compat shape augmented with validated thinking compat
+          return { ...candidate, compat: nextCompat as typeof candidate.compat };
+        })()
       : candidate;
     const resolved =
       resolvedModel === candidate && resolvedCandidate

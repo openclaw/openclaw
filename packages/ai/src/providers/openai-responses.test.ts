@@ -228,4 +228,24 @@ describe("OpenAI Responses provider", () => {
       }
     },
   );
+
+  it("serializes mixed-case declared reasoning efforts to matching provider-native wire payload", async () => {
+    const requestModel = model({
+      id: "custom-provider-model",
+      provider: "custom",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "MAX"],
+      },
+    });
+    const options = { apiKey: "sentinel-key", reasoningEffort: "max" as const };
+    const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
+    await streamOpenAIResponses(requestModel, context, options).result();
+
+    for (const params of [transportParams, openAiMockState.params[0]]) {
+      const request = params as {
+        reasoning?: { effort: string; summary?: string };
+      };
+      expect(request.reasoning?.effort).toBe("MAX");
+    }
+  });
 });

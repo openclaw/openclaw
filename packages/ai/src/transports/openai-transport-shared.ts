@@ -451,7 +451,7 @@ export function resolvePromptCacheKey(
 
 export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   const normalized = effort.trim().toLowerCase();
-  return normalized !== "off" && normalized !== "none";
+  return Boolean(normalized) && normalized !== "off" && normalized !== "none";
 }
 
 export function readOpenAICompletionsContentDeltas(

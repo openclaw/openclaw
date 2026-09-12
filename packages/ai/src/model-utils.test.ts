@@ -80,4 +80,142 @@ describe("clampThinkingLevel", () => {
     expect(getSupportedThinkingLevels(model)).toContain("max");
     expect(clampThinkingLevel(model, "max")).toBe("max");
   });
+
+  it("honors compat.supportedReasoningEfforts for extended thinking levels without thinkingLevelMap", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    });
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).toContain("xhigh");
+    expect(levels).toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("max");
+    expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
+  });
+
+  it("preserves max for custom provider models with off/minimal null map and compat efforts", () => {
+    const model = makeModel(
+      { off: null, minimal: null },
+      {
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    );
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(clampThinkingLevel(model, "max")).toBe("max");
+  });
+
+  it("clamps max down to xhigh when compat only declares xhigh", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    });
+
+    expect(getSupportedThinkingLevels(model)).toContain("xhigh");
+    expect(getSupportedThinkingLevels(model)).not.toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
+  it("clamps max down to high when compat does not declare extended tiers", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+    });
+
+    expect(getSupportedThinkingLevels(model)).not.toContain("xhigh");
+    expect(getSupportedThinkingLevels(model)).not.toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("high");
+  });
+
+  it("preserves explicit null opt-out over compat.supportedReasoningEfforts", () => {
+    const model = makeModel(
+      { max: null },
+      {
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    );
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).toContain("xhigh");
+    expect(levels).not.toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
+  it("does not unlock extended tiers when supportsReasoningEffort is false", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportsReasoningEffort: false,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    });
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).not.toContain("xhigh");
+    expect(levels).not.toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("high");
+  });
+
+  it("normalizes canonical reasoning effort casing and trimming", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["  xhigh  ", "MAX"],
+      },
+    });
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).toContain("xhigh");
+    expect(levels).toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("max");
+    expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
+  });
+
+  it("does not admit non-canonical aliases without explicit mapping", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "extra-high"],
+      },
+    });
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).not.toContain("xhigh");
+    // Unsupported extra-high correctly clamps down to high
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+  });
+
+  it("never clamps unsupported xhigh upward to max when only max is supported", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "max"],
+      },
+    });
+
+    expect(getSupportedThinkingLevels(model)).not.toContain("xhigh");
+    expect(getSupportedThinkingLevels(model)).toContain("max");
+    // Crucial cost invariant: unsupported xhigh must clamp DOWN to high, NEVER up to max
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+  });
+
+  it("ignores inherited Object.prototype properties for supportedReasoningEfforts", () => {
+    const model = makeModel(undefined, {
+      compat: {},
+    });
+
+    const proto = Object.prototype as unknown as { supportedReasoningEfforts?: string[] };
+    proto.supportedReasoningEfforts = ["max"];
+    try {
+      const levels = getSupportedThinkingLevels(model);
+      expect(levels).not.toContain("max");
+      expect(clampThinkingLevel(model, "max")).toBe("high");
+    } finally {
+      delete proto.supportedReasoningEfforts;
+    }
+  });
 });

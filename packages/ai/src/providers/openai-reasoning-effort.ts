@@ -101,7 +101,8 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
 }
 
 function isDisabledReasoningEffort(effort: string): boolean {
-  return effort === "none" || effort === "off";
+  const folded = effort.trim().toLowerCase();
+  return folded === "none" || folded === "off";
 }
 
 /** Resolve the reasoning efforts accepted by a specific OpenAI-compatible model. */
@@ -179,8 +180,16 @@ export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,
   effort: string,
 ): boolean {
-  return resolveOpenAISupportedReasoningEfforts(model).includes(
-    normalizeOpenAIReasoningEffort(effort) as OpenAIApiReasoningEffort,
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  const supported = resolveOpenAISupportedReasoningEfforts(model);
+  if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
+    return true;
+  }
+  return supported.some(
+    (supportedEffort) =>
+      normalizeOpenAIReasoningEffort(supportedEffort) === normalized &&
+      !isDisabledReasoningEffort(normalized) &&
+      !isDisabledReasoningEffort(supportedEffort),
   );
 }
 
@@ -205,23 +214,38 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
   }
+  const normalizedKey = normalizeOpenAIReasoningEffort(normalized);
+  const matchedSupported = supported.find(
+    (effort) => normalizeOpenAIReasoningEffort(effort) === normalizedKey,
+  );
+  if (
+    matchedSupported !== undefined &&
+    !isDisabledReasoningEffort(normalizedKey) &&
+    !isDisabledReasoningEffort(matchedSupported)
+  ) {
+    return matchedSupported;
+  }
   if (requested === "off" && supported.includes("none")) {
     return "none";
   }
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
   }
-  if (requested === "minimal" && supported.includes("low")) {
-    return "low";
+  const findSupported = (target: string) =>
+    supported.find((item) => item === target) ??
+    supported.find((item) => normalizeOpenAIReasoningEffort(item) === target);
+
+  if (requested === "minimal" && findSupported("low")) {
+    return findSupported("low");
   }
-  if ((requested === "minimal" || requested === "low") && supported.includes("medium")) {
-    return "medium";
+  if ((requested === "minimal" || requested === "low") && findSupported("medium")) {
+    return findSupported("medium");
   }
-  if (requested === "xhigh" && supported.includes("high")) {
-    return "high";
+  if (requested === "xhigh" && findSupported("high")) {
+    return findSupported("high");
   }
-  if (requested === "max" && supported.includes("xhigh")) {
-    return "xhigh";
+  if (requested === "max" && findSupported("xhigh")) {
+    return findSupported("xhigh");
   }
   return supported.find(
     (effort) => !isDisabledReasoningEffort(normalizeOpenAIReasoningEffort(effort)),
