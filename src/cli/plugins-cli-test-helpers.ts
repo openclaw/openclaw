@@ -171,13 +171,14 @@ export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
 export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
-export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
 export const withPluginDiagnosticsReportForInspectionMock =
   vi.fn<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReportForInspection"]>();
+export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
-export const notifyGatewayPluginMetadataChangedMock: AsyncUnknownMock = vi.fn();
+export const resolvePluginLifecycleGatewayMock = vi.fn();
+export const pluginLifecycleGatewayMock: AsyncUnknownMock = vi.fn();
 export const clearPluginRegistryLoadCacheMock: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelectionMock: UnknownMock = vi.fn();
 export const planPluginUninstallMock: UnknownMock = vi.fn();
@@ -280,9 +281,8 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value, space),
 }));
 
-vi.mock("./plugins-update-gateway-signal.js", () => ({
-  notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
-    notifyGatewayPluginMetadataChangedMock(...args),
+vi.mock("./plugins-lifecycle-client.js", () => ({
+  resolvePluginLifecycleGateway: () => resolvePluginLifecycleGatewayMock(),
 }));
 
 vi.mock("../config/io.factory.js", async (importOriginal) => {
@@ -384,7 +384,9 @@ vi.mock("../plugins/marketplace.js", () => ({
     resolveMarketplaceInstallShortcutMock(...args)) as ResolveMarketplaceInstallShortcutFn,
 }));
 
-vi.mock("../plugins/enable.js", () => ({
+vi.mock("../plugins/enable.js", async (importOriginal) => ({
+  prepareConfigForDisabledInstall: (await importOriginal<typeof import("../plugins/enable.js")>())
+    .prepareConfigForDisabledInstall,
   enableExplicitlySelectedPluginInConfig: ((
     ...args: Parameters<
       (typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"]
@@ -954,15 +956,18 @@ export function resetPluginsCliTestState() {
   buildPluginInspectReportMock.mockReset();
   buildAllPluginInspectReportsMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
-  retirePluginDiagnosticsMock.mockReset();
   withPluginDiagnosticsReportForInspectionMock.mockReset();
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
     formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),
   );
+  retirePluginDiagnosticsMock.mockReset();
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();
-  notifyGatewayPluginMetadataChangedMock.mockReset();
+  resolvePluginLifecycleGatewayMock.mockReset().mockResolvedValue(null);
+  pluginLifecycleGatewayMock
+    .mockReset()
+    .mockResolvedValue({ runtime: { operationId: "cli-test", generation: 2, pluginIds: [] } });
   clearPluginRegistryLoadCacheMock.mockReset();
   applyExclusiveSlotSelectionMock.mockReset();
   planPluginUninstallMock.mockReset();
@@ -1126,7 +1131,6 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistryMock.mockResolvedValue(defaultRegistryIndex);
-  notifyGatewayPluginMetadataChangedMock.mockResolvedValue(true);
   applyExclusiveSlotSelectionMock.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],

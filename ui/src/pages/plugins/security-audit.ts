@@ -1,6 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+
+registerPluginManagementEnglish();
 
 function securityLabel(status: string): string {
   return /^(?:clean|pass|safe)$/iu.test(status) ? "Pass" : status;

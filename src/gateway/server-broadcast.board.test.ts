@@ -75,7 +75,7 @@ function makeClient(
 }
 
 describe("read-capable operator event scope guards", () => {
-  it.each(["skills.changed", "users.prefs.changed"] as const)(
+  it.each(["skills.changed", "users.prefs.changed", "plugins.changed"] as const)(
     "delivers %s only to read-capable operators",
     (event) => {
       const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
@@ -92,7 +92,9 @@ describe("read-capable operator event scope guards", () => {
         event,
         event === "users.prefs.changed"
           ? { profileId: "profile-1", keys: ["ui.accent"] }
-          : { reason: "remote-node" },
+          : event === "plugins.changed"
+            ? { generation: 1 }
+            : { reason: "remote-node" },
       );
 
       expect(pairing.socket.events).toEqual([]);

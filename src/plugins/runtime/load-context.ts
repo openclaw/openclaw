@@ -31,6 +31,7 @@ export type PluginRuntimeLoadContext = {
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
 };
 
 export function setPluginRuntimeLoadContext(
@@ -85,6 +86,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "manifestRegistry"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
+  | "expectedSourceDigests"
 >;
 
 /** Creates the default plugin runtime loader logger. */
@@ -112,6 +114,7 @@ export function buildPluginRuntimeLoadOptions(
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
+    expectedSourceDigests: values.expectedSourceDigests,
     ...overrides,
   };
 }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
@@ -107,7 +108,7 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
 
 function throwManagedPluginCapabilityConsentRequired(
   review: PluginCapabilityConsentReview,
-  recovery = `Run "openclaw plugins enable ${review.pluginId} --accept-capabilities" to accept its capabilities.`,
+  recovery = "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
 ): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
@@ -138,6 +139,7 @@ export async function resolvePluginCapabilityConsent(params: {
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -195,6 +197,8 @@ export async function resolvePluginCapabilityConsent(params: {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
+    // Pure reload needs no write permission; newly accepted capabilities do.
+    assertConfigWriteAllowedInCurrentMode({ env });
     const acknowledgment = params.acknowledge ?? (await params.onCapabilityConsent?.(review));
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
@@ -221,6 +225,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (acknowledgment.reviewToken !== currentReview.reviewToken) {
       throwManagedPluginCapabilityConsentRequired(currentReview);
     }
+    params.beforePersistentApply?.();
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
         ...records,

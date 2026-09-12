@@ -172,7 +172,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       return send(
         503,
         "text/plain",
-        "Team Reports is not running. Start or restart the Gateway service.\n",
+        "Team Reports is not running. Check plugin configuration and reload the plugin.\n",
       );
     }
     const json = (body: unknown) => send(200, "application/json", JSON.stringify(body));

@@ -796,7 +796,15 @@ export function createHookRunner(
       }
     });
 
-    await Promise.all(promises);
+    // Strict lifecycle callers settle every handler's bounded outcome before advancing.
+    const failures = (await Promise.allSettled(promises)).flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+    }
   }
 
   const bindVoidHook =

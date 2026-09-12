@@ -16,6 +16,8 @@ import {
   createTestInstalledPluginIndex,
   parseClawHubPluginSpecMock,
   pluginCliConfigMock,
+  pluginLifecycleGatewayMock,
+  resolvePluginLifecycleGatewayMock,
   planPluginUninstallMock,
   PromptInputClosedError,
   promptYesNoMock,
@@ -149,6 +151,30 @@ describe("plugins cli uninstall", () => {
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expectRuntimeLogIncludes("Dry run, no changes made.");
     expectRuntimeLogIncludes("context engine slot");
+  });
+
+  it("forwards online --keep-files without deleting files or writing config locally", async () => {
+    pluginCliConfigMock.mockReturnValue({ plugins: { entries: { alpha: { enabled: true } } } });
+    setInstalledPluginIndexInstallRecords({
+      alpha: { source: "path", sourcePath: alphaInstallPath, installPath: alphaInstallPath },
+    });
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+    pluginLifecycleGatewayMock.mockResolvedValue({
+      pluginId: "alpha",
+      removed: ["plugin settings", "install record"],
+      runtime: { generation: 2 },
+    });
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
+    expect(pluginLifecycleGatewayMock).toHaveBeenCalledWith("plugins.uninstall", {
+      pluginId: "alpha",
+      keepFiles: true,
+    });
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it.each([

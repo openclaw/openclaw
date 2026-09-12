@@ -1,13 +1,10 @@
 /** Immutable artifact facts acquired by one plugin cache generation. */
 type PluginArtifactLocation = { modulePath: string; boundaryRoot: string };
 
-export type PluginModuleLoader = (
-  target: string,
-  retain?: (module: NodeJS.Module | undefined) => void,
-) => unknown;
+export type PluginModuleLoader = (target: string) => unknown;
 
 type PluginModuleCacheVariant = {
-  exports?: { value: unknown; module?: NodeJS.Module };
+  exports?: { value: unknown };
   pending?: Promise<unknown>;
 };
 
