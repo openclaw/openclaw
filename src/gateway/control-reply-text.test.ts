@@ -4,6 +4,18 @@ import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
 describe("control reply display projection", () => {
+  it.each(["NO_", "ANNOUNCE_", "REPLY_"])(
+    "holds whitespace-padded %s prefixes while streaming",
+    (prefix) => {
+      const text = `${" \t\n".repeat(10)}${prefix}\u00a0\ufeff`;
+      expect(projectLiveAssistantBufferedText(text)).toEqual({
+        text,
+        suppress: true,
+        pendingLeadFragment: true,
+      });
+    },
+  );
+
   it("preserves text whitespace when no control token is present", () => {
     expect(stripSuppressedControlReplyToken("  keep padded  ")).toBe("  keep padded  ");
     expect(
