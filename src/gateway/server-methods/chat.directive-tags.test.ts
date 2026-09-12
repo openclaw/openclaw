@@ -90,7 +90,7 @@ type TranscriptUpdate = Parameters<
 >[0];
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
-const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
+const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-6-astra" } as const;
 
 const mockState = vi.hoisted(() => {
   const createTestState = () => ({
@@ -977,8 +977,8 @@ function createChatContext() {
         // exercise the unsupported-model fallback instead of Pi persistence.
         {
           provider: "openai",
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
+          id: "gpt-6-astra",
+          name: "GPT-6 Astra",
           input: ["text", "image"],
         },
         {
