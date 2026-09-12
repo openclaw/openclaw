@@ -99,6 +99,7 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
 }
 
 export async function runBeforeToolCallHook(args: {
+  policyPhase?: "native-pre-tool-use";
   toolName: string;
   params: unknown;
   toolKind?: PluginHookToolKind;
@@ -219,6 +220,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolInputKind && { toolInputKind: args.toolInputKind }),
     };
     const buildToolContext = (identity: typeof toolIdentity) => ({
+      ...(args.policyPhase === "native-pre-tool-use" ? { policyPhase: args.policyPhase } : {}),
       toolName,
       ...identity,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
