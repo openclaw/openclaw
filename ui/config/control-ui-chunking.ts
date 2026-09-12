@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
@@ -36,8 +37,14 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
+export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
+
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
+
+  if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
+    return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
 
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
     return "gateway-runtime";
@@ -108,9 +115,9 @@ export const controlUiCodeSplitting = {
         // them (and therefore other routes) into its eagerly imported chunk.
         priority: 8 - index,
         includeDependenciesRecursively: true,
-        // Chat's dense module graph needs a smaller target to stay within the
-        // existing largest-JS budget; shared boot retains its request grouping.
-        maxSize: (route === "chat" ? 1408 : 1536) * 1024,
+        // Shared and chat groups both contain dense UI modules; keep their
+        // generated chunks within the existing compressed-size budget.
+        maxSize: 1408 * 1024,
       };
     }),
   ],

@@ -1,5 +1,9 @@
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
 import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  resolveFailedAssistantReplay,
+} from "./replay-turn-classification.js";
 import type {
   Api,
   AssistantMessage,
@@ -171,9 +175,17 @@ export function transformMessages<TApi extends Api>(
       message = { ...message, content: [] };
     }
     if (message.role === "assistant") {
+      const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
       message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
       flushToolCalls();
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
+      if (failedReplay === "drop") {
+        continue;
+      }
+      if (failedReplay === "marker") {
+        result.push({
+          ...message,
+          content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+        });
         continue;
       }
       pendingToolCalls = message.content.filter((block): block is ToolCall => {

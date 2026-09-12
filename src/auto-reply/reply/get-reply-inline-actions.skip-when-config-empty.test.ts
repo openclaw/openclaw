@@ -140,9 +140,11 @@ const createHandleInlineActionsInput = (params: {
     elevatedAllowed: false,
     elevatedFailures: [],
     defaultActivation: () => "always",
-    resolvedThinkLevel: undefined,
+    resolveModelLevels: async () => ({
+      resolvedThinkLevel: undefined,
+      resolvedReasoningLevel: "off",
+    }),
     resolvedVerboseLevel: undefined,
-    resolvedReasoningLevel: "off",
     resolvedElevatedLevel: "off",
     resolveDefaultThinkingLevel: async () => "off",
     provider: "openai",

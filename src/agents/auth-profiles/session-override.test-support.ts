@@ -45,6 +45,9 @@ const authStoreMocks = vi.hoisted(() => {
 
 vi.mock("./store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    authStoreMocks.state.store.profiles[profileId],
   hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
 vi.mock("./store-runtime.js", () => ({
@@ -56,6 +59,9 @@ vi.mock("./usage.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-model-routes.js", () => ({
+  // Synthetic route IDs in this fixture are already canonical.
+  createProviderModelCatalogIdNormalizer: () => (modelId: string) => modelId,
+  resolveProviderModelPolicySurface: () => null,
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 

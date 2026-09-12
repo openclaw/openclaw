@@ -320,15 +320,18 @@ try {
   stage = "runtime-preparation";
   // Exercise the actual standalone CLI startup policy, not an injected root
   // registry that could hide a missing run/work bootstrap in production.
-  const { ensureCliExecutionBootstrap, resolveCliExecutionStartupContext } =
+  const { ensureCliExecutionBootstrap } =
     await import("../../src/cli/command-execution-startup.js");
-  const startup = resolveCliExecutionStartupContext({
+  const { resolveCliStartupPolicy } = await import("../../src/cli/command-startup-policy.js");
+  const commandPath = ["tasks", "supervise", "run"];
+  const startupPolicy = resolveCliStartupPolicy({
     argv: ["node", "openclaw", "tasks", "supervise", "run", "fixture.json"],
-    commandPath: ["tasks", "supervise", "run"],
+    commandPath,
     jsonOutputMode: true,
   });
   await ensureCliExecutionBootstrap({
-    ...startup,
+    commandPath,
+    startupPolicy,
     runtime: {
       log: () => {},
       error: () => {},

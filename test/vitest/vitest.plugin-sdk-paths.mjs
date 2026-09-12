@@ -38,14 +38,20 @@ const pluginSdkLightEntries = [
   },
 ];
 
-const pluginSdkLightIncludePatternByFile = new Map(
-  pluginSdkLightEntries.flatMap(({ source, test }) => [
+const providerToolsNullableTest = "src/plugin-sdk/provider-tools.nullable.test.ts";
+const pluginSdkLightIncludePatternByFile = new Map([
+  ...pluginSdkLightEntries.flatMap(({ source, test }) => [
     [source, test],
     [test, test],
   ]),
-);
+  ["src/plugin-sdk/provider-tools.ts", "src/plugin-sdk/provider-tools{,.nullable}.test.ts"],
+  [providerToolsNullableTest, providerToolsNullableTest],
+]);
 
-export const pluginSdkLightTestFiles = pluginSdkLightEntries.map(({ test }) => test);
+export const pluginSdkLightTestFiles = [
+  ...pluginSdkLightEntries.map(({ test }) => test),
+  providerToolsNullableTest,
+];
 
 export function isPluginSdkLightTarget(file) {
   return pluginSdkLightIncludePatternByFile.has(normalizeRepoPath(file));

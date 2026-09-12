@@ -20,8 +20,12 @@ const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
   "m.video": "video",
 };
 
-function resolveMatrixMediaKind(msgtype: string | undefined): MatrixMessageAttachmentKind | null {
-  return MATRIX_MEDIA_KINDS[msgtype ?? ""] ?? null;
+function resolveMatrixMediaKind(
+  msgtype: string | undefined,
+): MatrixMessageAttachmentKind | undefined {
+  // Remote message types must match a declared key, never an inherited property.
+  const key = msgtype ?? "";
+  return Object.hasOwn(MATRIX_MEDIA_KINDS, key) ? MATRIX_MEDIA_KINDS[key] : undefined;
 }
 
 function resolveMatrixMediaLabel(

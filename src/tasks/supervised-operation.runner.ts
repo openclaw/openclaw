@@ -74,6 +74,7 @@ export async function runSupervisedOperationProcess(
     const ci = profile.kind === "ci" ? await import("./supervised-operation.ci.js") : undefined;
     assertCurrent();
     let outcome: SupervisedOperationOutcome;
+    let outcomeRecorded = false;
     const workspace = await prepareSupervisedOperationWorkspace(
       execution,
       encoded.contract,
@@ -109,8 +110,9 @@ export async function runSupervisedOperationProcess(
           },
           options,
           assertCurrent,
-          { retainScratch: outcome.status === "input_required" },
+          outcome,
         );
+        outcomeRecorded = true;
       }
     } else if (profile.kind === "review") {
       const { runScopedSupervisedReview } = await import("./supervised-review-runner.js");
@@ -141,7 +143,9 @@ export async function runSupervisedOperationProcess(
     } else {
       throw new Error("Accepted operation adapter unavailable");
     }
-    recordSupervisedOperationOutcome(execution, outcome, Date.now(), options);
+    if (!outcomeRecorded) {
+      recordSupervisedOperationOutcome(execution, outcome, Date.now(), options);
+    }
     // Command outcomes include required process-tree extinction; thrown paths
     // retain reservations until the independent runner is observed gone.
     releaseSupervisedWorkspaceOwner("operation", executionId, Date.now(), options);

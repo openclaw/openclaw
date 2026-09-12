@@ -7,8 +7,12 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   assertSupervisedOperationInTransaction,
   pinSupervisedOperationWorkspaceInTransaction,
+  recordSupervisedOperationOutcomeInTransaction,
 } from "./supervised-operation.store.js";
-import type { SupervisedOperationExecution } from "./supervised-operation.types.js";
+import type {
+  SupervisedOperationExecution,
+  SupervisedOperationOutcome,
+} from "./supervised-operation.types.js";
 import { assertSupervisedAttemptInTransaction } from "./supervised-task.store.js";
 import type { SupervisedTask } from "./supervised-task.types.js";
 import { assertSupervisedWorkflowRootInTransaction } from "./supervised-workflow-root.js";
@@ -257,7 +261,7 @@ export async function acceptSupervisedOperationWorkspace(
   prepared: { contract: SupervisedWorkflowContract; baseVersion: string; headVersion: string },
   options: Options,
   assertCurrent: () => void,
-  disposition: { retainScratch?: boolean } = {},
+  outcome: SupervisedOperationOutcome,
 ) {
   const frozen = await freezeSupervisedWorkspace(
     { kind: "operation", execution },
@@ -266,7 +270,8 @@ export async function acceptSupervisedOperationWorkspace(
   );
   assertCurrent();
   writeSupervisedWorkflow((db) => {
-    const operation = assertSupervisedOperationInTransaction(db, execution, Date.now());
+    const now = Date.now();
+    const operation = assertSupervisedOperationInTransaction(db, execution, now);
     commitSupervisedWorkspaceVersionInTransaction(db, {
       flowId: operation.flowId,
       episode: operation.episode,
@@ -275,7 +280,8 @@ export async function acceptSupervisedOperationWorkspace(
       snapshot: frozen.snapshot,
       now: Date.now(),
     });
-    if (!disposition.retainScratch) {
+    recordSupervisedOperationOutcomeInTransaction(db, execution, outcome, now);
+    if (outcome.status !== "input_required") {
       markSupervisedWorkspaceDiscardableInTransaction(
         db,
         frozen.version,

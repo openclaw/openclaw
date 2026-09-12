@@ -418,9 +418,15 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith("7", {
       exactTargetId: true,
-      signal: ctrl.signal,
-      timeoutMs: undefined,
+      signal: expect.any(AbortSignal),
+      timeoutMs: 60_000,
     });
+    const reason = new Error("caller cancelled");
+    ctrl.abort(reason);
+    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith(
+      "7",
+      expect.objectContaining({ signal: expect.objectContaining({ aborted: true, reason }) }),
+    );
   });
 
   it("allows existing-session snapshots under the default SSRF policy object", async () => {
@@ -629,7 +635,10 @@ describe("existing-session browser routes", () => {
     expect(clickParams.uid).toBe("btn-1");
     expect(clickParams.doubleClick).toBe(false);
     expect(clickParams.timeoutMs).toBe(1234);
-    expect(clickParams.signal).toBe(ctrl.signal);
+    expect(clickParams.signal).toBeInstanceOf(AbortSignal);
+    const reason = new Error("caller cancelled");
+    ctrl.abort(reason);
+    expect(clickParams.signal).toMatchObject({ aborted: true, reason });
   });
 
   it("supports coordinate clicks for existing-session profiles", async () => {

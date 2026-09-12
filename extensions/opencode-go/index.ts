@@ -115,6 +115,20 @@ export default defineSingleProviderPluginEntry({
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
+    resolveTransportTurnState: (ctx) => {
+      if (!normalizeOpencodeGoBaseUrl({ api: ctx.model?.api, baseUrl: ctx.model?.baseUrl })) {
+        return undefined;
+      }
+      if (
+        Object.keys(ctx.model?.headers ?? {}).some(
+          (name) => name.toLowerCase() === "x-opencode-session",
+        )
+      ) {
+        return undefined;
+      }
+      const sessionId = ctx.sessionId?.trim() || ctx.turnId.trim();
+      return sessionId ? { headers: { "x-opencode-session": sessionId } } : undefined;
+    },
     wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
     wrapSimpleCompletionStreamFn: (ctx) =>
       createOpencodeGoAttributionWrapper(ctx.streamFn, ctx.sourceApi),

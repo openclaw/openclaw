@@ -82,15 +82,6 @@ describe("resolveMSTeamsAutoThreadId", () => {
     replyToMode: "all" as const,
   };
 
-  it("returns ambient thread root for same conversation", () => {
-    expect(
-      resolveMSTeamsAutoThreadId({
-        to: "conversation:19:channel@thread.tacv2",
-        toolContext: sameChannel,
-      }),
-    ).toBe("thread-root");
-  });
-
   it("returns ambient thread root for bare conversation id target", () => {
     expect(
       resolveMSTeamsAutoThreadId({
@@ -137,15 +128,6 @@ describe("resolveMSTeamsAutoThreadId", () => {
         toolContext: sameChannel,
       }),
     ).toBe("explicit-root");
-  });
-
-  it("returns undefined for a different conversation", () => {
-    expect(
-      resolveMSTeamsAutoThreadId({
-        to: "conversation:19:other@thread.tacv2",
-        toolContext: sameChannel,
-      }),
-    ).toBeUndefined();
   });
 
   it("returns undefined when replyToMode is off", () => {

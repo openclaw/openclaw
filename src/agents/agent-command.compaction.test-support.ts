@@ -140,6 +140,7 @@ vi.mock("./runtime-plugins.js", () => ({
 }));
 
 vi.mock("./workspace.js", () => ({
+  DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: vi.fn(async () => undefined),
 }));
 

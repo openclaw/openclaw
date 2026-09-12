@@ -3,6 +3,7 @@ import type { ChannelConfigSchema } from "./types.config.js";
 
 type ManifestChannelAccount = {
   accountId: string;
+  name?: string;
   config: Record<string, unknown>;
 };
 
@@ -13,6 +14,8 @@ export type ManifestChannelPlugin = {
     id: string;
     label: string;
     selectionLabel: string;
+    detailLabel?: string;
+    systemImage?: string;
     docsPath: string;
     blurb: string;
     preferOver?: readonly string[];

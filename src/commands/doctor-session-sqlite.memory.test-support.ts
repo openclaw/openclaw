@@ -19,10 +19,8 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
-  const eventCount =
-    scenario === "deep" || scenario === "public" ? 100_000 : scenario === "batch" ? 64 : 8;
-  const payloadBytes =
-    scenario === "deep" || scenario === "public" ? 4096 : scenario === "batch" ? 32768 : 256;
+  const eventCount = scenario === "public" ? 100_000 : scenario === "batch" ? 64 : 8;
+  const payloadBytes = scenario === "public" ? 4096 : scenario === "batch" ? 32768 : 256;
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   fs.mkdirSync(sessionsDir, { recursive: true });

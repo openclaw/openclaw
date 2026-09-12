@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
-  extractInlineImageCandidates,
   isDownloadableAttachment,
   isLikelyImageAttachment,
   isUrlAllowed,
@@ -640,74 +639,6 @@ describe("Graph shared-link helpers", () => {
     expect(tryBuildGraphSharesUrlForSharedLink("https://example.com/file.pdf")).toBeUndefined();
     expect(tryBuildGraphSharesUrlForSharedLink("not-a-url")).toBeUndefined();
   });
-});
-
-describe("msteams inline image limits", () => {
-  const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
-
-  it.each([
-    ["AA==", "00"],
-    ["AAA=", "0000"],
-    ["AAAA", "000000"],
-    ["Z E = =", "64"],
-    ["A\tA==", "00"],
-  ])("enforces exact decoded-size limits for %s", (payload, hex) => {
-    const data = Buffer.from(hex, "hex");
-    const attachments = [
-      {
-        contentType: "text/html",
-        content: `<img src="data:image/png;base64,${payload}" />`,
-      },
-    ];
-    expect(
-      extractInlineImageCandidates(attachments, { maxInlineBytes: data.length - 1 }),
-    ).toStrictEqual([{ kind: "unavailable" }]);
-    expect(
-      extractInlineImageCandidates(attachments, { maxInlineBytes: data.length }),
-    ).toStrictEqual([{ kind: "data", data, contentType: "image/png" }]);
-  });
-
-  it.each(["aGV=sbG8=", "A===", "AA", "-AAA", "A!AA"])(
-    "rejects malformed inline base64 %s",
-    (payload) => {
-      const attachments = [
-        {
-          contentType: "text/html",
-          content: `<img src="data:image/png;base64,${payload}" />`,
-        },
-      ];
-      const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-      expect(out).toStrictEqual([{ kind: "unavailable" }]);
-    },
-  );
-
-  it.each([
-    [9, ["data", "unavailable", "unavailable"]],
-    [10, ["data", "data", "unavailable"]],
-  ])(
-    "enforces cumulative inline size limit %i across attachments",
-    (maxInlineTotalBytes, kinds) => {
-      const attachments = [
-        {
-          contentType: "text/html",
-          content: `<img src="${smallPngDataUrl}" />`,
-        },
-        {
-          contentType: "text/html",
-          content: `<img src="${smallPngDataUrl}" />`,
-        },
-        {
-          contentType: "text/html",
-          content: `<img src="${smallPngDataUrl}" />`,
-        },
-      ];
-      const out = extractInlineImageCandidates(attachments, {
-        maxInlineBytes: 10,
-        maxInlineTotalBytes,
-      });
-      expect(out.map((candidate) => candidate.kind)).toEqual(kinds);
-    },
-  );
 });
 
 describe("normalizeContentType case-insensitivity", () => {

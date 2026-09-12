@@ -22,6 +22,7 @@ import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
+import { resolveArgs } from "./config-utils.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -83,7 +84,22 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         ? { expected: params.expectedRuntimeArtifact }
         : {}
       : undefined;
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const configuredPlugin = readCodexPluginConfig(options.pluginConfig);
+  // The route planner leaves auth with the native owner only after rejecting
+  // host credential substitution. Keep explicit homes and prepared profiles intact.
+  const pluginConfig =
+    params.runtimePlan?.auth.deferredRouteSupport &&
+    !configuredPlugin.appServer?.homeScope &&
+    (configuredPlugin.appServer?.transport === undefined ||
+      configuredPlugin.appServer.transport === "stdio") &&
+    !isCodexAppServerProxyLaunch(
+      resolveArgs(configuredPlugin.appServer?.args, process.env.OPENCLAW_CODEX_APP_SERVER_ARGS),
+    )
+      ? {
+          ...configuredPlugin,
+          appServer: { ...configuredPlugin.appServer, homeScope: "user" as const },
+        }
+      : configuredPlugin;
   const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIdsStrict({

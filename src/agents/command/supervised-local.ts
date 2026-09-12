@@ -1,3 +1,4 @@
+import type { CliDeps } from "../../cli/deps.types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -10,7 +11,7 @@ import type { AgentCommandAdmissionIngress } from "../agent-command-execution-id
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import type { deliverAgentCommandResult } from "./delivery.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
-import type { loadSessionStoreRuntime } from "./runtime-loaders.js";
+import { loadDeliveryRuntime, type loadSessionStoreRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export function isSupervisedLocalRoot(params: {
@@ -117,6 +118,7 @@ export async function runSupervisedLocalRootCommand(params: {
   lifecycleGeneration: string;
   sessionStoreRuntime: Awaited<ReturnType<typeof loadSessionStoreRuntime>> | undefined;
   runtime: RuntimeEnv;
+  deps: CliDeps;
 }) {
   const { prepared, opts, runtime, sessionStoreRuntime } = params;
   const { storePath, sessionKey } = prepared;
@@ -157,12 +159,34 @@ export async function runSupervisedLocalRootCommand(params: {
       payloads: [{ text, mediaUrl: null }],
       meta: { durationMs: Date.now() - startedAt },
     };
-    runtime.log(
-      opts.json ? JSON.stringify({ ...result, supervisedTask: task ?? supervised.result }) : text,
-    );
     if (task && task.phase !== "succeeded" && task.phase !== "partial") {
       process.exitCode = 1;
     }
+    if (opts.deliver === true) {
+      const delivery = await loadDeliveryRuntime();
+      return await delivery.deliverAgentCommandResult({
+        cfg: prepared.cfg,
+        deps: params.deps,
+        opts,
+        // Keep one supervision JSON envelope, including the delivery owner's
+        // result on failure; the shared owner still controls sending and errors.
+        runtime: opts.json ? { log: () => {}, error: runtime.error, exit: runtime.exit } : runtime,
+        outboundSession: prepared.outboundSession,
+        sessionEntry: prepared.sessionEntry,
+        payloads: [{ text }],
+        result: { meta: result.meta },
+        assertDeliveryCurrent: assertSourceCurrent,
+        onDeliveryResult: opts.json
+          ? (delivered) =>
+              runtime.log(
+                JSON.stringify({ ...delivered, supervisedTask: task ?? supervised.result }),
+              )
+          : undefined,
+      });
+    }
+    runtime.log(
+      opts.json ? JSON.stringify({ ...result, supervisedTask: task ?? supervised.result }) : text,
+    );
     return result;
   }
   return undefined;

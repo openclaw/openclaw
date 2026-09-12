@@ -676,10 +676,16 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
         await fs.rm(home, { recursive: true, force: true });
         changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
       } catch (err) {
-        warnings.push(`Failed removing retired Memory Core QMD workspace ${home}: ${String(err)}`);
+        warnings.push(
+          `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${home}: ${String(err)}`,
+        );
       }
     }
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+    };
   },
 };
 

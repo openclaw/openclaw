@@ -3,7 +3,161 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  connection: {
+    access: {
+      title: "Connection",
+      descriptionOffline: "Not connected.",
+      connectedTo: "Connected to {host}",
+      tick: "{tick} tick",
+      auth: {
+        none: "no auth",
+        token: "token auth",
+        password: "password auth",
+        trustedProxy: "proxy auth",
+      },
+      status: {
+        connected: "Connected",
+        offline: "Offline",
+      },
+      gatewayUrl: "Gateway URL",
+      gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
+      secret: "Gateway secret",
+      secretPlaceholder: "Paste the token or type the password",
+      setupCodeHint:
+        "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
+      secretHint: "Tokens are saved for this tab after connecting. Passwords are never stored.",
+      tokenHint: "This Gateway expects its token. Saved for this tab after connecting.",
+      passwordHint: "This Gateway expects its password. Passwords are never stored.",
+      trustedProxy: "Authenticated via trusted proxy.",
+      trustedProxyStatus: "Trusted proxy",
+      sessionKey: "Default session",
+      sessionKeyHint: "Session opened after connecting.",
+      unsavedHint: "Unsaved changes apply when you connect.",
+      lastError: "Last error",
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
+      toggleSecretVisibility: "Toggle secret visibility",
+    },
+  },
   cloudWorkersPage: {
+    snapshots: {
+      title: "Snapshots",
+      viewLabel: "Cloud worker view",
+      unavailable:
+        "Snapshots are available when the Crabbox worker provider is enabled and the Gateway advertises them.",
+      adminRequired: "Administrator access is required to inspect and manage snapshots.",
+      empty: "No snapshots are recorded locally.",
+      profileEmpty: "No snapshots are recorded for this profile.",
+      images: "Images",
+      building: "Building",
+      held: "Held by sessions",
+      attention: "Needs attention",
+      unlabeledProfile: "Unlabeled profile",
+      machineImage: "Machine image",
+      projectImage: "Project image",
+      warmOn: "Warm images on",
+      warmOff: "Warm images off",
+      available: "Available",
+      retiring: "Retiring",
+      retirementPending: "Checkpoint deletion pending",
+      retirementHint:
+        "Checkpoint {checkpoint} is awaiting deletion. Cleanup retries during the next warm-image capture or worker teardown. Inspect openclaw crabbox warm-images --json and resolve provider deletion errors if it remains pending.",
+      scrubbing: "Building: scrubbing",
+      creating: "Building: creating",
+      uncertain: "Paused: uncertain",
+      noImage: "No image",
+      pending: "Pending",
+      created: "Created {age}",
+      lastUsed: "Last used {age}",
+      allocations: "Allocations: {count}",
+      runtime: "Runtime: {digest}",
+      baseCommit: "Commit: {commit}",
+      pinned: "Pinned",
+      pin: "Pin",
+      unpin: "Unpin",
+      delete: "Delete",
+      deleteTitle: "Delete snapshot",
+      deleteMessage:
+        "Delete this checkpoint from the provider? This cannot be undone. Failed deletion remains recorded and retries during maintenance.",
+      deletePinned: "Unpin this snapshot before deleting it.",
+      deleteHeld: "Outstanding allocations still hold this snapshot.",
+      deleteCapturing: "Wait for the active capture to finish before deleting this snapshot.",
+      deletionRetiring: "Snapshot deletion is pending. Maintenance will retry provider cleanup.",
+      captureOrRetirement: "Wait for the active capture or checkpoint deletion to finish.",
+      previous: "Previous",
+      rollback: "Roll back",
+      rollbackTitle: "Roll back snapshot",
+      rollbackMessage:
+        "Restore this previous checkpoint as the current image. The current image becomes the previous generation, or is retired when the retention policy keeps no previous generation unless it is pinned. Existing allocations keep their recorded checkpoint.",
+      retentionPolicy: "Retention policy",
+      retentionHelp:
+        "Pinned checkpoints are exempt from age refresh, unused expiry, and capacity eviction. A runtime or recipe change still starts new workers cold until a compatible capture publishes.",
+      refreshAfter: "Refresh after",
+      refreshAfterHelp: "Default: 24h. Use whole minutes, hours, or days; minimum 1h.",
+      refreshAfterInvalid:
+        "Enter a duration of at least 1h using up to eight digits and m, h, or d.",
+      retainUnused: "Retain unused",
+      retainUnusedHelp: "Default: 14d. Use whole minutes, hours, or days; minimum 1d.",
+      retainUnusedInvalid:
+        "Enter a duration of at least 1d using up to eight digits and m, h, or d.",
+      keepPrevious: "Previous generations",
+      keepNone: "None (default)",
+      keepOne: "Keep one",
+      savePolicy: "Save retention policy",
+      policyRestart: "Policy changes take effect after the Gateway restarts.",
+      policySaved: "Retention policy saved. Restart the Gateway to apply it.",
+      policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
+      buildSnapshot: "Build snapshot",
+      rebuild: "Rebuild",
+      profile: "Profile",
+      repository: "Repository",
+      chooseProfile: "Choose a profile",
+      chooseRepository: "Choose a repository",
+      selectBuildInputs: "Choose an enabled profile and a local repository.",
+      buildHelp:
+        "Prepare the repository's committed HEAD and run its committed setup recipe without starting a session.",
+      noRepositories:
+        "No local repositories were found. Add a local project from New Session, then reopen this dialog.",
+      buildStarted: "Build started",
+      buildReused: "Reusing the build already in progress",
+      capacity:
+        "The prepared worker pool is full. Raise the prepared pool cap or destroy an unused worker, then try again.",
+      invalidProject:
+        "The repository must be an accessible local Git checkout root with a HEAD commit. Select another repository or fix the checkout, then try again.",
+      invalidProfile:
+        "This profile is unavailable or does not support project preparation. Refresh and select an eligible profile.",
+      cancelBuild: "Cancel build",
+      cancelBuildMessage:
+        "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
+      buildCancelled: "Build canceled",
+      buildAge: "Age: {age}",
+      buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
+      buildStates: {
+        requested: "Requested",
+        provisioning: "Provisioning",
+        bootstrapping: "Bootstrapping",
+        ready: "Ready",
+        attached: "Attached",
+        idle: "Idle",
+        draining: "Draining",
+        destroying: "Destroying",
+        destroyed: "Destroyed",
+        failed: "Failed",
+        orphaned: "Orphaned",
+      },
+      refresh: "Refresh",
+      recover: "Recover",
+      recoverTitle: "Recover paused capture",
+      recoverMessage:
+        "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
+      acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
+      recovered:
+        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
+      migration: "Needs migration",
+      migrationHint:
+        "Run openclaw doctor --fix and follow its provider-cleanup recovery instructions before provisioning workers.",
+    },
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
@@ -12,7 +166,8 @@ const enSettings = {
     editProfile: "Edit profile",
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
-    deleteConfirm: "Delete profile {profile}? New cloud sessions cannot use it after restart.",
+    deleteConfirm:
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
     advertised: "Advertised",
     restartRequired: "Restart required",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
@@ -20,16 +175,39 @@ const enSettings = {
     providerFact: "Provider: {provider}",
     backendFact: "Crabbox backend: {backend}",
     classFact: "Class: {value}",
+    operatingSystemFact: "Operating system: {value}",
     ttlFact: "Max lifetime: {value}",
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
+    advanced: "Advanced",
+    preparedPool: "Prepared pool",
+    preparedPoolHelp:
+      "Maximum unassigned workers across projects and profiles. Leave empty for the default of 4; zero drains unused reserves and stops refill. Reserves incur running-machine charges.",
+    savePool: "Save pool",
+    repositories: "Repositories",
+    repositoriesHelp:
+      "Choose the default cloud worker profile for each repository. Explicit session profile choices take precedence.",
+    repositoriesEmpty: "No repository defaults are configured.",
+    addRepository: "Add repository",
+    editRepository: "Edit repository",
+    saveRepository: "Save repository",
+    repositoryIdentity: "Repository identity",
+    repositoryIdentityHelp:
+      "Enter host/owner/repo or a Git remote URL. Saved identities use lowercase and omit the trailing .git.",
+    repositoryProfile: "Default profile",
+    selectProfile: "Choose a profile",
+    warmImage: { auto: "Auto", on: "On", off: "Off" },
     fields: {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
       backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
+      backendHelp: "The backend passed to Crabbox, such as AWS, Azure, or Hetzner.",
       backendPlaceholder: "hetzner",
+      operatingSystem: "Operating system",
+      operatingSystemHelp:
+        "Options come from this profile's advertised operating systems. Choose Provider default to clear a saved target, including one no longer advertised.",
+      providerDefault: "Provider default",
       machineClass: "Machine class",
       machineClassHelp:
         "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
@@ -44,10 +222,22 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
+      warmImage: "Warm images",
+      warmImageHelp:
+        "Auto enables images for Linux when a machine class is known and no setup environment names are set. Images incur provider snapshot storage charges.",
+      setupEnv: "Setup environment names",
+      setupEnvHelp:
+        "Up to 16 unique POSIX environment variable names, separated by commas or whitespace. Requires a setup command. Values come from the gateway environment.",
+      readyWorkers: "Ready workers",
+      readyWorkersHelp:
+        "Prepares unassigned workers per eligible project after a successful session. Leave empty for one; zero disables reserves. Ready workers incur running-machine charges.",
+      suspendAfter: "Suspend after",
+      suspendAfterHelp:
+        "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
       actionsHelp: "Saving updates the config; the gateway must restart before using it.",
     },
@@ -57,11 +247,28 @@ const enSettings = {
         "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws or hetzner.",
+      backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
+      target:
+        "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
+      warmImage: "Warm images require Linux. Choose Linux, Auto, or Off before saving.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
       binary: "Enter an absolute Crabbox binary path or leave the field empty.",
+      setupEnv:
+        "Enter at most 16 unique POSIX environment variable names. CRABBOX_ENV_ALLOW is reserved.",
+      repository: "Enter a valid repository identity, such as github.com/acme/app.",
+      repositoryExists: "This repository already has a default. Edit its existing mapping.",
+      repositoryMissing:
+        "This repository mapping changed or was removed. Reload the config and try again.",
+      repositoryProfile:
+        "Choose an existing cloud worker profile. Add a profile first if none are configured.",
+      preparedPool: "Enter a non-negative whole number or leave the field empty.",
+      settingsSaveFailed: "These settings were not saved. Reload the config and try again.",
+      setupEnvRequiresSetup: "Enter a setup command or clear the setup environment names.",
+      readyWorkers: "Enter a whole number of zero or more, or leave ready workers empty.",
+      suspendAfter:
+        "Enter a duration of at least 1m, such as 45m or 2h, or leave suspend after empty.",
       saveFailed: "The profile was not saved. Reload the config and try again.",
       deleteFailed: "The profile was not deleted. Reload the config and try again.",
     },
@@ -69,7 +276,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
-    subtitle: "Model providers with auth, plan, quota, and cost data.",
+    subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
@@ -105,6 +312,28 @@ const enSettings = {
       envKeyNamed: "API key from environment ({name})",
       profileKey: "API key profiles: {count}",
       none: "Not configured",
+    },
+    profiles: {
+      title: "Provider profiles",
+      accountOne: "1 account",
+      accounts: "{count} accounts",
+      reorderHint: "Drag to set your preferred account order.",
+      reorder: "Reorder {account}, position {position}",
+      priority: "Priority {position}",
+      automaticOrder: "Account selection is automatic.",
+      priorityManagedByProvider: "Priority is managed by provider configuration.",
+      priorityManagedByAuth: "Priority is managed by auth.order.",
+      partialOrder: "Priority is inherited or managed across provider routes.",
+      partialStoredOrder: "Clear the custom order before changing priority.",
+      resetOrder: "Clear custom order",
+      resetOrderHint:
+        "Remove this agent's custom priority and use the default order. Accounts stay connected.",
+      addAccount: "Add account",
+      lastUsed: "Last used {time} ago",
+      sourceConfig: "Provider config",
+      sourceExternal: "External CLI",
+      sourceInherited: "Shared credential",
+      sourceSaved: "Saved in OpenClaw",
     },
     apiKey: {
       label: "API key",
@@ -146,7 +375,9 @@ const enSettings = {
     },
     logout: {
       action: "Log out",
-      confirm: "Log out of {provider}? Saved OAuth and token profiles will be removed.",
+      actionFor: "Log out {account}",
+      confirm:
+        "Remove the saved sign-in for {provider} from OpenClaw? You can add this account again later.",
       loggingOut: "Logging out…",
       done: "Logged out.",
     },
@@ -161,8 +392,9 @@ const enSettings = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Defaults",
-      subtitle: "Applies across all providers and models where applicable.",
+      title: "Global defaults",
+      subtitle:
+        "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
@@ -176,14 +408,17 @@ const enSettings = {
       noFallback: "No fallback model",
       selectModel: "Select a model",
       noModels: "Configure a provider before selecting default models.",
+      discoveringMore: "Discovering more models…",
+      discoverFailed: "More models could not be discovered.",
+      retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
-        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+        "Sets the global default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
       thinkingDefaultHelp:
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About fast mode defaults",
       fastModeHelp:
-        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+        "Sets the global default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
       saved: "Defaults saved.",
@@ -288,11 +523,17 @@ const enSettings = {
   },
   configPage: {
     deviceSettings: {
-      appOnly: "These settings are only available inside the OpenClaw Mac app.",
-      loading: "Waiting for settings from the Mac app…",
+      appOnly: "These settings are only available inside the OpenClaw app.",
+      loading: "Waiting for settings from the app…",
       intro: "App behavior and capabilities on this Mac.",
+      introIos: "App behavior and capabilities on this device.",
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
+      permissionsIntroIos: "Device access for notifications, capture, voice, and personal data.",
       app: "App",
+      appearance: "Appearance",
+      appearanceModes: { system: "System", light: "Light", dark: "Dark" },
+      notificationsEnabled: "Notifications",
+      notificationsEnabledHint: "Deliver notifications on this device.",
       showDockIcon: "Show Dock icon",
       iconStyle: "Dock icon",
       iconStyleHint:
@@ -315,6 +556,18 @@ const enSettings = {
       canvasHint: "Allow the agent to show and control the Canvas panel.",
       camera: "Allow Camera",
       cameraHint: "Allow the agent to capture a photo or short video via the built-in camera.",
+      keepAwake: "Keep awake",
+      keepAwakeHint: "Keep the screen awake while OpenClaw is active.",
+      healthSummary: "Health summaries",
+      healthSummaryHint: "Allow the agent to request a health summary from this device.",
+      device: "Device",
+      panels: {
+        diagnostics: "Diagnostics",
+        licenses: "Licenses",
+        about: "About",
+        watch: "Apple Watch",
+      },
+      openPanel: "Open…",
       computerControl: "Allow Computer Control",
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
@@ -364,8 +617,10 @@ const enSettings = {
       systemAccess: "System access",
       grant: "Grant…",
       openSystemSettings: "Open System Settings…",
+      openSettings: "Open Settings",
       permissionStatuses: {
         granted: "Granted",
+        limited: "Limited",
         denied: "Denied",
         notDetermined: "Not determined",
         unavailable: "Unavailable",
@@ -394,6 +649,13 @@ const enSettings = {
           title: "Automation (Terminal)",
           hint: "Control Terminal for automation actions; other apps request access separately.",
         },
+        contacts: { title: "Contacts", hint: "Access contacts when requested by the agent." },
+        calendars: {
+          title: "Calendars",
+          hint: "Access calendar events when requested by the agent.",
+        },
+        reminders: { title: "Reminders", hint: "Access reminders when requested by the agent." },
+        photos: { title: "Photos", hint: "Access photos you allow this app to use." },
       },
       location: "Location",
       locationAccess: "Location access",
@@ -401,6 +663,8 @@ const enSettings = {
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
       preciseLocationHint: "Always may require System Settings to approve background location.",
+      preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
+      preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
       activePresence: "Active computer presence",
       activePresenceHint:
@@ -411,6 +675,11 @@ const enSettings = {
       wakeEnabled: "Voice Wake",
       unsupported:
         "Voice Wake is unavailable on this Mac. It requires macOS 26 or newer and on-device recognition for the selected language.",
+      unsupportedDevice: "Voice Wake is unavailable on this device.",
+      talkEnabled: "Talk mode",
+      talkButtonEnabled: "Show Talk button",
+      talkBackgroundEnabled: "Talk in the background",
+      speakerphoneEnabled: "Use speakerphone",
       wakeTriggersTalkMode: "Wake triggers Talk Mode",
       pushToTalkEnabled: "Hold Right Option to talk",
       talkShiftToStopEnabled: "Shift to stop",
@@ -716,6 +985,7 @@ export const registerSettingsEnglish = Object.assign(
     en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
+    Object.assign(en.connection, enSettings.connection);
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);

@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
+  - You manage config externally and want OpenClaw to leave it unchanged
 title: "Config"
 sidebarTitle: "Config"
 ---
@@ -9,8 +10,38 @@ sidebarTitle: "Config"
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 <Note>
-When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse. Edit the Nix source for the install instead; for the first-party nix-openclaw distribution, use the [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) and set values under `programs.openclaw.config` or `instances.<name>.config`.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
+
+## Externally managed config
+
+Set `OPENCLAW_CONFIG_READONLY=1` in the environment of both the Gateway and any
+OpenClaw CLI processes when a deployment system manages your config:
+
+```bash
+export OPENCLAW_CONFIG_READONLY=1
+openclaw config validate
+openclaw gateway run
+```
+
+For a service or container, set the variable in its service environment or
+container definition. This is a host-environment switch, not an `openclaw.json`
+field. Do not set `OPENCLAW_CONFIG_READONLY` in config `env` or `env.vars`.
+Entries in `env.vars` are ignored, including differently cased spellings; flat
+`env` keys are not valid configuration. Config reload cannot enable, disable,
+or change the host-selected read-only mode. Only the host value `1` enables
+this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
+
+Config writes are blocked, including setup, onboarding, doctor repairs, plugin
+install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
+Startup-derived defaults stay runtime-only. Change the config through your
+external deployment system, then let the Gateway reload it or restart the Gateway
+as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+
+`OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
+does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`
+continues to imply immutable config, even if `OPENCLAW_CONFIG_READONLY` is unset or
+`0`. For Nix installs, edit the Nix source instead; see [Nix](/install/nix).
 
 ## Root options
 
@@ -165,7 +196,7 @@ For structured values that are awkward to quote in your shell, put a config-shap
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
-When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model.
+When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 
 <Note>
 Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
@@ -587,3 +618,4 @@ Inside the TUI, a leading `!` runs a literal local shell command (after a one-ti
 
 - [CLI reference](/cli)
 - [Configuration](/gateway/configuration)
+- [`openclaw configure`](/cli/configure) — guided editor for the same settings

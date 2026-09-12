@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import { createClientFactory } from "./bounded-turn.test-fixtures.js";
 
-it.each(["stdio", "websocket", "unix", "stdio-proxy"] as const)(
+it.each(["stdio", "websocket", "unix", "stdio-proxy", "stdio-remote-workspace"] as const)(
   "fences owned-local isolated turns before %s client startup",
   async (transport) => {
     const fake = createClientFactory();
@@ -18,11 +18,15 @@ it.each(["stdio", "websocket", "unix", "stdio-proxy"] as const)(
                   transport: "stdio",
                   args: ["app-server", "proxy", "--sock", "/fixture/native.sock"],
                 }
-              : transport === "stdio"
-                ? { transport }
-                : transport === "unix"
-                  ? { transport, homeScope: "user", url: "unix:///fixture/native.sock" }
-                  : { transport, url: "ws://127.0.0.1:19400", authToken: "fixture-token" },
+              : // A local stdio launcher for a remote workspace root still forwards the
+                // turn off this host, so the owned-local fence must reject it too.
+                transport === "stdio-remote-workspace"
+                ? { transport: "stdio", remoteWorkspaceRoot: "/home/oai/openclaw-workspaces" }
+                : transport === "stdio"
+                  ? { transport }
+                  : transport === "unix"
+                    ? { transport, homeScope: "user", url: "unix:///fixture/native.sock" }
+                    : { transport, url: "ws://127.0.0.1:19400", authToken: "fixture-token" },
         },
       },
       taskLabel: "isolated completion",

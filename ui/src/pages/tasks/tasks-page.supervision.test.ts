@@ -1,3 +1,4 @@
+import { createHash, webcrypto } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -139,6 +140,88 @@ describe("supervised task controls", () => {
     await waitForFast(() =>
       expect(page.textContent).not.toContain("I reviewed and accept this artifact"),
     );
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+  it("does not show a previous task's delayed file beneath the selected task's approval", async () => {
+    vi.stubGlobal("crypto", webcrypto);
+    const first = supervisedTask({ title: "First artifact" });
+    const second = supervisedTask({
+      flowId: "supervised-two",
+      title: "Second artifact",
+      artifact: { versionId: "00000000-0000-4000-8000-000000000002", sourceHash: "c".repeat(64) },
+    });
+    const firstContent = "only the first task's bytes";
+    const secondContent = "only the second task's bytes";
+    const manifest = (task: typeof first, name: string, content: string) => ({
+      ...task.artifact,
+      files: [
+        {
+          path: name,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          bytes: content.length,
+          executable: false,
+        },
+      ],
+    });
+    const firstManifest = manifest(first, "first.txt", firstContent);
+    const secondManifest = manifest(second, "second.txt", secondContent);
+    const fileResult = (result: typeof firstManifest, content: string) => ({
+      ...result,
+      file: {
+        path: result.files[0]!.path,
+        sha256: result.files[0]!.sha256,
+        bytes: content.length,
+        offset: 0,
+        base64: btoa(content),
+      },
+    });
+    const pendingFile = deferred<unknown>();
+    const request = vi.fn((method: string, params?: { flowId?: string; path?: string }) => {
+      if (method === "tasks.supervision.list") {
+        return Promise.resolve({ tasks: [first, second] });
+      }
+      if (method === "tasks.supervision.artifact") {
+        if (params?.flowId === first.flowId) {
+          return params.path ? pendingFile.promise : Promise.resolve(firstManifest);
+        }
+        return Promise.resolve(
+          params?.path ? fileResult(secondManifest, secondContent) : secondManifest,
+        );
+      }
+      return Promise.resolve({ tasks: [] });
+    });
+    const { page } = await mountSupervision(request);
+    await waitForFast(() => expect(page.textContent).toContain("Second artifact"));
+    button(page, "Details and controls").click();
+    await waitForFast(() => expect(page.textContent).toContain(first.flowId));
+    button(page, "Inspect retained files").click();
+    await waitForFast(() => expect(page.textContent).toContain("first.txt"));
+    button(page, "first.txt").click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "tasks.supervision.artifact",
+        expect.objectContaining({ flowId: first.flowId, path: "first.txt" }),
+      ),
+    );
+    const details = Array.from(page.querySelectorAll<HTMLButtonElement>("button")).filter(
+      (candidate) => candidate.textContent?.trim() === "Details and controls",
+    );
+    expect(details).toHaveLength(2);
+    details[1]!.click();
+    await waitForFast(() => expect(page.textContent).toContain(second.flowId));
+    pendingFile.resolve(fileResult(firstManifest, firstContent));
+    await waitForFast(() => expect(button(page, "Inspect retained files").disabled).toBe(false));
+    button(page, "Inspect retained files").click();
+    await waitForFast(() =>
+      expect(button(page, "I reviewed and accept this artifact").disabled).toBe(false),
+    );
+    expect(page.textContent).not.toContain(firstContent);
+    expect(page.querySelector("pre")).toBeNull();
+    button(page, "second.txt").click();
+    await waitForFast(() =>
+      expect(page.querySelector("pre")?.textContent).toContain(secondContent),
+    );
+    expect(page.textContent).not.toContain(firstContent);
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
   it("drops an old-session list response after reconnect and does not display stale custody", async () => {

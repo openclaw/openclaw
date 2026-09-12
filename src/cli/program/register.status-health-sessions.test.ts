@@ -519,6 +519,21 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("documents retained delete archives in sessions delete help", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const deleteCommand = sessions?.commands.find((command) => command.name() === "delete");
+
+    let help = "";
+    deleteCommand?.configureOutput({ writeOut: (text) => (help += text) }).outputHelp();
+
+    expect(help).toContain(
+      "Retained deleted-session archives can remain eligible for memory search",
+    );
+    expect(help).toContain("openclaw memory forget --agent <agent-id> --session <id-or-key>");
+    expect(help).toContain("on the Gateway host or container using its state and configuration");
+    expect(help).toContain("including for global keys");
+  });
+
   it("rejects inherited session-list filters for lifecycle mutations", async () => {
     await expectSessionsRegistrationError(
       [

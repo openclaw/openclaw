@@ -1,3 +1,4 @@
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
 
 /**
@@ -16,6 +17,28 @@ type MobileKeyboardOptions = {
 export class DesktopMobileKeyboard {
   /** The document view renders this so the field always holds deletable padding. */
   value = MOBILE_KEYBOARD_SENTINEL;
+  private modifierConnection: DesktopConnectionHandle | null = null;
+  private readonly modifiers = new Map<string, KeyboardEvent>();
+  private readonly clearModifiers = () => {
+    this.modifiers.clear();
+    window.removeEventListener("blur", this.clearModifiers);
+    window.removeEventListener("keyup", this.handleWindowKeyup, true);
+  };
+  private readonly handleWindowKeyup = (event: KeyboardEvent) => {
+    // noVNC stops canvas keyups from bubbling. Capture physical releases after focus moves,
+    // but ignore our synthetic forwarding and temporary paste releases.
+    if (!event.isTrusted || event.composedPath()[0] === this.options.input()) {
+      return;
+    }
+    const connection = this.currentConnection();
+    if (!connection || !this.modifiers.delete(event.code)) {
+      return;
+    }
+    if (this.modifiers.size === 0) {
+      this.clearModifiers();
+    }
+    connection.sendKeyboardEvent(event);
+  };
 
   constructor(private readonly options: MobileKeyboardOptions) {}
 
@@ -26,6 +49,9 @@ export class DesktopMobileKeyboard {
   }
 
   reset(input?: HTMLTextAreaElement): void {
+    if (!input) {
+      this.clearModifiers();
+    }
     this.value = MOBILE_KEYBOARD_SENTINEL;
     const target = input ?? this.options.input();
     if (target) {
@@ -34,9 +60,31 @@ export class DesktopMobileKeyboard {
   }
 
   handleKeyboardEvent(event: KeyboardEvent): void {
-    const connection = this.options.connection();
-    if (!this.options.controlling() || !connection) {
+    const connection = this.currentConnection();
+    if (!connection) {
       return;
+    }
+    // The textarea owns local paste; forwarding its shortcut suppresses browser input.
+    if (
+      !event.isComposing &&
+      !event.altKey &&
+      (isApplePlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
+      event.key.toLowerCase() === "v"
+    ) {
+      return;
+    }
+    if (["Meta", "Control", "Shift", "Alt"].includes(event.key)) {
+      if (event.type === "keydown") {
+        this.modifiers.set(event.code, event);
+        // noVNC releases held keys on window blur; do not restore stale modifiers afterward.
+        window.addEventListener("blur", this.clearModifiers, { once: true });
+        window.addEventListener("keyup", this.handleWindowKeyup, true);
+      } else {
+        this.modifiers.delete(event.code);
+        if (this.modifiers.size === 0) {
+          this.clearModifiers();
+        }
+      }
     }
     connection.sendKeyboardEvent(event);
     event.preventDefault();
@@ -44,12 +92,17 @@ export class DesktopMobileKeyboard {
 
   handleInput(event: InputEvent): void {
     const input = event.currentTarget as HTMLTextAreaElement;
-    if (!this.options.controlling()) {
+    const connection = this.currentConnection();
+    if (!connection) {
       this.reset(input);
       return;
     }
     const nextValue = input.value;
-    const connection = this.options.connection();
+    // Paste is literal text even while the user still physically holds its shortcut modifiers.
+    const modifiers = event.inputType === "insertFromPaste" ? [...this.modifiers.values()] : [];
+    for (const modifier of modifiers) {
+      connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
+    }
     let prefixLength = 0;
     for (const character of this.value) {
       if (!nextValue.startsWith(character, prefixLength)) {
@@ -63,14 +116,26 @@ export class DesktopMobileKeyboard {
       remaining > 0;
       remaining -= 1
     ) {
-      connection?.sendBackspace();
+      connection.sendBackspace();
     }
-    connection?.sendText(nextValue.slice(prefixLength));
+    connection.sendText(nextValue.slice(prefixLength));
+    for (const modifier of modifiers) {
+      connection.sendKeyboardEvent(modifier);
+    }
     // Refill once the field drifts outside the range that keeps further deletes reportable.
     if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
       this.reset(input);
       return;
     }
     this.value = nextValue;
+  }
+
+  private currentConnection(): DesktopConnectionHandle | null {
+    const connection = this.options.controlling() ? this.options.connection() : null;
+    if (connection !== this.modifierConnection) {
+      this.clearModifiers();
+      this.modifierConnection = connection;
+    }
+    return connection;
   }
 }

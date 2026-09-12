@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
@@ -23,6 +22,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -367,12 +367,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion < 18 && tableExists(db, "task_flow_episodes")) {
-    migrations.push({ kind: "supervised-attempt-custody-v18", path: pathname });
+  const userVersion = readStateSchemaMigrationVersion(db);
+  if (userVersion < 19 && tableExists(db, "task_flow_episodes")) {
+    migrations.push({ kind: "supervised-attempt-custody-v19", path: pathname });
   }
-  if (userVersion < 17 && tableExists(db, "task_flow_episodes")) {
-    migrations.push({ kind: "supervised-workflow-custody-v17", path: pathname });
+  if (userVersion < 18 && tableExists(db, "task_flow_episodes")) {
+    migrations.push({ kind: "supervised-workflow-custody-v18", path: pathname });
   }
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
@@ -432,6 +432,13 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
       tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
   ) {
     migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
+  }
+  if (
+    userVersion < 17 &&
+    tableExists(db, "worker_environments") &&
+    !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
+  ) {
+    migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

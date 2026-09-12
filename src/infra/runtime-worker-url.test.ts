@@ -1,11 +1,15 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const requireFromHere = createRequire(import.meta.url);
 
 describe("resolveRuntimeWorkerUrl", () => {
   it("resolves source siblings and stable packaged worker paths", () => {
@@ -133,13 +137,29 @@ describe("resolveRuntimeWorkerArgv", () => {
         expect(args).toHaveLength(3);
         expect(args[0]).toBe("--import");
         if (extension === "cts") {
-          expect(args[1]).toBe(import.meta.resolve("tsx"));
+          expect(args[1]).toBe(pathToFileURL(requireFromHere.resolve("tsx")).href);
         } else {
           expect(args[1]).toMatch(/^data:text\/javascript;base64,/);
         }
       }
     }
   });
+
+  it.each(["ts", "mts", "cts"])(
+    "runs a .%s worker from outside the package directory",
+    async (extension) => {
+      await withTempDir("openclaw-worker-cwd-", async (cwd) => {
+        const entry = path.join(cwd, `worker fixture.${extension}`);
+        await writeFile(entry, "enum Answer { value = 42 }; console.log(Answer.value);");
+        const { stdout } = await promisify(execFile)(
+          process.execPath,
+          resolveRuntimeWorkerArgv(pathToFileURL(entry)),
+          { cwd, timeout: 10_000 },
+        );
+        expect(stdout.trim()).toBe("42");
+      });
+    },
+  );
 });
 
 describe("resolveRuntimeProcessEntrypointUrl", () => {

@@ -436,7 +436,6 @@ export async function maybeCompactAgentHarnessSession(
     return undefined;
   }
   const compactIdentity = resolveHarnessCompactIdentity(params);
-  let resolvedRuntimeAuthPlan = runtimeAuthPlan;
   const resolveNativeToolPolicyRestricted = (targetHarness: AgentHarness) =>
     resolveAgentHarnessNativeToolPolicyRestricted(
       {
@@ -451,14 +450,6 @@ export async function maybeCompactAgentHarnessSession(
     ...params,
     agentDir: compactIdentity.agentDir,
     agentId: compactIdentity.agentId,
-    ...(resolvedRuntimeAuthPlan
-      ? {
-          runtimeAuthPlan: resolvedRuntimeAuthPlan,
-          ...(params.runtimePlan
-            ? { runtimePlan: { ...params.runtimePlan, auth: resolvedRuntimeAuthPlan } }
-            : {}),
-        }
-      : {}),
   };
   const resolved = await resolveHarnessCompactApiKey({
     agentDir: compactIdentity.agentDir,
@@ -472,7 +463,7 @@ export async function maybeCompactAgentHarnessSession(
   harness = resolved.harness;
   const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);
   compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
-  resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? resolvedRuntimeAuthPlan;
+  const resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? runtimeAuthPlan;
   const nativeCompaction = resolveCodexAgentHarnessNativeCompaction(harness);
   if (options.nativeCompactionRequest === "after_context_engine" && !nativeCompaction) {
     return undefined;

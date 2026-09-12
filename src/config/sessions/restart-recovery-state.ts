@@ -248,7 +248,7 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
 }
 
 /** Keeps a bounded durable set of client runs that must never execute again. */
-function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
+export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }

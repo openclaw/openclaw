@@ -455,14 +455,7 @@ function mergeRecoveredManagedNpmInstallRecords(
 }
 
 /** Reads install records from the persisted installed plugin index. */
-export async function readPersistedInstalledPluginIndexInstallRecords(
-  options: InstalledPluginIndexStoreOptions = {},
-): Promise<Record<string, PluginInstallRecord> | null> {
-  return readPersistedInstalledPluginIndexInstallRecordsSync(options);
-}
-
-/** Synchronously reads install records from the persisted installed plugin index. */
-export function readPersistedInstalledPluginIndexInstallRecordsSync(
+export function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
   const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);

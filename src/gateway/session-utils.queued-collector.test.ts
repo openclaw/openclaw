@@ -134,7 +134,7 @@ describe("queued collector session projection", () => {
         status: "queued",
       });
       expect.soft(created?.startedAt).toBeUndefined();
-      expect.soft(created?.runtimeMs).toBeUndefined();
+      expect.soft(created?.runtimeMs).toBeNull();
       expect
         .soft(rows.filter((row) => row.swarmGroupId === queued.swarmGroupId && row.hasActiveRun))
         .toHaveLength(2);

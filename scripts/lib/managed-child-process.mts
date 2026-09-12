@@ -21,6 +21,7 @@ type ManagedProcessGroupChild = {
   signalCode?: string | null;
 };
 type ManagedProcessGroupOptions = {
+  deadlineAt?: number;
   errorPolicy: ManagedProcessGroupErrorPolicy;
   inspectLeaderWhenNoGroup?: boolean;
   platform?: NodeJS.Platform;
@@ -112,7 +113,7 @@ export function signalExitCode(signal: NodeJS.Signals) {
 }
 
 export function terminateManagedChild(
-  child: { kill(signal: NodeJS.Signals): unknown; pid?: number },
+  child: ManagedProcessGroupChild & { kill(signal: NodeJS.Signals): unknown },
   signal: NodeJS.Signals = "SIGTERM",
   {
     onChildSignalError,
@@ -166,6 +167,11 @@ export function terminateManagedChild(
     }
   }
 
+  // After exit this PID can name another process. Keep descendant cleanup
+  // unverified instead of targeting that potentially unrelated owner.
+  if (child.exitCode != null || child.signalCode != null) {
+    return { processTreeState: "indeterminate" };
+  }
   const taskkillPath = resolveWindowsTaskkillPath();
   const args = ["/PID", String(child.pid), "/T"];
   if (signal === "SIGKILL") {
@@ -197,6 +203,7 @@ export function terminateManagedChild(
 export function inspectManagedProcessGroup(
   child: ManagedProcessGroupChild,
   {
+    deadlineAt,
     errorPolicy,
     inspectLeaderWhenNoGroup = false,
     platform = process.platform,
@@ -218,7 +225,7 @@ export function inspectManagedProcessGroup(
   try {
     process.kill(-pid, 0);
     if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
-      if (isLinuxZombieProcessGroup(pid)) {
+      if (isLinuxZombieProcessGroup(pid, deadlineAt)) {
         return "dead";
       }
       // The group may be reaped while ps runs. Recheck kernel existence without
@@ -251,7 +258,16 @@ export function inspectManagedProcessGroup(
   }
 }
 
-function isLinuxZombieProcessGroup(pid: number): boolean {
+function isLinuxZombieProcessGroup(pid: number, deadlineAt?: number): boolean {
+  const timeout =
+    deadlineAt === undefined
+      ? PROCESS_GROUP_DRAIN_TIMEOUT_MS
+      : Math.min(PROCESS_GROUP_DRAIN_TIMEOUT_MS, Math.floor(deadlineAt - Date.now()));
+  // Snapshot work shares its owner's deadline. Exhaustion is not death, and
+  // timeout: 0 would silently remove Node's subprocess timeout.
+  if (timeout <= 0) {
+    return false;
+  }
   // Detached children lead their own session. Linux kill(0) includes zombies,
   // which cannot write or respond to signals while awaiting their parent's reap.
   // Enumerate threads (-L): a process row reports only the group leader's state,
@@ -259,7 +275,7 @@ function isLinuxZombieProcessGroup(pid: number): boolean {
   const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: PROCESS_GROUP_DRAIN_TIMEOUT_MS,
+    timeout,
     killSignal: "SIGKILL",
   });
   const zombie = new RegExp(`^\\s*${pid}\\s+Z\\s*$`, "u");
@@ -286,19 +302,22 @@ export async function waitForManagedProcessGroupExit(
     pollIntervalMs?: number;
   },
 ): Promise<boolean> {
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = Math.min(Date.now() + timeoutMs, groupOptions.deadlineAt ?? Infinity);
+  const boundedGroupOptions = { ...groupOptions, deadlineAt };
   while (Date.now() < deadlineAt) {
-    if (inspectManagedProcessGroup(child, groupOptions) !== "live") {
+    if (inspectManagedProcessGroup(child, boundedGroupOptions) !== "live") {
       return true;
     }
-    const waitMs = clampPollToDeadline
-      ? Math.min(pollIntervalMs, deadlineAt - Date.now())
-      : pollIntervalMs;
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    const waitMs = clampPollToDeadline ? Math.min(pollIntervalMs, remainingMs) : pollIntervalMs;
     await new Promise((resolve) => {
       setTimeout(resolve, waitMs);
     });
   }
-  return inspectManagedProcessGroup(child, groupOptions) !== "live";
+  return inspectManagedProcessGroup(child, boundedGroupOptions) !== "live";
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
@@ -513,9 +532,15 @@ async function finalizeManagedChild(
   // Nested wrappers own detached groups. Let them forward the signal before
   // killing their leader, then join inherited pipes as well as our own group.
   // Normal exit has no grace period: surviving group members are a failure.
+  const startedAt = Date.now();
+  const forceDelay = signal ? forceKillDelayMs : 0;
   const termination =
     !signal &&
-    inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform }) === "dead"
+    inspectManagedProcessGroup(child, {
+      deadlineAt: startedAt + forceDelay + PROCESS_GROUP_DRAIN_TIMEOUT_MS,
+      errorPolicy: "indeterminate",
+      platform,
+    }) === "dead"
       ? { processTreeState: "terminated" }
       : terminateManagedChild(child, signal ?? "SIGKILL", { platform, runTaskkill });
   if (platform === "win32" && termination?.processTreeState !== "terminated") {
@@ -526,16 +551,29 @@ async function finalizeManagedChild(
       "indeterminate",
     );
   }
-  const forceAt = Date.now() + (signal ? forceKillDelayMs : 0);
+  // POSIX probes share the original budget; Windows retains its existing
+  // post-taskkill drainage allowance.
+  const forceAt = (platform === "win32" ? Date.now() : startedAt) + forceDelay;
   const deadline = forceAt + PROCESS_GROUP_DRAIN_TIMEOUT_MS;
   let forced = !signal || platform === "win32";
   let groupState: "dead" | "indeterminate" | "live" = "indeterminate";
   while (true) {
+    const exited = child.exitCode !== null || child.signalCode !== null;
+    // A snapshot cannot spend drainage time before escalation is due. Forced
+    // leader-exit cleanup skips snapshot work but still checks kernel existence.
+    const probeDeadline = forced
+      ? deadline
+      : forceKillOnLeaderExit && exited
+        ? Math.min(forceAt, Date.now())
+        : forceAt;
     groupState =
       platform === "win32"
         ? "dead"
-        : inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform });
-    const exited = child.exitCode !== null || child.signalCode !== null;
+        : inspectManagedProcessGroup(child, {
+            deadlineAt: probeDeadline,
+            errorPolicy: "indeterminate",
+            platform,
+          });
     const pipesClosed = [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed);
     if (groupState === "dead" && exited && pipesClosed) {
       onTerminated();
@@ -563,7 +601,7 @@ async function finalizeManagedChild(
       break;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(PROCESS_GROUP_POLL_MS, deadline - now));
+      setTimeout(resolve, Math.min(PROCESS_GROUP_POLL_MS, (forced ? deadline : forceAt) - now));
     });
   }
   // Stop owning pipe handles only after recording failure; never disguise an

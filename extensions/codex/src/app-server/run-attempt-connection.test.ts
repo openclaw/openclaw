@@ -35,6 +35,58 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it.each(["websocket", "stdio-proxy", "env-stdio-proxy", "local-stdio"])(
+    "preserves the account owner for %s when deferred auth omits homeScope",
+    async (connectionType) => {
+      vi.stubEnv(
+        "OPENCLAW_CODEX_APP_SERVER_ARGS",
+        connectionType === "env-stdio-proxy"
+          ? "app-server proxy --sock /fixture/server.sock"
+          : undefined,
+      );
+      const sessionFile = path.join(tempDir, `deferred-${connectionType}.jsonl`);
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, `deferred-${connectionType}-workspace`),
+      );
+      const runtimePlan = createCodexRuntimePlanFixture();
+      params.runtimePlan = {
+        ...runtimePlan,
+        auth: {
+          ...runtimePlan.auth,
+          deferredRouteSupport: {
+            requestTransportOverrides: "none",
+            runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          },
+        },
+      };
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: {
+            appServer:
+              connectionType === "websocket"
+                ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
+                : {
+                    transport: "stdio",
+                    ...(connectionType === "stdio-proxy"
+                      ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
+                      : {}),
+                  },
+          },
+        },
+      });
+      expect(connection.appServer.start.transport).toBe(
+        connectionType === "websocket" ? "websocket" : "stdio",
+      );
+      expect(connection.appServer.start.homeScope).toBe(
+        connectionType === "local-stdio" ? "user" : "agent",
+      );
+    },
+  );
+
   it("retains the recovered generation fence after connection preparation", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);

@@ -1,4 +1,5 @@
 // Deepseek tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
@@ -33,18 +34,7 @@ type ReplayToolCall = {
   };
 };
 
-type RegisteredProvider = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
-
 const emptyUsage = createZeroUsageFixture();
-
-function requireThinkingProfileResolver(
-  provider: RegisteredProvider,
-): NonNullable<RegisteredProvider["resolveThinkingProfile"]> {
-  if (!provider.resolveThinkingProfile) {
-    throw new Error("DeepSeek provider did not register a thinking profile resolver");
-  }
-  return provider.resolveThinkingProfile;
-}
 
 const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
 const readToolResult = {
@@ -132,16 +122,6 @@ function createPayloadCapturingStream(capture: PayloadCapture) {
     queueMicrotask(() => stream.end());
     return stream;
   };
-}
-
-function requireThinkingWrapper(
-  wrapper: ReturnType<typeof createDeepSeekV4ThinkingWrapper>,
-  label: string,
-): NonNullable<ReturnType<typeof createDeepSeekV4ThinkingWrapper>> {
-  if (!wrapper) {
-    throw new Error(`expected DeepSeek thinking wrapper for ${label}`);
-  }
-  return wrapper;
 }
 
 function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
@@ -321,7 +301,10 @@ describe("deepseek provider plugin", () => {
 
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    const resolveThinkingProfile = expectDefined(
+      provider.resolveThinkingProfile,
+      "DeepSeek thinking profile resolver",
+    );
     const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     for (const modelId of [
@@ -360,9 +343,9 @@ describe("deepseek provider plugin", () => {
         return stream;
       };
 
-      const wrapThinkingOff = requireThinkingWrapper(
+      const wrapThinkingOff = expectDefined(
         createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "off"),
-        "off",
+        "DeepSeek thinking wrapper for off",
       );
       await wrapThinkingOff(
         {
@@ -377,9 +360,9 @@ describe("deepseek provider plugin", () => {
       expect(readThinking(capturedPayload)?.type).toBe("disabled");
       expect(capturedPayload).not.toHaveProperty("reasoning_effort");
 
-      const wrapThinkingXhigh = requireThinkingWrapper(
+      const wrapThinkingXhigh = expectDefined(
         createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "xhigh"),
-        "xhigh",
+        "DeepSeek thinking wrapper for xhigh",
       );
       await wrapThinkingXhigh(
         {
@@ -404,9 +387,9 @@ describe("deepseek provider plugin", () => {
       const context = deepSeekReasoningToolReplayContext(modelId);
       const baseStreamFn = createPayloadCapturingStream(capture);
 
-      const wrapThinkingHigh = requireThinkingWrapper(
+      const wrapThinkingHigh = expectDefined(
         createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
-        "high",
+        "DeepSeek thinking wrapper for high",
       );
       await wrapThinkingHigh(model, context, {});
 
@@ -471,9 +454,9 @@ describe("deepseek provider plugin", () => {
     );
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingHigh = requireThinkingWrapper(
+    const wrapThinkingHigh = expectDefined(
       createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
+      "DeepSeek thinking wrapper for high",
     );
     await wrapThinkingHigh(model, context, {});
 
@@ -504,9 +487,9 @@ describe("deepseek provider plugin", () => {
     } as Context;
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingHigh = requireThinkingWrapper(
+    const wrapThinkingHigh = expectDefined(
       createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
+      "DeepSeek thinking wrapper for high",
     );
     await wrapThinkingHigh(model, context, {});
 
@@ -522,9 +505,9 @@ describe("deepseek provider plugin", () => {
     const context = deepSeekReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture);
 
-    const wrapThinkingNone = requireThinkingWrapper(
+    const wrapThinkingNone = expectDefined(
       createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "none" as never),
-      "none",
+      "DeepSeek thinking wrapper for none",
     );
     await wrapThinkingNone(model, context, {});
 

@@ -507,76 +507,87 @@ export function recordSupervisedOperationOutcome(
   now: number,
   options: Options = {},
 ): SupervisedOperation {
-  const outcome = parseSupervisedOperationOutcome(value);
-  return writeSupervisedWorkflow((db) => {
-    const execution = exactExecution(db, expected);
-    const operation = readOperation(db, execution.operationId)!;
-    if (execution.outcome) {
-      if (JSON.stringify(execution.outcome) !== JSON.stringify(outcome)) {
-        throw new Error("Conflicting immutable execution observation");
-      }
-      return operation;
-    }
-    assertReviewRuntimeClosed(db, operation, execution);
-    if (execution.dispatchedAt === null && outcome.status === "succeeded") {
-      throw new Error("Undispatched operation cannot claim success");
-    }
-    saveExecution(db, execution, { ...execution, finishedAt: now, outcome });
-    // Read-only review scratch is private runtime state, not an unaccepted file
-    // result. Commit its disposal permission with the receipt, after exact scope
-    // closure, so an outer-runner crash cannot leak one reservation per review.
-    // Unknown/input-required evidence is deliberately retained.
-    if (
-      operation.request.kind === "review" &&
-      execution.process &&
-      (outcome.status === "succeeded" || outcome.status === "failed")
-    ) {
-      executeSqliteQuerySync(
-        db,
-        sql(db)
-          .updateTable("task_flow_workspace_allocations")
-          .set({ state: "released", discardable_at_ms: now, updated_at_ms: now })
-          .where("flow_id", "=", operation.flowId)
-          .where("episode", "=", operation.episode)
-          .where("owner_kind", "=", "operation")
-          .where("owner_id", "=", execution.executionId)
-          .where("owner_pid", "=", execution.process.pid)
-          .where("owner_start_time", "=", execution.process.startTime)
-          .where("kind", "=", "draft")
-          .where("state", "=", "reserved")
-          .where((eb) =>
-            eb.exists(
-              eb
-                .selectFrom("task_flow_command_resources")
-                .select("execution_id")
-                .where("execution_id", "=", execution.executionId)
-                .where("state", "=", "closed"),
-            ),
-          ),
-      );
-    }
+  return writeSupervisedWorkflow(
+    (db) => recordSupervisedOperationOutcomeInTransaction(db, expected, value, now),
+    options,
+  );
+}
 
-    if (
-      operation.outcome ||
-      operation.executionId !== execution.executionId ||
-      operation.generation !== execution.generation
-    ) {
-      return operation;
+/** Compose the immutable receipt with the workspace owner's acceptance transaction. */
+export function recordSupervisedOperationOutcomeInTransaction(
+  db: DatabaseSync,
+  expected: SupervisedOperationExecution,
+  value: unknown,
+  now: number,
+): SupervisedOperation {
+  const outcome = parseSupervisedOperationOutcome(value);
+  const execution = exactExecution(db, expected);
+  const operation = readOperation(db, execution.operationId)!;
+  if (execution.outcome) {
+    if (JSON.stringify(execution.outcome) !== JSON.stringify(outcome)) {
+      throw new Error("Conflicting immutable execution observation");
     }
-    return finishOperation(
+    return operation;
+  }
+  assertReviewRuntimeClosed(db, operation, execution);
+  if (execution.dispatchedAt === null && outcome.status === "succeeded") {
+    throw new Error("Undispatched operation cannot claim success");
+  }
+  saveExecution(db, execution, { ...execution, finishedAt: now, outcome });
+  // Read-only review scratch is private runtime state, not an unaccepted file
+  // result. Commit its disposal permission with the receipt, after exact scope
+  // closure, so an outer-runner crash cannot leak one reservation per review.
+  // Unknown/input-required evidence is deliberately retained.
+  if (
+    operation.request.kind === "review" &&
+    execution.process &&
+    (outcome.status === "succeeded" || outcome.status === "failed")
+  ) {
+    executeSqliteQuerySync(
       db,
-      operation,
-      episodeCurrent(db, operation, now)
-        ? outcome
-        : {
-            status: "cancelled",
-            summary: "Observed an operation result after episode authority ended",
-            facts: { observedExecution: execution.executionId, observedStatus: outcome.status },
-            artifacts: [],
-          },
-      now,
+      sql(db)
+        .updateTable("task_flow_workspace_allocations")
+        .set({ state: "released", discardable_at_ms: now, updated_at_ms: now })
+        .where("flow_id", "=", operation.flowId)
+        .where("episode", "=", operation.episode)
+        .where("owner_kind", "=", "operation")
+        .where("owner_id", "=", execution.executionId)
+        .where("owner_pid", "=", execution.process.pid)
+        .where("owner_start_time", "=", execution.process.startTime)
+        .where("kind", "=", "draft")
+        .where("state", "=", "reserved")
+        .where((eb) =>
+          eb.exists(
+            eb
+              .selectFrom("task_flow_command_resources")
+              .select("execution_id")
+              .where("execution_id", "=", execution.executionId)
+              .where("state", "=", "closed"),
+          ),
+        ),
     );
-  }, options);
+  }
+
+  if (
+    operation.outcome ||
+    operation.executionId !== execution.executionId ||
+    operation.generation !== execution.generation
+  ) {
+    return operation;
+  }
+  return finishOperation(
+    db,
+    operation,
+    episodeCurrent(db, operation, now)
+      ? outcome
+      : {
+          status: "cancelled",
+          summary: "Observed an operation result after episode authority ended",
+          facts: { observedExecution: execution.executionId, observedStatus: outcome.status },
+          artifacts: [],
+        },
+    now,
+  );
 }
 
 /** Expired leases are unresolved, never presumed safe to replay. */

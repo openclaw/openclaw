@@ -17,8 +17,13 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
+import {
+  WorkspaceAliasRepointedError,
+  WorkspaceVanishedError,
+} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
@@ -48,7 +53,10 @@ import {
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -63,10 +71,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type {
-  InternalGetReplyOptions as BaseInternalGetReplyOptions,
-  ReplySessionBinding,
-} from "./get-reply.types.js";
+import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -79,10 +84,11 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery.js";
+} from "./pending-final-delivery-state.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createReplyModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
@@ -99,7 +105,6 @@ import { createTypingController } from "./typing.js";
 type ResetCommandAction = "new" | "reset";
 
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
   extractedFileImages?: ExtractedFileImage[];
 };
 
@@ -146,7 +151,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
-  processingMode?: "audio-only";
+  processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
@@ -455,6 +460,7 @@ export async function getReplyFromConfig(
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
           overrideSeconds: opts?.timeoutOverrideSeconds,
+          overrideMs: opts?.timeoutOverrideMs,
         }),
       };
     });
@@ -518,18 +524,37 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-          provisioning: await (
-            await import("../../agents/acp-workspace-provisioning.js")
-          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-        }),
-  );
+  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
+  try {
+    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+      useFastTestBootstrap
+        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+        : await ensureAgentWorkspace({
+            dir: workspaceDirRaw,
+            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+            provisioning: await (
+              await import("../../agents/acp-workspace-provisioning.js")
+            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
+          }),
+    );
+  } catch (error) {
+    if (
+      opts?.isHeartbeat === true ||
+      !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
+    ) {
+      throw error;
+    }
+    // Permanent failures must finish ingress even in tool-only conversations.
+    // Keep host paths in operator logs; heartbeat failures retain their own owner.
+    typing.cleanup();
+    logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
+    const text =
+      error instanceof WorkspaceAliasRepointedError
+        ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
+        : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
+    return markReplyPayloadForSourceSuppressionDelivery({ text });
+  }
   const workspaceDir = workspace.dir;
 
   if (
@@ -565,28 +590,32 @@ export async function getReplyFromConfig(
       utilityModelSelectionLocked &&
       hasInboundAudio(finalized) &&
       hasExplicitAudioUnderstandingConfig(cfg);
-    // Native harnesses own image, video, and file interpretation. They cannot
-    // transcribe audio, so an explicitly configured STT pipeline still runs alone.
-    if (!utilityModelSelectionLocked || shouldApplyLockedAudio) {
-      const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
-        applyMediaUnderstandingIfNeeded({
-          ctx: finalized,
-          cfg,
-          agentId,
-          agentDir,
-          workspaceDir,
-          activeModel: { provider, model },
-          // Cache and classify now; the final provider and owner policy are
-          // resolved later, immediately before the embedded turn starts.
-          selfServeLocalPaths: false,
-          ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
-        }),
-      );
-      if (mediaResult?.extractedFileImages.length) {
-        extractedFileImages = mediaResult.extractedFileImages;
-      }
-      enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
+    // Native harnesses receive images directly, but generic file attachments
+    // still need host extraction. Only explicitly configured STT runs when locked.
+    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
+      applyMediaUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        activeModel: { provider, model },
+        // Cache and classify now; the final provider and owner policy are
+        // resolved later, immediately before the embedded turn starts.
+        selfServeLocalPaths: false,
+        ...(utilityModelSelectionLocked
+          ? {
+              processingMode: shouldApplyLockedAudio
+                ? ("audio-and-files" as const)
+                : ("files-only" as const),
+            }
+          : {}),
+      }),
+    );
+    if (mediaResult?.extractedFileImages.length) {
+      extractedFileImages = mediaResult.extractedFileImages;
     }
+    enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
   }
   if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
@@ -729,6 +758,7 @@ export async function getReplyFromConfig(
   internalResolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
+    lifecycleRevision: sessionEntry.lifecycleRevision,
     storePath,
   });
 
@@ -969,14 +999,14 @@ export async function getReplyFromConfig(
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
+    resolveModelLevels,
     contextTokens,
     inlineStatusRequested,
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
-  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
-    directiveResult.result;
+  let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -1050,9 +1080,8 @@ export async function getReplyFromConfig(
       elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolvedThinkLevel,
+      resolveModelLevels,
       resolvedVerboseLevel,
-      resolvedReasoningLevel,
       resolvedElevatedLevel,
       blockReplyChunking,
       resolvedBlockStreamingBreak,
@@ -1083,6 +1112,7 @@ export async function getReplyFromConfig(
   const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
   const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
+  let resolveRunModelLevels = resolveModelLevels;
   if (runAutoFallbackPrimaryProbe) {
     try {
       runModelState = await createModelSelectionState({
@@ -1131,23 +1161,29 @@ export async function getReplyFromConfig(
       hasTurnOrSessionThinkLevel ||
       configuredThinkingDefault !== undefined ||
       runModelState.hasConfiguredThinkingDefault === true;
-    if (!hasTurnOrSessionThinkLevel) {
-      resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
-    }
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
     const hasExplicitReasoningLevel =
       directives.reasoningLevel !== undefined ||
       rawSessionReasoningLevel != null ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel) {
-      const thinkingActive = resolvedThinkLevel !== "off";
-      resolvedReasoningLevel =
-        thinkingActive || hasExplicitThinkLevel
-          ? "off"
-          : await runModelState.resolveDefaultReasoningLevel();
-    }
+    resolveRunModelLevels = createReplyModelLevelResolver({
+      modelState: runModelState,
+      selection: {
+        provider: runModelState.provider,
+        model: runModelState.model,
+        thinkLevel: hasTurnOrSessionThinkLevel
+          ? (await resolveModelLevels()).resolvedThinkLevel
+          : undefined,
+        thinkingExplicit: hasExplicitThinkLevel,
+        reasoningLevel: hasExplicitReasoningLevel
+          ? (await resolveModelLevels()).resolvedReasoningLevel
+          : "off",
+        reasoningExplicit: hasExplicitReasoningLevel,
+      },
+    });
   }
+  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
 
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)
@@ -1161,6 +1197,12 @@ export async function getReplyFromConfig(
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
+    const stagingWorkspaceDir =
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: sessionEntry.spawnedBy,
+        workspaceDir: sessionEntry.spawnedWorkspaceDir,
+        cwd: sessionEntry.spawnedCwd,
+      }) ?? workspaceDir;
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1168,7 +1210,7 @@ export async function getReplyFromConfig(
         cfg,
         agentId,
         sessionKey,
-        workspaceDir,
+        workspaceDir: stagingWorkspaceDir,
         abortSignal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );

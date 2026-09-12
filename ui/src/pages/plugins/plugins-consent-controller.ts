@@ -21,7 +21,7 @@ import type { GatewayPageController } from "../../lit/gateway-page-controller.ts
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
-import { pluginRowKey, type PluginRowMessage } from "./view.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 
 type PluginMutationSuccess<Result> = (
   result: Result,
@@ -36,6 +36,13 @@ type PluginMutationOptions = {
   preserveMessageWhilePending?: boolean;
 };
 
+export type PluginMutationObserver = {
+  reviewConfirmed?: boolean;
+  onCommitted?: (result: PluginMutationResult, refreshError: string | null) => void | Promise<void>;
+  onFailure?: (error: string) => void;
+  onInstallPolicyWarning?: (request: PluginInstallRequest, reason: string) => void;
+};
+
 type PluginsConsentControllerHost = {
   gateway: GatewayPageController;
   getContext: () => ApplicationContext;
@@ -48,6 +55,7 @@ type PluginsConsentControllerHost = {
   closeDetails: () => void;
   applyMutationResult: (result: PluginMutationResult) => void;
   refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
+  reconnectAfterMutation: (rowKey: string) => void;
   requestUpdate: () => void;
 };
 
@@ -80,6 +88,7 @@ export class PluginsConsentController {
 
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
+  private readonly mutationObservers = new Map<string, PluginMutationObserver>();
   // Server reviews continue one confirmed install only while its Gateway epoch survives.
   // Reconnect reset drops the scope before a surviving row warning can be acknowledged.
   private readonly confirmedInstallScopes = new Map<string, GatewayConnectionScope>();
@@ -89,6 +98,7 @@ export class PluginsConsentController {
   reset(): void {
     this.close();
     this.mutationTokens.clear();
+    this.mutationObservers.clear();
     this.confirmedInstallScopes.clear();
   }
 
@@ -182,6 +192,11 @@ export class PluginsConsentController {
     this.host.requestUpdate();
   }
 
+  cancelMutationObserver(key: string): void {
+    this.mutationObservers.delete(key);
+    this.confirmedInstallScopes.delete(key);
+  }
+
   async inspect(): Promise<void> {
     const consent = this.consent;
     const scope = this.host.gateway.capture();
@@ -230,7 +245,15 @@ export class PluginsConsentController {
     }
   }
 
-  async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+  async install(
+    request: PluginInstallRequest,
+    installIdentity: string,
+    observer?: PluginMutationObserver,
+  ): Promise<void> {
+    if (observer) {
+      this.mutationObservers.set(installIdentity, observer);
+    }
+    const installObserver = this.mutationObservers.get(installIdentity);
     const confirmedScope = this.confirmedInstallScopes.get(installIdentity);
     this.confirmedInstallScopes.delete(installIdentity);
     const isConfirmedContinuation =
@@ -243,7 +266,7 @@ export class PluginsConsentController {
     await this.runMutation(
       installIdentity,
       (client) => installPlugin(client, request),
-      async (result, refreshError, client) => {
+      async (result, refreshError, client, isCurrent) => {
         const installedPluginKey = pluginRowKey(result.plugin.id);
         this.host.applyMutationResult(result);
         if (installedPluginKey !== installIdentity) {
@@ -254,9 +277,18 @@ export class PluginsConsentController {
           committedMutationMessage("installed", result, refreshError),
         );
         await this.host.refreshCatalogAfterMutation(client);
+        if (!isCurrent()) {
+          return;
+        }
+        const committedObserver = this.mutationObservers.get(installIdentity);
+        this.mutationObservers.delete(installIdentity);
+        await committedObserver?.onCommitted?.(result, refreshError);
       },
       {
-        confirm: isConfirmedContinuation ? undefined : () => confirmPluginInstall(request),
+        confirm:
+          isConfirmedContinuation || installObserver?.reviewConfirmed
+            ? undefined
+            : () => confirmPluginInstall(request),
         preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
       (error, scope) => {
@@ -278,9 +310,16 @@ export class PluginsConsentController {
             text: policyWarning.reason,
             installPolicyWarning: { details: policyWarning, request },
           });
+          this.mutationObservers
+            .get(installIdentity)
+            ?.onInstallPolicyWarning?.(request, policyWarning.reason);
           return;
         }
-        this.host.setMessage(installIdentity, { kind: "error", text: formatUiError(error) });
+        const message = formatUiError(error);
+        this.host.setMessage(installIdentity, { kind: "error", text: message });
+        const failedObserver = this.mutationObservers.get(installIdentity);
+        this.mutationObservers.delete(installIdentity);
+        failedObserver?.onFailure?.(message);
       },
     );
   }
@@ -290,7 +329,11 @@ export class PluginsConsentController {
     enabled: boolean,
     key = pluginRowKey(pluginId),
     options: Parameters<typeof setPluginEnabled>[3] = {},
+    observer?: PluginMutationObserver,
   ): Promise<void> {
+    if (observer) {
+      this.mutationObservers.set(key, observer);
+    }
     // The server owns whether stored acceptance still covers the installed artifact.
     await this.runMutation(
       key,
@@ -302,9 +345,15 @@ export class PluginsConsentController {
           committedMutationMessage(enabled ? "enabled" : "disabled", result, refreshError),
         );
         await this.host.refreshCatalogAfterMutation(client);
-        if (isCurrent() && !result.restartRequired) {
+        if (!isCurrent()) {
+          return;
+        }
+        const committedObserver = this.mutationObservers.get(key);
+        this.mutationObservers.delete(key);
+        await committedObserver?.onCommitted?.(result, refreshError);
+        if (!result.restartRequired) {
           // Plugin tabs come from hello; reconnect after the registry refresh.
-          this.host.getContext().gateway.connect();
+          this.host.reconnectAfterMutation(key);
         }
       },
       {},
@@ -314,7 +363,11 @@ export class PluginsConsentController {
           this.open({ kind: "enable", pluginId, rowKey: key }, details.pluginId, details);
           return;
         }
-        this.host.setMessage(key, { kind: "error", text: formatUiError(error) });
+        const message = formatUiError(error);
+        this.host.setMessage(key, { kind: "error", text: message });
+        const failedObserver = this.mutationObservers.get(key);
+        this.mutationObservers.delete(key);
+        failedObserver?.onFailure?.(message);
       },
     );
   }

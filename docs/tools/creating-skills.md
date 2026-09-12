@@ -291,4 +291,7 @@ personal owner or an organization where you have publisher access.
   <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">
     Plugins can ship skills alongside the tools they document.
   </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    How the command a skill registers is invoked and gated.
+  </Card>
 </CardGroup>

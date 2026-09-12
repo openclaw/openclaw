@@ -96,6 +96,7 @@ async function applyAbortTarget(params: {
     return abortOutcome;
   }
 
+  await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
     isCurrent: params.isCurrent,
     entry: abortTarget.entry,

@@ -158,9 +158,11 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "conversation bindings -> exact target keys without agent/session projections";
     case "skill-workshop-directory-ownership-v16":
       return "Skill Workshop proposals -> per-agent Workshop directory ownership";
-    case "supervised-workflow-custody-v17":
+    case "prepared-worker-ownership-v17":
+      return "prepared workers -> one-use capacity and fixed workspace ownership";
+    case "supervised-workflow-custody-v18":
       return "supervised workflows -> durable resource custody";
-    case "supervised-attempt-custody-v18":
+    case "supervised-attempt-custody-v19":
       return "supervised attempts -> episode-owned workspace custody";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";

@@ -11,6 +11,8 @@
     "../../src/agents/agent-command*.test.ts",
     "../../src/agents/agent-command*.test.tsx",
     "../../src/tasks/**/*.test.ts",
-    "../../src/tasks/**/*.test.tsx"
+    "../../src/tasks/**/*.test.tsx",
+    "../../src/tui/**/*.test.ts",
+    "../../src/tui/**/*.test.tsx"
   ]
 }

@@ -471,10 +471,17 @@ ${new TextDecoder().decode(this.fileBytes.subarray(0, 65536))}</pre>
             control: html`<button
               class="btn"
               @click=${() => {
+                // Changing the reviewed task invalidates every pending preview.
+                this.generation++;
+                this.abort?.abort();
+                this.abort = undefined;
+                this.busy = false;
+                this.error = "";
                 this.selected = task;
                 this.input = "";
                 this.artifact = null;
                 this.fileBytes = null;
+                this.fileName = "";
                 this.host.requestUpdate();
               }}
             >

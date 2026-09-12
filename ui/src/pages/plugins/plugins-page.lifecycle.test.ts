@@ -5,19 +5,18 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type {
+  PluginDiscoveryDetailResult,
   PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
 } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  clickRowAction,
   createClient,
   createContext,
   createGateway,
   createPlugin,
   createPluginsRouteData,
-  createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
   deferred,
@@ -56,6 +55,36 @@ describe("PluginsPage lifecycle confirmation", () => {
       return { ok: true, value: await task(client), refresh: { ok: true } };
     };
     return { harness, queued: queued.promise, release };
+  }
+
+  function createWizardDetail(): PluginDiscoveryDetailResult {
+    return {
+      plugin: {
+        id: "ch_Y29tbXVuaXR5LXRoaW5n",
+        catalog: {
+          name: "Community Thing",
+          family: "code-plugin",
+          official: false,
+          categories: [],
+        },
+        local: {
+          present: false,
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+          action: "install",
+        },
+      },
+      detail: {
+        origin: "clawhub",
+        packageName: "community-thing",
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
   }
 
   it("does not install on a replacement Gateway after confirmation started", async () => {
@@ -264,6 +293,109 @@ describe("PluginsPage lifecycle confirmation", () => {
     });
   });
 
+  it("retires configuration-stage edits when the owning Gateway changes", async () => {
+    const { client } = createClient(async () => createResult());
+    const initialGateway = createGateway(client);
+    const replacementGateway = createGateway(client);
+    const config = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { connected: true, configFormDirty: false, lastError: null },
+      () => client,
+    );
+    const { page, provider } = await mountPage(
+      createContext(initialGateway.gateway, undefined, undefined, config),
+      createPluginsRouteData(initialGateway.gateway),
+    );
+    page.installWizardController.open(createWizardDetail());
+    page.installWizard = {
+      ...page.installWizard!,
+      pluginId: "community-thing",
+      stage: "configuring",
+    };
+
+    provider.setContext(createContext(replacementGateway.gateway, undefined, undefined, config));
+    await page.updateComplete;
+    page.installWizardController.patchConfiguration(
+      ["plugins", "entries", "community-thing"],
+      true,
+    );
+
+    expect(page.installWizard?.stage).toBe("error");
+    expect(config.runtimeConfig.patchForm).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch a queued configuration save after the wizard closes", async () => {
+    const { client, request } = createClient(async () => createResult());
+    const gateway = createGateway(client);
+    const { harness: config, queued, release } = createQueuedRuntimeConfig(client);
+    config.runtimeConfig.state.connected = true;
+    const { page } = await mountPage(
+      createContext(gateway.gateway, undefined, undefined, config),
+      createPluginsRouteData(gateway.gateway),
+    );
+    page.installWizardController.open(createWizardDetail());
+    page.installWizard = {
+      ...page.installWizard!,
+      pluginId: "community-thing",
+      stage: "configuring",
+      configDraft: {
+        pluginId: "community-thing",
+        baseline: {},
+        value: { token: "secret" },
+      },
+    };
+
+    const save = page.installWizardController.saveConfiguration();
+    await queued;
+    page.installWizardController.close();
+    release.resolve();
+    await save;
+
+    expect(request).not.toHaveBeenCalledWith("config.set", expect.anything());
+    expect(page.installWizard).toBeNull();
+  });
+
+  it("preserves the configuration draft after a failed save retry", async () => {
+    const { client } = createClient(async () => createResult());
+    const gateway = createGateway(client);
+    const config = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { connected: true, configFormDirty: false, lastError: "write unavailable" },
+      () => client,
+    );
+    vi.mocked(config.runtimeConfig.runExternalMutation).mockResolvedValue({
+      ok: false,
+      reason: "error",
+      error: "write unavailable",
+    });
+    const { page } = await mountPage(
+      createContext(gateway.gateway, undefined, undefined, config),
+      createPluginsRouteData(gateway.gateway),
+    );
+    page.installWizardController.open(createWizardDetail());
+    const configDraft = {
+      pluginId: "community-thing",
+      baseline: {},
+      value: { token: "secret" },
+    };
+    page.installWizard = {
+      ...page.installWizard!,
+      pluginId: "community-thing",
+      stage: "configuring",
+      configDraft,
+    };
+
+    await page.installWizardController.saveConfiguration();
+    expect(page.installWizard?.stage).toBe("error");
+    page.installWizardController.retry();
+
+    expect(page.installWizard).toMatchObject({
+      stage: "configuring",
+      configDraft,
+      error: undefined,
+    });
+  });
+
   it("reconfirms an install-policy retry after a same-client reconnect", async () => {
     const available = createPlugin({
       id: "community-thing",
@@ -305,11 +437,7 @@ describe("PluginsPage lifecycle confirmation", () => {
     const harness = createGateway(client);
     const { page } = await mountPage(
       createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult(available),
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
+      createPluginsRouteData(harness.gateway, createResult(available)),
     );
     const request = {
       source: "official",
@@ -321,13 +449,13 @@ describe("PluginsPage lifecycle confirmation", () => {
     expect(showConfirmDialog).toHaveBeenCalledOnce();
     harness.emit(client, false);
     harness.emit(client, true);
-    await waitForFast(() =>
-      expect(page.querySelector('[data-plugin-id="community-thing"]')).not.toBeNull(),
-    );
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
 
-    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Install anyway");
+    void page.consentController.install(
+      { ...request, acknowledgeInstallPolicyWarning: true },
+      "plugin:community-thing",
+    );
     await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
     expect(installCalls).toBe(1);
 

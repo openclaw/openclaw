@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleApiBaseUrl } from "./google-api-base-url.js";
 
-const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-3.6-flash";
 
 export type GeminiConfig = {
   apiKey?: unknown;

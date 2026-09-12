@@ -30,6 +30,7 @@ const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_m
 const MOVE_SCHEMA_END = "\n) STRICT;";
 const MOVE_OPERATION_PREFIX = "move:v1:";
 const MOVE_MACHINE_CLASS_MAX_LENGTH = 128;
+const MOVE_OS_MAX_LENGTH = 64;
 
 type MoveRow = Selectable<WorkerSessionPlacementMoves>;
 type MoveDatabase = Pick<
@@ -79,6 +80,7 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
+  ensureColumn(db, "worker_session_placement_moves", "target_os TEXT");
   ensureColumn(db, "worker_session_placement_moves", "abandon_source INTEGER");
   ensuredMoveSchemaHandles.add(db);
 }
@@ -125,6 +127,9 @@ function normalizeOperationId(value: string): string {
 function normalizeWorkerPlacementMoveTarget(
   target: WorkerPlacementMoveTarget,
 ): WorkerPlacementMoveTarget {
+  if (target.kind !== "profile" && Object.hasOwn(target, "os")) {
+    throw new Error("Worker placement move operating system requires a profile target");
+  }
   switch (target.kind) {
     case "gateway":
       return { kind: "gateway" };
@@ -133,6 +138,9 @@ function normalizeWorkerPlacementMoveTarget(
       return {
         kind: "profile",
         profileId: boundedIdentifier(target.profileId, "move profile id"),
+        ...(target.os === undefined
+          ? {}
+          : { os: boundedIdentifier(target.os, "move operating system", MOVE_OS_MAX_LENGTH) }),
         ...(machineClass === undefined
           ? {}
           : {
@@ -164,18 +172,30 @@ function targetValues(target: WorkerPlacementMoveTarget): {
   target_kind: MoveRow["target_kind"];
   target_id: MoveRow["target_id"];
   target_machine_class: MoveRow["target_machine_class"];
+  target_os: MoveRow["target_os"];
 } {
   switch (target.kind) {
     case "gateway":
-      return { target_kind: target.kind, target_id: null, target_machine_class: null };
+      return {
+        target_kind: target.kind,
+        target_id: null,
+        target_machine_class: null,
+        target_os: null,
+      };
     case "profile":
       return {
         target_kind: target.kind,
         target_id: target.profileId,
         target_machine_class: target.machineClass ?? null,
+        target_os: target.os ?? null,
       };
     case "device":
-      return { target_kind: target.kind, target_id: target.deviceId, target_machine_class: null };
+      return {
+        target_kind: target.kind,
+        target_id: target.deviceId,
+        target_machine_class: null,
+        target_os: null,
+      };
   }
   throw new Error("Worker placement move target is invalid");
 }
@@ -201,7 +221,10 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
     ownerEpoch: row.source_owner_epoch,
   });
   let target: WorkerPlacementMoveTarget;
-  if (row.target_kind !== "profile" && row.target_machine_class !== null) {
+  if (
+    row.target_kind !== "profile" &&
+    (row.target_machine_class !== null || row.target_os !== null)
+  ) {
     throw new Error(`Invalid worker placement move target: ${row.target_kind}`);
   }
   if (row.target_kind === "gateway" && row.target_id === null) {
@@ -210,6 +233,9 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
     target = {
       kind: "profile",
       profileId: boundedIdentifier(row.target_id, "move profile id"),
+      ...(row.target_os === null
+        ? {}
+        : { os: boundedIdentifier(row.target_os, "move operating system", MOVE_OS_MAX_LENGTH) }),
       ...(row.target_machine_class === null
         ? {}
         : {
@@ -280,27 +306,26 @@ function requireExactMove(
   return fromRow(row);
 }
 
-function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+function exactMoveValues(intent: WorkerPlacementMoveIntent) {
   const values = targetValues(intent.target);
-  let statement = moveQuery(db)
+  return {
+    operation_id: intent.operationId,
+    session_id: intent.sessionId,
+    source_generation: intent.source.generation,
+    source_environment_id: intent.source.environmentId,
+    source_owner_epoch: intent.source.ownerEpoch,
+    target_kind: values.target_kind,
+    abandon_source: abandonSourceValue(intent.abandonSource),
+    target_id: values.target_id,
+    target_machine_class: values.target_machine_class,
+    target_os: values.target_os,
+  };
+}
+
+function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+  const statement = moveQuery(db)
     .deleteFrom("worker_session_placement_moves")
-    .where("operation_id", "=", intent.operationId)
-    .where("session_id", "=", intent.sessionId)
-    .where("source_generation", "=", intent.source.generation)
-    .where("source_environment_id", "=", intent.source.environmentId)
-    .where("source_owner_epoch", "=", intent.source.ownerEpoch)
-    .where("target_kind", "=", values.target_kind);
-  statement = intent.abandonSource
-    ? statement.where("abandon_source", "=", 1)
-    : statement.where("abandon_source", "is", null);
-  statement =
-    values.target_id === null
-      ? statement.where("target_id", "is", null)
-      : statement.where("target_id", "=", values.target_id);
-  statement =
-    values.target_machine_class === null
-      ? statement.where("target_machine_class", "is", null)
-      : statement.where("target_machine_class", "=", values.target_machine_class);
+    .where((eb) => eb.and(exactMoveValues(intent)));
   const result = executeSqliteQuerySync(db, statement);
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Session ${intent.sessionId} placement move changed before completion`);
@@ -481,27 +506,10 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           return false;
         }
         const intent = fromRow(row);
-        const values = targetValues(intent.target);
-        let statement = moveQuery(db)
+        const statement = moveQuery(db)
           .updateTable("worker_session_placement_moves")
           .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })
-          .where("operation_id", "=", intent.operationId)
-          .where("session_id", "=", intent.sessionId)
-          .where("source_generation", "=", intent.source.generation)
-          .where("source_environment_id", "=", intent.source.environmentId)
-          .where("source_owner_epoch", "=", intent.source.ownerEpoch)
-          .where("target_kind", "=", values.target_kind);
-        statement = intent.abandonSource
-          ? statement.where("abandon_source", "=", 1)
-          : statement.where("abandon_source", "is", null);
-        statement =
-          values.target_id === null
-            ? statement.where("target_id", "is", null)
-            : statement.where("target_id", "=", values.target_id);
-        statement =
-          values.target_machine_class === null
-            ? statement.where("target_machine_class", "is", null)
-            : statement.where("target_machine_class", "=", values.target_machine_class);
+          .where((eb) => eb.and(exactMoveValues(intent)));
         return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
       });
     },

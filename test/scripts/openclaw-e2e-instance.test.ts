@@ -417,6 +417,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(result.stdout).toContain("Installing fixture package...");
+      expect(result.stdout).toContain("Installed fixture package.");
       expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
         `--kill-after=30s 42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
       );
@@ -524,11 +525,37 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
       });
 
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(42);
+      expect(result.stdout).not.toContain("Installed fixture package.");
       expect(result.stderr).toContain("npm install failed for fixture package");
       expect(result.stderr).toContain("recent npm tail");
       expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_NPM_LOG");
       expect(fs.readFileSync(fixture.logPath, "utf8")).toContain("DO_NOT_PRINT_OLD_NPM_LOG");
+    });
+  });
+
+  it("returns install failures through the caller-owned ERR diagnostics", () => {
+    withTempDir("openclaw-e2e-instance-install-trap-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticPath = path.join(tempDir, "diagnostic.txt");
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "npm"), ["exit 42"]);
+
+      const result = runBashWithHelper(
+        [
+          `trap 'status=$?; printf "%s" "$status" >${shellQuote(diagnosticPath)}; exit "$status"' ERR`,
+          `openclaw_e2e_install_package ${shellQuote(fixture.logPath)} ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
+        ],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+          OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+          OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+        },
+      );
+
+      expect(result.status).toBe(42);
+      expect(fs.readFileSync(diagnosticPath, "utf8")).toBe("42");
     });
   });
 

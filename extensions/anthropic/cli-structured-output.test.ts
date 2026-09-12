@@ -184,7 +184,7 @@ it("selects schema transport for an isolated completion without changing ordinar
   });
   const ordinary = { ...context, isolatedCompletionOutputJsonSchema: undefined };
   expect(backend.prepareExecution?.(ordinary)).toEqual({
-    env: {},
+    env: { CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1" },
     isolatedCompletionEnforced: true,
   });
 });
