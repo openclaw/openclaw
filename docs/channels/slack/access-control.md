@@ -46,6 +46,20 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
 
+## Live policy changes
+
+DM access, allowlists, group policy, mention rules, and existing channel policy fields
+apply to new messages, commands, and system events without reconnecting Slack.
+Root settings and account overrides keep their normal precedence. Each admitted turn
+keeps one resolved policy snapshot; a change does not rewrite a reply already in progress.
+Workspace name resolution runs once per new snapshot and never appends identities from
+an older policy. Presence targets learned under an older config snapshot retire before
+another background wake; fresh admitted activity creates new targets.
+
+Transport credentials, account enablement, adding or removing accounts or channel entries,
+name-matching mode, presence settings, and native command/approval registration still
+restart the Slack monitor. The Gateway remains running.
+
 ## Access control and routing
 
 <Tabs>
@@ -98,16 +112,16 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
 
     Name/ID resolution:
 
-    - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
+    - channel allowlist entries and DM allowlist entries are resolved at startup and when a new policy snapshot is first used, when token access allows
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
     <Warning>
-    Name-based keys (`#channel-name` or `channel-name`) do **not** match under `groupPolicy: "allowlist"`. The channel lookup is ID-first by default, so a name-based key will never route successfully and all messages in that channel will be silently blocked. This differs from `groupPolicy: "open"`, where the channel key is not required for routing and a name-based key appears to work.
+    Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
 
-    Always use the Slack channel ID as the key. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
+    Prefer the Slack channel ID as the key to avoid that lookup dependency. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
 
-    Correct:
+    Recommended stable ID:
 
     ```json5
     {
@@ -122,7 +136,7 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
     }
     ```
 
-    Incorrect (silently blocked under `groupPolicy: "allowlist"`):
+    Name-based input (requires successful lookup with the default matching policy):
 
     ```json5
     {

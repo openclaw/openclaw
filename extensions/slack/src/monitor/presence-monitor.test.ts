@@ -51,6 +51,7 @@ function createPrepared(params: {
   const channelId = params.channelId ?? "D123";
   const channelType = params.channelType ?? "im";
   return {
+    ctx: { isRuntimePolicyCurrent: () => true },
     message: {
       type: "message",
       user: params.userId,
@@ -82,6 +83,37 @@ function createPrepared(params: {
 }
 
 describe("Slack presence monitor", () => {
+  it("retires an old policy target while its presence request is in flight", async () => {
+    let current = true;
+    const response = createDeferred<{ presence: string }>();
+    const getPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockReturnValueOnce(response.promise);
+    const enqueue = vi.fn(() => true);
+    const cooldownStore = createCooldownStore();
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: { getPresence } as never,
+      cooldownStore,
+      enqueue,
+      wake: vi.fn(),
+    });
+    const prepared = createPrepared({ userId: "U123" });
+    prepared.ctx.isRuntimePolicyCurrent = () => current;
+    monitor.observe(prepared);
+    await monitor.pollOnce();
+    const pending = monitor.pollOnce();
+    current = false;
+    response.resolve({ presence: "active" });
+    await pending;
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(await cooldownStore.lookup("default:workspace:U123")).toBeUndefined();
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledTimes(2);
+  });
+
   it("stays disabled when presence config is absent or explicitly off", () => {
     expect(hasSlackPresenceEventsEnabled({})).toBe(false);
     expect(hasSlackPresenceEventsEnabled({ account: { mode: "off" } })).toBe(false);

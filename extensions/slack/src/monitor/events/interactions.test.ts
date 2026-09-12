@@ -446,6 +446,7 @@ function createContext(overrides?: {
     resolveChannelName,
     resolveSlackSystemEventRoute: resolveSessionKey,
   };
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   return {
     ctx,
     app,

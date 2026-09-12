@@ -29,8 +29,9 @@ export function registerSlackMemberEvents(params: {
     client: AllMiddlewareArgs["client"];
   }) => {
     try {
+      const runtimeContext = await params.ctx.readRuntimeContext();
       const eventScope = resolveSlackListenerEventScope({
-        ctx,
+        ctx: runtimeContext,
         body: paramsLocal.body,
         context: paramsLocal.context,
         client: paramsLocal.client,
@@ -38,36 +39,39 @@ export function registerSlackMemberEvents(params: {
       if (eventScope === null) {
         return;
       }
-      if (ctx.shouldDropMismatchedSlackEvent(paramsLocal.body)) {
+      if (runtimeContext.shouldDropMismatchedSlackEvent(paramsLocal.body)) {
         return;
       }
       trackEvent?.();
       const payload = paramsLocal.event;
       const channelId = payload.channel;
-      const channelInfo = channelId ? await ctx.resolveChannelName(channelId, eventScope) : {};
+      const channelInfo = channelId
+        ? await runtimeContext.resolveChannelName(channelId, eventScope)
+        : {};
       const channelType = payload.channel_type ?? channelInfo?.type;
-      if (paramsLocal.verb === "joined" && payload.user === ctx.botUserId && channelId) {
+      if (paramsLocal.verb === "joined" && payload.user === runtimeContext.botUserId && channelId) {
         const roomType = normalizeSlackChannelType(channelType, channelId);
         if (roomType === "channel" || roomType === "group") {
           // Joining is conversation admission, not a human message: sender allowlists
           // and requireMention cannot apply to the bot's own membership event.
-          const roomAllowed = ctx.isChannelAllowed({
-            teamId: eventScope?.teamId ?? ctx.teamId,
+          const roomAllowed = runtimeContext.isChannelAllowed({
+            teamId: eventScope?.teamId ?? runtimeContext.teamId,
             channelId,
             channelName: channelInfo.name,
             channelType: roomType,
           });
           const inviterLabel =
             roomAllowed && payload.inviter
-              ? ((await ctx.resolveUserName(payload.inviter, eventScope)).name ?? payload.inviter)
+              ? ((await runtimeContext.resolveUserName(payload.inviter, eventScope)).name ??
+                payload.inviter)
               : undefined;
           await reportChannelRoomJoin({
-            cfg: ctx.cfg,
+            cfg: runtimeContext.cfg,
             channel: "slack",
-            accountId: ctx.accountId,
+            accountId: runtimeContext.accountId,
             conversationId: channelId,
             deliverTo: `channel:${channelId}`,
-            route: ctx.resolveSlackSystemEventRoute({
+            route: runtimeContext.resolveSlackSystemEventRoute({
               channelId,
               channelType: roomType,
               eventScope,
@@ -85,7 +89,7 @@ export function registerSlackMemberEvents(params: {
               try {
                 const { messages } = await readSlackMessages(channelId, {
                   limit: messageLimit,
-                  client: eventScope?.client ?? ctx.app.client,
+                  client: eventScope?.client ?? runtimeContext.app.client,
                 });
                 return {
                   ...roomContext,
@@ -102,7 +106,7 @@ export function registerSlackMemberEvents(params: {
         }
       }
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx,
+        ctx: runtimeContext,
         senderId: payload.user,
         channelId,
         channelType,
@@ -112,7 +116,9 @@ export function registerSlackMemberEvents(params: {
       if (!ingressContext) {
         return;
       }
-      const userInfo = payload.user ? await ctx.resolveUserName(payload.user, eventScope) : {};
+      const userInfo = payload.user
+        ? await runtimeContext.resolveUserName(payload.user, eventScope)
+        : {};
       const userLabel = userInfo?.name ?? payload.user ?? "someone";
       enqueueRoutedSystemEvent(
         `Slack: ${userLabel} ${paramsLocal.verb} ${ingressContext.channelLabel}.`,

@@ -204,6 +204,8 @@ function attachBoltMemberIngress(params: {
     threadHistoryScope: "thread",
     threadInheritParent: false,
   });
+  // This Bolt retry fixture starts after policy resolution, with the explicit policy above.
+  ctx.readRuntimeContext = async () => ctx;
   registerSlackMemberEvents({ ctx, trackEvent: params.trackEvent });
   return { ingress, receive: receiverHarness.receive };
 }

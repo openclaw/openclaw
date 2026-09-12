@@ -55,6 +55,10 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 }
 ```
 
+Reply threading, history limits, text chunk limits, streaming, typing reactions, and
+unfurl settings apply to the next admitted message without reconnecting Slack. An active
+reply retains the settings it started with. The same behavior applies to account overrides.
+
 ## Text streaming
 
 `channels.slack.streaming` controls live preview behavior:

@@ -73,6 +73,7 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -950,6 +951,43 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.disposeMcpRuntimes).toBe(false);
     expect(plan.hotReasons).toEqual([path, path]);
     expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  describe("registered Slack policy reload boundaries", () => {
+    it.each([
+      ["channels.slack.allowFrom", true],
+      ["channels.slack.accounts.ops.dmPolicy", true],
+      ["channels.slack.accounts.ops.dm.groupChannels", true],
+      ["channels.slack.channels.C123.users", true],
+      ["channels.slack.accounts.ops.channels.C123.requireMention", true],
+      ["channels.slack.accounts.ops.streaming.progress.toolProgress", true],
+      ["channels.slack.replyToModeByChatType.direct", true],
+      ["channels.slack.textChunkLimit", true],
+      ["channels.slack.reactionNotifications", true],
+      ["channels.slack.enabled", false],
+      ["channels.slack.accounts.ops", false],
+      ["channels.slack.channels.C123", false],
+      ["channels.slack.accounts.ops.botToken", false],
+      ["channels.slack.slashCommand.name", false],
+      ["channels.slack.presenceEvents.mode", false],
+      ["channels.slack.channels.C123.presenceEvents.mode", false],
+      ["channels.slack.execApprovals.enabled", false],
+      ["channels.slack.dangerouslyAllowNameMatching", false],
+    ] as const)("plans %s without losing the owner boundary", async (path, dynamic) => {
+      const { slackSetupPlugin } = await loadBundledPluginFacade<{
+        slackSetupPlugin: ChannelPlugin;
+      }>({
+        pluginId: "slack",
+        artifactBasename: "setup-plugin-api.ts",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
+      );
+      const plan = buildGatewayReloadPlan([path]);
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartChannels).toEqual(new Set(dynamic ? [] : ["slack"]));
+      expect(isNoopGatewayReloadPlan(plan)).toBe(dynamic);
+    });
   });
 
   it("restarts the matching channel for channel config changes", () => {

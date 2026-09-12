@@ -28,6 +28,7 @@ type PresenceObservation = { presence: "active" } | { presence: "away"; firstObs
 
 type PresenceTarget = {
   key: string;
+  isPolicyCurrent: () => boolean;
   teamId?: string;
   mode: Exclude<SlackPresenceEventsMode, "off">;
   prompt: string | undefined;
@@ -158,6 +159,7 @@ function resolveObservedTarget(params: {
     }),
     sessionKey: prepared.route.sessionKey,
     agentId: prepared.route.agentId,
+    isPolicyCurrent: prepared.ctx.isRuntimePolicyCurrent,
     participants: new Map([[userId, params.nowMs]]),
     lastActivityAtMs: params.nowMs,
     autoEligibleKind,
@@ -193,7 +195,10 @@ export function createSlackPresenceMonitor(params: {
 
   const pruneTargets = (now: number) => {
     for (const [key, target] of targets) {
-      if (now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS) {
+      if (
+        !target.isPolicyCurrent() ||
+        now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS
+      ) {
         targets.delete(key);
       }
     }
@@ -229,7 +234,7 @@ export function createSlackPresenceMonitor(params: {
       accountConfig: params.accountConfig,
       nowMs: now,
     });
-    if (!observed) {
+    if (!observed || !observed.isPolicyCurrent()) {
       return;
     }
     const current = targets.get(observed.key);

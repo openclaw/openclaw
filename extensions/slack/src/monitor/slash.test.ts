@@ -320,8 +320,9 @@ function createArgMenusHarness(
     isChannelAllowed: () => true,
     resolveChannelName: async () => ({ name: "dm", type: "im" }),
     resolveUserName: async () => ({ name: "Ada" }),
-  } as unknown;
+  };
 
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = {
     accountId: "acct",
     config: { commands: { native: true, nativeSkills: false } },
@@ -849,9 +850,7 @@ describe("Slack native command argument menus", () => {
     const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
-    (
-      testHarness.ctx as { runtime: { log: typeof runtimeLog; error: typeof runtimeError } }
-    ).runtime = { log: runtimeLog, error: runtimeError };
+    testHarness.ctx.runtime = { log: runtimeLog, error: runtimeError };
 
     await registerCommands(testHarness.ctx, testHarness.account);
 
@@ -1031,7 +1030,7 @@ describe("Slack native command argument menus", () => {
   it("falls back to static menus when app.options() throws during registration", async () => {
     const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
-    (testHarness.ctx as { runtime: { log: typeof runtimeLog } }).runtime = { log: runtimeLog };
+    testHarness.ctx.runtime = { log: runtimeLog };
     testHarness.app.options = () => {
       throw new Error("Cannot read properties of undefined (reading 'listeners')");
     };
@@ -1616,8 +1615,9 @@ function createPolicyHarness(overrides?: {
     resolveChannelName:
       overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
     resolveUserName: async () => ({ name: "Ada" }),
-  } as unknown;
+  };
 
+  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
 
   return {
@@ -1937,13 +1937,24 @@ describe("slack slash command session metadata", () => {
   const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock, resolveAgentRouteMock } =
     getSlackSlashMocks();
 
-  it("refreshes slash routing config between invocations", async () => {
+  it("refreshes slash routing and access policy between invocations", async () => {
     const harness = createPolicyHarness({
       channelId: "D123",
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
     });
-    const sourceCfg = (harness.ctx as { cfg: OpenClawConfig }).cfg;
+    const { createInboundSlackTestContext } =
+      await import("./message-handler/prepare.test-helpers.js");
+    const sourceCfg: OpenClawConfig = {
+      ...harness.ctx.cfg,
+      channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    setRuntimeConfigSnapshot(sourceCfg, sourceCfg);
+    const ctx = createInboundSlackTestContext({ cfg: sourceCfg, accountId: "acct" });
+    Object.assign(ctx.app, harness.ctx.app);
+    ctx.resolveChannelName = async () => ({ name: "directmessage", type: "im" });
+    ctx.resolveUserName = harness.ctx.resolveUserName;
+    ctx.slashCommand = harness.ctx.slashCommand;
     const runtimeCfg = {
       ...sourceCfg,
       session: { dmScope: "per-channel-peer" },
@@ -1956,7 +1967,7 @@ describe("slack slash command session metadata", () => {
           ? "agent:main:slack:direct:U1"
           : "agent:main:main",
     }));
-    await registerCommands(harness.ctx, harness.account);
+    await registerCommands(ctx, harness.account);
 
     await runSlashHandler({
       commands: harness.commands,
@@ -1988,6 +1999,16 @@ describe("slack slash command session metadata", () => {
         }),
       }),
     );
+    const disabled: OpenClawConfig = {
+      ...runtimeCfg,
+      channels: { slack: { dmPolicy: "disabled" } },
+    };
+    setRuntimeConfigSnapshot(disabled, disabled);
+    await runSlashHandler({
+      commands: harness.commands,
+      command: { channel_id: harness.channelId, channel_name: harness.channelName },
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {

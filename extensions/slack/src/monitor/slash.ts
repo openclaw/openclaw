@@ -37,7 +37,6 @@ import type {
   PluginCommandReplyOptions,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -45,7 +44,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
-import type { ResolvedSlackAccount } from "../accounts.js";
+import { resolveSlackAccount, type ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
@@ -408,11 +407,11 @@ export function createSlackCommandHandler(params: {
   trackEvent?: () => void;
   supportsExternalArgMenus?: () => boolean;
 }) {
-  const { ctx, account, trackEvent } = params;
-  const runtime = ctx.runtime;
-  const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
+  const { ctx: monitor, account: startupAccount, trackEvent } = params;
+  const runtime = monitor.runtime;
+  const supportsInteractiveArgMenus = typeof monitor.app.action === "function";
   const slashCommand = resolveSlackSlashCommandConfig(
-    ctx.slashCommand ?? account.config.slashCommand,
+    monitor.slashCommand ?? startupAccount.config.slashCommand,
   );
 
   return async (p: {
@@ -456,9 +455,9 @@ export function createSlackCommandHandler(params: {
           }
         : createSlackResponseUrlBudget(respondWithoutBudget);
     const respond = responseBudget.respond;
-    const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
+    let cfg = monitor.cfg;
     try {
-      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+      if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
         runtime.log?.(
           `slack: drop slash command from user=${command.user_id ?? "unknown"} channel=${command.channel_id ?? "unknown"} (mismatched app/team)`,
@@ -474,6 +473,9 @@ export function createSlackCommandHandler(params: {
         return false;
       }
       await ack();
+      const ctx = await monitor.readRuntimeContext();
+      cfg = ctx.cfg;
+      const account = resolveSlackAccount({ cfg, accountId: params.account.accountId });
 
       if (ctx.botUserId && command.user_id === ctx.botUserId) {
         return false;
