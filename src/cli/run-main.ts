@@ -35,6 +35,7 @@ import {
 } from "./command-registration-policy.js";
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
@@ -1122,6 +1123,10 @@ async function runCliWithPreparedOutputMode(
     true,
     options.runtimeRecoveryEnv,
   );
+
+  if (tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
+    return;
+  }
 
   if (
     !isHelpOrVersionInvocation &&
