@@ -13,6 +13,10 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
+import type {
+  AuthorizationResult,
+  GatewayClassification,
+} from "../security/local-security-gateway.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -99,7 +103,9 @@ export type HookBlockedReason =
   | "plugin-before-tool-call"
   | "plugin-approval"
   | "plugin-approval-unavailable"
-  | "tool-loop";
+  | "tool-loop"
+  | "security-gateway-blocked"
+  | "security-gateway-rejected";
 
 type HookBlockedOutcome = {
   blocked: true;
@@ -121,4 +127,6 @@ export type HookOutcome =
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;
       loopWarning?: ToolLoopWarning;
+      gatewayClassification?: GatewayClassification;
+      gatewayAuthorizationResult?: AuthorizationResult;
     };
