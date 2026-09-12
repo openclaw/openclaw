@@ -14,6 +14,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -22,9 +23,14 @@ import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
+  convergeMigrationPlugins: vi.fn(),
   readConfig: vi.fn(),
   resolveEntrypoint: vi.fn(),
   runExec: vi.fn(),
+}));
+
+vi.mock("../../commands/doctor/shared/migration-plugin-convergence.js", () => ({
+  convergeDoctorMigrationPlugins: mocks.convergeMigrationPlugins,
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -52,6 +58,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
 
 import {
   completePostCorePluginUpdate,
+  convergeUpdateDoctorMigrationPlugins,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 
@@ -100,6 +107,9 @@ afterEach(() => {
 
 describe("post-plugin update readiness", () => {
   beforeEach(() => {
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.log).mockClear();
+    mocks.convergeMigrationPlugins.mockReset().mockResolvedValue(undefined);
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.runExec.mockReset().mockImplementation(async (_command, args: string[]) => ({
@@ -108,6 +118,49 @@ describe("post-plugin update readiness", () => {
         : "",
       stderr: "",
     }));
+  });
+
+  it.each([undefined, false, true])(
+    "forwards only explicit capability acceptance before migration (accept=%s)",
+    async (acceptCapabilities) => {
+      const opts = { yes: true, json: true, acceptCapabilities };
+      await convergeUpdateDoctorMigrationPlugins(opts);
+
+      expect(mocks.convergeMigrationPlugins).toHaveBeenCalledExactlyOnceWith(
+        acceptCapabilities
+          ? {
+              env: process.env,
+              onCapabilityConsent: expect.any(Function),
+              onNote: expect.any(Function),
+            }
+          : { env: process.env, onNote: expect.any(Function) },
+      );
+      expect(mocks.runExec).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps initial plugin migration diagnostics off JSON stdout", async () => {
+    const message = "Refreshed the configured Codex package before migration.";
+    mocks.convergeMigrationPlugins.mockImplementationOnce(
+      async ({ onNote }: { onNote?: (message: string, title: string) => void }) => {
+        expect(onNote).toEqual(expect.any(Function));
+        onNote?.(message, "Doctor changes");
+      },
+    );
+
+    await convergeUpdateDoctorMigrationPlugins({ json: true });
+
+    expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.runExec).not.toHaveBeenCalled();
+  });
+
+  it("propagates plugin convergence refusal before starting a migration Doctor", async () => {
+    const refusal = new Error("configured plugin capability review required");
+    mocks.convergeMigrationPlugins.mockRejectedValueOnce(refusal);
+
+    await expect(convergeUpdateDoctorMigrationPlugins({ json: true })).rejects.toBe(refusal);
+    expect(mocks.runExec).not.toHaveBeenCalled();
   });
 
   it.each([undefined, 5_000])("propagates the primary Doctor timeout %s", async (timeoutMs) => {

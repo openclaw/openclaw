@@ -20,6 +20,8 @@ export type LegacyConfigMigrationContext = {
 type LegacyConfigMigration = {
   id: string;
   describe: string;
+  /** Pure config normalization that does not retire state or plugin migration inputs. */
+  beforePluginConvergence?: LegacyConfigMigration["apply"];
   apply: (
     raw: Record<string, unknown>,
     changes: string[],

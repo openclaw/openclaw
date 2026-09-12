@@ -112,7 +112,15 @@ export async function runUpdateLeaseChild(): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const phase = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
+    const previousEvents = await fs.readFile(path.join(stateDir, "events.jsonl"), "utf8");
+    const phase =
+      (scenario.lane === "resume" || scenario.lane === "repair") &&
+      !previousEvents.includes('"event":"pre-attempt"')
+        ? "pre"
+        : "post";
+    // Both migration passes use the installed target's post-core generation;
+    // "pre" labels the first pass, before the broader package cohort.
+    assert.equal(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE, "1");
     assert.deepEqual(process.argv.slice(3), [
       "--repair",
       "--non-interactive",

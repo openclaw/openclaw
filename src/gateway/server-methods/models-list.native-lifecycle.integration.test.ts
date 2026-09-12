@@ -273,6 +273,27 @@ it.each([false, true])(
         await server.startupSettled;
         const list = () =>
           client.request<ModelsListResult>("models.list", { agentId: "main", view: "all" });
+        const refreshAndSettle = async () => {
+          let result = await client.request<ModelsListResult>("models.list", {
+            agentId: "main",
+            view: "all",
+            refresh: true,
+          });
+          // Foreground replies can precede native discovery. Do not join this failed
+          // acquisition when the fixture asks for a distinct recovery below.
+          await expect
+            .poll(
+              async () => {
+                if (result.pendingProviders?.length) {
+                  result = await list();
+                }
+                return result.pendingProviders ?? [];
+              },
+              { timeout: 15_000 },
+            )
+            .toEqual([]);
+          return result;
+        };
         let waitTimer: ReturnType<typeof setTimeout> | undefined;
         const nativeStarted = await Promise.race([
           nativeRequested.then(() => true),
@@ -309,11 +330,7 @@ it.each([false, true])(
         );
         if (!withProviderCredentials) {
           expect(requests).toEqual(["/native/models"]);
-          const unavailable = await client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            view: "all",
-            refresh: true,
-          });
+          const unavailable = await refreshAndSettle();
           expect(unavailable.refreshFailed).toBe(true);
           expect
             .soft(unavailable.models)
@@ -323,7 +340,7 @@ it.each([false, true])(
           );
           console.log("NATIVE_FIRST_PROVIDER_FAILURE", JSON.stringify({ requests, unavailable }));
           failedProviderCatalog = false;
-          await client.request("models.list", { agentId: "main", view: "all", refresh: true });
+          await refreshAndSettle();
           expect((await list()).models).toContainEqual(
             expect.objectContaining({ provider, id: "provider-account" }),
           );

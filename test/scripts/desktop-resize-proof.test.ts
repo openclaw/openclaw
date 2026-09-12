@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   desktopProofAssets,
   desktopProofCommit,
@@ -11,6 +11,7 @@ import {
   desktopResizeStages,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
+  prepareDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
@@ -120,6 +121,131 @@ describe("desktop proof identity and public evidence", () => {
     const file = path.join(root, "not-a-directory");
     await writeFile(file, "private contents");
     expect(await inspectDesktopSshdRuntimeDirectory(file)).toMatchObject({ directory: false });
+  });
+
+  it("creates a missing sshd runtime directory once and verifies the resulting security facts", async () => {
+    const missing = {
+      status: "missing",
+      symlink: null,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    };
+    const ready = {
+      status: "present",
+      symlink: false,
+      directory: true,
+      rootOwned: true,
+      groupOrWorldWritable: false,
+    };
+    const events: string[] = [];
+    let current: Awaited<ReturnType<typeof inspectDesktopSshdRuntimeDirectory>> = missing;
+    const create = vi.fn(async () => {
+      events.push("create");
+      current = ready;
+    });
+    const inspect = async () => {
+      events.push("inspect");
+      return current;
+    };
+    expect(await prepareDesktopSshdRuntimeDirectory(inspect, create)).toEqual({
+      before: missing,
+      after: ready,
+      created: true,
+    });
+    expect(events).toEqual(["inspect", "create", "inspect"]);
+    expect(create).toHaveBeenCalledTimes(1);
+    events.length = 0;
+    expect(await prepareDesktopSshdRuntimeDirectory(inspect, create)).toEqual({
+      before: ready,
+      after: ready,
+      created: false,
+    });
+    expect(events).toEqual(["inspect"]);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      status: "missing",
+      symlink: true,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    },
+    {
+      status: "unavailable",
+      symlink: null,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    },
+    {
+      status: "present",
+      symlink: true,
+      directory: true,
+      rootOwned: true,
+      groupOrWorldWritable: false,
+    },
+    {
+      status: "present",
+      symlink: false,
+      directory: false,
+      rootOwned: true,
+      groupOrWorldWritable: false,
+    },
+    {
+      status: "present",
+      symlink: false,
+      directory: true,
+      rootOwned: false,
+      groupOrWorldWritable: false,
+    },
+    {
+      status: "present",
+      symlink: false,
+      directory: true,
+      rootOwned: true,
+      groupOrWorldWritable: true,
+    },
+  ])("refuses unsafe existing sshd runtime facts without mutation (%#)", async (facts) => {
+    const create = vi.fn(async () => undefined);
+    await expect(prepareDesktopSshdRuntimeDirectory(async () => facts, create)).rejects.toThrow(
+      "Unsafe or unavailable",
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("refuses invalid sshd creation and preserves a concurrent-path creation error", async () => {
+    const missing = {
+      status: "missing",
+      symlink: null,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    };
+    const unsafe = {
+      status: "present",
+      symlink: false,
+      directory: true,
+      rootOwned: false,
+      groupOrWorldWritable: false,
+    };
+    const inspect = vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(unsafe);
+    const create = vi.fn(async () => undefined);
+    await expect(prepareDesktopSshdRuntimeDirectory(inspect, create)).rejects.toThrow(
+      "Unsafe or unavailable",
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(inspect).toHaveBeenCalledTimes(2);
+    const conflict = Object.assign(new Error("path already exists"), { code: "EEXIST" });
+    const racedCreate = vi.fn(async () => {
+      throw conflict;
+    });
+    await expect(prepareDesktopSshdRuntimeDirectory(async () => missing, racedCreate)).rejects.toBe(
+      conflict,
+    );
+    expect(racedCreate).toHaveBeenCalledTimes(1);
   });
 
   it.each([

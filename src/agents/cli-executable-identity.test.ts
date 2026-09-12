@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
@@ -40,9 +40,7 @@ const commandPackagePolicy: CliBackendRuntimeArtifactPolicy = {
 
 describe("CLI executable implementation identity", () => {
   afterEach(() => {
-    for (const directory of tempDirs.splice(0)) {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    cleanupTempDirs(tempDirs);
   });
 
   it("changes when package implementation changes behind an unchanged launcher", async () => {
@@ -200,6 +198,7 @@ describe("CLI executable implementation identity", () => {
       );
       expect(child.error).toBeUndefined();
       expect(child.status).toBe(0);
+      expect(child.signal).toBeNull();
       expect(child.stdout).toBe("identity-ok");
     });
 

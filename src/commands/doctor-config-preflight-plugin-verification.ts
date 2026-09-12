@@ -1,6 +1,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import type { PluginPayloadSmokeFailure } from "../plugins/payload-verification.js";
 import {
@@ -80,6 +81,8 @@ export async function runStartupUpgradeConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onNote?: typeof note;
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
@@ -97,15 +100,19 @@ export async function runStartupUpgradeConvergence(params: {
         cfg: params.cfg,
         env: params.env,
         compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
+        onCapabilityConsent: params.onCapabilityConsent,
       }),
     params.measure,
   );
   if (convergence.changes.length > 0) {
-    note(convergence.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+    (params.onNote ?? note)(
+      convergence.changes.map((entry) => `- ${entry}`).join("\n"),
+      "Doctor changes",
+    );
   }
   const notices = convergence.notices ?? [];
   if (notices.length > 0) {
-    note(
+    (params.onNote ?? note)(
       notices.map((notice) => `- ${notice.message} ${notice.guidance.join(" ")}`.trim()).join("\n"),
       "Doctor notices",
     );
@@ -114,7 +121,10 @@ export async function runStartupUpgradeConvergence(params: {
     `${warning.message} ${warning.guidance.join(" ")}`.trim(),
   );
   if (warnings.length > 0) {
-    note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+    (params.onNote ?? note)(
+      warnings.map((warning) => `- ${warning}`).join("\n"),
+      "Doctor warnings",
+    );
   }
   const quarantinedPlugins = buildStartupPluginQuarantine({
     cfg: params.cfg,

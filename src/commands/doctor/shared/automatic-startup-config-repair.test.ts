@@ -5,12 +5,15 @@ import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../../version.js";
 import {
   isStartupConfigRepairResult,
   planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
+  repairDoctorConfigBeforePluginConvergence,
 } from "./automatic-startup-config-repair.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
 function invalidSnapshot(params: {
   config: OpenClawConfig;
@@ -208,4 +211,162 @@ describe("automatic startup config repair", () => {
 
     expect(planAutomaticConfigRepair(snapshot)).toBeNull();
   });
+});
+
+describe("config repair before plugin convergence", () => {
+  it.each([
+    {
+      name: "legacy session idle timeout",
+      config: { session: { idleMinutes: 45 } },
+      expected: { session: { reset: { mode: "idle", idleMinutes: 45 } } },
+    },
+    {
+      name: "explicit nested session reset precedence",
+      config: {
+        session: { idleMinutes: 45, reset: { mode: "daily", atHour: 4, idleMinutes: 90 } },
+      },
+      expected: { session: { reset: { mode: "daily", atHour: 4, idleMinutes: 90 } } },
+    },
+    {
+      name: "existing session reset mode",
+      config: { session: { idleMinutes: 45, reset: { mode: "daily", atHour: 4 } } },
+      expected: { session: { reset: { mode: "daily", atHour: 4, idleMinutes: 45 } } },
+    },
+    {
+      name: "enabled wide-area discovery",
+      config: { discovery: { wideArea: { enabled: true, domain: "discovery.example" } } },
+      expected: { discovery: { wideArea: { domain: "discovery.example" } } },
+    },
+    {
+      name: "disabled wide-area discovery",
+      config: { discovery: { wideArea: { enabled: false, domain: "discovery.example" } } },
+      expected: { discovery: { wideArea: {} } },
+    },
+  ])("repairs $name through the strict writer", async ({ config, expected }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ ...config, plugins: { enabled: false } });
+      await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+        },
+        async () => {
+          await repairDoctorConfigBeforePluginConvergence();
+          const after = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+          await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "0" }, async () => {
+            expect(validateConfigObjectWithPlugins(after).ok).toBe(true);
+          });
+          expect(after).toMatchObject(expected);
+          expect(after.session ?? {}).not.toHaveProperty("idleMinutes");
+          expect(after.discovery?.wideArea ?? {}).not.toHaveProperty("enabled");
+          expect(await repairDoctorConfigBeforePluginConvergence()).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it("normalizes pure aliases without mutating input or consuming deferred migration inputs", () => {
+    const raw = {
+      session: { idleMinutes: 45 },
+      agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+      cron: { store: "/retained/cron.json" },
+      tts: { prefsPath: "/retained/tts.json" },
+      memory: { search: { store: { path: "/retained/memory.sqlite" } } },
+      channels: { signal: { httpHost: "localhost", httpPort: 8080 } },
+      web: { enabled: false },
+    };
+    const before = structuredClone(raw);
+    const result = applyLegacyDoctorMigrations(raw, undefined, {
+      pluginContracts: false,
+      beforePluginConvergence: true,
+    });
+    expect(result.next).toEqual({
+      ...before,
+      session: { reset: { mode: "idle", idleMinutes: 45 } },
+    });
+    expect(raw).toEqual(before);
+  });
+
+  it("does not overwrite an invalid explicit nested reset to admit an early write", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({
+        session: { idleMinutes: 45, reset: { idleMinutes: "invalid" } },
+        plugins: { enabled: false },
+      });
+      const before = await fs.readFile(state.configPath);
+      expect(await repairDoctorConfigBeforePluginConvergence()).toEqual([]);
+      expect(await fs.readFile(state.configPath)).toEqual(before);
+    });
+  });
+
+  it.each(["absent", "empty"])(
+    "initializes an %s ordinary roster while repairing core aliases",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({
+          agents: { ...(kind === "empty" ? { entries: {} } : {}), defaults: { pdfMaxBytesMb: 5 } },
+          tools: { exec: { security: "deny", ask: "off" } },
+          plugins: { enabled: false },
+        });
+        expect(await repairDoctorConfigBeforePluginConvergence()).not.toEqual([]);
+        const after = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(after.agents.entries).toEqual({ main: {} });
+        expect(after.agents.defaults.pdfMaxMb).toBe(5);
+        expect(after.agents.defaults).not.toHaveProperty("pdfMaxBytesMb");
+        expect(after.agents.defaults).not.toHaveProperty("systemAgent");
+        expect(after.tools.exec).toEqual({ mode: "deny" });
+      });
+    },
+  );
+  it.each(["locators", "include", "invalid", "roster", "keyed-roster"])(
+    "retains %s inputs when independent repairs cannot form a valid write",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const legacy = {
+          session: { idleMinutes: 45 },
+          agents: { entries: {}, defaults: { pdfMaxBytesMb: 5 } },
+          tools: { exec: { security: "deny", ask: "off" } },
+        };
+        await state.writeConfig({
+          ...legacy,
+          ...(kind === "roster"
+            ? {
+                agents: {
+                  defaults: legacy.agents.defaults,
+                  list: [{ id: "alpha", default: true }, { id: "beta" }],
+                },
+              }
+            : {}),
+          ...(kind === "keyed-roster"
+            ? {
+                agents: {
+                  defaults: legacy.agents.defaults,
+                  entries: { alpha: { default: true }, beta: {} },
+                },
+              }
+            : {}),
+          ...(kind === "locators"
+            ? {
+                cron: { store: state.path("retained-cron.sqlite") },
+                tts: { prefsPath: state.path("retained-tts.json") },
+                memory: { search: { store: { path: state.path("retained-memory.sqlite") } } },
+              }
+            : {}),
+          ...(kind === "invalid" ? { gateway: { port: "not-a-port" } } : {}),
+          ...(kind === "include" ? { $include: "./included.json" } : {}),
+        });
+        if (kind === "include") {
+          await fs.writeFile(
+            state.statePath("included.json"),
+            JSON.stringify({ gateway: { mode: "local" } }),
+          );
+        }
+        const before = await fs.readFile(state.configPath);
+        expect(await repairDoctorConfigBeforePluginConvergence()).toEqual([]);
+        expect(await fs.readFile(state.configPath)).toEqual(before);
+      });
+    },
+  );
 });

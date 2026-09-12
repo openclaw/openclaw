@@ -89,9 +89,18 @@ suite.define(() => {
       model: "openai/gpt-5.4",
     });
     await call("sessions.patch", { key, thinkingLevel: "high" });
-    const catalog: ModelCatalogResult = JSON.parse(
+    let catalog: ModelCatalogResult = JSON.parse(
       await call("models.list", { agentId: "main", view: "configured", refresh: true }),
     );
+    // Assert the completed failure, not the bounded foreground pending snapshot.
+    await expect
+      .poll(async () => {
+        if (catalog.pendingProviders?.length) {
+          catalog = JSON.parse(await call("models.list", { agentId: "main", view: "configured" }));
+        }
+        return catalog.pendingProviders ?? [];
+      })
+      .toEqual([]);
     await fs.writeFile(
       path.join(suite.artifactDir, "models-list.json"),
       JSON.stringify(catalog, null, 2),
@@ -123,6 +132,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
           const composer = page.locator(".agent-chat__input").first();
           const model = composer.locator("[data-chat-model-select]");
+          await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
           await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();

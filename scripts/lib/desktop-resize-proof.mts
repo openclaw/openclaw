@@ -214,6 +214,31 @@ export async function inspectDesktopSshdRuntimeDirectory(directory: string) {
   }
 }
 
+/** Provision only an absent privsep directory; never repair a pre-existing path. */
+export async function prepareDesktopSshdRuntimeDirectory(
+  inspect: () => ReturnType<typeof inspectDesktopSshdRuntimeDirectory>,
+  create: () => Promise<unknown>,
+) {
+  const before = await inspect();
+  const created = before.status === "missing" && before.symlink === null;
+  if (created) {
+    // The caller uses non-recursive mkdir: a concurrently created path must fail,
+    // not be followed or have its ownership/permissions changed by install -d.
+    await create();
+  }
+  const after = created ? await inspect() : before;
+  if (
+    after.status !== "present" ||
+    after.symlink !== false ||
+    after.directory !== true ||
+    !after.rootOwned ||
+    after.groupOrWorldWritable
+  ) {
+    throw new Error("Unsafe or unavailable desktop sshd runtime directory");
+  }
+  return { before, after, created };
+}
+
 export function desktopProofSshdFailure(stderr: string) {
   if (stderr.length > 64 * 1024) {
     return "output-too-large";

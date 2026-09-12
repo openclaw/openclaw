@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
+import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
@@ -117,6 +118,46 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
+function retiredInstallSnapshot(
+  options: {
+    legacyLocator?: boolean;
+    invalidRecord?: boolean;
+    invalidRemainder?: boolean;
+  } = {},
+) {
+  const sourceConfig = {
+    gateway: { mode: "local", port: options.invalidRemainder ? "invalid" : 19091 },
+    agents: { ownership: "explicit", entries: { alpha: {}, bravo: {} } },
+    plugins: {
+      enabled: false,
+      installs: {
+        fixture: {
+          source: options.invalidRecord ? "invalid" : "npm",
+          spec: "@fixture/migration",
+          installPath: "/retained/plugin",
+        },
+      },
+    },
+    ...(options.legacyLocator
+      ? { memory: { search: { store: { path: "/retained/memory.sqlite" } } } }
+      : {}),
+  };
+  return {
+    exists: true,
+    valid: false,
+    raw: `${JSON.stringify(sourceConfig, null, 2)}\n`,
+    config: sourceConfig,
+    sourceConfig,
+    parsed: sourceConfig,
+    includedPaths: [],
+    legacyIssues: options.legacyLocator
+      ? [{ path: "memory.search.store.path", message: "memory index path is retired" }]
+      : [],
+    warnings: [],
+    issues: [{ path: "plugins.installs", message: "plugin install records are retired" }],
+  };
+}
+
 describe("runDoctorConfigPreflight state migration input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -153,6 +194,118 @@ describe("runDoctorConfigPreflight state migration input", () => {
       expect.objectContaining({ doctorOnlyStateMigrations: true }),
     );
   });
+
+  it.each([false, true])(
+    "requires completed plugin convergence before admitting retired install records (converged=%s)",
+    async (converged) => {
+      const snapshot = retiredInstallSnapshot();
+      const original = structuredClone(snapshot);
+      readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+
+      const result = await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        doctorOnlyStateMigrations: true,
+        ...(converged ? { migrationPluginsConverged: true as const } : {}),
+      });
+
+      if (converged) {
+        expect(autoMigrateLegacyState).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            cfg: expect.objectContaining({
+              gateway: snapshot.sourceConfig.gateway,
+              agents: snapshot.sourceConfig.agents,
+              plugins: { enabled: false },
+            }),
+            pluginDoctorConfig: snapshot.sourceConfig,
+            doctorOnlyStateMigrations: true,
+          }),
+        );
+      } else {
+        expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+      }
+      expect(result.snapshot.sourceConfig).toEqual(original.sourceConfig);
+      expect(snapshot).toEqual(original);
+    },
+  );
+
+  it.each(["record", "remainder"] as const)(
+    "does not admit an invalid %s using plugin convergence proof",
+    async (invalid) => {
+      const snapshot = retiredInstallSnapshot({
+        invalidRecord: invalid === "record",
+        invalidRemainder: invalid === "remainder",
+      });
+      const original = structuredClone(snapshot);
+      readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+
+      await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        doctorOnlyStateMigrations: true,
+        migrationPluginsConverged: true,
+      });
+
+      expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+      expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
+      expect(snapshot).toEqual(original);
+    },
+  );
+
+  it.each(["completed", "refused"] as const)(
+    "settles required migration before returning the source config for retirement (%s)",
+    async (outcome) => {
+      const snapshot = retiredInstallSnapshot({ legacyLocator: true });
+      const original = structuredClone(snapshot);
+      const receipt: LegacyStateMigrationStepReceipt = {
+        id: "plugin-doctor-state",
+        phase: "final",
+        source: [{ kind: "path", path: "/retained/binding.json" }],
+        target: [{ kind: "owner", id: "fixture" }],
+        requiredness: "required",
+        reversibility: "checkpoint-required",
+        outcome,
+        changes: outcome === "completed" ? ["binding imported"] : [],
+        warnings: outcome === "refused" ? ["binding import refused"] : [],
+        ...(outcome === "refused"
+          ? { refusal: { code: "fixture-refused", message: "binding import refused" } }
+          : {}),
+      };
+      readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      autoMigrateLegacyState.mockImplementationOnce(async (input) => {
+        const params = input as Parameters<
+          typeof import("../infra/state-migrations.doctor.js").autoMigrateLegacyState
+        >[0];
+        expect(snapshot).toEqual(original);
+        expect(params.cfg).not.toHaveProperty("plugins.installs");
+        expect(params.cfg).not.toHaveProperty("memory.search.store.path");
+        expect(params.pluginDoctorConfig).toEqual(original.sourceConfig);
+        params.onStepReceipt?.(receipt);
+        return {
+          migrated: outcome === "completed",
+          skipped: false,
+          changes: receipt.changes,
+          warnings: receipt.warnings,
+        };
+      });
+
+      const preflight = runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        doctorOnlyStateMigrations: true,
+        migrationPluginsConverged: true,
+      });
+      if (outcome === "refused") {
+        await expect(preflight).rejects.toThrow("a state migration refused to continue");
+      } else {
+        const result = await preflight;
+        expect(result.stateMigrationStepReceipts).toEqual([receipt]);
+        expect(result.snapshot.sourceConfig).toEqual(original.sourceConfig);
+      }
+      expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+      expect(snapshot).toEqual(original);
+    },
+  );
 
   it("does not skip a retired custom cron partition on a pristine state root", async () => {
     const sourceConfig = {

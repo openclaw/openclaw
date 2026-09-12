@@ -1,6 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import fs, {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { delimiter, dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectNpmPackInventory,
   compareNpmPackInventory,
@@ -178,17 +186,17 @@ describe("npm pack inventory", () => {
       stderr: "",
       expectedError: "npm pack inventory failed with status 23",
     },
+    {
+      name: "version output limit",
+      phase: "version",
+      exitCode: 23,
+      signal: null,
+      stderr: "x".repeat(128 * 1024),
+      expectedError: "npm --version exceeded its output limit",
+    },
     ...(process.platform === "win32"
       ? []
       : [
-          {
-            name: "version output limit",
-            phase: "version",
-            exitCode: 23,
-            signal: null,
-            stderr: "x".repeat(128 * 1024),
-            expectedError: "npm --version exceeded its output limit",
-          },
           {
             name: "SIGTERM pack",
             phase: "pack",
@@ -331,16 +339,128 @@ describe("npm pack inventory", () => {
 
   it("fails closed when npm pack times out", () => {
     const { packageRoot, root } = createPackageFixture();
+    const capturePath = join(root, "timed-out-command.json");
     const npm = fakeNpmEnvironment(
       root,
       [
+        "import fs from 'node:fs';",
         "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({ cwd: process.cwd() }));",
         "setTimeout(() => process.stdout.write(JSON.stringify([{ files: [] }])), 10_000);",
       ].join("\n"),
     );
-
-    expect(() => collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 1_000 })).toThrow(
-      "npm pack inventory timed out after 1000ms",
-    );
+    npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
+    let timeoutError: unknown;
+    expect(() => {
+      try {
+        collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 1_000 });
+      } catch (error) {
+        timeoutError = error;
+        throw error;
+      }
+    }).toThrow("npm pack inventory timed out after 1000ms");
+    if (process.platform === "win32") {
+      expect(timeoutError).toMatchObject({ code: "ETIMEDOUT", processTreeState: "terminated" });
+    }
+    const { cwd } = JSON.parse(readFileSync(capturePath, "utf8")) as { cwd: string };
+    expect(existsSync(dirname(cwd))).toBe(false);
   });
+
+  it.runIf(process.platform === "win32")(
+    "settles a successful cmd shim's detached descendant before removing its sandbox",
+    () => {
+      const { packageRoot, root } = createPackageFixture();
+      const capturePath = join(root, "detached-command.json");
+      const npm = fakeNpmEnvironment(
+        root,
+        [
+          "import fs from 'node:fs';",
+          "import { spawn } from 'node:child_process';",
+          "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });",
+          "child.once('spawn', () => { fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({ cwd: process.cwd() })); process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }])); process.exit(0); });",
+        ].join("\n"),
+      );
+      npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
+      expect(collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 })).toMatchObject({
+        files: ["package.json"],
+        npmVersion: "11.12.1",
+      });
+      const { cwd } = JSON.parse(readFileSync(capturePath, "utf8")) as { cwd: string };
+      expect(existsSync(dirname(cwd))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === "win32").each(["success", "timeout"] as const)(
+    "propagates a persistent sandbox HANDLE refusal after %s and permits explicit recovery",
+    (outcome) => {
+      const { packageRoot, root } = createPackageFixture();
+      const npm = fakeNpmEnvironment(
+        root,
+        [
+          "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+          outcome === "timeout"
+            ? "setTimeout(() => {}, 10_000);"
+            : "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));",
+        ].join("\n"),
+      );
+      const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
+      const kernel32 = koffi.load("kernel32.dll");
+      const openDirectory = kernel32.func("__stdcall", "CreateFileW", "uintptr_t", [
+        "str16",
+        "uint32_t",
+        "uint32_t",
+        "void *",
+        "uint32_t",
+        "uint32_t",
+        "uintptr_t",
+      ]);
+      const closeHandle = kernel32.func("__stdcall", "CloseHandle", "int32_t", ["uintptr_t"]);
+      const remove = fs.rmSync;
+      let sandbox = "";
+      let directoryHandle: number | bigint | undefined;
+      let attempts = 0;
+      const removal = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+        sandbox = String(target);
+        attempts++;
+        // Deny delete sharing with a real parent-owned directory HANDLE. This
+        // refusal is independent of the npm Job and must never be suppressed.
+        directoryHandle = openDirectory(join(sandbox, "cwd"), 1, 3, null, 3, 0x0200_0000, 0);
+        expect(directoryHandle).not.toBe(0);
+        expect(directoryHandle).not.toBe(0xffff_ffff_ffff_ffffn);
+        return remove(target, options);
+      });
+      try {
+        let failure: unknown;
+        try {
+          collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 1_000 });
+        } catch (error) {
+          failure = error;
+        }
+        expect(attempts).toBe(1);
+        expect(existsSync(sandbox)).toBe(true);
+        if (outcome === "timeout") {
+          expect(failure).toBeInstanceOf(AggregateError);
+          const errors = (failure as AggregateError).errors;
+          expect(errors).toHaveLength(2);
+          expect(errors[0]).toMatchObject({ code: "ETIMEDOUT", processTreeState: "terminated" });
+          expect(errors[1]).toMatchObject({ code: "EPERM" });
+          expect((failure as AggregateError).cause).toBe(errors[1]);
+        } else {
+          expect(failure).toMatchObject({ code: "EPERM" });
+        }
+      } finally {
+        removal.mockRestore();
+        if (directoryHandle !== undefined) {
+          expect(closeHandle(directoryHandle)).toBe(1);
+        }
+        // Explicit fixture recovery only after its known independent owner
+        // closes the HANDLE. Production has no removal retry or error waiver.
+        if (sandbox) {
+          remove(sandbox, { recursive: true, force: true });
+          expect(existsSync(sandbox)).toBe(false);
+        }
+      }
+    },
+  );
 });

@@ -28,6 +28,7 @@ import { formatCommandOutput } from "../../process/command-error.js";
 import { isPlainCommandExitFailure, runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
+import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
@@ -44,6 +45,29 @@ import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-out
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 // These checks remain bounded even when repair Doctor has no automatic deadline.
 const POST_PLUGIN_CHECK_TIMEOUT_MS = 180_000;
+
+/** Target-runtime owner: retain updater consent before the noninteractive Doctor. */
+export async function convergeUpdateDoctorMigrationPlugins(params: {
+  acceptCapabilities?: boolean;
+  json?: boolean;
+}): Promise<void> {
+  const { convergeDoctorMigrationPlugins } =
+    await import("../../commands/doctor/shared/migration-plugin-convergence.js");
+  await convergeDoctorMigrationPlugins({
+    env: process.env,
+    ...(params.json
+      ? {
+          onNote: (message: unknown, title?: string) =>
+            defaultRuntime.error(`${title ?? "Doctor"}: ${String(message)}`),
+        }
+      : {}),
+    ...resolvePluginCapabilityConsentCliOptions({
+      acceptCapabilities: params.acceptCapabilities,
+      action: "update",
+      allowPrompt: !params.json,
+    }),
+  });
+}
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousValues = [

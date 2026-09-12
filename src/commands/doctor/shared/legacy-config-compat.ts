@@ -13,6 +13,7 @@ export function applyLegacyDoctorMigrations(
     // state database. Preview callers that must stay state-free pass false; the config they
     // produce is scaffolding only — the committed result always comes from a full run.
     pluginContracts?: boolean;
+    beforePluginConvergence?: boolean;
   },
 ): {
   next: Record<string, unknown> | null;
@@ -25,11 +26,16 @@ export function applyLegacyDoctorMigrations(
   const next = structuredClone(original);
   const changes: string[] = [];
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes, context);
+    const apply = options?.beforePluginConvergence
+      ? migration.beforePluginConvergence
+      : migration.apply;
+    apply?.(next, changes, context);
   }
-  const compat = applyChannelDoctorCompatibilityMigrations(next, {
-    pluginContracts: options?.pluginContracts !== false,
-  });
+  const compat = options?.beforePluginConvergence
+    ? { next, changes: [] }
+    : applyChannelDoctorCompatibilityMigrations(next, {
+        pluginContracts: options?.pluginContracts !== false,
+      });
   changes.push(...compat.changes);
   if (changes.length === 0) {
     return { next: null, changes: [] };

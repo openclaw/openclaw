@@ -154,12 +154,15 @@ describe("cloud target menu", () => {
     const container = document.createElement("div");
     render(
       renderCloudProfileMenuItems({
-        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
+        profiles: [{ id: "aws", providerId: "aws", operatingSystems: [], machines: [machine] }],
         selectedId: "aws",
         compact: true,
+        onSelect: vi.fn(),
+        selectedOs: "",
         selectedMachine: machine.id,
         submitting: false,
-        onSelect: vi.fn(),
+        onSelectOs: vi.fn(),
+        onSelectMachine: vi.fn(),
       }),
       container,
     );
@@ -220,12 +223,12 @@ describe("cloud target menu", () => {
       ],
       selectedId: "aws",
       compact: true,
+      onSelect: vi.fn(),
       selectedOs: "linux",
       selectedMachine: "small",
       submitting: false,
       onSelectMachine,
       onSelectOs,
-      onSelect: vi.fn(),
     };
     render(renderCloudProfileMenuItems(params), container);
     container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
@@ -248,13 +251,17 @@ describe("cloud target menu", () => {
               { id: "linux", label: "Linux" },
               { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
             ],
+            machines: [],
           },
         ],
         selectedId: "aws",
         compact: true,
-        selectedOs: "windows",
-        submitting: false,
         onSelect: vi.fn(),
+        selectedOs: "windows",
+        selectedMachine: "",
+        submitting: false,
+        onSelectMachine: vi.fn(),
+        onSelectOs: vi.fn(),
       }),
       container,
     );
@@ -263,9 +270,8 @@ describe("cloud target menu", () => {
     expect(fixedOs?.tagName).toBe("SPAN");
     expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
     expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
-    expect(
-      container.querySelector('.new-session-page__cloud-configuration [aria-pressed="true"]'),
-    ).toBeNull();
+    const configuration = container.querySelector(".new-session-page__cloud-configuration")!;
+    expect(configuration.querySelector('[aria-pressed="true"]')).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {

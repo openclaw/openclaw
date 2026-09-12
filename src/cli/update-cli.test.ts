@@ -903,6 +903,24 @@ describe("update-cli", () => {
     return pkgRoot;
   };
 
+  // Version 1.0.0 command fixtures model a legacy Git target, not this live checkout.
+  const mockLegacyGitInstallAtCaseDir = async (prefix: string) => {
+    const root = createCaseDir(prefix);
+    await writeOpenClawPackageFixture(root, "1.0.0", {
+      git: true,
+      entrySource: "export {};\n",
+    });
+    const canonicalRoot = await fs.realpath(root);
+    mockFileBackedPathExists();
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(canonicalRoot);
+    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(canonicalRoot);
+    vi.mocked(resolveUpdateInstallKind).mockImplementation(async (target) => {
+      expect(target).toBe(canonicalRoot);
+      return "git";
+    });
+    return canonicalRoot;
+  };
+
   const primeNpmChannelTag = (tag: string, version: string | null): void => {
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag, version });
   };
@@ -1350,6 +1368,19 @@ describe("update-cli", () => {
       ...(params.yes ? ["--yes"] : []),
     ]);
   };
+
+  const postCoreValidationCommands = () =>
+    vi
+      .mocked(runExec)
+      .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
+      .map(([, args]) => args.slice(1));
+
+  const postCoreDoctorCommand = [
+    "doctor",
+    "--repair",
+    "--non-interactive",
+    "--no-workspace-suggestions",
+  ];
 
   const commandResult = (
     overrides: Partial<{
@@ -2374,6 +2405,7 @@ describe("update-cli", () => {
   it.each([false, true])("admits non-TTY updates with an active session (yes=%s)", async (yes) => {
     setTty(false);
     setStdoutTty(false);
+    const root = await mockLegacyGitInstallAtCaseDir("openclaw-active-session-legacy-git");
     const { beginSessionWorkAdmission, getActiveSessionWorkAdmissionCount } =
       await import("../sessions/session-lifecycle-admission.js");
     const admission = await beginSessionWorkAdmission({
@@ -2384,15 +2416,24 @@ describe("update-cli", () => {
     try {
       mockRunningManagedGateway([
         process.execPath,
-        path.join(process.cwd(), "dist", "index.js"),
+        path.join(root, "dist", "index.js"),
         "gateway",
         "run",
       ]);
-      vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+      vi.mocked(runGatewayUpdate).mockImplementation(async (options) => {
         expect(getActiveSessionWorkAdmissionCount()).toBe(1);
-        return makeOkUpdateResult();
+        // Admit the original executor before returning a successful core result.
+        await options?.inspectGitTarget?.({});
+        await options?.validateCandidate?.(root);
+        await options?.beforeGitMutation?.({});
+        return makeOkUpdateResult({ root });
       });
-      await invokeUpdateCli(yes ? { yes: true } : {});
+      await invokeUpdateCli(yes ? { yes: true } : {}).catch((cause: unknown) => {
+        throw new Error(
+          [getErrorOutput(), getLogOutput(), JSON.stringify(lastWriteJsonCall())].join("\n"),
+          { cause },
+        );
+      });
       expect(runGatewayUpdate).toHaveBeenCalledOnce();
       expect(confirm).not.toHaveBeenCalled();
       expect(select).not.toHaveBeenCalled();
@@ -2639,7 +2680,7 @@ describe("update-cli", () => {
       const root =
         kind === "package"
           ? await mockPackageInstallAtCaseDir("openclaw-sealed-code-update")
-          : process.cwd();
+          : await mockLegacyGitInstallAtCaseDir("openclaw-sealed-legacy-git");
       const entrypoint =
         kind === "package"
           ? await writeOpenClawPackageFixture(root, "1.0.0", {
@@ -4364,7 +4405,7 @@ describe("update-cli", () => {
     },
   );
 
-  it("post-core resume returns package work without running core update or Doctor completion", async () => {
+  it("post-core resume completes migration and validation without running core update", async () => {
     readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
@@ -4382,7 +4423,10 @@ describe("update-cli", () => {
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
+    expect(postCoreValidationCommands()).toEqual([
+      postCoreDoctorCommand,
+      ["config", "validate", "--json"],
+    ]);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(lastNpmPluginUpdateCall()).toMatchObject({
@@ -4404,7 +4448,7 @@ describe("update-cli", () => {
     });
   });
 
-  it("returns convergence-only post-core changes for the parent to complete", async () => {
+  it("completes convergence-only post-core changes before returning them to the parent", async () => {
     runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
       postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
@@ -4415,11 +4459,11 @@ describe("update-cli", () => {
 
     expect(syncPluginCall()?.config).toBeDefined();
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? "")),
-    ).toEqual([]);
+    expect(postCoreValidationCommands()).toEqual([
+      postCoreDoctorCommand,
+      postCoreDoctorCommand,
+      ["config", "validate", "--json"],
+    ]);
     expect(lastWriteJsonCall()).toMatchObject({
       status: "ok",
       postUpdate: { plugins: { changed: true } },
@@ -4721,16 +4765,16 @@ describe("update-cli", () => {
     expect(getLogOutput()).toContain("1 updated, 0 unchanged");
   });
 
-  it("returns changed package results without Doctor output during JSON post-core resume", async () => {
+  it("completes changed packages without mixing Doctor output into JSON post-core results", async () => {
     mockNpmPluginOutcomes([], true);
 
     await runPostCoreCommand({ json: true, restart: false });
 
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? "")),
-    ).toEqual([]);
+    expect(postCoreValidationCommands()).toEqual([
+      postCoreDoctorCommand,
+      postCoreDoctorCommand,
+      ["config", "validate", "--json"],
+    ]);
     expect(JSON.parse(getLogOutput())).toEqual(lastWriteJsonCall());
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -4786,6 +4830,7 @@ describe("update-cli", () => {
       demo: { source: "npm", spec: "@openclaw/demo@1.0.0", installPath },
     });
     pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
 
     await runPostCoreCommand(
       { json: true, restart: false },
@@ -4876,11 +4921,10 @@ describe("update-cli", () => {
 
       if (mode === "resume") {
         await runPostCoreCommand({ restart: false, json: true });
-        expect(
-          vi
-            .mocked(runExec)
-            .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? "")),
-        ).toEqual([]);
+        expect(postCoreValidationCommands()).toEqual([
+          postCoreDoctorCommand,
+          ...(valid ? [["config", "validate", "--json"]] : []),
+        ]);
       } else {
         vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
         if (valid) {
@@ -5400,6 +5444,11 @@ describe("update-cli", () => {
     "reports a completed missing-payload repair instead of the later bulk skip (json=%s)",
     async (json) => {
       mockNoopPostUpdatePluginConvergence();
+      const root = createCaseDir("openclaw-repaired-plugin-root");
+      const entryPath = await writeOpenClawPackageFixture(root, "1.0.0", {
+        entrySource: "// updated install Doctor entrypoint fixture\n",
+      });
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
       const installPath = createCaseDir("openclaw-repaired-plugin-summary");
       fsSync.mkdirSync(installPath, { recursive: true });
       const records = {
@@ -5453,6 +5502,22 @@ describe("update-cli", () => {
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 
+      expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledWith(root);
+      expect(runExec).toHaveBeenCalledWith(
+        expect.any(String),
+        [
+          entryPath,
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        expect.objectContaining({
+          cwd: root,
+          env: expect.objectContaining({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }),
+        }),
+      );
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       if (json) {
         const result = lastWriteJsonCall() as UpdateRunResult | undefined;
@@ -5463,6 +5528,23 @@ describe("update-cli", () => {
         expect(getLogOutput()).toContain("Plugin updates: 1 updated, 0 unchanged.");
         expect(getLogOutput()).not.toContain("1 skipped");
       }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses post-core repair without an updated Doctor entrypoint (json=%s)",
+    async (json) => {
+      const root = createCaseDir("openclaw-missing-doctor-entrypoint");
+      await writeOpenClawPackageFixture(root, "1.0.0");
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+      mockFileBackedPathExists();
+
+      await expect(runPostCoreCommand({ yes: true, json, restart: false })).rejects.toThrow(
+        "Updated OpenClaw entrypoint not found for post-plugin doctor",
+      );
+      expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledWith(root);
+      expect(runExec).not.toHaveBeenCalled();
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
   );
 
@@ -12582,7 +12664,13 @@ describe("update-cli", () => {
         for (const suffix of [".pre-update", ".bak"]) {
           await writeJsonFixture(`${configPath}${suffix}`, preUpdateConfig);
         }
-        vi.mocked(runExec).mockRejectedValueOnce(new Error("ps unavailable"));
+        const run = requireValue(vi.mocked(runExec).getMockImplementation(), "runExec mock");
+        vi.mocked(runExec).mockImplementation(async (file, ...rest) => {
+          if (file === "ps" || file === "powershell.exe") {
+            throw new Error("ps unavailable");
+          }
+          return await run(file, ...rest);
+        });
         return {};
       },
     },
@@ -12621,13 +12709,13 @@ describe("update-cli", () => {
     const preUpdateConfig = stableWhatsAppConfig();
     const postDoctorConfig = stableConfig();
     await setupPostCoreConfigFixture({ preUpdateConfig, postDoctorConfig });
-    vi.mocked(runExec).mockImplementationOnce(async (file, commandArgs) => {
-      expect(file).toBe("powershell.exe");
-      expect(commandArgs).toContain("-NonInteractive");
-      return {
-        stdout: new Date(Date.now() - 1_000).toISOString(),
-        stderr: "",
-      };
+    const run = requireValue(vi.mocked(runExec).getMockImplementation(), "runExec mock");
+    vi.mocked(runExec).mockImplementation(async (file, commandArgs, options) => {
+      if (file === "powershell.exe") {
+        expect(commandArgs).toContain("-NonInteractive");
+        return { stdout: new Date(Date.now() - 1_000).toISOString(), stderr: "" };
+      }
+      return await run(file, commandArgs, options);
     });
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", {
@@ -12643,6 +12731,11 @@ describe("update-cli", () => {
       }
     }
 
+    expect(runExec).toHaveBeenCalledWith(
+      "powershell.exe",
+      expect.arrayContaining(["-NonInteractive"]),
+      expect.objectContaining({ logOutput: false, timeoutMs: 1_000 }),
+    );
     expect(syncPluginCall()?.config?.channels?.whatsapp).toEqual(
       preUpdateConfig.channels?.whatsapp,
     );
@@ -13804,7 +13897,7 @@ describe("update-cli", () => {
     });
   });
 
-  it("updateFinalizeCommand defers plugin installation during pre-plugin doctor", async () => {
+  it("updateFinalizeCommand admits migration Doctor after plugin convergence", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
     await withEnvAsync(
       {
@@ -13833,7 +13926,7 @@ describe("update-cli", () => {
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
-        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
+        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();

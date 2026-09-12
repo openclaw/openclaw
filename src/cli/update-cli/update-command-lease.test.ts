@@ -53,6 +53,12 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entrypoint,
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
+vi.mock("./update-command-fresh-doctor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-fresh-doctor.js")>()),
+  // Package discovery is covered separately; this fixture exercises real
+  // process/lease ownership at the Doctor and result-publication boundaries.
+  convergeUpdateDoctorMigrationPlugins: vi.fn(async () => undefined),
+}));
 vi.mock("./progress.js", () => ({ printResult: mocks.print }));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
@@ -135,6 +141,7 @@ beforeEach(async () => {
     await loader.unregister();
   `,
   );
+  await state.writeText("dist/index.mjs", await fs.readFile(entrypoint, "utf8"));
   mocks.entrypoint.mockResolvedValue(entrypoint);
   mocks.root.mockResolvedValue(state.root);
   mocks.plugins.mockReset().mockResolvedValue(pluginResult);
@@ -421,24 +428,25 @@ describe("update orchestration lifecycle ownership", () => {
       });
 
       await invoke(lane);
-      expectSuccess(lane, lane === "repair");
+      expectSuccess(lane);
       expect(mocks.publication).toHaveBeenCalledOnce();
       expect((await fs.stat(aliasRoot)).ino).toBe(aliasBefore.ino);
       expect(JSON.parse(await fs.readFile(runtimeMetadata, "utf8")).generation).toBe("candidate");
       const firstEvents = await events();
       expect(firstEvents).toContain("runtime-proof:runtime-proof");
-      if (lane === "repair") {
-        expect(firstEvents.indexOf("runtime-proof:doctor")).toBeLessThan(
-          firstEvents.indexOf("pre-attempt"),
-        );
-      }
+      expect(firstEvents.indexOf("runtime-proof:doctor")).toBeGreaterThan(-1);
+      expect(firstEvents.indexOf("runtime-proof:doctor")).toBeLessThan(
+        firstEvents.indexOf("pre-attempt"),
+      );
 
       const beforeRetry = await fs.stat(runtimeEntry);
+      await fs.writeFile(state.statePath("events.jsonl"), "");
       mocks.publication.mockImplementationOnce(async () => {
         throw new Error("A running Gateway cannot publish changed artifacts.");
       });
       await invoke(lane);
-      expectSuccess(lane, lane === "repair");
+      expectSuccess(lane);
+      expect(await events()).toEqual(firstEvents);
       expect(mocks.publication).toHaveBeenCalledOnce();
       expect(await fs.stat(runtimeEntry)).toMatchObject({
         ino: beforeRetry.ino,
@@ -475,7 +483,7 @@ describe("update orchestration lifecycle ownership", () => {
     }
   });
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["resume", "fresh-process", "current-process", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
@@ -512,7 +520,7 @@ describe("update orchestration lifecycle ownership", () => {
         lane === "current-process" ? "1" : undefined,
       );
       expect(await events()).toEqual([
-        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "repair" || lane === "resume" ? ["pre-attempt", "pre-acquired"] : []),
         ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
         "post-attempt",
         "post-acquired",
@@ -636,7 +644,7 @@ describe("update orchestration lifecycle ownership", () => {
       await writePersistedInstalledPluginIndexInstallRecords(current);
       await writeScenario("resume");
       await invoke("resume");
-      expectSuccess("resume", false);
+      expectSuccess("resume");
       expect(mocks.plugins).toHaveBeenCalledWith(
         expect.objectContaining({
           configSnapshot: expect.objectContaining({
@@ -645,19 +653,26 @@ describe("update orchestration lifecycle ownership", () => {
           pluginInstallRecords: current,
         }),
       );
-      expect(await events()).toEqual([]);
+      expect(await events()).toEqual([
+        "pre-attempt",
+        "pre-acquired",
+        "post-attempt",
+        "post-acquired",
+        "validate",
+        "readiness",
+      ]);
     },
   );
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["resume", "fresh-process", "current-process", "repair"] as const)(
     "%s does not run a final doctor when no plugins changed",
     async (lane) => {
       await writeScenario(lane, { pluginUpdate: { ...pluginResult, changed: false } });
       mocks.plugins.mockResolvedValueOnce({ ...pluginResult, changed: false });
       await invoke(lane);
-      expectSuccess(lane, lane === "repair");
+      expectSuccess(lane, lane === "repair" || lane === "resume");
       expect(await events()).toEqual([
-        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "repair" || lane === "resume" ? ["pre-attempt", "pre-acquired"] : []),
         ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
         "validate",
         "readiness",
@@ -784,6 +799,23 @@ describe("update orchestration lifecycle ownership", () => {
     expect(probe.stdout).toBe("acquired");
   });
 
+  it("resume withholds the handoff result when its first migration Doctor fails", async () => {
+    await writeScenario("resume", { failDoctor: "pre" });
+    const resultPath = state.path("failed-first-doctor.json");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+
+    await expect(invoke("resume")).rejects.toThrow("doctor fixture failure");
+
+    expect(mocks.plugins).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("doctor fixture failure"),
+    });
+    expect(await events()).toEqual(["pre-attempt", "pre-acquired"]);
+    const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
+    expect(probe.stdout).toBe("acquired");
+  });
+
   it("rejects restart handling after a final doctor failure despite valid config", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
     await invokeReportedFailure("current-process");
@@ -876,20 +908,19 @@ describe("update orchestration lifecycle ownership", () => {
 
       if (lane === "resume") {
         await invoke(lane);
-        expectSuccess(lane, false);
       } else {
         await invokeReportedFailure(lane);
-        expect(reportedResult(lane)).toMatchObject({
-          status: "error",
-          postUpdate: {
-            plugins: {
-              reason: valid
-                ? "post-plugin-doctor-execution-failed"
-                : "post-plugin-doctor-invalid-config",
-            },
-          },
-        });
       }
+      expect(reportedResult(lane)).toMatchObject({
+        status: "error",
+        postUpdate: {
+          plugins: {
+            reason: valid
+              ? "post-plugin-doctor-execution-failed"
+              : "post-plugin-doctor-invalid-config",
+          },
+        },
+      });
       const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
       expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
       expect(persisted.update?.channel).toBe("stable");
@@ -899,18 +930,14 @@ describe("update orchestration lifecycle ownership", () => {
         env: {},
       });
       expect(startupBlock === null).toBe(valid);
-      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
-        lane === "resume"
-          ? []
-          : [
-              ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-              ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-              "post-attempt",
-              "post-acquired",
-              "validate",
-              ...(valid ? ["readiness"] : []),
-            ],
-      );
+      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual([
+        ...(lane === "repair" || lane === "resume" ? ["pre-attempt", "pre-acquired"] : []),
+        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
+        "post-attempt",
+        "post-acquired",
+        "validate",
+        ...(valid ? ["readiness"] : []),
+      ]);
     },
   );
 });

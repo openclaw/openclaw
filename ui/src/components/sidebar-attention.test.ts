@@ -227,6 +227,9 @@ describe("sidebar attention refresh ownership", () => {
   it("keeps the plain attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
+    // Opening imports the real panel lazily. Join that boundary before polling
+    // its DOM; the top-layer assertion is not a module transformation deadline.
+    await import("./sidebar-attention-panel.runtime.ts");
 
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
     const panel = element.querySelector(".sidebar-issues-panel");

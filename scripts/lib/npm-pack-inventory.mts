@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveNpmRunner, type NpmRunnerParams } from "../npm-runner.mts";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
+import { runNpmWindowsJob } from "./npm-windows-job.mts";
 
 const NPM_VERSION_TIMEOUT_MS = 10_000;
 const ISOLATED_ENV_KEYS =
@@ -112,7 +113,7 @@ function controlledNpmEnvironment(
 
 function describeSpawnFailure(
   label: string,
-  result: ReturnType<typeof spawnSync>,
+  result: Pick<ReturnType<typeof spawnSync>, "error" | "signal" | "stderr" | "status">,
   timeoutMs: number,
 ): string {
   // Output-limit and timeout errors can also carry the signal used to stop the child.
@@ -174,27 +175,50 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
 
   const npmEnv = controlledNpmEnvironment(options.sourceEnv ?? process.env, sandbox);
   const spawnOptions = { cwd: sandbox.cwd, encoding: "utf8" as const, windowsHide: true };
+  let safeToRemoveSandbox = true;
   const runNpm = (label: string, args: string[], timeout: number, maxBuffer: number): string => {
     const npm = resolveNpmRunner({
       env: npmEnv,
       npmArgs: [`--prefix=${sandbox.cwd}`, ...args],
       ...options.runnerParams,
     });
-    const result = spawnSync(npm.command, npm.args, {
-      ...spawnOptions,
-      env: npm.env ?? npmEnv,
-      maxBuffer,
-      shell: npm.shell,
-      timeout,
-      windowsVerbatimArguments: npm.windowsVerbatimArguments,
-    });
+    const ownedShim = process.platform === "win32" && npm.windowsVerbatimArguments === true;
+    const result: {
+      status: number | null;
+      signal: NodeJS.Signals | null;
+      stdout: string;
+      stderr: string;
+      error?: NodeJS.ErrnoException;
+      processTreeState?: "terminated" | "indeterminate";
+    } = ownedShim
+      ? runNpmWindowsJob(npm.command, npm.args, {
+          cwd: sandbox.cwd,
+          env: npm.env ?? npmEnv,
+          timeout,
+          maxBuffer,
+        })
+      : spawnSync(npm.command, npm.args, {
+          ...spawnOptions,
+          env: npm.env ?? npmEnv,
+          maxBuffer,
+          shell: npm.shell,
+          timeout,
+          windowsVerbatimArguments: npm.windowsVerbatimArguments,
+        });
     if (result.status !== 0 || result.error) {
-      throw new Error(describeSpawnFailure(label, result, timeout));
+      if ("processTreeState" in result && result.processTreeState !== "terminated") {
+        safeToRemoveSandbox = false;
+      }
+      throw Object.assign(new Error(describeSpawnFailure(label, result, timeout)), {
+        code: result.error?.code,
+        ...("processTreeState" in result ? { processTreeState: result.processTreeState } : {}),
+        cause: result.error,
+      });
     }
     return result.stdout;
   };
   const startedAt = Date.now();
-  try {
+  const inventory = () => {
     const npmVersion = parseNpmVersion(
       runNpm("npm --version", ["--version"], NPM_VERSION_TIMEOUT_MS, 64 * 1024),
     );
@@ -228,7 +252,30 @@ export function collectNpmPackInventory(packageRoot: string, options: NpmPackInv
       files: parseNpmPackFiles(packOutput),
       npmVersion,
     };
-  } finally {
-    fs.rmSync(sandboxRoot, { force: true, recursive: true });
+  };
+  let outcome: { value: ReturnType<typeof inventory> } | { error: unknown };
+  try {
+    outcome = { value: inventory() };
+  } catch (error) {
+    outcome = { error };
   }
+  if (safeToRemoveSandbox) {
+    try {
+      fs.rmSync(sandboxRoot, { force: true, recursive: true });
+    } catch (cleanupError) {
+      if ("error" in outcome) {
+        const primary = outcome.error;
+        throw new AggregateError(
+          [primary, cleanupError],
+          primary instanceof Error ? primary.message : String(primary),
+          { cause: cleanupError },
+        );
+      }
+      throw cleanupError;
+    }
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }

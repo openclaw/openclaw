@@ -13,6 +13,7 @@ import {
   desktopProofSshdFailure,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
+  prepareDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
   readDesktopProofTestReport,
   withDesktopProofCleanup,
@@ -54,6 +55,9 @@ const receipt = {
     serverVersion: "",
     serverBinarySha256: "",
     runtimeDirectory: null as Awaited<ReturnType<typeof inspectDesktopSshdRuntimeDirectory>> | null,
+    runtimeDirectoryPreparation: null as Awaited<
+      ReturnType<typeof prepareDesktopSshdRuntimeDirectory>
+    > | null,
     configFailure: null as ReturnType<typeof desktopProofSshdFailure> | null,
   },
   provenance: {
@@ -510,17 +514,16 @@ async function main() {
       ].join("\n"),
       { mode: 0o600 },
     );
-    // Ubuntu compiles this privsep path; direct sshd does not create the service runtime directory.
-    await run("sshd-runtime-directory", "sudo", [
-      "-n",
-      "/bin/mkdir",
-      "-p",
-      "-m",
-      "0755",
-      "/run/sshd",
-    ]);
-    receipt.preinstalledSsh.runtimeDirectory =
-      await inspectDesktopSshdRuntimeDirectory("/run/sshd");
+    // Direct sshd does not create Ubuntu's compiled privsep directory. Provision
+    // it on this disposable CI runner without starting or reconfiguring its SSH service.
+    receipt.preinstalledSsh.runtimeDirectoryPreparation = await prepareDesktopSshdRuntimeDirectory(
+      async () => {
+        const facts = await inspectDesktopSshdRuntimeDirectory("/run/sshd");
+        receipt.preinstalledSsh.runtimeDirectory ??= facts;
+        return facts;
+      },
+      () => run("sshd-runtime-directory", "sudo", ["-n", "/bin/mkdir", "-m", "0755", "/run/sshd"]),
+    );
     await run("sshd-config", "sudo", ["-n", "/usr/sbin/sshd", "-t", "-f", config]);
     const stop = daemon("sshd", "sudo", ["-n", "/usr/sbin/sshd", "-D", "-e", "-f", config]);
     // Register teardown before readiness: a failed bootstrap still owns its child.

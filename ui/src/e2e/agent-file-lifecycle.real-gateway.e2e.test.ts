@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   createOpenClawTestState,
@@ -15,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -43,6 +44,36 @@ const refreshInventoryArgs = [
   "--params",
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
+const waitForInventoryPublication = async (
+  owner: OpenClawTestInstance,
+  initial: Awaited<ReturnType<OpenClawTestInstance["cli"]>>,
+  commands?: unknown[],
+) => {
+  let result = initial;
+  // A refresh reply can still be pending. Passive reads await publication without
+  // starting a second acquisition or changing the provider fixture mid-flight.
+  await vi.waitFor(
+    async () => {
+      const catalog = JSON.parse(result.stdout) as ModelCatalogResult;
+      if (catalog.pendingProviders?.length) {
+        const args = [
+          "gateway",
+          "call",
+          "models.list",
+          "--json",
+          "--params",
+          JSON.stringify({ agentId: "main", view: "all" }),
+        ];
+        result = await owner.cli(args);
+        commands?.push({ args, ...result });
+        expect(result.code, result.stderr).toBe(0);
+      }
+      expect((JSON.parse(result.stdout) as ModelCatalogResult).pendingProviders ?? []).toEqual([]);
+    },
+    { interval: 100, timeout: 15_000 },
+  );
+  return result;
+};
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id: "selected", name: "Selected" },
@@ -104,8 +135,9 @@ const catalogSuite = createControlUiE2eSuite({
     };
     try {
       await catalogInstance.startGateway();
-      const initialInventory = await catalogInstance.cli(refreshInventoryArgs);
+      let initialInventory = await catalogInstance.cli(refreshInventoryArgs);
       expect(initialInventory.code, initialInventory.stderr).toBe(0);
+      initialInventory = await waitForInventoryPublication(catalogInstance, initialInventory);
       expect(initialInventory.stdout).toContain("inventory-before");
       return {
         baseUrl: `http://127.0.0.1:${catalogInstance.port}/`,
@@ -259,9 +291,10 @@ catalogSuite.define(() => {
           }
 
           inventoryModel = "inventory-after";
-          const refreshed = await owner.cli(refreshInventoryArgs);
+          let refreshed = await owner.cli(refreshInventoryArgs);
           commands.push({ args: refreshInventoryArgs, ...refreshed });
           expect(refreshed.code, refreshed.stderr).toBe(0);
+          refreshed = await waitForInventoryPublication(owner, refreshed, commands);
           expect(refreshed.stdout).toContain("inventory-after");
           await expect
             .poll(() =>

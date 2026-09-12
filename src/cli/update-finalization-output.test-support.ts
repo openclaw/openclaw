@@ -118,6 +118,25 @@ export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
+    sourceUrl("../commands/doctor/shared/migration-plugin-convergence.ts"),
+    `import { note } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
+export async function convergeDoctorMigrationPlugins({ onCapabilityConsent, onNote = note }) {
+  onNote('Migration plugin convergence diagnostic', 'Plugin updates');
+  ${
+    scenario?.startsWith("migration-consent")
+      ? `
+  const reviewToken = 'fixture-migration-review';
+  const acknowledgment = await onCapabilityConsent?.({ reviewToken });
+  if (acknowledgment?.reviewToken !== reviewToken) {
+    throw new Error('Migration plugin capability consent required');
+  }
+  onNote('Migration capability consent accepted', 'Plugin updates');
+  `
+      : ""
+  }
+}`,
+  ],
+  [
     sourceUrl("../plugins/installed-plugin-index-records.ts"),
     "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
   ],

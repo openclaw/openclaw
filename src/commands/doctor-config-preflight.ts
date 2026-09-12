@@ -103,6 +103,8 @@ export async function runDoctorConfigPreflight(
     skipPristineStartupStateMigrations?: boolean;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
+    /** Explicit Doctor repair has imported install records and converged migration plugins. */
+    migrationPluginsConverged?: true;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -467,7 +469,11 @@ export async function runDoctorConfigPreflight(
         automaticConfigRepair = snapshot.valid ? null : planScopedConfigRepair(snapshot);
       }
     }
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      migrationPluginsConverged: options.migrationPluginsConverged,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
         snapshot,
@@ -685,19 +691,17 @@ export async function runDoctorConfigPreflight(
       freshConfigGuardAllowed &&
       snapshot.valid
     ) {
-      const persistedSnapshotRead = await persistRefreshedPluginIndex({
+      const persistedRead = await persistRefreshedPluginIndex({
         env: startupMigrationEnv,
         lease: startupMigrationLease,
         measure: measurePreflightStep,
         readPersistedSnapshot: () => readConfigSnapshotForPreflight(false),
         snapshotRead: configSnapshotRead,
       });
-      const persistedBaseConfig =
-        persistedSnapshotRead.snapshot.sourceConfig ?? persistedSnapshotRead.snapshot.config ?? {};
       const persistedIdentity = resolveMigrationCheckpointIdentity({
-        snapshot: persistedSnapshotRead.snapshot,
-        baseConfig: persistedBaseConfig,
-        pluginMigrationFingerprint: persistedSnapshotRead.pluginMigrationFingerprint,
+        snapshot: persistedRead.snapshot,
+        baseConfig: persistedRead.snapshot.sourceConfig ?? persistedRead.snapshot.config ?? {},
+        pluginMigrationFingerprint: persistedRead.pluginMigrationFingerprint,
       });
       if (
         !migrationCheckpointIdentity ||
@@ -713,7 +717,7 @@ export async function runDoctorConfigPreflight(
       }
       // The durable reread supplies the accepted inventory. Replace both the
       // authoritative snapshot and its checkpoint identity at that boundary.
-      configSnapshotRead = persistedSnapshotRead;
+      configSnapshotRead = persistedRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
     configSnapshotRead = await completeStartupMigrationPreflight({
@@ -731,12 +735,10 @@ export async function runDoctorConfigPreflight(
       startupMigrationWarnings,
       stateMigrationsAllowed,
     });
-    snapshot = configSnapshotRead.snapshot;
-    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-
     return {
-      snapshot,
-      baseConfig,
+      snapshot: configSnapshotRead.snapshot,
+      baseConfig:
+        configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {},
       ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
       ...(configSnapshotRead.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }

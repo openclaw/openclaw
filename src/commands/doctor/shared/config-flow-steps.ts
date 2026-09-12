@@ -146,6 +146,7 @@ export function restoreDoctorConfigEnvRefs(
   candidate: OpenClawConfig,
   snapshot: ConfigFileSnapshot,
   env?: NodeJS.ProcessEnv,
+  options?: { beforePluginConvergence?: boolean },
 ): OpenClawConfig {
   const authored = resolveConfigIncludes(snapshot.parsed, snapshot.path, undefined, {
     allowedRoots: resolveIncludeRoots(env),
@@ -156,10 +157,14 @@ export function restoreDoctorConfigEnvRefs(
     rootAuthoredConfig: authored,
     sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
   });
-  const migrated = applyLegacyDoctorMigrations(canonicalAuthored, {
-    authoredRaw: snapshot.parsed,
-    resolvedRaw: snapshot.sourceConfig,
-  });
+  const migrated = applyLegacyDoctorMigrations(
+    canonicalAuthored,
+    {
+      authoredRaw: snapshot.parsed,
+      resolvedRaw: snapshot.sourceConfig,
+    },
+    options,
+  );
   // The root writer preserves unchanged roster refs after checking include ownership.
   // Single-file and include-file writers still need references moved with their roster.
   const referenceBase =
