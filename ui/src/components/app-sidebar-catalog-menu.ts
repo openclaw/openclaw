@@ -9,6 +9,7 @@ import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.t
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import "./catalog-session-menu.ts";
 import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
@@ -109,7 +110,6 @@ export class SidebarCatalogMenuController {
       return;
     }
     try {
-      const { showConfirmDialog } = await import("./confirm-dialog.ts");
       const confirmed = await showConfirmDialog({
         message: t("chat.catalog.deleteSessionConfirm"),
         details: menu.name,

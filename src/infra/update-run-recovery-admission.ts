@@ -30,5 +30,5 @@ export async function assertUpdateRecoveryAdmission(
       "Interrupted shared-database publication is read-only while full-state recovery is deferred",
     );
   }
-  assertNoPendingUpdateRecovery(options);
+  assertNoPendingUpdateRecovery({ ...options, path: databasePath });
 }
