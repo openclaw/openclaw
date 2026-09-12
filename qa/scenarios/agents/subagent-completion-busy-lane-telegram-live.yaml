@@ -9,7 +9,7 @@ scenario:
       - agent-runtime.subagent-turns-delivery
     secondary:
       - agent-runtime.subagent-turns-subagents
-      - channels.telegram
+      - telegram.conversation-routing-and-delivery
   gatewayConfigPatch:
     tools:
       profile: full
