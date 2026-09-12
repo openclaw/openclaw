@@ -11,6 +11,24 @@ final class ExecApprovalsGatewayPrompter {
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.gateway")
     private let gateway: GatewayConnection
     private var task: Task<Void, Never>?
+    private var promptTasks: [PromptKey: PromptTask] = [:]
+
+    private struct PromptKey: Hashable {
+        let id: String
+        let kind: ExecApprovalQueueItem.ApprovalKind
+        let serverLease: GatewayConnection.ServerLease
+    }
+
+    private struct PromptTask {
+        let token: UUID
+        let task: Task<Void, Never>
+        var phase: PromptPhase
+    }
+
+    private enum PromptPhase {
+        case presenting
+        case resolving
+    }
 
     init(gateway: GatewayConnection = .shared) {
         self.gateway = gateway
@@ -24,32 +42,49 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     func start() {
-        SimpleTaskSupport.start(task: &self.task) { [weak self] in
-            await self?.run()
+        let gateway = self.gateway
+        SimpleTaskSupport.start(task: &self.task) { @MainActor [weak self, gateway] in
+            await GatewayPushSubscription.consume(connection: gateway, bufferingNewest: 200) { [weak self] delivery in
+                self?.handle(delivery: delivery)
+            }
         }
     }
 
     func stop() {
         SimpleTaskSupport.stop(task: &self.task)
+        self.cancelAllPrompts()
     }
 
-    private func run() async {
-        let stream = await self.gateway.subscribe(bufferingNewest: 200)
-        for await delivery in stream {
-            if Task.isCancelled {
+    private func handle(delivery: GatewayConnection.PushDelivery) {
+        guard let push = delivery.push else {
+            self.cancelPrompts(serverLease: delivery.serverLease)
+            return
+        }
+        guard delivery.isCurrent, case let .event(evt) = push, let payload = evt.payload else { return }
+        let kind: ExecApprovalQueueItem.ApprovalKind
+        switch evt.event {
+        case "exec.approval.requested", "exec.approval.resolved":
+            kind = .exec
+        case "openclaw.approval.requested", "openclaw.approval.resolved":
+            kind = .systemAgent
+        default:
+            return
+        }
+
+        if evt.event.hasSuffix(".resolved") {
+            guard let resolved = try? GatewayPayloadDecoding.decode(payload, as: ResolvedApproval.self) else {
                 return
             }
-            await self.handle(delivery: delivery)
+            // The Gateway echoes our own successful resolution before its RPC response.
+            // Dismiss pending UI, but let an in-flight decision observe that response.
+            self.cancelPrompt(
+                PromptKey(id: resolved.id, kind: kind, serverLease: delivery.serverLease),
+                ifPresentingOnly: true)
+            return
         }
-    }
 
-    private func handle(delivery: GatewayConnection.PushDelivery) async {
-        guard delivery.isCurrent, let push = delivery.push, case let .event(evt) = push else { return }
-        guard evt.event == "exec.approval.requested" || evt.event == "openclaw.approval.requested" else { return }
-        guard let payload = evt.payload else { return }
         do {
-            let data = try JSONEncoder().encode(payload)
-            let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
+            let request = try GatewayPayloadDecoding.decode(payload, as: GatewayApprovalRequest.self)
             // The Gateway emitted this event because its own policy requires a
             // decision. If this Mac cannot present UI, leave the request
             // unresolved so the Gateway applies its current timeout fallback.
@@ -57,28 +92,105 @@ final class ExecApprovalsGatewayPrompter {
             let nowMs = Int(Date().timeIntervalSince1970 * 1000)
             let (remainingMs, overflow) = request.expiresAtMs.subtractingReportingOverflow(nowMs)
             guard !overflow, remainingMs > 0 else { return }
-            guard let decision = await ExecApprovalsPromptPresenter.prompt(
-                request.request,
-                timeoutMs: remainingMs)
-            else {
-                return
+            let key = PromptKey(id: request.id, kind: kind, serverLease: delivery.serverLease)
+            guard self.promptTasks[key] == nil else { return }
+            let token = UUID()
+            let gateway = self.gateway
+            let task = Task { [weak self, gateway] in
+                guard let self else { return }
+                defer { self.finishPrompt(key: key, token: token) }
+                await self.present(
+                    request: request,
+                    kind: kind,
+                    key: key,
+                    token: token,
+                    gateway: gateway)
             }
-            guard delivery.isCurrent else {
-                self.logger.info("exec approval decision discarded after the Gateway connection changed")
-                return
-            }
-            let isSystemAgent = evt.event == "openclaw.approval.requested"
-            var params = ["id": AnyCodable(request.id), "decision": AnyCodable(decision.rawValue)]
-            if isSystemAgent { params["kind"] = AnyCodable("system-agent") }
-            let method: GatewayConnection.Method = isSystemAgent ? .approvalResolve : .execApprovalResolve
-            _ = try await self.gateway.request(
-                method: method.rawValue,
-                params: params,
-                timeoutMs: 10000,
-                ifCurrentServerLease: delivery.serverLease)
+            self.promptTasks[key] = PromptTask(token: token, task: task, phase: .presenting)
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func present(
+        request: GatewayApprovalRequest,
+        kind: ExecApprovalQueueItem.ApprovalKind,
+        key: PromptKey,
+        token: UUID,
+        gateway: GatewayConnection) async
+    {
+        var hasLocalDecision = false
+        do {
+            let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+            let (remainingMs, overflow) = request.expiresAtMs.subtractingReportingOverflow(nowMs)
+            guard !overflow, remainingMs > 0 else { return }
+            guard let decision = await ExecApprovalsPromptPresenter.prompt(
+                request.request,
+                timeoutMs: remainingMs,
+                isStillEligible: { self.shouldPresent(request: request) })
+            else {
+                return
+            }
+            guard gateway.serverLeaseMatchesCurrentState(key.serverLease) else {
+                self.logger.info("exec approval decision discarded after the Gateway connection changed")
+                return
+            }
+            var params = ["id": AnyCodable(request.id), "decision": AnyCodable(decision.rawValue)]
+            if kind == .systemAgent { params["kind"] = AnyCodable("system-agent") }
+            let method: GatewayConnection.Method = kind == .systemAgent ? .approvalResolve : .execApprovalResolve
+            hasLocalDecision = true
+            self.markResolving(key: key, token: token)
+            _ = try await gateway.request(
+                method: method.rawValue,
+                params: params,
+                timeoutMs: 10000,
+                ifCurrentServerLease: key.serverLease)
+        } catch is CancellationError {
+            // Cancellation before a local decision means another owner won. Once the user
+            // decides, retain a diagnostic if ownership changes before the RPC completes.
+            if hasLocalDecision {
+                self.logger.info("exec approval decision discarded after approval ownership changed")
+            }
+        } catch {
+            self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func cancelPrompt(_ key: PromptKey, ifPresentingOnly: Bool = false) {
+        guard let promptTask = self.promptTasks[key], !ifPresentingOnly || promptTask.phase == .presenting else {
+            return
+        }
+        self.promptTasks.removeValue(forKey: key)
+        promptTask.task.cancel()
+    }
+
+    private func cancelPrompts(serverLease: GatewayConnection.ServerLease) {
+        let keys = self.promptTasks.keys.filter { $0.serverLease == serverLease }
+        for key in keys {
+            self.cancelPrompt(key)
+        }
+    }
+
+    private func cancelAllPrompts() {
+        let tasks = self.promptTasks.values.map(\.task)
+        self.promptTasks.removeAll()
+        for task in tasks {
+            task.cancel()
+        }
+    }
+
+    private func finishPrompt(key: PromptKey, token: UUID) {
+        guard self.promptTasks[key]?.token == token else { return }
+        self.promptTasks.removeValue(forKey: key)
+    }
+
+    private func markResolving(key: PromptKey, token: UUID) {
+        guard self.promptTasks[key]?.token == token else { return }
+        self.promptTasks[key]?.phase = .resolving
+    }
+
+    private struct ResolvedApproval: Decodable {
+        let id: String
     }
 
     private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
@@ -129,6 +241,12 @@ final class ExecApprovalsGatewayPrompter {
 
 #if DEBUG
 extension ExecApprovalsGatewayPrompter {
+    func _testHandle(deliveries: [GatewayConnection.PushDelivery]) {
+        for delivery in deliveries {
+            self.handle(delivery: delivery)
+        }
+    }
+
     static func _testShouldPresent(
         mode: AppState.ConnectionMode,
         activeSession: String?,
