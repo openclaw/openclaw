@@ -1,7 +1,7 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
-import { fetchWithControlUiAuth } from "../../app/control-ui-auth.ts";
+import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
@@ -12,16 +12,11 @@ type NostrProfileRequest = {
   isCurrent: () => boolean;
 };
 
-type NostrProfileHttpResult<T> = {
-  data: T | null;
-  response: Response;
-};
-
 async function requestNostrProfile<T>(
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
   auth: NostrProfileRequest,
-): Promise<NostrProfileHttpResult<T>> {
+) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -37,15 +32,7 @@ async function requestNostrProfile<T>(
       auth.authCandidates,
       auth.isCurrent,
     );
-    let data: T | null = null;
-    try {
-      data = (await response.json()) as T;
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw controller.signal.reason ?? error;
-      }
-    }
-    return { data, response };
+    return await readControlUiJsonResponse<T>(response, controller.signal);
   } finally {
     clearTimeout(timeout);
   }
@@ -84,7 +71,6 @@ export async function putNostrProfile(
 ) {
   return await requestNostrProfile<{
     ok?: boolean;
-    error?: string;
     details?: unknown;
     persisted?: boolean;
   }>(
@@ -103,7 +89,6 @@ export async function putNostrProfile(
 export async function importNostrProfile(params: NostrProfileRequest) {
   return await requestNostrProfile<{
     ok?: boolean;
-    error?: string;
     imported?: NostrProfile;
     merged?: NostrProfile;
     saved?: boolean;

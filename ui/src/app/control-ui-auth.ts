@@ -1,4 +1,31 @@
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { formatUiExternalText } from "../lib/format-error.ts";
+
+/** Decode a Gateway JSON response once, preserving validation details and HTTP status. */
+export async function readControlUiJsonResponse<T>(response: Response, signal: AbortSignal) {
+  let data: (T & { ok?: boolean; error?: unknown }) | null = null;
+  try {
+    data = await response.json();
+  } catch {
+    signal.throwIfAborted();
+  }
+  const error = data?.error;
+  const message =
+    typeof error === "string"
+      ? error
+      : error &&
+          typeof error === "object" &&
+          "message" in error &&
+          typeof error.message === "string"
+        ? error.message
+        : "";
+  const detail = formatUiExternalText(message);
+  return {
+    data,
+    response,
+    errorMessage: detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
+  };
+}
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;

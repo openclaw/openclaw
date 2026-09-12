@@ -346,7 +346,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       }),
     ).resolves.toEqual({
       authMethod: "device-token",
-      trustDeclaredOperatorScopes: true,
+      trustDeclaredOperatorScopes: false,
       authenticatedUserProfile: ownerProfile,
     });
   });

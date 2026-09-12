@@ -15,7 +15,7 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
@@ -413,7 +413,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = pendingForm;
 
     try {
-      const { data, response } = await putNostrProfile({
+      const { data, response, errorMessage } = await putNostrProfile({
         accountId: operation.accountId,
         authCandidates: operation.authCandidates,
         isCurrent: () => this.currentNostrForm(operation) !== null,
@@ -427,12 +427,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.updateFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -489,7 +484,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
 
     try {
-      const { data, response } = await importNostrProfile({
+      const { data, response, errorMessage } = await importNostrProfile({
         accountId: operation.accountId,
         authCandidates: operation.authCandidates,
         isCurrent: () => this.currentNostrForm(operation) !== null,
@@ -502,12 +497,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.importFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
         };
         return;
