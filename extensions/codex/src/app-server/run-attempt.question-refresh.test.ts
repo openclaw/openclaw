@@ -21,14 +21,14 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import { activeRunRegistrationMocks } from "./run-attempt.steering.test-mocks.js";
+import { activeRunRegistrationMocks } from "./run-attempt.steering.test-helpers.js";
 import {
   createSteeringParams,
   waitAndQueueActiveRunMessage,
 } from "./run-attempt.steering.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
-  const { createSteeringRuntimeMock } = await import("./run-attempt.steering.test-mocks.js");
+  const { createSteeringRuntimeMock } = await import("./run-attempt.steering.test-helpers.js");
   return createSteeringRuntimeMock(
     await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>(),
   );
