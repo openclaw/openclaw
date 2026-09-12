@@ -1280,11 +1280,20 @@ export async function loadWorkspaceBootstrapFiles(
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
-    if (
-      (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
-    ) {
-      continue;
+    if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
+      // The exact-entry check distinguishes an absent optional file (skipped)
+      // from one that exists but cannot be listed or read. When the lookup
+      // itself fails operationally (e.g. EACCES/EIO on the workspace dir), do
+      // not reject the whole bootstrap load: fall through to the guarded read,
+      // which produces the existing [UNREADABLE: ...] record and retains the
+      // remaining readable context.
+      try {
+        if (!(await exactWorkspaceEntryExists(resolvedDir, entry.name))) {
+          continue;
+        }
+      } catch {
+        // Fall through to the guarded read; it reports unreadability per entry.
+      }
     }
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,

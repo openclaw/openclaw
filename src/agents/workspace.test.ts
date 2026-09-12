@@ -990,6 +990,34 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
+  it("does not reject the whole bootstrap load when the workspace dir is unreadable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    // root bypasses directory permission checks, so this scenario cannot be
+    // exercised as root.
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-eacces-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "memory", "utf8");
+      await fs.chmod(workspaceDir, 0o000);
+      try {
+        // An unreadable workspace directory must not turn an EACCES from the
+        // exact-entry lookup into a rejected bootstrap load; the guarded read
+        // reports the unreadable entry and other context remains readable.
+        await expect(loadWorkspaceBootstrapFiles(workspaceDir)).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;
