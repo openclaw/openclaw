@@ -402,7 +402,7 @@ describe("read-only memory search manager", () => {
       const newCfg = createConfig({ provider: "none", model: "new-model", vectorEnabled: false });
       const replacement = await getReader(newCfg);
       trackManager(replacement);
-      expect(replacement).not.toBe(oldReader);
+      expect(replacement === oldReader).toBe(false);
       const retainedCandidate = retainedCandidates[0];
       expect(retainedCandidate).toBeDefined();
       expect((retainedCandidate as unknown as { closed: boolean }).closed).toBe(false);
@@ -459,7 +459,7 @@ describe("read-only memory search manager", () => {
 
     const replacement = await getReader(newCfg);
     trackManager(replacement);
-    expect(replacement).not.toBe(oldReader);
+    expect(replacement === oldReader).toBe(false);
     expect((oldReader as unknown as { closed: boolean }).closed).toBe(true);
   });
 });
