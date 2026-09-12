@@ -3,7 +3,10 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
+import {
+  CATALOG_SESSION_CONTINUED_EVENT,
+  CATALOG_SESSION_RELEASED_EVENT,
+} from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
   SessionListOptions,
@@ -18,13 +21,16 @@ import type {
 // Chat panes announce catalog adoptions before the next poll so rows bind immediately.
 export function subscribeSessionCatalogBrowserEvents(
   onContinued: EventListener,
+  onReleased: EventListener,
   onPageActivation: EventListener,
 ): () => void {
   document.addEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+  document.addEventListener(CATALOG_SESSION_RELEASED_EVENT, onReleased);
   document.addEventListener("visibilitychange", onPageActivation);
   globalThis.addEventListener("focus", onPageActivation);
   return () => {
     document.removeEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+    document.removeEventListener(CATALOG_SESSION_RELEASED_EVENT, onReleased);
     document.removeEventListener("visibilitychange", onPageActivation);
     globalThis.removeEventListener("focus", onPageActivation);
   };

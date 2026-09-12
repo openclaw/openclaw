@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
+  catalogSessionReleasedDetailFromEvent,
   catalogSessionSearch,
   lookupCatalogSession,
   parseCatalogSessionKey,
@@ -21,6 +22,13 @@ describe("catalog session keys", () => {
   it("round-trips a catalog thread URL target", () => {
     const key = { catalogId: "claude", hostId: "node:abc", threadId: "thread:a/b" };
     expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
+  });
+
+  it("accepts release events before a newly started native thread is discovered", () => {
+    const detail = { agentId: "main", catalogId: "codex", hostId: "gateway:local" };
+    expect(catalogSessionReleasedDetailFromEvent(new CustomEvent("release", { detail }))).toEqual(
+      detail,
+    );
   });
 
   it("keeps the explicit agent owner across paginated lookup requests", async () => {
