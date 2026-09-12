@@ -118,8 +118,9 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
   const view = await createView();
 
   try {
-    expect(avatarImage(view)).toBeNull();
-    await expectAvatarFallback(view);
+    const avatar = view.querySelector(".agent-identity-editor__avatar .identity-avatar--agent");
+    expect(avatar?.classList).toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-fallback");
     expect(fetchAvatar).toHaveBeenCalledWith(
       `${globalThis.location.origin}/avatar/beta?v=1`,
       expect.objectContaining({
@@ -133,6 +134,9 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
     await waitForFast(() => {
       expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-1");
     });
+    expect(avatar?.classList).toContain("is-pending");
+    avatarImage(view)?.dispatchEvent(new Event("load"));
+    expect(avatar?.classList).not.toContain("is-pending");
     expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(createObjectURL).toHaveBeenCalledOnce();
   } finally {

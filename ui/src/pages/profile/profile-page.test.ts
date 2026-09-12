@@ -516,15 +516,17 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
-  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
+  const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
-  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+  expect(avatar.classList).toContain("is-pending");
 
   image?.dispatchEvent(new Event("error"));
   await page.updateComplete;
 
-  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
-  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+  expect(avatar.querySelector("img")).toBeNull();
+  expect(avatar.classList).toContain("is-fallback");
+  expect(avatar.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
 it("fetches a protected hero avatar with the current Control UI credential", async () => {
@@ -572,7 +574,9 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
       signal: expect.any(AbortSignal),
     });
     expect(
-      page.querySelector<HTMLImageElement>(".profile-hero__avatar-image")?.getAttribute("src"),
+      page
+        .querySelector<HTMLImageElement>(".profile-hero__avatar .identity-avatar__image")
+        ?.getAttribute("src"),
     ).toBe("blob:hero-avatar");
   });
 

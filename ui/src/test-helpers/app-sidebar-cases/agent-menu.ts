@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
@@ -24,6 +25,26 @@ function pointerEvent(type: "pointerenter" | "pointerleave", pointerType = "mous
 }
 
 describe("AppSidebar agent chip", () => {
+  it("keeps a configured avatar blank while waiting for authentication", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: null });
+    const fetchAvatar = vi.spyOn(globalThis, "fetch");
+    const { sidebar } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        ...TWO_AGENTS,
+        agents: [{ id: "main", identity: { avatarUrl: "/avatar/main", emoji: "🦞" } }],
+      },
+    );
+    const avatar = sidebar.querySelector(".sidebar-agent-card__avatar .identity-avatar--agent");
+    expect(avatar?.classList).toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-fallback");
+    expect(avatar?.querySelector("img")).toBeNull();
+    expect(fetchAvatar).not.toHaveBeenCalled();
+  });
+
   it("loads the workspace identity used by the Agents editor", async () => {
     const request = vi.fn().mockResolvedValue({
       agentId: "main",
@@ -648,10 +669,8 @@ describe("AppSidebar agent chip", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(["avatar"], { type: "image/png" }),
-    });
+    const response = createDeferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(response.promise);
     vi.stubGlobal("fetch", fetchMock);
     setAvatarGatewayOrigin(globalThis.location.origin, ["secret-token"]);
     try {
@@ -678,7 +697,13 @@ describe("AppSidebar agent chip", () => {
         ...(menu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
       ].find((row) => row.textContent?.includes("research"));
       expect(researchRow).toBeDefined();
+      const avatar = researchRow?.querySelector(".agent-select__avatar");
+      expect(avatar?.classList).toContain("is-pending");
+      expect(avatar?.classList).not.toContain("is-fallback");
 
+      response.resolve(
+        new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      );
       await vi.waitFor(() => {
         expect(
           researchRow
@@ -686,6 +711,9 @@ describe("AppSidebar agent chip", () => {
             ?.getAttribute("src"),
         ).toBe("blob:agent-avatar");
       });
+      expect(avatar?.classList).toContain("is-pending");
+      avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
+      expect(avatar?.classList).not.toContain("is-pending");
       expect(createObjectURL).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
         `${globalThis.location.origin}/avatar/research?v=140879`,
@@ -694,6 +722,7 @@ describe("AppSidebar agent chip", () => {
         }),
       );
     } finally {
+      response.resolve(new Response(null, { status: 404 }));
       setAvatarGatewayOrigin(null);
       vi.unstubAllGlobals();
     }

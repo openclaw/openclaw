@@ -102,7 +102,12 @@ page filtered to that agent. Open **Agents** in the sidebar to return to the ros
 page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
 for group controls and filtering.
 
-Agent names and avatars follow agent and identity updates. Activity and previews on the page and sidebar roster refresh on session events
+Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
+the avatar keeps its tinted background with no face or text. The image appears when ready;
+an emoji or generated face appears only when no image is configured or the image fails to load.
+This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Activity and previews on the page and sidebar roster refresh on session events
 and Gateway reconnects. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions
