@@ -121,6 +121,9 @@ describe("gateway usage helpers", () => {
 
   it.each([
     [{ startDate: "2026-02-30" }, "invalid startDate"],
+    [{ startDate: "" }, "invalid startDate"],
+    [{ endDate: "   " }, "invalid endDate"],
+    [{ startDate: "", endDate: "" }, "invalid startDate"],
     [{ endDate: "2026-2-5" }, "invalid endDate"],
     [{ startDate: 0 }, "invalid startDate"],
     [{ endDate: [] }, "invalid endDate"],

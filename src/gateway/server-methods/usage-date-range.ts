@@ -111,8 +111,13 @@ const findInvalidExplicitDate = (params: {
 }): "startDate" | "endDate" | undefined => {
   for (const field of ["startDate", "endDate"] as const) {
     const raw = params[field];
-    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    if (raw === undefined || raw === null) {
       continue;
+    }
+    // Explicit blank/whitespace is invalid, not "absent". Omitting the field still
+    // falls through to the days-based default window.
+    if (typeof raw === "string" && raw.trim() === "") {
+      return field;
     }
     if (parseDateParts(raw) === undefined) {
       return field;
