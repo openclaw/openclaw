@@ -28,7 +28,6 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-wi
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { createInitialModelCatalogRead } from "../lib/model-catalog-cache.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -46,6 +45,7 @@ import {
 } from "./gateway-control-ui-reload.ts";
 import {
   createGatewayEventLog,
+  createGatewayMetadataObserver,
   createGatewayEventObserver,
   notifyGatewayObservers,
 } from "./gateway-observers.ts";
@@ -129,6 +129,7 @@ export function createApplicationGateway(
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const eventLog = createGatewayEventLog();
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
     // Retirement remains valid after a reentrant stop or same-account client replacement.
     notifyGatewayObservers(
@@ -174,7 +175,8 @@ export function createApplicationGateway(
     }, OFFLINE_INDICATOR_DELAY_MS);
   };
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
-    snapshot = { ...snapshot, ...patch };
+    const previous = snapshot;
+    snapshot = { ...previous, ...patch };
     if (snapshot.phase === "connected") {
       clearOfflineIndicatorTimer();
       snapshot.offlineStable = false;
@@ -186,7 +188,9 @@ export function createApplicationGateway(
       snapshot.pluginCapabilities = null;
       scheduleOfflineIndicator();
     }
-    notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
+    if (metadataObserver.synchronize(previous, snapshot)) {
+      notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
+    }
   };
   const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
     if (canvasSurfaceLease) {
@@ -434,7 +438,6 @@ export function createApplicationGateway(
     stopCanvasSurfaceLease();
     client?.stop();
 
-    const initialCatalog = createInitialModelCatalogRead();
     const nextClient = createClient({
       url: nextConnection.gatewayUrl,
       token: nextConnection.token.trim() ? nextConnection.token : undefined,
@@ -452,15 +455,16 @@ export function createApplicationGateway(
       instanceId: options.clientOptions?.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
       get modelCatalog() {
-        return initialCatalog.captureTarget(
-          options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
-        );
+        return client === nextClient
+          ? metadataObserver.captureTarget(
+              options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
+            )
+          : undefined;
       },
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
         }
-        initialCatalog.start(nextClient, hello);
         // The submitted secret is unclassified until this Gateway reports its mode.
         // Clear an old token too when the origin now uses password or proxy auth.
         persistSessionToken(
@@ -642,7 +646,7 @@ export function createApplicationGateway(
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
         isCurrent: () => isCurrentClient(nextClient),
-        project: (event) => initialCatalog.receive(event, snapshot),
+        project: (event) => metadataObserver.receive(event, snapshot),
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),

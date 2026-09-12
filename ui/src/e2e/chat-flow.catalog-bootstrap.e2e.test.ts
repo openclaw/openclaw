@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -160,8 +161,8 @@ suite.define(() => {
     },
   );
 
-  it.each(["pending", "complete"] as const)(
-    "keeps the patched account when its replacement read is %s before a late initial snapshot",
+  it.each(["pending", "complete", "reconnect", "ordinary-reconnect"] as const)(
+    "real chat route preserves account state during %s snapshot ordering",
     async (replacementState) => {
       const state = await createOpenClawTestState({
         label: `chat-catalog-mutation-${replacementState}`,
@@ -249,14 +250,17 @@ suite.define(() => {
           },
         );
         await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-          const initialSnapshot = createDeferred<{ deliver: () => void; payload: unknown }>();
+          let initialSnapshot = createDeferred<{ deliver: () => void; payload: unknown }>();
+          const disconnect = createDeferred<() => Promise<void>>();
           const replacementRead = createDeferred();
           const invalidation = createDeferred();
           const catalogRequests = new Set<string>();
           const heldReplies: Array<() => void> = [];
           let holdReplacement = true;
+          let holdReconnectCatalog = false;
           await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
             const server = socket.connectToServer();
+            disconnect.resolve(() => socket.close({ code: 1012, reason: "Reconnect proof" }));
             socket.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
               if (
@@ -289,6 +293,10 @@ suite.define(() => {
               }
               if (typeof frame.id === "string" && catalogRequests.has(frame.id)) {
                 frames.push({ direction: "response", frame });
+                if (holdReconnectCatalog) {
+                  heldReplies.push(() => socket.send(message));
+                  return;
+                }
                 if (
                   frame.ok &&
                   requireRecord(requireRecord(frame.payload).accountSelection).authProfileId ===
@@ -330,6 +338,50 @@ suite.define(() => {
           await trigger.click();
           await expect.poll(() => account.isVisible()).toBe(true);
           await expect.poll(() => account.textContent()).toContain("Account A");
+          if (replacementState === "reconnect" || replacementState === "ordinary-reconnect") {
+            const mountedShell = await page.locator("openclaw-app-shell").elementHandle();
+            assert.ok(mountedShell);
+            await trigger.click();
+            initialSnapshot = createDeferred<{ deliver: () => void; payload: unknown }>();
+            holdReconnectCatalog = true;
+            frames.push({ direction: "disconnect-mounted-shell" });
+            await (
+              await disconnect.promise
+            )();
+            const reconnected = await withTestTimeout(
+              initialSnapshot.promise,
+              10_000,
+              "Reconnected catalog snapshot did not arrive",
+            );
+            await expect.poll(() => heldReplies.length).toBeGreaterThan(0);
+            expect(await mountedShell.evaluate((element) => element.isConnected)).toBe(true);
+            if (replacementState === "reconnect") {
+              frames.push({ direction: "deliver-reconnect-snapshot" });
+              reconnected.deliver();
+            } else {
+              frames.push({ direction: "deliver-ordinary-without-snapshot" });
+              holdReconnectCatalog = false;
+              heldReplies.splice(0).forEach((send) => send());
+            }
+            const requestsBeforeOpen = catalogRequests.size;
+            await trigger.click();
+            await expect.poll(() => account.isVisible()).toBe(true);
+            await expect.poll(() => account.textContent()).toContain("Account A");
+            const row = picker.locator('[data-chat-model-option="fixture/first"]');
+            await expect.poll(() => row.isVisible()).toBe(true);
+            expect(await row.isEnabled()).toBe(true);
+            expect(catalogRequests.size).toBe(requestsBeforeOpen);
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `catalog-${replacementState}.png`),
+            });
+            holdReconnectCatalog = false;
+            heldReplies.splice(0).forEach((send) => send());
+            await trigger.click();
+            await trigger.click();
+            await expect.poll(() => row.isVisible()).toBe(true);
+            expect(catalogRequests.size).toBe(requestsBeforeOpen);
+            return;
+          }
           frames.push({ direction: "patch", model: "fixture/second@fixture:account-b" });
           await admin.request("sessions.patch", {
             key: sessionKey,

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -17,12 +18,12 @@ import {
 } from "../pages/chat/chat-state-refresh.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./app-host.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import type { ApplicationContext } from "./context.ts";
+import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 type ChatMetadataShell = HTMLElement & {
   runtime: { context: ApplicationContext };
   handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
 };
 
 afterEach(() => {
@@ -115,21 +116,20 @@ it.each(["config.changed", "chat.metadata.changed"])(
   },
 );
 
-it("invalidates chat metadata on config changes and same-client disconnects", () => {
+it("retires chat metadata through config.changed and the Gateway close callback", () => {
   vi.useFakeTimers();
-  const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-  const connected = {
-    client,
-    phase: "connected",
-    sessionKey: "agent:main:main",
-  } as ApplicationGatewaySnapshot;
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
     synchronize: vi.fn(),
   };
   const context = {
-    gateway: { snapshot: connected },
+    gateway,
     connectionBootstrap,
     runtimeConfig: {
       state: { configFormDirty: false, configSnapshot: null },
@@ -140,14 +140,14 @@ it("invalidates chat metadata on config changes and same-client disconnects", ()
   const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
   shell.runtime = { context };
 
-  shell.synchronizeGateway(connected);
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
   shell.handleGatewayEvent({ event: "config.changed", payload: {} });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
 
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
-  shell.synchronizeGateway({ ...connected, phase: "reconnecting" });
+  current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
   expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+  gateway.stop();
 });
 
 describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
@@ -157,7 +157,7 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
     "same-client reconnect",
     "same-client hello",
     "same-client identity",
-  ])("retires shared reads at the application boundary (%s)", async (transition) => {
+  ])("retires shared reads through Gateway callbacks or shell events (%s)", async (transition) => {
     vi.useFakeTimers();
     const staleResult = kind === "auth" ? { ts: 1, providers: [] } : { models: [] };
     const freshResult =
@@ -166,18 +166,16 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
         : { models: [{ id: "fresh", name: "Fresh", provider: "test" }] };
     const stale = createDeferred<ModelAuthStatusResult | ModelCatalogResult>();
     const fresh = createDeferred<ModelAuthStatusResult | ModelCatalogResult>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(() => stale.promise)
+    const { gateway, current } = createGatewayStoreTestStore();
+    gateway.start();
+    current().opts.onHello?.(gatewayHelloForMethods([]));
+    const request = current()
+      .request.mockImplementationOnce(() => stale.promise)
       .mockImplementation(() => fresh.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const connected = {
-      client,
-      phase: "connected",
-      sessionKey: "agent:main:main",
-    } as ApplicationGatewaySnapshot;
+    const client = gateway.snapshot.client;
+    assert.ok(client);
     const context = {
-      gateway: { snapshot: connected },
+      gateway,
       connectionBootstrap: {
         reset: vi.fn(),
         run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -191,24 +189,23 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
     shell.runtime = { context };
-    shell.synchronizeGateway(connected);
     const read = () =>
       kind === "auth"
         ? loadModelAuthStatus(client, { agentId: "main" })
         : loadModelCatalog(client, { agentId: "main" });
     const before = read();
     if (transition === "same-client reconnect") {
-      shell.synchronizeGateway({ ...connected, phase: "reconnecting" });
-      shell.synchronizeGateway(connected);
+      current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+      current().opts.onHello?.(gatewayHelloForMethods([]));
     } else if (transition === "same-client hello") {
-      shell.synchronizeGateway({
-        ...connected,
-        hello: gatewayHelloForMethods([]),
-      });
+      current().opts.onHello?.(gatewayHelloForMethods([]));
     } else if (transition === "same-client identity") {
-      shell.synchronizeGateway({
-        ...connected,
-        selfUser: { id: "replacement" },
+      current().opts.onEvent?.({
+        type: "event",
+        event: "presence",
+        payload: {
+          presence: [{ instanceId: current().instanceId, user: { id: "replacement" } }],
+        },
       });
     } else {
       shell.handleGatewayEvent({ event: transition, payload: {} });
@@ -221,6 +218,7 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
 
     expect(await Promise.all([replacement, follower])).toEqual([freshResult, freshResult]);
     expect(request).toHaveBeenCalledTimes(2);
+    gateway.stop();
   });
 });
 

@@ -113,7 +113,9 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
         for (const socket of wss.clients) {
           socket.terminate();
         }
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     },
   );

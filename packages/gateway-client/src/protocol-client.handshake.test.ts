@@ -271,7 +271,8 @@ describe("GatewayProtocolClient connect handshake", () => {
     const { client, connections } = createHandshakeClient(buildConnectPlan);
     try {
       client.start();
-      const first = connections[0]!;
+      const first = connections[0];
+      assert.ok(first);
       first.handlers.open();
       first.handlers.message(
         JSON.stringify({
@@ -288,7 +289,9 @@ describe("GatewayProtocolClient connect handshake", () => {
       });
       first.handlers.close(1006, "reconnect");
       await vi.advanceTimersByTimeAsync(10);
-      receiveConnectChallenge(connections[1]!);
+      const second = connections[1];
+      assert.ok(second);
+      receiveConnectChallenge(second);
       expect(buildConnectPlan).toHaveBeenLastCalledWith({
         nonce: "synthetic-nonce",
         challengeTs: 1_800_000_000_000,

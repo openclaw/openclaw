@@ -1,15 +1,7 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
-import type {
-  ModelCatalogTarget,
-  ModelsListParams,
-  ModelsSnapshotEvent,
-} from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
-import {
-  resolveUiConversationIdentity,
-  type UiSessionDefaultsHost,
-} from "./sessions/session-key.ts";
 
 export type ModelCatalogReadScope = Pick<
   ModelsListParams,
@@ -166,61 +158,6 @@ export function publishModelCatalogResult(
   cache.entries.set(key, entry);
   trimModelCatalogCache(cache);
   return true;
-}
-
-/** Connect reserves a read before any invalidation or replacement can supersede it. */
-export function createInitialModelCatalogRead() {
-  let target: ModelCatalogTarget | undefined;
-  let read: ModelCatalogRead | undefined;
-  const targetKey = (value: ModelCatalogTarget) =>
-    JSON.stringify(
-      "shortId" in value
-        ? ["short", value.agentId, value.shortId, value.slugHint]
-        : ["scope", value.agentId, value.sessionKey],
-    );
-  return {
-    captureTarget(value: ModelCatalogTarget | undefined) {
-      target = value;
-      return value;
-    },
-    start(client: ModelCatalogClient, hello: GatewayHelloOk) {
-      invalidateModelCatalogCache(client);
-      const scope: ModelCatalogReadScope | undefined =
-        target && !("shortId" in target)
-          ? target.sessionKey
-            ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)
-            : {}
-          : undefined;
-      read = target
-        ? beginModelCatalogRead(client, scope, undefined, scope?.agentId === undefined)
-        : undefined;
-    },
-    receive(event: GatewayEventFrame, host: UiSessionDefaultsHost): GatewayEventFrame | undefined {
-      if (event.event !== "models.snapshot") {
-        return event;
-      }
-      const currentRead = read;
-      if (!currentRead) {
-        return undefined;
-      }
-      // SAFETY: The negotiated authenticated snapshot carries ModelsSnapshotEvent.
-      const publication = event.payload as ModelsSnapshotEvent;
-      if (!target || targetKey(target) !== targetKey(publication.target)) {
-        return undefined;
-      }
-      read = undefined;
-      const scope = publication.scope.sessionKey
-        ? resolveUiConversationIdentity(
-            host,
-            publication.scope.sessionKey,
-            publication.scope.agentId,
-          )
-        : publication.scope;
-      const accepted = publishModelCatalogResult(currentRead, scope, publication.catalog);
-      currentRead.cache.reads.delete(currentRead);
-      return accepted ? { ...event, payload: { ...publication, scope } } : undefined;
-    },
-  };
 }
 
 /** Retire display copies and sharing eligibility before any consumer starts its next read. */
