@@ -96,7 +96,7 @@ describe("server-owned pending input display", () => {
   });
 
   it.each([
-    { state: "queued", runId: undefined, notice: "Queued · waiting for the agent" },
+    { state: "queued", runId: undefined, notice: undefined },
     {
       state: "interrupted",
       runId: "run-queued",
@@ -868,7 +868,7 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("labels unconsumed input as queued between its acceptance time and later output", () => {
+  it("keeps unconsumed input in order without a generic queue notice", () => {
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
@@ -890,11 +890,6 @@ describe("server-owned pending input display", () => {
         kind: "group",
         role: "user",
         messages: [{ message: { content: "Keep my accepted input" } }],
-      },
-      {
-        kind: "notice",
-        timestamp: input.acceptedAt,
-        text: "Queued · waiting for the agent",
       },
       { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);

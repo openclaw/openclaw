@@ -66,9 +66,9 @@ browsers. The running turn keeps its original approval destination. A different
 browser identity alone does not defer the message, but changes to permissions,
 execution policy, workspace, or bound tools can require a followup turn.
 
-The Control UI labels accepted messages that are still waiting for the agent as
-queued. A visible message or send acknowledgment does not mean the active runtime
-has consumed it.
+A visible message or send acknowledgment does not mean the active runtime has
+consumed it. The Control UI shows specific notices when an accepted message is
+waiting for worker setup or workspace sync.
 
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 

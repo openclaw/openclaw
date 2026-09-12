@@ -718,27 +718,21 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).not.toContain("苦难 者");
   });
 
-  it("preserves mixed long CJK prose without inserting display spaces", () => {
-    const input =
-      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难";
+  it.each<[name: string, input: string]>([
+    [
+      "preserves mixed long CJK prose without inserting display spaces",
+      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难",
+    ],
+    [
+      "preserves long filesystem paths verbatim for copy safety",
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt",
+    ],
+    [
+      "preserves long urls verbatim for copy safety",
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered",
+    ],
+  ])("%s", (_name, input) => {
     const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long filesystem paths verbatim for copy safety", () => {
-    const input =
-      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long urls verbatim for copy safety", () => {
-    const input =
-      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
-    const sanitized = sanitizeRenderableText(input);
-
     expect(sanitized).toBe(input);
   });
 
@@ -789,38 +783,29 @@ describe("sanitizeRenderableText", () => {
     expect(sanitizeRenderableText("\u061cمرحبا\u200f")).toBe("\u2067مرحبا\u2069");
   });
 
-  it("preserves long camelCase identifiers wrapped in inline code spans (#48432)", () => {
-    const input = "- `requireConfirmationForMutatingActions: false`";
+  it.each<[name: string, input: string]>([
+    [
+      "preserves long camelCase identifiers wrapped in inline code spans (#48432)",
+      "- `requireConfirmationForMutatingActions: false`",
+    ],
+    [
+      "preserves long hyphenated package names in inline code spans (#48432)",
+      "Install `ubuntu-budgie-desktop-environment` to fix it.",
+    ],
+    [
+      "preserves dotted entity IDs in inline code spans (#39505)",
+      "See `binary_sensor.sense_energy_monitor_power` for the live reading.",
+    ],
+    [
+      "preserves bare hyphenated package names in prose",
+      "Run apt install ubuntu-budgie-desktop-environment after enabling the PPA.",
+    ],
+    [
+      "preserves bare dotted entity IDs in prose",
+      "Watch binary_sensor.sense_energy_monitor_power.daily_energy after midnight.",
+    ],
+  ])("%s", (_name, input) => {
     const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long hyphenated package names in inline code spans (#48432)", () => {
-    const input = "Install `ubuntu-budgie-desktop-environment` to fix it.";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves dotted entity IDs in inline code spans (#39505)", () => {
-    const input = "See `binary_sensor.sense_energy_monitor_power` for the live reading.";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves bare hyphenated package names in prose", () => {
-    const input = "Run apt install ubuntu-budgie-desktop-environment after enabling the PPA.";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves bare dotted entity IDs in prose", () => {
-    const input = "Watch binary_sensor.sense_energy_monitor_power.daily_energy after midnight.";
-    const sanitized = sanitizeRenderableText(input);
-
     expect(sanitized).toBe(input);
   });
 
