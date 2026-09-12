@@ -1300,8 +1300,10 @@ export function startGatewayConfigReloader(opts: {
       await ready;
       params.assertInvokerOwned?.();
       // The awaited reload releases `running` in finally; a queued reload may take ownership next.
-      // oxlint-disable-next-line no-unmodified-loop-condition
-      while (running) {
+      for (;;) {
+        if (!running) {
+          break;
+        }
         await activeReloadCompletion;
       }
       params.assertInvokerOwned?.();

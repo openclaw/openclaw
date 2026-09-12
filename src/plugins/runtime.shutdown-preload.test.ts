@@ -1,11 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
+import type { prepareMemoryRuntimeReload } from "./memory-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 const state = vi.hoisted(() => ({
   rotated: false,
   imports: 0,
-  closeMemory: vi.fn(async () => {}),
+  closeMemory: vi.fn<ReturnType<typeof prepareMemoryRuntimeReload>["close"]>(async () => ({
+    errors: [],
+  })),
 }));
 
 vi.mock("../shared/lazy-runtime.js", async (importOriginal) => {
@@ -69,7 +72,7 @@ it("retains the exact memory shutdown loader before installed artifacts rotate",
   expect(preparedImports).toBeGreaterThan(0);
   // Reject importer entry itself, even if Vitest has an incidental module cached.
   state.rotated = true;
-  await owner.close();
+  await expect(owner.close()).resolves.toEqual({ memoryErrors: [] });
   expect(state.closeMemory).toHaveBeenCalledOnce();
   expect(state.imports).toBe(preparedImports);
 });

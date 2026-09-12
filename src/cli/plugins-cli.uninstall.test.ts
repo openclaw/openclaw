@@ -76,13 +76,6 @@ describe("plugins cli uninstall", () => {
     configWriteMock.mockImplementation(async (config) => {
       pluginCliConfigMock.mockReturnValue(config as OpenClawConfig);
     });
-    replaceConfigFileMock.mockImplementation(async (input) => {
-      const params = input as Parameters<
-        (typeof import("../config/config.js"))["replaceConfigFile"]
-      >[0];
-      params.writeOptions?.assertConfigPathForWrite?.();
-      await configWriteMock(params.sourceConfig ?? params.nextConfig);
-    });
   });
 
   afterEach(() => {

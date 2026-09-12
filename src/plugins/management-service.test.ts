@@ -42,6 +42,7 @@ vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: (params?: { env?: NodeJS.ProcessEnv }) => {
     assertConfigWriteAllowedInCurrentMode(params);
   },
+  readConfigFileSnapshot: async () => (await mocks.readConfig()).snapshot,
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
@@ -172,7 +173,10 @@ describe("plugin management service", () => {
         origin: "global",
         installRecord: record("second"),
       });
-      mocks.readConfig.mockResolvedValue(configSnapshot());
+      const config = {
+        plugins: { entries: { first: { enabled: true }, second: { enabled: true } } },
+      };
+      mocks.readConfig.mockResolvedValue(configSnapshot(config));
       mocks.readPersistedRecords.mockReturnValue({
         ...first.index.installRecords,
         ...second.index.installRecords,
@@ -193,6 +197,7 @@ describe("plugin management service", () => {
       };
       const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
         request.assertInvokerOwned?.();
+        expect(request.config).toEqual(config);
         expect(request.pluginIds).toEqual(application.pluginIds);
         expect(request.expectedSourceDigests).toEqual(
           mode === "one-target" ? undefined : { first: "a".repeat(64), second: "b".repeat(64) },

@@ -3,11 +3,12 @@ import fs from "node:fs";
 import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { createJiti, JitiOptions, JitiResolveOptions } from "jiti";
+import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import { createJiti } from "./jiti-factory.js";
 import {
   clearPluginModuleRequireCache,
   isPluginSourceModulePath,
@@ -63,7 +64,6 @@ type ResolvePluginModuleLoaderCacheEntryParams = {
   transformOpenClawDependencies?: boolean;
 };
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
-const requireForJiti = createRequire(import.meta.url);
 const pluginModuleLoaderStats = {
   calls: 0,
   nativeHits: 0,
@@ -95,11 +95,6 @@ export function getPluginModuleLoaderStats() {
       .slice(0, 8)
       .map(([target, count]) => ({ target, count })),
   };
-}
-
-function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
-  const loaded: typeof import("jiti") = requireForJiti("jiti");
-  return loaded.createJiti;
 }
 
 function toSourceTransformImportPath(specifier: string): string {
@@ -157,44 +152,41 @@ function createPluginModuleLoader(
     const jitiOptions = buildPluginLoaderJitiOptions(params.getAliasMap(), {
       modulePath: params.loaderFilename,
     });
-    const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
-      params.loaderFilename,
-      {
-        ...jitiOptions,
-        // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
-        // matcher misses them. Keep host state native while plugin source remains
-        // transformable and reloadable within its cache generation.
-        virtualModules: params.transformOpenClawDependencies
-          ? undefined
-          : new Proxy<Record<string, unknown>>(
-              {},
-              {
-                has(_target, key) {
-                  return (
-                    typeof key === "string" &&
-                    isPluginSdkAliasSpecifier(key) &&
-                    Boolean(params.resolveAlias(key))
-                  );
-                },
-                get(_target, key) {
-                  const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
-                  if (!target) {
-                    return undefined;
-                  }
-                  const native = tryNativeRequireModule(target, {
-                    allowWindows: true,
-                    fallbackOnMissingDependency: true,
-                  });
-                  return native.ok ? native.moduleExport : jitiLoader(target);
-                },
+    const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
+      ...jitiOptions,
+      // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
+      // matcher misses them. Keep host state native while plugin source remains
+      // transformable and reloadable within its cache generation.
+      virtualModules: params.transformOpenClawDependencies
+        ? undefined
+        : new Proxy<Record<string, unknown>>(
+            {},
+            {
+              has(_target, key) {
+                return (
+                  typeof key === "string" &&
+                  isPluginSdkAliasSpecifier(key) &&
+                  Boolean(params.resolveAlias(key))
+                );
               },
-            ),
-        nativeModules: params.transformOpenClawDependencies
-          ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
-          : jitiOptions.nativeModules,
-        tryNative: false,
-      },
-    );
+              get(_target, key) {
+                const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
+                if (!target) {
+                  return undefined;
+                }
+                const native = tryNativeRequireModule(target, {
+                  allowWindows: true,
+                  fallbackOnMissingDependency: true,
+                });
+                return native.ok ? native.moduleExport : jitiLoader(target);
+              },
+            },
+          ),
+      nativeModules: params.transformOpenClawDependencies
+        ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
+        : jitiOptions.nativeModules,
+      tryNative: false,
+    });
     loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
     return loadWithSourceTransform;
   };
@@ -347,7 +339,7 @@ export function bindPluginInstanceModuleLoader(params: {
   }
   const nativeRequire = createRequire(params.source);
   const createPaths = (source: string, options?: JitiOptions) => ({
-    resolver: loadCreateJitiLoaderFactory()(source, {
+    resolver: createJiti(source, {
       ...options,
       fsCache: false,
       moduleCache: false,

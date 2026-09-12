@@ -171,7 +171,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         )
         .toBe(true);
       await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
-      await gateway.setMethodResponse("plugins.list", initialInventory);
+      await gateway.deferNext("plugins.uninstall");
       await page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true }).click();
       await page
         .locator("openclaw-modal-dialog")
@@ -180,6 +180,8 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       expect((await gateway.waitForRequest("plugins.uninstall")).params).toEqual({
         pluginId: "calendar-plus",
       });
+      await gateway.setMethodResponse("plugins.list", initialInventory);
+      await gateway.resolveDeferred("plugins.uninstall");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
       await page.locator(".plugins-settings-row").first().waitFor();
       expect(await page.locator('[data-plugin-id="calendar-plus"]').count()).toBe(0);

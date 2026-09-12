@@ -103,26 +103,30 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
         });
       },
     });
-    const previous = moduleWithResolver["_resolveFilename"]!;
-    moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
-      if (!capturedModuleResolvers.resolving && parent?.filename) {
-        capturedModuleResolvers.resolving = true;
-        try {
-          for (const owner of capturedModuleResolvers.owners) {
-            const target = owner.resolve(request, parent.filename, () =>
-              previous(request, parent, isMain, options),
-            );
-            if (target) {
-              return target;
+    // Older Bun drops createRequire's ESM parent when this private hook is replaced.
+    // Its public resolver above retains the importer without changing native resolution.
+    if (!bun) {
+      const previous = moduleWithResolver["_resolveFilename"]!;
+      moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
+        if (!capturedModuleResolvers.resolving && parent?.filename) {
+          capturedModuleResolvers.resolving = true;
+          try {
+            for (const owner of capturedModuleResolvers.owners) {
+              const target = owner.resolve(request, parent.filename, () =>
+                previous(request, parent, isMain, options),
+              );
+              if (target) {
+                return target;
+              }
             }
+          } finally {
+            // Original-source Jiti lookup can itself call the native resolver.
+            capturedModuleResolvers.resolving = false;
           }
-        } finally {
-          // Original-source Jiti lookup can itself call the native resolver.
-          capturedModuleResolvers.resolving = false;
         }
-      }
-      return previous(request, parent, isMain, options);
-    };
+        return previous(request, parent, isMain, options);
+      };
+    }
     capturedModuleResolvers.installed = true;
   }
   capturedModuleResolvers.owners.add(binding);

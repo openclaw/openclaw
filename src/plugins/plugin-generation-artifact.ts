@@ -4,8 +4,9 @@ import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
-import { createJiti, type JitiOptions } from "jiti";
+import type { JitiOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
+import { createJiti } from "./jiti-factory.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,

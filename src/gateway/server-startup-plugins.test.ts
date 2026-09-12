@@ -636,14 +636,7 @@ describe("loadGatewayStartupPluginRuntime", () => {
           expect(cleanup).not.toHaveBeenCalled();
           expect(retireGatewayRuntimeBindings).not.toHaveBeenCalled();
         } else {
-          if (outcome === "invalid") {
-            await expect(loading).rejects.toBe(validationError);
-          } else {
-            await expect(loading).rejects.toMatchObject({
-              cause: validationError,
-              errors: [validationError, expect.any(AggregateError)],
-            });
-          }
+          await expect(loading).rejects.toBe(validationError);
           expect(cleanup).toHaveBeenCalledOnce();
           expect(instance.lifecycle.signal.aborted).toBe(true);
           expect(retireGatewayRuntimeBindings).toHaveBeenCalledOnce();
@@ -652,13 +645,14 @@ describe("loadGatewayStartupPluginRuntime", () => {
         expect(validationAuthority?.()).toBe(false);
       } finally {
         retireGatewayRuntimeBindings();
-        if (outcome === "invalid with failed cleanup") {
-          await expect(disposePluginRegistryInstances(registry)).rejects.toBeInstanceOf(
-            AggregateError,
-          );
-        } else {
-          await disposePluginRegistryInstances(registry);
-        }
+        const disposed = await disposePluginRegistryInstances(registry);
+        expect(disposed.failures).toEqual(
+          outcome === "invalid with failed cleanup"
+            ? [{ pluginId: record.id, hookId: "instance", error: cleanupError }]
+            : [],
+        );
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(instance.lifecycle.signal.aborted).toBe(true);
       }
     },
   );
