@@ -8,6 +8,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 import "../../plugins/control-ui-view.runtime.ts";
@@ -340,6 +341,55 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "drop", dataTransfer, 11);
 
     expect(onUpdate).toHaveBeenCalledWith(["route:tasks", "route:usage", "route:plugins"]);
+  });
+
+  it("reorders a pinned session without requiring session-group write access", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: gatewayHelloForMethods([], ["operator.read"]) });
+    const sessions = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:alpha",
+      "agent:main:beta",
+    ]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.connected = true;
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    sessions.publish({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) =>
+          row.key === "agent:main:alpha" ? Object.assign({}, row, { pinned: true }) : row,
+        ),
+      },
+    });
+    sidebar.sidebarEntries = ["route:usage", "session:agent:main:alpha", "route:plugins"];
+    const onUpdate = vi.fn();
+    sidebar.onUpdateSidebarEntries = onUpdate;
+    await sidebar.updateComplete;
+    const source = sidebar.querySelector<HTMLElement>('[data-session-key="agent:main:alpha"]');
+    if (!source) {
+      throw new Error("expected pinned Alpha session row");
+    }
+    const target = zoneEntry(sidebar, "route:usage");
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      top: 10,
+      height: 20,
+    } as DOMRect);
+    const dataTransfer = createDataTransferStub();
+
+    expect(source.getAttribute("draggable")).toBe("true");
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+    dispatchDragEvent(target, "dragover", dataTransfer, 11);
+    dispatchDragEvent(target, "drop", dataTransfer, 11);
+
+    expect(onUpdate).toHaveBeenCalledWith([
+      "session:agent:main:alpha",
+      "route:usage",
+      "route:plugins",
+    ]);
   });
 
   it("pins and inserts a session dropped from Threads", async () => {

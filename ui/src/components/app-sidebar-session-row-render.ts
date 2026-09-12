@@ -393,7 +393,9 @@ export function renderRecentSession(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  // Pinned rows reorder inside the browser-local navigation zone; only rows
+  // that can move between session groups require Gateway group-write access.
+  const rowDraggable = !session.isChild && (session.pinned || groupWriteAccess.allowed);
   const marqueeLabelTemplate = html`<span
     ${display ? ref(restartHoverMarqueeIfHovered) : nothing}
     class="sidebar-recent-session__name hover-marquee"
