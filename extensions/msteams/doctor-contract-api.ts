@@ -418,6 +418,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return { changes, warnings };
       }
       if (source.archived) {
+        // A preserved archive remains discoverable after recovery. If every retained
+        // row was already present, the direct migration entry point is a no-op too.
+        if (imported === 0) {
+          return { changes, warnings };
+        }
         const retainedKeys = new Set((await store.entries()).map((entry) => entry.key));
         const missing = [...requiredKeys].filter((key) => !retainedKeys.has(key)).length;
         if (missing > 0) {
