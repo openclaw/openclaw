@@ -437,6 +437,9 @@ export function listAgentsForGateway(
     const agent = Object.assign(
       {
         id,
+        ...(entry.admissionRefusal
+          ? { status: entry.status, admissionRefusal: entry.admissionRefusal }
+          : {}),
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
         name: entry.name,
         identity: identityById.get(id),

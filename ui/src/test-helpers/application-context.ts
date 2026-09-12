@@ -1,5 +1,5 @@
 import { ContextProvider } from "@lit/context";
-import type { GatewayEventFrame } from "../api/gateway.ts";
+import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
   applicationContext,
@@ -57,7 +57,7 @@ export type ApplicationContextProvider = ReturnType<typeof createApplicationCont
 export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
   const gateway = {
     connectionRevision: 0,
     connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
@@ -69,7 +69,7 @@ export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+    subscribeEvents(listener: GatewayEventListener) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },

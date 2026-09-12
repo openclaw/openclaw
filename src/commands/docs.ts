@@ -97,7 +97,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
 
 function parseDocsSearchResults(raw: unknown): DocResult[] {
   if (!Array.isArray(raw)) {
-    return [];
+    throw new Error("Docs search response is malformed: expected results array");
   }
   const results: DocResult[] = [];
   for (const item of raw) {

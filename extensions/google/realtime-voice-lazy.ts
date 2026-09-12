@@ -1,3 +1,4 @@
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -10,16 +11,11 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-let googleRealtimeVoiceProviderPromise: Promise<RealtimeVoiceProviderPlugin> | null = null;
 
-async function loadGoogleRealtimeVoiceProvider(): Promise<RealtimeVoiceProviderPlugin> {
-  if (!googleRealtimeVoiceProviderPromise) {
-    googleRealtimeVoiceProviderPromise = import("./realtime-voice-provider.js").then((mod) =>
-      mod.buildGoogleRealtimeVoiceProvider(),
-    );
-  }
-  return await googleRealtimeVoiceProviderPromise;
-}
+const loadGoogleRealtimeVoiceProvider = createLazyRuntimeSurface(
+  () => import("./realtime-voice-provider.js"),
+  (mod) => mod.buildGoogleRealtimeVoiceProvider(),
+);
 
 function resolveGoogleRealtimeProviderConfig(
   rawConfig: RealtimeVoiceProviderConfig,
@@ -101,10 +97,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     };
   // Loading and connecting finish on separate async boundaries. Keep close ownership
   // here so either late completion closes the provider bridge exactly once.
-  const closeBridge = (loadedBridge = bridge): void | Promise<void> => {
-    if (!loadedBridge) {
-      return;
-    }
+  const closeBridge = (loadedBridge: RealtimeVoiceBridge): void | Promise<void> => {
     if (closedBridges.has(loadedBridge)) {
       return closedBridges.get(loadedBridge);
     }

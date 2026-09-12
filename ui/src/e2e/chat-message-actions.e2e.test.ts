@@ -726,8 +726,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
-        "New session",
+        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        "New conversation",
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),

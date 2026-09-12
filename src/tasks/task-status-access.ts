@@ -4,7 +4,6 @@ import {
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
@@ -14,7 +13,7 @@ import {
   listTasksForAgentId,
   listTasksForRelatedSessionKey,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const GENERATED_MEDIA_TASK_KINDS = new Set([
   "image_generation",

@@ -79,6 +79,8 @@ export type RunPreparedReplyParams = {
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
   model: string;
+  /** Turn-local account pin from the selected model reference. */
+  configuredProfileId?: string;
   requestedRouteResolution?: Awaited<
     ReturnType<typeof createModelSelectionState>
   >["requestedRouteResolution"];

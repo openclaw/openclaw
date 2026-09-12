@@ -1,12 +1,18 @@
 // Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import {
+  controlGatewayHeapProfile,
+  readGatewayHeapProfile,
+} from "../../scripts/lib/gateway-bench-heap.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { createDeferred } from "../helpers/promise.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
 
@@ -39,11 +45,72 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it("profiles load allocations after collection without charging startup allocations", async () => {
+    await withTempDir("gateway-heap-profile-", async (dir) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--expose-gc",
+          "--import",
+          new URL("../../scripts/lib/gateway-bench-heap-preload.ts", import.meta.url).href,
+          "--input-type=module",
+          "--eval",
+          `process.stdin.resume();
+        function startupAllocations() {
+          return Array.from({ length: 20000 }, (_, index) => Array(100).fill(index));
+        }
+        globalThis.startup = startupAllocations();
+        globalThis.startup = null;
+        gc();
+        function loadAllocations() {
+          return Array.from({ length: 20000 }, (_, index) => Array(100).fill(index));
+        }
+        process.on("message", (message) => {
+          if (message !== "allocate") return;
+          globalThis.load = loadAllocations();
+          globalThis.load = null;
+          gc();
+          gc();
+          process.send("allocated");
+        });
+        process.send("ready");`,
+        ],
+        { stdio: ["pipe", "pipe", "pipe", "ipc"] },
+      );
+      const exited = once(child, "exit");
+      try {
+        const ready = await Promise.race([
+          once(child, "message"),
+          exited.then(() => {
+            throw new Error("Heap profile fixture exited before ready");
+          }),
+        ]);
+        expect(ready[0]).toBe("ready");
+        const profilePath = `${dir}/load.heapprofile`;
+        await controlGatewayHeapProfile(child, "start", profilePath);
+        const allocated = once(child, "message");
+        child.send("allocate");
+        expect((await allocated)[0]).toBe("allocated");
+        await controlGatewayHeapProfile(child, "stop", profilePath);
+        const profile = readGatewayHeapProfile(profilePath);
+        expect(profile.sampledAllocatedBytes).toBeGreaterThan(1_000_000);
+        const stacks = profile.topAllocationSites.flatMap((site) => site.stack).join("\n");
+        expect(stacks).toContain("loadAllocations");
+        expect(stacks).not.toContain("startupAllocations");
+      } finally {
+        child.kill();
+        await exited;
+      }
+    });
+  });
+
   it("parses benchmark controls without booting a gateway", () => {
     expect(
       testing.parseOptions([
         "--concurrency",
         "12",
+        "--turns-per-session",
+        "8",
         "--runs",
         "2",
         "--warmup",
@@ -54,6 +121,8 @@ describe("gateway concurrency benchmark script", () => {
         "90000",
         "--cpu-prof-dir",
         "/tmp/gateway-cpu-profiles",
+        "--heap-prof-dir",
+        "/tmp/gateway-heap-profiles",
         "--plugin-count",
         "50",
         "--session-count",
@@ -91,6 +160,7 @@ describe("gateway concurrency benchmark script", () => {
       cadenceMs: 50,
       concurrency: 12,
       cpuProfDir: "/tmp/gateway-cpu-profiles",
+      heapProfDir: "/tmp/gateway-heap-profiles",
       diagnosticsTimeline: false,
       json: true,
       historyBurst: 5,
@@ -110,12 +180,18 @@ describe("gateway concurrency benchmark script", () => {
       subscribers: 4,
       timeoutMs: 90_000,
       toolEvents: true,
+      turnsPerSession: 8,
       visibleObserver: true,
       warmup: 0,
       workspaceFanout: true,
     });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
+    );
+    expect(testing.parseOptions([]).turnsPerSession).toBe(1);
+    expect(() => testing.parseOptions(["--turns-per-session", "0"])).toThrow("--turns-per-session");
+    expect(() => testing.parseOptions(["--turns-per-session", "101"])).toThrow(
+      "--turns-per-session must be at most 100",
     );
     expect(() => testing.parseOptions(["--runs", "2", "--runs", "3"])).toThrow(
       "--runs was provided more than once",
@@ -361,6 +437,58 @@ describe("gateway concurrency benchmark script", () => {
       expect(wait?.timeoutMs).toBeLessThanOrEqual(budgetMs);
     },
   );
+
+  it("advances parallel sessions independently while serializing their own turns", async () => {
+    const starts: Array<{ sessionKey: string; idempotencyKey: string; message: string }> = [];
+    const startedSessions: string[] = [];
+    const createTurn = () => ({
+      issued: createDeferred(),
+      completed: createDeferred(),
+    });
+    const turns = [createTurn(), createTurn(), createTurn(), createTurn()] as const;
+    const rpc = async <T>(method: string, params: unknown): Promise<T> => {
+      if (method === "agent") {
+        const request = params as (typeof starts)[number];
+        starts.push(request);
+        return { runId: request.idempotencyKey, status: "accepted" } as T;
+      }
+      const { runId } = params as { runId: string };
+      const index = starts.findIndex((request) => request.idempotencyKey === runId);
+      const turn = turns[index];
+      if (!turn) {
+        throw new Error(`Unexpected agent wait: ${runId}`);
+      }
+      turn.issued.resolve();
+      await turn.completed.promise;
+      return { status: "ok" } as T;
+    };
+    const [fastSession, slowSession] = ["fast", "slow"].map((sessionKey, index) =>
+      testing.runSessionTurns(rpc, index, performance.now() + 60_000, {
+        onStarted: () => startedSessions.push(sessionKey),
+        sessionKey,
+        toolEvents: true,
+        turnsPerSession: 2,
+      }),
+    );
+    await Promise.all([turns[0].issued.promise, turns[1].issued.promise]);
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow"]);
+
+    turns[0].completed.resolve();
+    await turns[2].issued.promise;
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast"]);
+    turns[2].completed.resolve();
+    expect(await fastSession).toBe(2);
+    expect(startedSessions).toEqual(["fast", "slow"]);
+
+    turns[1].completed.resolve();
+    await turns[3].issued.promise;
+    turns[3].completed.resolve();
+    expect(await slowSession).toBe(2);
+    expect(starts.map((request) => request.sessionKey)).toEqual(["fast", "slow", "fast", "slow"]);
+    expect(startedSessions).toEqual(["fast", "slow"]);
+    expect(new Set(starts.map((request) => request.idempotencyKey)).size).toBe(4);
+    expect(new Set(starts.map((request) => request.message)).size).toBe(4);
+  });
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
     const deadlines: number[] = [];

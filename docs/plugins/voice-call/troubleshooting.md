@@ -25,6 +25,9 @@ Token-bound realtime streams wait for pending call updates before matching the c
 Failed event writes remain retryable, and shutdown drains admitted call work after
 closing webhook and stream producers.
 
+If another realtime stream becomes active during admission, a failure to create
+the new bridge leaves that active call connected.
+
 ### Setup fails webhook exposure
 
 Run setup from the same environment that runs the Gateway:

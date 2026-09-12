@@ -3366,64 +3366,92 @@ describe("release CI summary child correlation", () => {
     );
   });
 
-  it("binds split changelog reuse to the selected release entry and matching record", () => {
-    const inputs = { ...rawManifest({}).validationInputs, targetVersion: "2026.9.4" };
-    const root = validateParentManifest(
-      { ...rawManifest({}), validationInputs: inputs },
-      {
-        runAttempt: 2,
-        runId: "29090000000",
-      },
-    );
-    const paths = ["CHANGELOG.md", "CHANGELOG/2026.9.4.md", "CHANGELOG/records/2026.9.4.md"];
-    const makeCurrent = (changedPaths: string[]) =>
-      validateParentManifest(
+  it.each(["2026.7.1", "2026.7.1-beta.1"])(
+    "binds %s split changelog reuse to the selected release entry and matching record",
+    (targetVersion) => {
+      const inputs = { ...rawManifest({}).validationInputs, targetVersion };
+      const root = validateParentManifest(
+        { ...rawManifest({}), validationInputs: inputs },
         {
-          ...rawManifest({
-            evidenceReuse: {
-              changedPaths,
-              evidenceSha: root.targetSha,
-              policy: "split-changelog-release-v1",
-              runId: root.runId,
-              selectedRunId: root.runId,
-            },
-            runId: "29090000001",
-            targetSha: "b".repeat(40),
-          }),
-          validationInputs: inputs,
+          runAttempt: 2,
+          runId: "29090000000",
         },
-        { runAttempt: 2, runId: "29090000001" },
       );
-    const compare = (changedPaths: string[]) => (base: string) => ({
-      files: changedPaths.map((filename) => ({ filename, status: "modified" })),
-      merge_base_commit: { sha: base },
-      status: "ahead",
-    });
-    expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
-      root.targetSha,
-    );
-    for (const unrelated of [
-      "CHANGELOG/2026.8.1.md",
-      "CHANGELOG/records/2026.8.1.md",
-      "src/index.ts",
-    ]) {
-      const changedPaths = [...paths, unrelated];
+      const paths = ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"];
+      const makeCurrent = (changedPaths: string[]) =>
+        validateParentManifest(
+          {
+            ...rawManifest({
+              evidenceReuse: {
+                changedPaths,
+                evidenceSha: root.targetSha,
+                policy: "split-changelog-release-v1",
+                runId: root.runId,
+                selectedRunId: root.runId,
+              },
+              runId: "29090000001",
+              targetSha: "b".repeat(40),
+            }),
+            validationInputs: inputs,
+          },
+          { runAttempt: 2, runId: "29090000001" },
+        );
+      const compare = (changedPaths: string[]) => (base: string) => ({
+        files: changedPaths.map((filename) => ({ filename, status: "modified" })),
+        merge_base_commit: { sha: base },
+        status: "ahead",
+      });
+      expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
+        root.targetSha,
+      );
+      for (const unrelated of [
+        "CHANGELOG/2026.8.1.md",
+        "CHANGELOG/records/2026.8.1.md",
+        "src/index.ts",
+      ]) {
+        const changedPaths = [...paths, unrelated];
+        expect(() =>
+          validateEvidenceReuseChain(makeCurrent(changedPaths), root, root, compare(changedPaths)),
+        ).toThrow("invalid target delta");
+        expect(() =>
+          validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(changedPaths)),
+        ).toThrow("failed commit comparison");
+      }
+      for (const filename of paths.slice(1)) {
+        for (const status of ["removed", "renamed"]) {
+          expect(() =>
+            validateEvidenceReuseChain(makeCurrent(paths), root, root, (base: string) => ({
+              ...compare(paths)(base),
+              files: paths.map((path) => ({
+                filename: path,
+                status: path === filename ? status : "modified",
+                previous_filename:
+                  path === filename && status === "renamed" ? "src/index.ts" : undefined,
+              })),
+            })),
+          ).toThrow("failed commit comparison");
+        }
+      }
+      if (targetVersion.endsWith("-beta.1")) {
+        const betaPaths = [
+          "CHANGELOG.md",
+          `CHANGELOG/${targetVersion}.md`,
+          `CHANGELOG/records/${targetVersion}.md`,
+        ];
+        expect(() =>
+          validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths)),
+        ).toThrow("invalid target delta");
+      }
       expect(() =>
-        validateEvidenceReuseChain(makeCurrent(changedPaths), root, root, compare(changedPaths)),
+        validateEvidenceReuseChain(
+          makeCurrent(["CHANGELOG.md"]),
+          root,
+          root,
+          compare(["CHANGELOG.md"]),
+        ),
       ).toThrow("invalid target delta");
-      expect(() =>
-        validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(changedPaths)),
-      ).toThrow("failed commit comparison");
-    }
-    expect(() =>
-      validateEvidenceReuseChain(
-        makeCurrent(["CHANGELOG.md"]),
-        root,
-        root,
-        compare(["CHANGELOG.md"]),
-      ),
-    ).toThrow("invalid target delta");
-  });
+    },
+  );
 
   it("rejects exact-target reuse without matching root policy and authorization", () => {
     const root = validateParentManifest(rawManifest({}), {

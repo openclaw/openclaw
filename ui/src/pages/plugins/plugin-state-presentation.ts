@@ -1,5 +1,8 @@
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+
+registerPluginManagementEnglish();
 
 export function pluginStatePresentation(plugin: PluginCatalogItem): {
   kind: "ok" | "warn" | "danger" | "muted";

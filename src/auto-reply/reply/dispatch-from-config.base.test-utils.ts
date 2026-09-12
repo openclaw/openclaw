@@ -13,12 +13,15 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
+import { resolveGroupThreadConfig } from "../group-thread-config.js";
+import { runGroupThread } from "../group-thread.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -64,6 +67,51 @@ beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
+
+  it.each([false, true])(
+    "reports agent refusal before runtime loading (aborted: %s)",
+    async (aborted) => {
+      const refusal = {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch" as const,
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Keep the main copy and quarantine the divergent cleaner copy, then restart.",
+      };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } } };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }));
+      const abort = new AbortController();
+      if (aborted) {
+        abort.abort();
+      }
+      recordAgentDatabaseAdmissions([refusal]);
+      try {
+        const result = await dispatchReplyFromConfig({
+          ctx: buildTestCtx({ AgentId: "cleaner", SessionKey: "agent:cleaner:main" }),
+          cfg,
+          dispatcher,
+          replyResolver,
+          usePublishedModelRuntime: true,
+          replyOptions: { abortSignal: abort.signal },
+        });
+        expect(result.queuedFinal).toBe(!aborted);
+        if (aborted) {
+          expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        } else {
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+            text: `${refusal.reason}\n${refusal.repairHint}`,
+            isError: true,
+          });
+        }
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      } finally {
+        recordAgentDatabaseAdmissions([]);
+      }
+    },
+  );
 
   function createActiveSlackThread(userId: string) {
     setNoAbort();
@@ -1342,6 +1390,72 @@ describe("dispatchReplyFromConfig", () => {
         activeOperation.complete();
       }
       await Promise.allSettled([resultPromise]);
+    }
+  });
+
+  it("keeps group participants pending until the active reply operation completes", async () => {
+    setNoAbort();
+    const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
+    const lowLevelDispatch = createRuntimeChannel().reply.dispatchReplyFromConfig;
+    const sessionKey = "agent:main:telegram:group:123";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const cfg: OpenClawConfig = {
+      ...emptyConfig,
+      agents: { entries: { main: {} } },
+      broadcast: { "telegram:123": ["main"] },
+    };
+    const group = expectDefined(
+      resolveGroupThreadConfig({ cfg, channel: "telegram", peerId: "123" }),
+      "expected configured group thread",
+    );
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "participant final" }) satisfies ReplyPayload);
+    const resultPromise = runGroupThread({
+      cfg,
+      group,
+      channel: "telegram",
+      peerId: "123",
+      messageId: "group-pending-turn",
+      text: "Discuss the proposal",
+      runTurn: (turn) =>
+        lowLevelDispatch({
+          ctx: buildTestCtx({
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            SessionKey: sessionKey,
+            MessageSid: turn.messageId,
+            BodyForAgent: "Discuss the proposal",
+          }),
+          cfg,
+          dispatcher,
+          replyResolver,
+        }),
+    });
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      activeOperation.complete();
+      await expect(resultPromise).resolves.toMatchObject({ turnsStarted: 1, failedTurns: 0 });
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "participant final" });
+    } finally {
+      activeOperation.complete();
+      await resultPromise;
     }
   });
 

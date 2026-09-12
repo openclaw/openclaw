@@ -3,10 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   forkSessionRepositoryWorkspace,
@@ -20,6 +18,7 @@ import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
   hasWorkerWorkspaceResultRef,
+  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -80,6 +79,25 @@ async function fixture() {
     });
   };
   return { root, remote, database, store, workspace, stage };
+}
+
+async function publicationFixture(root: string, content = "working tree\n") {
+  const normalized = Buffer.from(content);
+  const sha = await requireWorkspaceResultGit(root, ["hash-object", "--stdin"], {
+    input: normalized,
+  });
+  const publicationStagingRoot = path.join(root, "publication");
+  await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
+  await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
+  const metadata = JSON.stringify({
+    version: 1,
+    baseCommit,
+    baseTree: "b".repeat(40),
+    workspaceTree: "c".repeat(40),
+    entries: [{ path: "edit.txt", mode: "100644", sha }],
+  });
+  await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
+  return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
 }
 
 it("retains cumulative multi-turn files, deletions and executable modes in a bare artifact repo", async () => {
@@ -225,26 +243,8 @@ it.each([false, true])(
   async (corrupt) => {
     const { root, remote, store, workspace, stage } = await fixture();
     await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
-    const normalized = Buffer.from("working tree\n");
-    const sha = createHash("sha1")
-      .update(`blob ${normalized.length}\0`)
-      .update(normalized)
-      .digest("hex");
-    const publicationStagingRoot = path.join(root, "publication");
-    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-    await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
-    const metadata = JSON.stringify({
-      version: 1,
-      baseCommit,
-      baseTree: "b".repeat(40),
-      workspaceTree: "c".repeat(40),
-      entries: [{ path: "edit.txt", mode: "100644", sha }],
-    });
-    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
-    const prepared = await stage("turn-publication", {
-      publicationStagingRoot,
-      publicationDigest: hash(metadata),
-    });
+    const { sha, input } = await publicationFixture(root);
+    const prepared = await stage("turn-publication", input);
     const sourceArtifact = store.artifactPath(workspace.workspaceId);
     const candidates = (
       await requireWorkspaceResultGit(sourceArtifact, [
@@ -297,7 +297,7 @@ it.each([false, true])(
           expect(snapshot.publicationStagingRoot).toBeUndefined();
           expect(snapshot.publicationDigest).toBeUndefined();
         } else {
-          expect(snapshot.publicationDigest).toBe(hash(metadata));
+          expect(snapshot.publicationDigest).toBe(input.publicationDigest);
           expect(
             await fs.readFile(path.join(snapshot.publicationStagingRoot!, "blobs", sha), "utf8"),
           ).toBe("working tree\n");
@@ -317,6 +317,74 @@ it.each([false, true])(
     expect(reads).toBe(2);
   },
 );
+
+it.each(["recovery", "publication"])(
+  "verifies the peeled %s candidate and rejects its replacement or removal",
+  async (target) => {
+    const { root, remote, store, workspace, stage } = await fixture();
+    await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
+    const { input } = await publicationFixture(root);
+    const prepared = await stage("turn-verify", input);
+    const artifact = store.artifactPath(workspace.workspaceId);
+    const refs = (
+      await requireWorkspaceResultGit(artifact, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-result-candidates/",
+      ])
+    ).split("\n");
+    const candidates = await Promise.all(
+      refs.map(async (ref) => ({
+        ref,
+        objectId: await requireWorkspaceResultGit(artifact, ["rev-parse", `${ref}^{commit}`]),
+        snapshot: await readStagedWorkerWorkspaceResult(artifact, ref),
+      })),
+    );
+    expect(candidates).toHaveLength(2);
+    const candidate = candidates.find(
+      (value) => (value.snapshot.base.baseCommit === baseCommit) === (target === "recovery"),
+    )!;
+    const other = candidates.find((value) => value !== candidate)!;
+    const tag = await requireWorkspaceResultGit(artifact, ["mktag"], {
+      input: Buffer.from(
+        `object ${candidate.objectId}\ntype commit\ntag checkpoint-peel\ntagger Checkpoint Test <checkpoint@example.invalid> 0 +0000\n\nsame candidate\n`,
+      ),
+    });
+    await requireWorkspaceResultGit(artifact, ["update-ref", candidate.ref, tag]);
+    await prepared.verify();
+    await requireWorkspaceResultGit(artifact, ["update-ref", candidate.ref, other.objectId]);
+    await expect(prepared.verify()).rejects.toThrow(
+      target === "recovery"
+        ? "Repository checkpoint preparation changed"
+        : "Repository publication preparation changed",
+    );
+    await requireWorkspaceResultGit(artifact, ["update-ref", "-d", candidate.ref]);
+    await expect(prepared.verify()).rejects.toThrow();
+    expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+    await prepared.discard();
+  },
+);
+
+it("cannot replace an immutable publication companion when recovery bytes are unchanged", async () => {
+  const { root, remote, store, workspace, stage } = await fixture();
+  await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
+  const original = await publicationFixture(root);
+  const initial = await stage("turn-immutable-publication", original.input);
+  await initial.publish();
+  const replacement = await publicationFixture(root, "different publication\n");
+  const collision = await stage("turn-immutable-publication", replacement.input);
+  await expect(collision.publish()).rejects.toThrow("different result");
+  await collision.discard();
+  await withSessionRepositoryCheckpoint(
+    { store, workspaceId: workspace.workspaceId, includePublication: true },
+    async (snapshot) => {
+      expect(snapshot.publicationDigest).toBe(original.input.publicationDigest);
+      expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
+        "working tree\r\n",
+      );
+    },
+  );
+});
 
 it("accepts raw recovery files when a publication blob fails validation", async () => {
   const { root, remote, store, workspace, stage } = await fixture();

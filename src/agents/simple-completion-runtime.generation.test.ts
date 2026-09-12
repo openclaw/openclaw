@@ -130,6 +130,8 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
       }
       const generation = mocks.readGeneration();
       observedModelGenerations.push(generation);
+      mocks.publishedGeneration = "B";
+      await Promise.resolve();
       const configured = cfg?.models?.providers?.openai;
       return {
         model: {
@@ -155,8 +157,7 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
     mocks.publishedGeneration = "B";
     return {
       apiKey: "sk-platform",
-      profileId: "openai:platform",
-      source: "profile:openai:platform",
+      source: "models.providers.openai",
       mode: "api-key",
     };
   });
@@ -167,7 +168,11 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
 
   const result = await prepareSimpleCompletionModel({
     preparedModelRuntime,
-    cfg: {},
+    cfg: {
+      models: {
+        providers: { openai: { baseUrl: "", models: [], apiKey: "fixture-api-key" } },
+      },
+    },
     agentId: "main",
     provider: "openai",
     modelId: "gpt-5.5",

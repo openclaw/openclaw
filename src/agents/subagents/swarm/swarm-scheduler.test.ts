@@ -141,7 +141,7 @@ describe("swarm scheduler", () => {
     await vi.waitFor(() => expect(started).toEqual(["one"]));
     const hold = holdQueuedSwarmRun("two");
     expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
-    hold?.release();
+    await hold?.release();
     expect(isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
     expect(removeQueuedSwarmRun("two")).toBe(true);
     expect(waits).toEqual([true, false, true, false]);
@@ -562,11 +562,10 @@ describe("swarm scheduler", () => {
         await flushMicrotasks();
         expect(started).toEqual(["foreign"]);
         expect(isSwarmRunActive("held")).toBe(false);
-        first?.release();
-        first?.release();
+        await Promise.all([first?.release(), first?.release()]);
         await flushMicrotasks();
         expect(started).toEqual(["foreign"]);
-        second?.release();
+        await second?.release();
         await flushMicrotasks();
         expect(started).toEqual(["foreign", "held"]);
         expect(isSwarmRunActive("held")).toBe(true);
@@ -574,8 +573,7 @@ describe("swarm scheduler", () => {
         await flushMicrotasks();
         expect(started).toEqual(["foreign", "held", "next"]);
       } finally {
-        first?.release();
-        second?.release();
+        await Promise.all([first?.release(), second?.release()]);
       }
     },
   );
@@ -606,7 +604,7 @@ describe("swarm scheduler", () => {
         onStartFailure: () => true,
       });
       expect(hold?.withdraw()).toBe(false);
-      hold?.release();
+      await hold?.release();
       await flushMicrotasks();
       expect(oldStart).not.toHaveBeenCalled();
       expect(nextStart).toHaveBeenCalledOnce();

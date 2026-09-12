@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsSection, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -454,7 +455,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
 
 function renderInsightList(
   title: string,
-  items: Array<{ label: string; value: string; sub?: string }>,
+  items: Array<{ label: string; value: string; sub?: string; agentId?: string }>,
   emptyLabel: string,
   options?: {
     className?: string;
@@ -485,7 +486,9 @@ function renderInsightList(
                       `
                     : html`
                         <div class="usage-list-item">
-                          <span>${item.label}</span>
+                          <span
+                            >${item.agentId ? renderAgentRowChip(item.agentId) : item.label}</span
+                          >
                           <span class="usage-list-value">
                             <span>${item.value}</span>
                             ${
@@ -645,6 +648,7 @@ function renderUsageInsights(
   }));
   const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
     label: entry.agentId,
+    agentId: entry.agentId,
     value: formatAnalysisCost(entry.totals.totalCost),
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
@@ -792,6 +796,8 @@ function renderSessionsCard(
   onClearSessions: () => void,
 ) {
   const showColumn = (id: UsageColumnId) => visibleColumns.includes(id);
+  const showAgent =
+    showColumn("agent") || new Set(sessions.map((session) => session.agentId)).size > 1;
   const formatSessionListLabel = (s: UsageSessionEntry): string => {
     const raw = s.label || s.key;
     // Agent session keys often include a token query param; remove it for readability.
@@ -803,7 +809,6 @@ function renderSessionsCard(
   const buildSessionMeta = (session: UsageSessionEntry): string[] =>
     [
       showColumn("channel") && session.channel && `channel:${session.channel}`,
-      showColumn("agent") && session.agentId && `agent:${session.agentId}`,
       showColumn("provider") &&
         (session.modelProvider || session.providerOverride) &&
         `provider:${session.modelProvider ?? session.providerOverride}`,
@@ -912,6 +917,7 @@ function renderSessionsCard(
         >
           <span class="session-bar-label">
             <span class="session-bar-title">${displayLabel}</span>
+            ${showAgent && s.agentId ? renderAgentRowChip(s.agentId) : nothing}
             ${
               meta.length > 0
                 ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`

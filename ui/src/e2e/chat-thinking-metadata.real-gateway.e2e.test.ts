@@ -346,8 +346,8 @@ suite.define(() => {
               path: path.join(suite.artifactDir, "session-thinking.png"),
             });
 
-            stage = "open New session";
-            await page.getByRole("link", { name: "New session", exact: true }).first().click();
+            stage = "open New conversation";
+            await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
             await page.waitForURL((current) => current.pathname === "/new");
             await waitForControlUiGatewayReady(page);
             const modelControl = page.locator("[data-chat-model-select='true']");

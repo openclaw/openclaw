@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -181,9 +181,9 @@ describe("AppSidebar session ownership", () => {
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
-  it("derives owner initials from agent labels and whole grapheme clusters", async () => {
+  it("uses agent faces while preserving human owner grapheme initials", async () => {
     for (const { type, label, expected } of [
-      { type: "agent" as const, label: "Roboclaw", expected: "R" },
+      { type: "agent" as const, label: "Roboclaw", expected: null },
       { type: "human" as const, label: "🦞小明", expected: "🦞" },
       { type: "human" as const, label: "👨‍👩‍👧‍👦Family", expected: "👨‍👩‍👧‍👦" },
     ]) {
@@ -210,7 +210,13 @@ describe("AppSidebar session ownership", () => {
       const chip = sidebar.querySelector(
         '[data-session-key="agent:main:lobster"] .session-owner-chip',
       );
-      expect(chip?.textContent?.trim()).toBe(expected);
+      if (type === "agent") {
+        await vi.waitFor(() =>
+          expect(chip?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+        );
+      } else {
+        expect(chip?.textContent?.trim()).toBe(expected);
+      }
     }
   });
 

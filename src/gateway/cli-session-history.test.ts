@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
@@ -278,6 +279,8 @@ describe("cli session history", () => {
       const streamSpy = vi.spyOn(rawFs, "createReadStream");
       const transcriptRedact = await import("../agents/transcript-redact.js");
       const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
+      const readdirSyncSpy = vi.spyOn(rawFs, "readdirSync");
+      const existsSyncSpy = vi.spyOn(rawFs, "existsSync");
       const initial = await (async () => {
         try {
           const [first, second] = await Promise.all([
@@ -285,8 +288,15 @@ describe("cli session history", () => {
             readChatHistoryCliSessionImportSnapshot(params),
           ]);
           expect(second).toEqual(first);
+          expect(await readChatHistoryCliSessionImportSnapshot(params)).toEqual(first);
           expect(streamSpy).toHaveBeenCalledTimes(1);
           expect(redactSpy).toHaveBeenCalledTimes(first.length);
+          // Scope this to transcript discovery; redaction may load unrelated config.
+          const projectsDir = path.dirname(path.dirname(filePath));
+          expect(
+            readdirSyncSpy.mock.calls.filter(([directory]) => directory === projectsDir),
+          ).toHaveLength(0);
+          expect(existsSyncSpy).not.toHaveBeenCalledWith(filePath);
           return resolveChatHistoryWithCliSessionImports({
             ...params,
             preparedImportedMessages: first,
@@ -294,6 +304,8 @@ describe("cli session history", () => {
         } finally {
           streamSpy.mockRestore();
           redactSpy.mockRestore();
+          readdirSyncSpy.mockRestore();
+          existsSyncSpy.mockRestore();
         }
       })();
       expect(initial.messages).toHaveLength(3);
@@ -324,9 +336,66 @@ describe("cli session history", () => {
         externalId: "replacement-assistant",
       });
 
-      await fs.rm(filePath);
+      const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
+      await fs.mkdir(movedProjectDir);
+      const movedFilePath = path.join(movedProjectDir, path.basename(filePath));
+      await fs.rename(filePath, movedFilePath);
+      expect(await read()).toEqual(replaced);
+
+      await fs.rm(movedFilePath);
       const deleted = await read();
       expect(deleted).toEqual({ messages: [], imported: false, expanded: false });
+    });
+  });
+
+  it("preserves project precedence when a later matching transcript is found first", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const projectsDir = path.dirname(path.dirname(filePath));
+      const otherProjectDir = path.join(projectsDir, "other-workspace");
+      await fs.mkdir(otherProjectDir);
+      await fs.writeFile(
+        path.join(otherProjectDir, path.basename(filePath)),
+        createClaudeTextHistoryLines([
+          { role: "user", uuid: "other-project-user", content: "other project" },
+        ]),
+      );
+      const [firstPath, secondPath] = (await fs.readdir(projectsDir)).map((project) =>
+        path.join(projectsDir, project, path.basename(filePath)),
+      );
+      const expected = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const releaseFirst = createDeferred();
+      const foundSecond = createDeferred();
+      const access = fs.access;
+      const accessSpy = vi
+        .spyOn(rawFs.promises, "access")
+        .mockImplementation(async (candidate, mode) => {
+          if (candidate === firstPath) {
+            await releaseFirst.promise;
+          }
+          await access(candidate, mode);
+          if (candidate === secondPath) {
+            foundSecond.resolve();
+          }
+        });
+      const pending = readChatHistoryCliSessionImportSnapshot({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      });
+      try {
+        await Promise.race([foundSecond.promise, pending]);
+        releaseFirst.resolve();
+        expect(await pending).toEqual(expected);
+      } finally {
+        releaseFirst.resolve();
+        await pending;
+        accessSpy.mockRestore();
+      }
     });
   });
 
@@ -1788,6 +1857,18 @@ describe("cli session history", () => {
 
       for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
         expect(readClaudeCliSessionMessages({ cliSessionId, homeDir })).toEqual([]);
+        expect(
+          await readChatHistoryCliSessionImportSnapshot({
+            entry: {
+              sessionId: "openclaw-session",
+              updatedAt: Date.now(),
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+            provider: "claude-cli",
+            localMessages: [],
+            homeDir,
+          }),
+        ).toEqual([]);
       }
     });
   });

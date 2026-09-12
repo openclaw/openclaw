@@ -863,7 +863,7 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
-    const records = { brave: { source: "npm" as const, installPath: "/p/brave" } };
+    const records = { external: { source: "npm" as const, installPath: "/p/external" } };
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ["Repaired"],
       warnings: [],
@@ -871,7 +871,7 @@ describe("runPostCorePluginConvergence", () => {
     });
     await runPostCorePluginConvergence({
       cfg: {
-        plugins: { entries: { brave: { enabled: true } } },
+        plugins: { entries: { external: { enabled: true } } },
       } as unknown as OpenClawConfig,
       env: {},
     });
@@ -979,6 +979,7 @@ describe("filterRecordsToActive", () => {
       },
     };
     const filtered = filterRecordsToActive({
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       cfg: {
         plugins: {
           enabled: true,

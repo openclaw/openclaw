@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -36,7 +35,11 @@ import {
   tryPersistTaskDeliveryStateUpsert,
   tryPersistTaskUpsert,
 } from "./task-registry-state.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskDeliveryState,
+  type TaskRecord,
+} from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 function syncManagedFlowCancellationFromTask(task: TaskRecord): void {

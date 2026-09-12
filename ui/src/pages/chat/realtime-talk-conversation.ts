@@ -75,7 +75,6 @@ export function updateRealtimeTalkConversation(
       update.role === "user" ? state.userEntryId : state.assistantEntryId,
       text,
       update.final,
-      nowMs,
       update.textMode,
     );
   }
@@ -87,7 +86,6 @@ export function updateRealtimeTalkConversation(
       preparedState.assistantEntryId,
       text,
       update.final,
-      nowMs,
     );
   }
   const entryId = state.userEntryId;
@@ -112,7 +110,6 @@ export function updateRealtimeTalkConversation(
     shouldStartNewUserEntry ? null : entryId,
     text,
     update.final,
-    nowMs,
   );
 }
 
@@ -136,7 +133,6 @@ function upsertRealtimeConversationEntry(
   entryId: string | null,
   text: string,
   isFinal: boolean,
-  nowMs: number,
   textMode?: RealtimeTalkTranscript["textMode"],
 ): RealtimeTalkConversationState {
   if (entryId === null) {
@@ -155,17 +151,13 @@ function upsertRealtimeConversationEntry(
       role,
       id,
       isFinal,
-      nowMs,
     );
   }
 
   const targetIndex = state.entries.findIndex((entry) => entry.id === entryId);
-  if (targetIndex === -1) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs, textMode);
-  }
   const entry = state.entries[targetIndex];
   if (!entry) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs, textMode);
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, textMode);
   }
   const mergedText =
     textMode === "verbatim"
@@ -182,7 +174,7 @@ function upsertRealtimeConversationEntry(
             ? { ...candidate, text: updatedText, isStreaming: !isFinal }
             : candidate,
         );
-  return rememberRealtimeConversationEntry({ ...state, entries }, role, entryId, isFinal, nowMs);
+  return rememberRealtimeConversationEntry({ ...state, entries }, role, entryId, isFinal);
 }
 
 function rememberRealtimeConversationEntry(
@@ -190,7 +182,6 @@ function rememberRealtimeConversationEntry(
   role: RealtimeTalkConversationRole,
   entryId: string,
   isFinal: boolean,
-  _nowMs: number,
 ): RealtimeTalkConversationState {
   if (role === "user") {
     return {

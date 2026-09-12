@@ -347,7 +347,10 @@ export async function prepareWorkspaceBuildGroup(
       authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
       syntheticAuthProviderRefs:
         catalogMode === "static"
-          ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)
+          ? scopeSyntheticAuthProviderRefs(
+              listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders),
+              options.providerDiscoveryProviderIds,
+            )
           : scopeSyntheticAuthProviderRefs(
               resolveRuntimeSyntheticAuthProviderRefs({
                 config: input.config,

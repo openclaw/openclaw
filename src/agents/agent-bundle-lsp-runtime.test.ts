@@ -406,6 +406,46 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
   });
 
+  it.each([1, 4096])(
+    "preserves consecutive multibyte tool responses delivered in %i-byte chunks",
+    async (chunkSize) => {
+      configureSingleLspServer();
+      const child = new MockChildProcess("", new Set(["initialize", "shutdown"]));
+      spawnMock.mockReturnValue(child);
+      const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+      const tool = runtime.tools.find((candidate) => candidate.name === "lsp_hover_typescript");
+      if (!tool) {
+        throw new Error("expected hover tool");
+      }
+      const results = [{ contents: "té🙂".repeat(2048) }, { contents: "次の結果".repeat(1024) }];
+      const requests = results.map((_, index) =>
+        tool.execute(`call-${index}`, {
+          uri: "file:///tmp/workspace/index.ts",
+          line: index,
+          character: 0,
+        }),
+      );
+      const calls = child.receivedMessages.filter(
+        (message) => message.method === "textDocument/hover",
+      );
+      const bytes = Buffer.from(
+        results
+          .map((result, index) =>
+            encodeLspMessage({ jsonrpc: "2.0", id: calls[index]?.id, result }),
+          )
+          .join(""),
+      );
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        child.stdout.write(bytes.subarray(offset, offset + chunkSize));
+      }
+
+      expect((await Promise.all(requests)).map((result) => result.content)).toEqual(
+        results.map((result) => [{ type: "text", text: JSON.stringify(result, null, 2) }]),
+      );
+      await runtime.dispose();
+    },
+  );
+
   it("accepts a maximum-size header when its separator is split across chunks", async () => {
     configureSingleLspServer();
     const child = new MockChildProcess("", undefined, (body) => {

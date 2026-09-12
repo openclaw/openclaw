@@ -16,7 +16,11 @@ import type {
   TranscriptsStartResult,
 } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
-import { TranscriptsSummaryChangedError, type TranscriptsStore } from "./store.js";
+import {
+  TranscriptSessionConflictError,
+  TranscriptsSummaryChangedError,
+  type TranscriptsStore,
+} from "./store.js";
 
 const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
 
@@ -691,6 +695,9 @@ export async function startTranscripts(params: {
     }
     // Cleanup and restoration failures remain terminal admissions, never authority
     // to start another provider behind retained cleanup or an unrestored tuple.
+    if (!admitted && failure instanceof TranscriptSessionConflictError) {
+      throw new TranscriptStartError("id-conflict", failure);
+    }
     throw admitted ? new TranscriptStartError("admitted-start-failed", failure, retry) : failure;
   } finally {
     startupAbort.detach();

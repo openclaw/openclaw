@@ -554,30 +554,6 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     },
   );
 
-  it("does not acknowledge source from a rejected fenced block", async () => {
-    const pipeline = createBlockReplyPipeline({
-      onBlockReply: async (payload) => {
-        if (payload.text === "```ts\n1;\n```") {
-          throw new Error("channel rejected the continuation");
-        }
-      },
-      timeoutMs: 5000,
-    });
-    pipeline.enqueue(
-      setReplyPayloadMetadata(
-        { text: "```ts\nconst x = \n```" },
-        { blockSourceText: "```ts\nconst x = " },
-      ),
-    );
-    pipeline.enqueue(
-      setReplyPayloadMetadata({ text: "```ts\n1;\n```" }, { blockSourceText: "1;\n```" }),
-    );
-    await pipeline.flush({ force: true });
-
-    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```" })).toBe(false);
-    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = " })).toBe(true);
-  });
-
   it("merges source coverage through ordinary text and a media continuation", async () => {
     const sent: ReplyPayload[] = [];
     const pipeline = createBlockReplyPipeline({

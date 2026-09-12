@@ -124,7 +124,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         workspaceDir: "/tmp/workspace",
         runtimePluginSelections: [
           { provider: "openai", modelId: "gpt-5.4", agentId: "default" },
-          { provider: "openai", modelId: "gpt-5.6-sol", agentId: "default" },
+          { provider: "openai", modelId: "gpt-6-astra", agentId: "default" },
         ],
       },
       { catalogMode: "static", pluginGeneration, abortSignal: dispatchAdmission.abortSignal },

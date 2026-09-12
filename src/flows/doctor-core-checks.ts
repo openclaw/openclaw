@@ -885,9 +885,10 @@ const claudeCliCheck: HealthCheck = {
   },
 };
 
-function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: "core/doctor/security",
+    updateReadiness: "post-plugin",
     kind: "core",
     description: "Security posture checks produce structured findings.",
     source: "doctor",
@@ -898,7 +899,7 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
   };
 }
 
-function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
+export function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
   const detailLines = finding.detail.split("\n");
   const firstDetail = detailLines.shift() ?? "";
   const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");

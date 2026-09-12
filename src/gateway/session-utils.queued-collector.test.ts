@@ -295,7 +295,7 @@ describe("queued collector session projection", () => {
       expect(isSubagentRunQueued(entry)).toBe(false);
       expect((await listChildren(context)).sessions[0]?.hasActiveRun).toBe(false);
     } finally {
-      hold.release();
+      await hold.release();
     }
     await Promise.resolve();
     expect(start).not.toHaveBeenCalled();

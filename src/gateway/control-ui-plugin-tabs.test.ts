@@ -10,6 +10,7 @@ import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  listControlUiPluginDescriptors,
   listControlUiPluginTabAuthGrants,
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
@@ -165,7 +166,11 @@ describe("listControlUiPluginTabs", () => {
     ]);
 
     expect(listControlUiPluginTabs(["operator.read"])).toEqual([]);
+    expect(listControlUiPluginDescriptors(["operator.read"])).toEqual([]);
     expect(listControlUiPluginTabs(["operator.write"]).map((tab) => tab.id)).toEqual(["logbook"]);
+    expect(listControlUiPluginDescriptors(["operator.write"]).map((entry) => entry.id)).toEqual([
+      "logbook",
+    ]);
     expect(listControlUiPluginTabs(["operator.admin"]).map((tab) => tab.id)).toEqual([
       "adminy",
       "logbook",
@@ -180,6 +185,11 @@ describe("listControlUiPluginTabs", () => {
     ]);
 
     expect(listControlUiPluginTabs([]).map((tab) => tab.id)).toEqual(["beta", "zed", "alpha"]);
+    expect(listControlUiPluginDescriptors([]).map((entry) => entry.pluginId)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 
   it("merges the read-scoped core kind into deterministic plugin ordering", () => {

@@ -211,6 +211,9 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
+  sidebarAgentsMode?: "chip" | "roster";
+  sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
+  sidebarCollapsedAgentIds?: string[];
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
@@ -230,6 +233,11 @@ export type UiSettings = {
 };
 
 export type UiPreferences = Omit<UiSettings, "token">;
+
+function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
+  const agentId = normalizeOptionalString(value);
+  return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
+}
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -334,8 +342,7 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = gatewayOriginScope(gatewayUrl);
-  const scoped = parsed.sessionsByGateway?.[scope];
+  const scoped = parsed.sessionsByGateway?.[gatewayOriginScope(gatewayUrl)];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
   const scopedSelectedAgentId = normalizeOptionalString(scoped?.selectedAgentId);
@@ -350,14 +357,9 @@ function resolveScopedSessionSelection(
   }
 
   const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? fallback.sessionKey;
-  const legacyLastActiveSessionKey =
-    normalizeOptionalString(parsed.lastActiveSessionKey) ??
-    legacySessionKey ??
-    fallback.lastActiveSessionKey;
-
   return {
     sessionKey: legacySessionKey,
-    lastActiveSessionKey: legacyLastActiveSessionKey,
+    lastActiveSessionKey: normalizeOptionalString(parsed.lastActiveSessionKey) ?? legacySessionKey,
   };
 }
 
@@ -474,6 +476,7 @@ export function loadUiPreferences(
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
+    sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
@@ -564,6 +567,9 @@ export function loadUiPreferences(
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
+      sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
+      sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
+      sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
       sidebarEntries:
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
@@ -724,6 +730,13 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         }
       : {}),
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
+    sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
+    sidebarPreTeamScope: normalizeSidebarPreTeamScope(next.sidebarPreTeamScope),
+    ...(next.sidebarCollapsedAgentIds?.length
+      ? {
+          sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds),
+        }
+      : {}),
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)

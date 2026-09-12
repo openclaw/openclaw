@@ -546,7 +546,7 @@ class AutoreviewAmpTests(unittest.TestCase):
             args = AUTOREVIEW.parse_args()
         reviewer = AUTOREVIEW.reviewer_args(args)[0]
         self.assertEqual(reviewer.amp_bin, "/tmp/trusted-amp")
-        self.assertEqual(reviewer.model, "openai/gpt-5.6-sol")
+        self.assertEqual(reviewer.model, "openai/gpt-6-astra")
         self.assertEqual(reviewer.thinking, "high")
         self.assertFalse(reviewer.tools)
 
@@ -614,7 +614,7 @@ class AutoreviewAmpTests(unittest.TestCase):
         args = argparse.Namespace(
             amp_bin="amp",
             max_output_chars=2_000_000,
-            model="openai/gpt-5.6-sol",
+            model="openai/gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
         )
@@ -810,7 +810,7 @@ class AutoreviewAmpTests(unittest.TestCase):
             amp_bin="amp",
             engine_timeout_seconds=0.01,
             max_output_chars=2_000_000,
-            model="openai/gpt-5.6-sol",
+            model="openai/gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
         )
@@ -924,7 +924,7 @@ class AutoreviewAmpTests(unittest.TestCase):
         args = argparse.Namespace(
             amp_bin="amp",
             max_output_chars=2_000_000,
-            model="openai/gpt-5.6-sol",
+            model="openai/gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
         )
@@ -1207,7 +1207,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -1221,10 +1221,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 self.assertEqual(kwargs["input_text"], prompt)
                 model = command[command.index("--model") + 1]
                 events.append(model)
-                if model == "gpt-5.6-sol":
+                if model == "gpt-5.6-luna":
                     return subprocess.CompletedProcess(
                         command, 1, "",
-                        "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
+                        "The model `gpt-5.6-luna` does not exist or you do not have access to it.",
                     )
                 output_path = Path(command[command.index("--output-last-message") + 1])
                 output_path.write_text(json.dumps(FINAL_REPORT))
@@ -1238,7 +1238,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                     mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_run):
                 report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
                 self.assertEqual(report["findings"], [])
-            self.assertEqual(events, ["gpt-5.6-sol", "gpt-5.6-terra"])
+            self.assertEqual(events, ["gpt-5.6-luna", "gpt-5.6-terra"])
 
     def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
         args = argparse.Namespace(
@@ -1246,7 +1246,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model=None,
-            model="gpt-5.6-sol",
+            model="gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -1332,7 +1332,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -1364,7 +1364,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "network timeout"):
                 AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
 
-        self.assertEqual(models, ["gpt-5.6-sol"])
+        self.assertEqual(models, ["gpt-5.6-luna"])
 
     def test_codex_does_not_fallback_after_model_capacity_failure(self) -> None:
         args = argparse.Namespace(
@@ -1372,7 +1372,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-5.6-luna",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -1386,7 +1386,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 command,
                 1,
                 "",
-                "model_not_available: gpt-5.6-sol is temporarily unavailable due to capacity",
+                "model_not_available: gpt-5.6-luna is temporarily unavailable due to capacity",
             )
 
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
@@ -1409,30 +1409,30 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "temporarily unavailable"):
                 AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
 
-        self.assertEqual(models, ["gpt-5.6-sol"])
+        self.assertEqual(models, ["gpt-5.6-luna"])
 
     def test_codex_access_fallback_ignores_structured_output_text(self) -> None:
         result = subprocess.CompletedProcess(
             ["codex"],
             1,
-            '{"type":"agent_message","text":"gpt-5.6-sol does not exist or you do not have access"}',
-            '{"type":"agent_message","message":"gpt-5.6-sol does not exist or you do not have access"}',
+            '{"type":"agent_message","text":"gpt-5.6-luna does not exist or you do not have access"}',
+            '{"type":"agent_message","message":"gpt-5.6-luna does not exist or you do not have access"}',
         )
 
         self.assertFalse(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-luna")
         )
 
     def test_codex_access_fallback_accepts_terminal_error_event(self) -> None:
         result = subprocess.CompletedProcess(
             ["codex"],
             1,
-            '{"type":"error","message":"gpt-5.6-sol does not exist or you do not have access"}',
+            '{"type":"error","message":"gpt-5.6-luna does not exist or you do not have access"}',
             "",
         )
 
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-luna")
         )
 
     def test_codex_access_fallback_accepts_account_model_list_error(self) -> None:
@@ -1441,25 +1441,25 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             1,
             "",
             (
-                "The model gpt-5.6-sol does not appear in the list of models "
+                "The model gpt-5.6-luna does not appear in the list of models "
                 "available to your account"
             ),
         )
 
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-luna")
         )
 
     def test_codex_access_fallback_ignores_plain_stdout(self) -> None:
-        message = "gpt-5.6-sol does not exist or you do not have access"
+        message = "gpt-5.6-luna does not exist or you do not have access"
         stdout_result = subprocess.CompletedProcess(["codex"], 1, message, "")
         stderr_result = subprocess.CompletedProcess(["codex"], 1, "", message)
 
         self.assertFalse(
-            AUTOREVIEW.codex_model_access_failure(stdout_result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(stdout_result, "gpt-5.6-luna")
         )
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(stderr_result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(stderr_result, "gpt-5.6-luna")
         )
 
     def test_extract_json_accepts_dict_result_payload(self) -> None:

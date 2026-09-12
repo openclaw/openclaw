@@ -364,7 +364,7 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/path/to/work model openai/gpt-5.6-sol
+create agent work workspace ~/path/to/work model openai/gpt-6-astra
 /openclaw create agent work workspace ~/path/to/work
 ```
 

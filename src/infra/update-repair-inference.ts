@@ -72,6 +72,7 @@ export async function selectUpdateRepairInference(params: {
       const accepted =
         createModelAuthAvailabilityResolver({
           cfg: route.runConfig,
+          agentId: route.agentId,
           authStore,
           agentDir: route.agentDir,
           externalCliProviderIds: [],

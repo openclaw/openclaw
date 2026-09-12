@@ -461,6 +461,10 @@ describe("Model Setup icon lifecycle through the shared proxy", () => {
             })
           : undefined;
       installedIcons = pluginIcons;
+      const iconView = document.createDocumentFragment();
+      const iconTile = document.createElement("span");
+      iconTile.dataset.pluginIconId = key;
+      iconView.append(iconTile);
       let present = true;
       const reconcile = () => {
         if (!pluginIcons) {
@@ -469,7 +473,7 @@ describe("Model Setup icon lifecycle through the shared proxy", () => {
         }
         const result = createResult(present ? [createPlugin({ id: key, hasIcon: true })] : []);
         pluginIcons.reconcileInstalled(result);
-        pluginIcons.syncInstalled(result, new Set([key]));
+        pluginIcons.syncInstalled(result, iconView);
       };
       const eligible = (value: boolean) => {
         present = value;

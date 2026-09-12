@@ -20,6 +20,7 @@ export type UiCommandDetail = UiCommandParams;
 export type TerminalPanelToggleDetail = {
   agentId?: string | null;
   dock?: "bottom" | "right";
+  newSession?: boolean;
   open?: boolean;
   terminalSessionId?: string;
   agentOwned?: boolean;

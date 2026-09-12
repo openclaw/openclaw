@@ -10,6 +10,7 @@ import {
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -20,8 +21,59 @@ import {
   getSessionWorkAdmissionRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { markRestartAbortedMainSessions } from "./main-session-restart-recovery-marking.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  markRestartAbortedMainSessions,
+  markStartupOrphanedMainSessionsForRecovery,
+} from "./main-session-restart-recovery-marking.js";
+import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
+
+it("marks healthy startup orphans while leaving a refused secondary database untouched", async () => {
+  await withOpenClawTestState({ label: "recovery-admission" }, async (state) => {
+    const cfg = { agents: { entries: { main: { default: true }, cleaner: {} } } };
+    for (const agentId of ["main", "cleaner"]) {
+      await replaceSessionEntry(
+        { agentId, sessionKey: `agent:${agentId}:main` },
+        { sessionId: `${agentId}-orphan`, status: "running", updatedAt: 1 },
+      );
+    }
+    const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const copy = new DatabaseSync(copyPath);
+    copy.exec(
+      "PRAGMA user_version = 16; UPDATE schema_meta SET agent_id = 'main', schema_version = 16;",
+    );
+    copy.close();
+    await assertOpenClawDatabasesReady({
+      config: cfg,
+      env: state.env,
+      operation: "gateway-startup",
+    });
+    const before = await fs.readFile(copyPath);
+    expect(
+      await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir }),
+    ).toEqual({ marked: 1, skipped: 0 });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.abortedLastRun,
+    ).toBe(true);
+    expect(
+      (
+        await discoverRestartRecoveryStoreTargets({
+          cfg,
+          stateDir: state.stateDir,
+          statuses: ["running"],
+        })
+      ).map((target) => target.agentId),
+    ).toEqual(["main"]);
+    expect(await fs.readFile(copyPath)).toEqual(before);
+  });
+});
 
 it("marks only the closing Gateway's exact active admissions", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-owner-"));

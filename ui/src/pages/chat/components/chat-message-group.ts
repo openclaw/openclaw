@@ -443,9 +443,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? renderForwardedAvatar(group.senderSession?.agentId, opts)
         : renderChatAvatar(
             group.role,
-            { name: assistantName, avatar: opts.assistantAvatar ?? null },
+            {
+              agentId: opts.agentId,
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+              textAvatar: opts.assistantTextAvatar,
+            },
             { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
-            opts.resourceBasePath,
             group.sender,
           )
       : nothing;

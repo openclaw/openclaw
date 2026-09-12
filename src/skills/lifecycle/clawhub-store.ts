@@ -17,6 +17,7 @@ import {
   tryReadJson,
   writeJson,
 } from "../../infra/json-files.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
 
 export { normalizeOptionalStringValue };
@@ -424,6 +425,7 @@ export async function untrackClawHubSkill(
   workspaceDir: string,
   slug: string,
   beforePersistentApply?: () => void,
+  beforeRollback = beforePersistentApply,
 ): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
   const lock = await readClawHubSkillsLockfile(workspaceDir);
@@ -431,15 +433,29 @@ export async function untrackClawHubSkill(
   if (!previous) {
     return async () => undefined;
   }
+  // Keep the authority check and atomic publication in one synchronous commit section.
+  // The async atomic writer awaits identity checks after its pre-rename callback.
+  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) => {
+    assertCurrent?.();
+    return replaceFileAtomicSync({
+      filePath: path.join(workspaceDir, DOT_DIR, "lock.json"),
+      content: `${JSON.stringify(value, null, 2)}\n`,
+      mode: 0o600,
+      dirMode: 0o777 & ~process.umask(),
+      copyFallbackOnPermissionError: true,
+      syncTempFile: true,
+      syncParentDir: true,
+      beforeRename: assertCurrent,
+    });
+  };
   delete lock.skills[trackedSlug];
-  beforePersistentApply?.();
-  await writeClawHubSkillsLockfile(workspaceDir, lock);
+  writeLock(lock);
   return async () => {
     const current = await readClawHubSkillsLockfile(workspaceDir);
     if (current.skills[trackedSlug]) {
       throw new Error(`Skill ${JSON.stringify(trackedSlug)} was retracked during rollback.`);
     }
     current.skills[trackedSlug] = previous;
-    await writeClawHubSkillsLockfile(workspaceDir, current);
+    writeLock(current, beforeRollback);
   };
 }

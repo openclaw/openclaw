@@ -112,7 +112,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const fallbackExhausted = execution.fallback.exhausted;
   const fallbackAttempts = execution.fallback.attempts;
   const directlySentBlockKeys = execution.directlySentBlockKeys;
-  const directlySentBlockPayloads = execution.directlySentBlockPayloads;
+  const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
   const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
@@ -345,7 +345,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     contextTokensUsed,
     didLogHeartbeatStrip,
     directlySentBlockKeys,
-    directlySentBlockPayloads,
+    directBlockDeliveries,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,

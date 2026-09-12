@@ -687,7 +687,7 @@ function resolveAnthropicTransportOptions(
   if (!reasoning) {
     resolved.thinkingEnabled = defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
-      resolved.effort = "high";
+      resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
     }
     return resolved;
   }

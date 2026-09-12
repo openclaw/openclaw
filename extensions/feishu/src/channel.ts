@@ -427,7 +427,7 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
 const collectFeishuOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectFeishuSecurityWarnings,
   checkId: "channels.feishu.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Feishu security warning",
 });
 

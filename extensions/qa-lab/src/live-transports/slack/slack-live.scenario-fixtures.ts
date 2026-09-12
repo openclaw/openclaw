@@ -115,7 +115,9 @@ function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
   // fallback text remains a generic status headline. Command-derived suffixes
   // can be truncated, so identify the row by its stable native label.
   return (message.blockText ?? []).some((text) =>
-    text.split(/\r?\n/u).some((line) => /^• \*Exec\* — \S/u.test(line.trim())),
+    text
+      .split(/\r?\n/u)
+      .some((line) => /^(?:•|🛠️|:hammer_and_wrench:) \*Exec\* — \S/u.test(line.trim())),
   );
 }
 

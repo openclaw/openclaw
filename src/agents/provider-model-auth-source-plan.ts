@@ -94,6 +94,8 @@ export type ProviderModelAuthSourcePlan =
       kind: "automatic";
       profiles: ProviderModelAuthAutomaticProfiles;
       orderedProfiles: readonly ProviderModelAuthProfileSource[];
+      /** An authored preferred profile keeps priority without becoming an explicit auth-order list. */
+      preserveProfilePriority?: boolean;
       allowCooldown: boolean;
       fallback?: ProviderModelAuthDirectSource;
       /**
@@ -160,6 +162,7 @@ export function buildProviderModelAuthSourcePlan(params: {
   };
   profiles: readonly ProviderModelAuthProfileSource[];
   preferredProfileId?: string;
+  preserveProfilePriority?: boolean;
   explicitOrder?: boolean;
   fallback?: ProviderModelAuthDirectSource;
   allowCooldown?: boolean;
@@ -199,6 +202,7 @@ export function buildProviderModelAuthSourcePlan(params: {
     kind: "automatic",
     profiles,
     orderedProfiles: ordered,
+    ...(params.preserveProfilePriority ? { preserveProfilePriority: true } : {}),
     allowCooldown: params.allowCooldown === true,
     declaredProfileCount: params.declaredProfileCount ?? ordered.length,
     ...(params.fallback ? { fallback: params.fallback } : {}),

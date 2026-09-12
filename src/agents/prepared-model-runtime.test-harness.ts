@@ -78,7 +78,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   })),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
   runPreparedModelCatalogWorker: vi.fn(
-    async (..._args: unknown[]): Promise<ModelCatalogSnapshot> => ({
+    async (_providerIds?: readonly string[]): Promise<ModelCatalogSnapshot> => ({
       entries: [],
       routeVariants: [],
     }),
@@ -121,7 +121,9 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
   ) => {
     preparedModelRuntimeMocks.createPreparedModelCatalogWorker(...factoryArgs);
     return {
-      loadCatalog: async (...args: unknown[]) => {
+      loadCatalog: async (
+        ...args: Parameters<typeof preparedModelRuntimeMocks.runPreparedModelCatalogWorker>
+      ) => {
         const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
         // Real worker replies always pair inventory with the observed auth generation.
         setPreparedModelFullCatalogAuth(
@@ -142,6 +144,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         Promise.resolve({
           authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
           authModes: {},
+          credentials: {},
         }),
     };
   },

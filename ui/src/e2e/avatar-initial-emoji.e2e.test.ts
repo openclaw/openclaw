@@ -1,5 +1,4 @@
-// Control UI E2E: grapheme-aware avatar initials remain intact across every
-// live agent-avatar fallback surface.
+// Control UI E2E: explicit identity emoji remain intact across agent avatar surfaces.
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
@@ -8,7 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI grapheme-aware avatar initials",
+  name: "Control UI identity emoji avatars",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
@@ -22,7 +21,7 @@ beforeEach(() => {
   }
 });
 
-const emojiAgent = { id: "emoji", identity: { name: "🚀Rocket" }, name: "🚀Rocket" };
+const emojiAgent = { id: "emoji", identity: { name: "🚀Rocket", emoji: "🚀" }, name: "🚀Rocket" };
 const asciiAgent = { id: "main", identity: { name: "Main" }, name: "Main" };
 const emojiGrapheme = "🚀";
 const agentsList = {
@@ -56,7 +55,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("renders the emoji grapheme initial in the sidebar chip and agent menu row", async () => {
+  it("renders the identity emoji in the sidebar chip and agent menu row", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -95,7 +94,7 @@ suite.define(() => {
         const emojiRow = sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
           .getByRole("menuitemradio", { name: "🚀Rocket", exact: true });
-        const menuAvatar = emojiRow.locator(".agent-select__avatar--text");
+        const menuAvatar = emojiRow.locator(".identity-avatar__text");
         await expect.poll(() => menuAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
         // The shared picker paints its text through CSS, not a text node.
         await expect
@@ -115,14 +114,18 @@ suite.define(() => {
           )
           .toBe(true);
         await expect
-          .poll(() => sidebar.locator(".sidebar-agent-card__avatar-text").textContent())
+          .poll(() =>
+            sidebar
+              .locator(".sidebar-agent-card__avatar .identity-avatar__text")
+              .getAttribute("data-avatar"),
+          )
           .toBe(emojiGrapheme);
         await screenshot(page, "01-sidebar-chip-emoji.png");
       },
     );
   });
 
-  it("renders the emoji grapheme initial in the agent selector dropdown", async () => {
+  it("renders the identity emoji in the agent selector dropdown", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -138,7 +141,7 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}agents`);
+        const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
         const agentSelect = page.locator("openclaw-agents-page openclaw-agent-select");
@@ -147,7 +150,7 @@ suite.define(() => {
           name: "🚀Rocket",
           exact: true,
         });
-        const pickerAvatar = emojiItem.locator(".agent-select__avatar--text");
+        const pickerAvatar = emojiItem.locator(".identity-avatar__text");
         await expect.poll(() => pickerAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
         await expect
           .poll(() =>
@@ -159,7 +162,7 @@ suite.define(() => {
     );
   });
 
-  it("renders the emoji grapheme initial in the agents overview identity editor", async () => {
+  it("renders the identity emoji in the agents overview identity editor", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -219,7 +222,11 @@ suite.define(() => {
           `03-agents-overview-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "emoji"}.png`,
         );
         await expect
-          .poll(() => page.locator(".agent-identity-editor__avatar-text").textContent())
+          .poll(() =>
+            page
+              .locator(".agent-identity-editor__avatar .identity-avatar__text")
+              .getAttribute("data-avatar"),
+          )
           .toBe(emojiGrapheme);
       },
     );

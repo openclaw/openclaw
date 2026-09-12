@@ -14,6 +14,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -60,7 +61,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
-import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 type TranscriptSearchState =
@@ -1560,6 +1561,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     : nothing
                 }
               </span>
+              ${row.kind === "global" && !row.agentId ? nothing : renderAgentRowChip(parseAgentSessionKey(row.key)?.agentId ?? row.agentId)}
               ${
                 showDisplayName
                   ? html`<span class="muted session-key-display-name">${displayName}</span>`

@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { createThinkingCatalogResolver } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type PreparedThinkingPolicy,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 
@@ -81,7 +88,7 @@ describe.each([
   { agentRuntime: "codex", api: "openai-chatgpt-responses" as const },
 ])("Gateway model thinking defaults on $agentRuntime", ({ agentRuntime, api }) => {
   it.each<{ name: string; cfg: OpenClawConfig; expected: string }>([
-    { name: "provider default", cfg: {}, expected: "low" },
+    { name: "provider default", cfg: {}, expected: "medium" },
     {
       name: "global override",
       cfg: { agents: { defaults: { thinkingDefault: "high" } } },
@@ -117,5 +124,110 @@ describe.each([
     });
     expect(profile.thinkingDefault).toBe(expected);
     expect(profile.thinkingLevels.map(({ id }) => id)).toContain(expected);
+  });
+});
+
+describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) => {
+  it.each([
+    { configured: false, configuredReasoning: undefined, expected: "low" },
+    { configured: true, configuredReasoning: undefined, expected: "high" },
+    { configured: false, configuredReasoning: false, expected: "off" },
+  ])("keeps logical defaults separate from donor levels: %j", (scenario) => {
+    const logicalPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+      levels: [{ id: "off" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    }));
+    const donorPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+      levels: [{ id: "off" }, { id: "low", label: "On" }, { id: "high" }],
+      defaultLevel: "high",
+    }));
+    const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
+      {
+        provider: "logical",
+        id: "Reasoner",
+        name: "Logical",
+        reasoning: true,
+        [PREPARED_THINKING_POLICY]: logicalPolicy,
+      },
+      {
+        provider: "donor",
+        id: "Reasoner",
+        name: "Donor",
+        reasoning: true,
+        [PREPARED_THINKING_POLICY]: donorPolicy,
+      },
+    ];
+    const cfg: OpenClawConfig = scenario.configured
+      ? {
+          agents: {
+            defaults: {
+              models: {
+                "logical/Reasoner": { params: { thinking: "high" } },
+                "donor/Reasoner": { params: { thinking: "off" } },
+              },
+            },
+          },
+        }
+      : {};
+    const profile = resolveGatewayModelThinkingProfile({
+      cfg,
+      agentId: "main",
+      provider: "logical",
+      model: "Reasoner",
+      thinkingPolicyProvider: "donor",
+      agentRuntime: "openclaw",
+      modelCatalog: catalog,
+      catalogResolver: indexed ? createThinkingCatalogResolver(catalog) : undefined,
+      configuredReasoning: scenario.configuredReasoning,
+    });
+    expect(profile.thinkingLevels).toEqual(
+      scenario.configuredReasoning === false
+        ? [{ id: "off", label: "off" }]
+        : [
+            { id: "off", label: "off" },
+            { id: "low", label: "On" },
+            { id: "high", label: "high" },
+          ],
+    );
+    expect(profile.thinkingDefault).toBe(scenario.expected);
+    expect(logicalPolicy).toHaveBeenCalledTimes(scenario.configured ? 0 : 1);
+    expect(donorPolicy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains an authoritative absent policy across all default and clamp reads", () => {
+    const otherPolicy = vi.fn<PreparedThinkingPolicy>(() => ({
+      levels: [{ id: "high" }],
+      defaultLevel: "high",
+    }));
+    const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
+      {
+        provider: "captured-null",
+        id: "Reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        [PREPARED_THINKING_POLICY]: null,
+      },
+    ];
+    const profile = resolveGatewayModelThinkingProfile({
+      cfg: {},
+      agentId: "main",
+      provider: "captured-null",
+      model: "Reasoner",
+      agentRuntime: "openclaw",
+      modelCatalog: catalog,
+      catalogResolver: indexed ? createThinkingCatalogResolver(catalog) : undefined,
+      providerPolicySource: {
+        providers: [{ provider: { id: "captured-null", resolveThinkingProfile: otherPolicy } }],
+      },
+    });
+    expect(profile.thinkingLevels.map(({ id }) => id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(profile.thinkingDefault).toBe("medium");
+    expect(otherPolicy).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  stream as streamModel,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
@@ -364,19 +368,50 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
   });
 
-  it("uses Fable 5's always-adaptive Vertex contract", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "high",
-      maxTokens: 128000,
+  it.each([
+    { id: "claude-fable-5", effort: "medium" },
+    { id: "claude-fable-5-1", effort: "medium" },
+    {
+      id: "production-fable",
+      params: { canonicalModelId: "claude-fable-5-1" },
+      reasoning: false,
+      effort: "medium",
+    },
+    { id: "claude-mythos-5", effort: "high" },
+  ])("sends the shared Vertex default for $id", async ({ effort, ...modelOptions }) => {
+    const { deps } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn(
+      "vertex-project",
+      "us-east5",
+      undefined,
+      { ...deps, streamAnthropic: streamModel },
+      {},
+    );
+    const onPayload = vi.fn((_payload: unknown) => {
+      throw new Error("stop before network");
     });
-    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+    const model: Model<"anthropic-messages"> = {
+      ...makeModel({ ...modelOptions, maxTokens: 128000 }),
+      name: modelOptions.id,
+      input: ["text"],
+      contextWindow: 1_000_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const stream = await streamFn(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { temperature: 0.7, onPayload },
+    );
+    const result = await stream.result();
+
+    expect(onPayload, result.errorMessage).toHaveBeenCalledOnce();
+    const payload = onPayload.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort },
+      max_tokens: 128000,
+    });
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it.each([
@@ -401,21 +436,6 @@ describe("createAnthropicVertexStreamFn", () => {
       }
     },
   );
-
-  it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-mythos-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "high",
-      maxTokens: 128000,
-    });
-    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
-  });
 
   it("uses canonical Claude policy for Vertex deployment aliases", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();

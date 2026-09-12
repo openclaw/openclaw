@@ -1,5 +1,8 @@
 import { renderHubTabs, type HubTabOption } from "../../components/hub-tabs.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+
+registerPluginManagementEnglish();
 
 export type PluginsHubTab = "plugins" | "skills" | "skill-workshop";
 

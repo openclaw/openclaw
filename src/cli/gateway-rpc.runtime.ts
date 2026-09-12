@@ -76,6 +76,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
       await callGateway<T>({
         config: opts.config,
         url: opts.url,
+        expectUrl: opts.expectUrl,
         token: opts.token,
         password: opts.password,
         method,

@@ -11,11 +11,17 @@ import {
 // Register the harness metadata mock before loading the real config and command modules.
 const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
+const { formatConfigIssueLines } = await import("../config/issue-format.js");
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
 const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
   await import("./config-cli.js");
-const { withConfigFileHarness } = useConfigCliIntegrationHarness();
+const {
+  registeredRuntimeLogs,
+  registeredRuntimeErrors,
+  runRegisteredConfigCommand,
+  withConfigFileHarness,
+} = useConfigCliIntegrationHarness();
 
 function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
   const readSchema = runtimeSchema.readBestEffortRuntimeConfigSchema;
@@ -27,6 +33,79 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
+  it("renders actionable paths for real dotted model-key validation failures", async () => {
+    const configForAlias = (alias: string | number) => ({
+      agents: {
+        entries: { main: {} },
+        defaults: { models: { "fixture/model.v1": { alias } } },
+      },
+    });
+    const raw = `${JSON.stringify(configForAlias(42), null, 2)}\n`;
+    const displayPath = 'agents.defaults.models["fixture/model.v1"].alias';
+    const issuePath = "agents.defaults.models.fixture/model.v1.alias";
+
+    await withConfigFileHarness(
+      "openclaw-config-cli-dotted-diagnostic-",
+      raw,
+      async ({ configPath }) => {
+        const snapshot = await configRuntime.readConfigFileSnapshot({ observe: false });
+        expect(snapshot.valid).toBe(false);
+        expect(snapshot.issues).toHaveLength(1);
+        expect(snapshot.issues[0]).toMatchObject({
+          path: issuePath,
+          pathSegments: ["agents", "defaults", "models", "fixture/model.v1", "alias"],
+          message: expect.stringContaining("expected string"),
+        });
+
+        for (const args of [
+          ["config", "validate"],
+          ["config", "get", displayPath],
+        ]) {
+          registeredRuntimeErrors.length = 0;
+          await expect(runRegisteredConfigCommand(args)).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
+          const diagnostic = registeredRuntimeErrors.join("\n");
+          expect(diagnostic).toContain(`openclaw.json:9 — ${displayPath}:`);
+          expect(diagnostic).toContain("expected string");
+          expect(diagnostic).not.toContain(`${issuePath}:`);
+          expect(registeredRuntimeLogs).toEqual([]);
+        }
+
+        registeredRuntimeErrors.length = 0;
+        await expect(
+          runRegisteredConfigCommand(["config", "validate", "--json"]),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(registeredRuntimeErrors).toEqual([]);
+        expect(registeredRuntimeLogs).toHaveLength(1);
+        expect(JSON.parse(registeredRuntimeLogs[0] ?? "")).toMatchObject({
+          valid: false,
+          path: configPath,
+          issues: [{ path: issuePath, message: expect.stringContaining("expected string") }],
+        });
+        expect(registeredRuntimeLogs[0]).not.toContain("pathSegments");
+        expect(formatConfigIssueLines(snapshot.issues, "")).toEqual([
+          expect.stringContaining(`${displayPath}:`),
+        ]);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      },
+    );
+
+    registeredRuntimeLogs.length = 0;
+    const validRaw = `${JSON.stringify(configForAlias("qa"), null, 2)}\n`;
+    await withConfigFileHarness(
+      "openclaw-config-cli-dotted-lookup-",
+      validRaw,
+      async ({ configPath }) => {
+        await runRegisteredConfigCommand(["config", "get", displayPath, "--json"]);
+        expect(registeredRuntimeLogs).toEqual(['"qa"']);
+        expect(registeredRuntimeErrors).toEqual([]);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(validRaw);
+      },
+    );
+  });
+
   it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
     const schemaOnlySecrets = ["first-private-route", "second-private-route"];

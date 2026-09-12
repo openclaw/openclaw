@@ -22,7 +22,7 @@ Runtime policy decides which harness executes a model run. It lives on providers
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       models: {
         "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },

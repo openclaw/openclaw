@@ -454,17 +454,18 @@ describe("resolveClaudeThinkingProfile", () => {
     expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
   });
 
-  it.each(["claude-fable-5", "claude-mythos-5"])(
-    "exposes %s's mandatory-adaptive profile to Claude providers",
-    (modelId) => {
-      const profile = resolveClaudeThinkingProfile(modelId);
-      expectFields(profile, {
-        defaultLevel: "high",
-        preserveWhenCatalogReasoningFalse: true,
-      });
-      expect(readLevelIds(profile)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    },
-  );
+  it.each([
+    ["claude-fable-5", "medium"],
+    ["claude-fable-5-1", "medium"],
+    ["claude-mythos-5", "high"],
+  ])("exposes %s's mandatory-adaptive profile to Claude providers", (modelId, defaultLevel) => {
+    const profile = resolveClaudeThinkingProfile(modelId);
+    expectFields(profile, {
+      defaultLevel,
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(readLevelIds(profile)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
 
   it("keeps Mythos Preview mandatory adaptive without claiming the Claude 5 effort ladder", () => {
     const profile = resolveClaudeThinkingProfile("claude-mythos-preview");

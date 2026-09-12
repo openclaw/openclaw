@@ -344,10 +344,11 @@ user skill directly.
     | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
-    A direct "update OpenClaw" request offers an **Update now** button where
-    supported, or the `/update` command to send. The button runs `/update` as
-    the clicking user; the update starts only after that owner action. Chat
-    access alone does not grant permission to update. See
+    Natural-language update requests use the `gateway` tool's `update.run`
+    action. `/update` provides the same update operation without requiring a
+    functioning model or access to that tool. Both use the Gateway update
+    handler, also used by the Control UI. Chat access alone does not grant
+    permission to update. See
     [Updating from chat](/install/updating#from-chat).
 
   </Accordion>
@@ -555,8 +556,9 @@ that reply, then rerun with `--accept-capabilities`:
 /plugins enable <plugin-id> --accept-capabilities
 ```
 
-Capability consent also applies to official external plugins and is separate
-from the source acknowledgement provided by `--force`.
+Bundled plugins and verified plugins from OpenClaw's official catalog are exempt
+from capability consent. Third-party capability consent is separate from the
+source acknowledgement provided by `--force`.
 
 ## `/trace`: plugin trace output
 

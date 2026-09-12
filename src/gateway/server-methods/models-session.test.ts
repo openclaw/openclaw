@@ -44,7 +44,7 @@ function fixture() {
   } satisfies OpenClawConfig;
   const owner = createChatMetadataOwner(
     config,
-    "gpt-5.6-sol",
+    "gpt-5.6-luna",
     {},
     "openai",
     "openai-chatgpt-responses",
@@ -160,7 +160,7 @@ describe("direct session model catalogs", () => {
       expect(saved).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
-          models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+          models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
           accountSelection: expect.objectContaining({
             kind: "personal",
             authProfileId: f.authProfileId,
@@ -227,7 +227,7 @@ describe("direct session model catalogs", () => {
       try {
         const direct = await f.request({ sessionKey, view: "configured" });
         expect(direct.mock.calls[0]?.[1]).toMatchObject({
-          models: [{ id: "gpt-5.6-sol", provider: "openai" }],
+          models: [{ id: "gpt-5.6-luna", provider: "openai" }],
         });
         const payload = direct.mock.calls[0]?.[1];
         expect(payload).not.toEqual(

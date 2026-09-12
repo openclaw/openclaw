@@ -308,7 +308,7 @@ describe("buildQaGatewayConfig", () => {
   it.each([
     ["openai/gpt-5.6", "openai/gpt-5.6-luna"],
     ["openai/gpt-5.6-sol", "openai/gpt-5.6-luna"],
-    ["openai/gpt-5.6-luna", "openai/gpt-5.6-sol"],
+    ["openai/gpt-5.6-luna", "openai/gpt-5.6-terra"],
   ])("keeps an omitted live alternate on OpenAI for %s", (primary, alternate) => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

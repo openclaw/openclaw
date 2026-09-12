@@ -4,6 +4,7 @@ import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning
 export type PluginRowMessage = {
   kind: "success" | "error" | "warning";
   text: string;
+  savedInstall?: string;
   installPolicyWarning?: {
     details: PluginInstallPolicyWarningDetails;
     request: PluginInstallRequest;
