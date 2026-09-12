@@ -453,4 +453,110 @@ describe("openai completions stream", () => {
       }
     },
   );
+
+  it("does not treat empty SSE chunks as diagnostic model progress", async () => {
+    const idleTimeoutMs = 100;
+    const emptyChunkDurationMs = 260;
+    const runId = "empty-stream-progress-run";
+    let resolveEmptyWindow!: () => void;
+    const emptyWindowReached = new Promise<void>((resolve) => {
+      resolveEmptyWindow = resolve;
+    });
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+
+        const startedAt = Date.now();
+        const writeNextChunk = () => {
+          if (res.destroyed) {
+            return;
+          }
+          if (Date.now() - startedAt < emptyChunkDurationMs) {
+            res.write(
+              `data: ${JSON.stringify({
+                id: "chatcmpl-empty-progress",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "empty-progress-model",
+                choices: [],
+              })}\n\n`,
+            );
+            setTimeout(writeNextChunk, 20);
+            return;
+          }
+
+          resolveEmptyWindow();
+          res.write(
+            `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
+          );
+          res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+          res.end("data: [DONE]\n\n");
+        };
+
+        writeNextChunk();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        id: "empty-progress-model",
+        provider: "compatible-proxy",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+      });
+      markDiagnosticRunProgress({
+        runId,
+        sessionId: runId,
+        reason: "model_call:started",
+      });
+      const stream = streamWithIdleTimeout(
+        createOpenAICompletionsTransportStreamFn(),
+        idleTimeoutMs,
+        undefined,
+        { runId },
+      )(
+        model,
+        {
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let text = "";
+      const collectStream = (async () => {
+        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+          if (event.type === "text_delta") {
+            text += event.delta ?? "";
+          }
+        }
+      })();
+
+      await emptyWindowReached;
+      const duringEmptyActivity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
+      expect(duringEmptyActivity.lastProgressReason).toBe("model_call:started");
+      expect(duringEmptyActivity.lastProgressAgeMs).toBeGreaterThan(150);
+
+      await collectStream;
+      expect(text).toBe("OK");
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId: runId }).lastProgressReason).toBe(
+        "model_call:stream_progress",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 });

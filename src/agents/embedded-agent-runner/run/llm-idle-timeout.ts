@@ -506,12 +506,18 @@ export function streamWithIdleTimeout(
             }, effectiveTimeout);
             idleTimer.unref?.();
           };
-          const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
-            armTimer();
-            if (runId && areDiagnosticsEnabledForProcess()) {
-              markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
-            }
-          });
+          const unsubscribeLlmActivity = onLlmRequestActivity(
+            streamAbortController.signal,
+            (modelProgress) => {
+              // Provider activity keeps the transport watchdog alive, but it is not
+              // necessarily model progress: empty stream chunks must not starve stalled-run
+              // recovery.
+              armTimer();
+              if (modelProgress && runId && areDiagnosticsEnabledForProcess()) {
+                markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
+              }
+            },
+          );
           const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
           const settle = () => {
             if (settled) {

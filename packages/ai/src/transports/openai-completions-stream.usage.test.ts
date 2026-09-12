@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
@@ -213,6 +214,66 @@ describe("openai completions stream", () => {
       { type: "thinking", thinking: "" },
       { type: "text", text: "Hi" },
     ]);
+  });
+
+  it("counts only advancing usage-only reasoning as progress when reasoning is hidden", async () => {
+    const model = makeCompletionsModel({
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      provider: "vertex-ai",
+      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+      contextWindow: 1_000_000,
+    });
+    const output = createAssistantOutput(model);
+    const controller = new AbortController();
+    const progress: boolean[] = [];
+    const unsubscribe = onLlmRequestActivity(controller.signal, (modelProgress) => {
+      progress.push(modelProgress);
+    });
+
+    try {
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({}, null, {
+            choices: [],
+            usage: {
+              prompt_tokens: 8,
+              completion_tokens: 7,
+              total_tokens: 15,
+              completion_tokens_details: { reasoning_tokens: 7 },
+            },
+          }),
+          makeCompletionsChunk({}, null, {
+            choices: [],
+            usage: {
+              prompt_tokens: 8,
+              completion_tokens: 7,
+              total_tokens: 15,
+              completion_tokens_details: { reasoning_tokens: 7 },
+            },
+          }),
+          makeCompletionsChunk({}, null, {
+            choices: [],
+            usage: {
+              prompt_tokens: 8,
+              completion_tokens: 9,
+              total_tokens: 17,
+              completion_tokens_details: { reasoning_tokens: 9 },
+            },
+          }),
+          makeCompletionsChunk({}, null, { choices: [] }),
+        ]),
+        output,
+        model,
+        { push() {} },
+        { emitReasoning: false, signal: controller.signal },
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(progress).toEqual([true, false, true, false]);
+    expect(output.content).toEqual([]);
   });
 
   it("does not add trailing reasoning activity after visible OpenAI-compatible text", async () => {

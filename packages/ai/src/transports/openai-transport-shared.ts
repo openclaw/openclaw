@@ -184,6 +184,43 @@ export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
   | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
 
+export function hasOpenAICompletionsModelProgress(chunk: {
+  choices?: Array<{ delta?: unknown; message?: unknown }>;
+}): boolean {
+  return (
+    chunk.choices?.some((choice) => {
+      const delta = choice.delta ?? choice.message;
+      if (!delta || typeof delta !== "object") {
+        return false;
+      }
+      return Object.entries(delta).some(([key, value]) => {
+        if (key === "role" || value == null) {
+          return false;
+        }
+        return typeof value === "string"
+          ? value.length > 0
+          : !Array.isArray(value) || value.length > 0;
+      });
+    }) ?? false
+  );
+}
+
+export function trackOpenAICompletionsReasoningUsage(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> | null | undefined,
+  previousReasoningTokens: number | undefined,
+): { hasProgress: boolean; maxTokens: number } {
+  const reasoningTokens = rawUsage?.completion_tokens_details?.reasoning_tokens;
+  const validReasoningTokens =
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? reasoningTokens
+      : undefined;
+  return {
+    hasProgress:
+      validReasoningTokens !== undefined && validReasoningTokens > (previousReasoningTokens ?? 0),
+    maxTokens: Math.max(previousReasoningTokens ?? 0, validReasoningTokens ?? 0),
+  };
+}
+
 type OpenAICompletionsReasoningBatch = {
   readonly deltas: readonly OpenAICompletionsContentDelta[];
   readonly mirroredThinking: readonly string[];
