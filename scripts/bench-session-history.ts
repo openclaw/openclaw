@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.js";
@@ -131,9 +132,9 @@ async function trace(read: () => Promise<unknown>) {
   const queries = new Map<string, QueryTrace>();
   const originalParse = JSON.parse;
   const originalStringify = JSON.stringify;
-  // Native methods are restored unchanged and invoked with the original statement receiver.
-  // oxlint-disable-next-line typescript/unbound-method
-  const { get: originalGet, all: originalAll, iterate: originalIterate } = StatementSync.prototype;
+  const originalGet = mock.method(StatementSync.prototype, "get");
+  const originalAll = mock.method(StatementSync.prototype, "all");
+  const originalIterate = mock.method(StatementSync.prototype, "iterate");
   let jsonParseCalls = 0;
   let jsonParseBytes = 0;
   let jsonStringifyCalls = 0;
@@ -176,7 +177,7 @@ async function trace(read: () => Promise<unknown>) {
       value(this: StatementSync, ...args: unknown[]) {
         const record = query(this, args);
         const start = performance.now();
-        const result: unknown = Reflect.apply(original, this, args);
+        const result: unknown = Reflect.apply(original.bind(this), undefined, args);
         record.elapsedMs += performance.now() - start;
         record.rows += Array.isArray(result) ? result.length : result === undefined ? 0 : 1;
         return result;
@@ -188,7 +189,7 @@ async function trace(read: () => Promise<unknown>) {
     writable: true,
     *value(this: StatementSync, ...args: unknown[]) {
       const record = query(this, args);
-      const iterator = Reflect.apply(originalIterate, this, args);
+      const iterator = Reflect.apply(originalIterate.bind(this), undefined, args);
       try {
         while (true) {
           const start = performance.now();
@@ -210,9 +211,9 @@ async function trace(read: () => Promise<unknown>) {
   } finally {
     JSON.parse = originalParse;
     JSON.stringify = originalStringify;
-    StatementSync.prototype.get = originalGet;
-    StatementSync.prototype.all = originalAll;
-    StatementSync.prototype.iterate = originalIterate;
+    originalGet.mock.restore();
+    originalAll.mock.restore();
+    originalIterate.mock.restore();
   }
   return { queries: [...queries.values()], jsonParseCalls, jsonParseBytes, jsonStringifyCalls };
 }

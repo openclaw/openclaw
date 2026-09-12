@@ -35,8 +35,8 @@ Measure SQLite history pages and the Gateway's bounded history reader with
 synthetic conversations, including sparse markers, dense markers, and resets:
 
 ```bash
-node --import ./scripts/tsx.mjs scripts/bench-session-history.ts --samples 30 --output history.json
-node --import ./scripts/tsx.mjs scripts/bench-session-history.ts --profile sparse,trailing,reset --operation recent --analyze --samples 15 --output history-analyzed.json
+pnpm test:sessions:history:bench --samples 30 --output history.json
+pnpm test:sessions:history:bench --profile sparse,trailing,reset --operation recent --analyze --samples 15 --output history-analyzed.json
 ```
 
 The second command includes 5,000 trailing compaction markers and refreshes
