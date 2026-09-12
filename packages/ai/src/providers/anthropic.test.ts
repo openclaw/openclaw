@@ -2227,20 +2227,24 @@ describe("Anthropic provider", () => {
     }
   });
 
-  it("honors provider effort restrictions for Claude Fable 5", async () => {
+  it.each([
+    { reasoning: "xhigh", thinkingLevelMap: { xhigh: null, max: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: "low" }, effort: "low" },
+  ] as const)("honors provider effort restrictions for Claude Fable 5: %j", async (testCase) => {
     const { payload } = await captureSimpleAnthropicPayload(
       {
         id: "claude-fable-5",
         name: "Claude Fable 5",
         provider: "github-copilot",
         reasoning: false,
-        thinkingLevelMap: { xhigh: null, max: null },
+        thinkingLevelMap: testCase.thinkingLevelMap,
       },
-      { apiKey: "copilot-token", reasoning: "xhigh" },
+      { apiKey: "copilot-token", reasoning: testCase.reasoning },
     );
     expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
+      output_config: { effort: testCase.effort },
     });
   });
 

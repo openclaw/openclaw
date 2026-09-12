@@ -125,10 +125,11 @@ export function resolveAnthropicThinkingEffort(
   model: Model<"anthropic-messages">,
   level: SimpleStreamOptions["reasoning"],
 ): AnthropicEffort {
-  if (level === undefined && resolveClaudeFable5ModelIdentity(model)) {
-    return CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel;
-  }
-  const requestedLevel = level as ModelThinkingLevel | undefined;
+  const requestedLevel: ModelThinkingLevel | undefined =
+    level ??
+    (resolveClaudeFable5ModelIdentity(model)
+      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+      : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
