@@ -90,25 +90,25 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
     const { context, admission } = await preparePluginContext(execute);
     const consumer = context.pluginExecutionConsumer;
     expect(consumer).toBeDefined();
+    let outcome: { ok: true; text: string } | { ok: false; error: unknown } | undefined;
+    const run = executePreparedCliRun(context).then(
+      (value) => {
+        outcome = { ok: true, text: value.text };
+      },
+      (error: unknown) => {
+        outcome = { ok: false, error };
+      },
+    );
+    let disposal: ReturnType<typeof owner.dispose> | undefined;
     try {
-      const run = executePreparedCliRun(context);
       await vi.waitFor(() => expect(started).toBe(true));
 
-      const disposal = owner.dispose();
+      disposal = owner.dispose();
       await vi.advanceTimersByTimeAsync(5_001);
       expect(owner.acceptingCalls).toBe(false);
       finish.resolve();
 
       // Settle under fake timers so a regression fails on its own error instead of hanging.
-      let outcome: { ok: true; text: string } | { ok: false; error: unknown } | undefined;
-      void run.then(
-        (value) => {
-          outcome = { ok: true, text: value.text };
-        },
-        (error: unknown) => {
-          outcome = { ok: false, error };
-        },
-      );
       await vi.waitFor(() => expect(outcome).toBeDefined(), { timeout: 30_000, interval: 100 });
       expect(outcome, "CLI run did not settle after its plugin instance retired").toEqual({
         ok: true,
@@ -120,7 +120,11 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
       consumer!.release();
       await expect(disposal).resolves.toEqual({ errors: [] });
     } finally {
+      // A failed assertion must not strand the iterator or its retained owner.
+      finish.resolve();
+      consumer?.release();
       admission.close();
+      await Promise.allSettled([run, disposal ?? owner.dispose()]);
     }
   });
 });

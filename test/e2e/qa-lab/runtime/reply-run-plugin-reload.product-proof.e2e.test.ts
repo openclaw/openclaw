@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -135,6 +135,7 @@ afterEach(async () => {
     errors.push(error);
   } finally {
     bus = undefined;
+    vi.unstubAllEnvs();
   }
   if (errors.length > 0) {
     throw new AggregateError(errors, "reload repro cleanup failed");
@@ -153,9 +154,9 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
         const fakeDir = fs.mkdtempSync(path.join(fakeRoot, "fake-claude-"));
         const fakeBin = path.join(fakeDir, "claude");
         fs.writeFileSync(fakeBin, FAKE_CLAUDE, { mode: 0o755 });
-        process.env.PATH = `${fakeDir}${path.delimiter}${process.env.PATH ?? ""}`;
-        process.env.FAKE_CLAUDE_DIR = fakeDir;
-        process.env.FAKE_CLAUDE_TURN_MS = String(TURN_MS);
+        vi.stubEnv("PATH", `${fakeDir}${path.delimiter}${process.env.PATH ?? ""}`);
+        vi.stubEnv("FAKE_CLAUDE_DIR", fakeDir);
+        vi.stubEnv("FAKE_CLAUDE_TURN_MS", String(TURN_MS));
 
         const state = createQaBusState();
         const transport = createQaChannelTransport(state);
@@ -333,9 +334,14 @@ describe.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
           2_000,
         ).catch((error: unknown) => String(error));
         record.turnFinished = finished;
-        await delay(20_000);
-
-        await Promise.race([patchPromise, delay(30_000)]);
+        await waitFor(
+          "outbound reply after CLI completion",
+          () =>
+            state.getSnapshot().messages.some((message) => message.direction === "outbound")
+              ? true
+              : undefined,
+          20_000,
+        );
         const outbound = state
           .getSnapshot()
           .messages.filter((message) => message.direction === "outbound")
