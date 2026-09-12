@@ -12,7 +12,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 - A native chat UI for the gateway.
 
-Remote Markdown images are blocked by default. To allow a trusted browser-direct image host, set `gateway.controlUi.remoteImageOrigins` to exact bare HTTP or HTTPS origins, such as `https://images.example.com` or `http://images.example.test:8080`. Wildcards, credentials, paths, query strings, fragments, and unsupported schemes are rejected. Scheme, hostname, and effective port must match exactly. HTTP may be blocked by browsers as mixed content when Control UI uses HTTPS; this setting provides no Gateway-side SSRF or redirect enforcement.
+Remote Markdown images are blocked by default. To allow a trusted browser-direct image host, set `gateway.controlUi.remoteImageOrigins` to exact bare HTTP or HTTPS origins, such as `https://images.example.com` or `http://images.example.test:8080`. Wildcards, credentials, paths, query strings, fragments, and unsupported schemes are rejected. Scheme, hostname, and effective port must match exactly. `remoteImageOrigins` cannot override browser mixed-content protection: when Control UI uses HTTPS, the browser may block or upgrade an allowed HTTP image. To avoid mixed-content blocking for a plain HTTP image endpoint, load Control UI over HTTP too or serve that endpoint over HTTPS. This setting provides no Gateway-side SSRF or redirect enforcement.
 
 - Uses the same sessions and routing rules as other channels.
 - Deterministic routing: replies always go back to WebChat.

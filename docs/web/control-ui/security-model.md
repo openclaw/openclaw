@@ -45,10 +45,19 @@ the page retains its previous policy until it can reload; finish that work and
 reload to apply a revocation. Fresh pages receive the current policy immediately.
 
 These requests go directly from the operator browser to the image host, exposing
-the browser's network address to that host. HTTPS pages remain subject to browser
-mixed-content rules for HTTP images. Redirects can still fail if their destination
-is outside the page CSP; allowing an initial origin does not allow arbitrary
-redirect destinations. Browser policy may further restrict requests.
+the browser's network address to that host.
+
+<Warning>
+An HTTPS Control UI page cannot reliably display an allowed `http://` image:
+the browser may block or upgrade it as mixed content. `remoteImageOrigins` cannot
+override this browser protection. A plain HTTP image endpoint avoids mixed-content
+blocking only when the Control UI page is also loaded over HTTP; otherwise, serve
+the image endpoint over HTTPS.
+</Warning>
+
+Redirects can still fail if their destination is outside the page CSP; allowing
+an initial origin does not allow arbitrary redirect destinations. Browser policy
+may further restrict requests.
 
 This option makes **no Gateway SSRF behavior change**: it adds no image proxy,
 Gateway fetch, or exception to server-side URL and DNS checks.
