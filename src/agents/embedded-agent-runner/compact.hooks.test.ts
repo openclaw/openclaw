@@ -2230,7 +2230,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         errorMessage: "429 rate limit exceeded",
         outcome: "fallback",
       },
-      { scenario: "intentional quality rejection", errorMessage: undefined, outcome: "cancel" },
+      { scenario: "intentional quality rejection", errorMessage: undefined, outcome: "degrade" },
       { scenario: "explicit model timeout", errorMessage: "request timed out", outcome: "cancel" },
       {
         scenario: "reasoning-mandatory rejection",
@@ -2302,7 +2302,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
               : createAssistant(activeModel, [
                   {
                     type: "text",
-                    text: outcome === "cancel" ? "Missing required sections." : fallbackSummary,
+                    text:
+                      outcome === "cancel" || outcome === "degrade"
+                        ? "Missing required sections."
+                        : fallbackSummary,
                   },
                 ]),
           );
@@ -2374,7 +2377,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "degrade") {
+          // Exhausted quality validation commits a bounded fallback instead of cancelling:
+          // cancelling never shrinks the transcript, so the session could never compact again.
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          const boundary = expectDefined(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+            "degraded compaction boundary",
+          );
+          expect(boundary).toMatchObject({ details: { qualityDegraded: true } });
+          expect(boundary.summary).toContain("## Decisions");
+          expect(sessionManager.buildSessionContext().messages).not.toEqual(originalMessages);
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }

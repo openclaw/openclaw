@@ -2786,7 +2786,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
+  it("degrades to the bounded fallback when audit-required tail sections cannot fit the artifact cap", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";
     const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
@@ -2822,11 +2822,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
 
-    expect(result).toEqual({ cancel: true });
+    // Cancelling here left the session permanently uncompactable: the required facts
+    // never shrink, so every later attempt hits the same wall. Both terminal quality
+    // paths now commit the same bounded artifact and mark it as degraded.
+    expect(result).toMatchObject({
+      compaction: { details: { qualityDegraded: true } },
+    });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-      "Compaction safeguard required facts exceed the finalized summary budget.",
-    );
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("restores source ask evidence omitted by the split-turn summary", async () => {

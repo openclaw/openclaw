@@ -14,10 +14,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import {
-  getCompactionSafeguardRuntime,
-  setCompactionSafeguardRuntime,
-} from "../agent-hooks/compaction-safeguard-runtime.js";
+import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
@@ -101,21 +98,64 @@ function collectCompactionEnds(session: Awaited<ReturnType<typeof createTestSess
   return events;
 }
 
+/** The structured artifact the safeguard commits when quality validation is exhausted. */
+const DEGRADED_FALLBACK_SUMMARY = [
+  "## Decisions",
+  "No prior history.",
+  "",
+  "## Open TODOs",
+  "None.",
+  "",
+  "## Constraints/Rules",
+  "None.",
+  "",
+  "## Pending user asks",
+  "None.",
+  "",
+  "## Exact identifiers",
+  "None captured.",
+].join("\n");
+
 describe("AgentSession compaction", () => {
+  // A provider throw never cancels on its own: it is caught and retried through the
+  // built-in summarizer. What the session ends up with is decided by that summary --
+  // "recovered" when it passes the quality audit, "degraded" when it is produced but
+  // fails the audit, and "cancelled" only when the caller aborts.
   it.each([
-    { name: "provider timeout", errorName: "TimeoutError", cancelCaller: false, recovers: false },
+    {
+      name: "provider timeout",
+      errorName: "TimeoutError",
+      cancelCaller: false,
+      outcome: "degraded",
+    },
     {
       name: "provider timeout recovery",
       errorName: "TimeoutError",
       cancelCaller: false,
-      recovers: true,
+      outcome: "recovered",
     },
-    { name: "ordinary provider failure", errorName: "Error", cancelCaller: false, recovers: false },
-    { name: "provider-side abort", errorName: "AbortError", cancelCaller: false, recovers: true },
-    { name: "caller cancellation", errorName: "AbortError", cancelCaller: true, recovers: false },
-  ])(
+    {
+      name: "ordinary provider failure",
+      errorName: "Error",
+      cancelCaller: false,
+      outcome: "degraded",
+    },
+    {
+      name: "provider-side abort",
+      errorName: "AbortError",
+      cancelCaller: false,
+      outcome: "recovered",
+    },
+    {
+      name: "caller cancellation",
+      errorName: "AbortError",
+      cancelCaller: true,
+      outcome: "cancelled",
+    },
+  ] as const)(
     "preserves the safeguard boundary after $name",
-    async ({ errorName, cancelCaller, recovers }) => {
+    async ({ errorName, cancelCaller, outcome }) => {
+      const recovers = outcome === "recovered";
       // A synthetic API plus the registered stream keep both real summarizers offline.
       const model = {
         ...testModel,
@@ -224,7 +264,11 @@ describe("AgentSession compaction", () => {
         const appended = sessionManager
           .getEntries()
           .filter((entry) => entry.type === "compaction")
-          .map(({ summary: text, fromHook }) => ({ summary: text, fromHook }));
+          .map(({ summary: text, fromHook, details }) => ({
+            summary: text,
+            fromHook,
+            qualityDegraded: (details as { qualityDegraded?: true } | undefined)?.qualityDegraded,
+          }));
 
         const observation = {
           providerCalls: summarize.mock.calls.length,
@@ -238,28 +282,43 @@ describe("AgentSession compaction", () => {
           streamMocks.streamSimple.mock.calls.length * 2,
         );
         subscription.unsubscribe();
+        const expectedCommit =
+          outcome === "recovered"
+            ? recoveredSummary
+            : outcome === "degraded"
+              ? DEGRADED_FALLBACK_SUMMARY
+              : undefined;
         expect.soft(observation).toMatchObject({
           providerCalls: 1,
           callerAbortedAtProviderEntry: false,
           callerAborted: cancelCaller,
-          result: recovers
-            ? { status: "resolved", summary: recoveredSummary }
+          result: expectedCommit
+            ? { status: "resolved", summary: expectedCommit }
             : { status: "rejected" },
-          outcomes: [recovers ? "completed" : "aborted"],
-          appended: recovers ? [{ summary: recoveredSummary, fromHook: true }] : [],
+          outcomes: [expectedCommit ? "completed" : "aborted"],
+          appended: expectedCommit
+            ? [
+                {
+                  summary: expectedCommit,
+                  fromHook: true,
+                  // The degraded commit records itself on the boundary it produced, so
+                  // "was this degraded?" never has to be read back out of summary prose.
+                  qualityDegraded: outcome === "degraded" ? true : undefined,
+                },
+              ]
+            : [],
         });
         // The guarded pipeline may chunk the history; do not pin its request count.
         if (!cancelCaller) {
           expect(streamMocks.streamSimple).toHaveBeenCalled();
         }
-        if (!recovers) {
+        // Only a cancelled compaction leaves history untouched. A degraded one commits a
+        // boundary on purpose: that is the whole point of degrading instead of cancelling.
+        if (outcome === "cancelled") {
           expect.soft(sessionManager.getEntries()).toEqual(entriesBefore);
           expect.soft(session.messages).toEqual(messagesBefore);
-        }
-        if (!cancelCaller && !recovers) {
-          expect(getCompactionSafeguardRuntime(sessionManager)?.cancellation?.reason).toContain(
-            "failed quality checks",
-          );
+        } else {
+          expect.soft(sessionManager.getEntries()).not.toEqual(entriesBefore);
         }
         expect(network.mock.calls.length).toBe(0);
       } finally {
