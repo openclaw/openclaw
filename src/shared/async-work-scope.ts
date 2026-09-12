@@ -32,7 +32,7 @@ export class AsyncWorkScope {
       throw new Error("Async work scope is closed");
     }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
-    const operation = createDeferredCore<void>();
+    const operation = createDeferredCore();
     this.pending.add(operation.promise);
     try {
       return currentWorkScope.run(this, run);
