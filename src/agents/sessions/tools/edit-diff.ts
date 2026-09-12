@@ -278,8 +278,7 @@ export function stripBom(content: string): { bom: string; text: string } {
     : { bom: "", text: content };
 }
 
-function countOccurrences(content: string, oldText: string): number {
-  const fuzzyContent = normalizeForFuzzyMatch(content);
+function countOccurrences(fuzzyContent: string, oldText: string): number {
   const fuzzyOldText = normalizeForFuzzyMatch(oldText);
   if (!fuzzyOldText) {
     return 0;
@@ -490,7 +489,7 @@ function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. Fuzzy matching is
+ * assembled from original spans so offsets remain stable. Fuzzy matching is
  * lookup-only: replacements always splice into the original content.
  */
 function applyEdits(normalizedContent: string, edits: Edit[], path: string): AppliedEdits {
@@ -516,9 +515,10 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   const matchedEdits: MatchedEdit[] = [];
   for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(normalizedContent, edit.oldText, fuzzyFile);
-    const occurrences = matchResult.usedFuzzyMatch
-      ? countOccurrences(normalizedContent, edit.oldText)
-      : countExactOccurrences(replacementBaseContent, edit.oldText);
+    const occurrences =
+      fuzzyFile && matchResult.usedFuzzyMatch
+        ? countOccurrences(fuzzyFile.text, edit.oldText)
+        : countExactOccurrences(replacementBaseContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }

@@ -33,9 +33,22 @@ function getLineSpans(content: string): LineSpan[] {
 function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
   const replacementStart = replacement.matchIndex;
   const replacementEnd = replacement.matchIndex + replacement.matchLength;
-  const startLine = lines.findIndex(
-    (line) => replacementStart >= line.start && replacementStart < line.end,
-  );
+  let lower = 0;
+  let upper = lines.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const line = lines[middle];
+    if (!line) {
+      throw new Error("Replacement range is outside the base content.");
+    }
+    if (line.end <= replacementStart) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
+    }
+  }
+  const firstLine = lines[lower];
+  const startLine = firstLine && replacementStart >= firstLine.start ? lower : -1;
   if (startLine === -1) {
     throw new Error("Replacement range is outside the base content.");
   }
@@ -59,15 +72,15 @@ export function applyReplacements(
   replacements: TextReplacement[],
   offset = 0,
 ): string {
-  let result = content;
-  for (const replacement of replacements.toReversed()) {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
     const matchIndex = replacement.matchIndex - offset;
-    result =
-      result.slice(0, matchIndex) +
-      replacement.newText +
-      result.slice(matchIndex + replacement.matchLength);
+    parts.push(content.slice(cursor, matchIndex), replacement.newText);
+    cursor = matchIndex + replacement.matchLength;
   }
-  return result;
+  parts.push(content.slice(cursor));
+  return parts.join("");
 }
 
 function groupReplacementsByLine(
