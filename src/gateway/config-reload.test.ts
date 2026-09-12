@@ -1658,51 +1658,25 @@ function createReloaderHarness(
     initialIncludedPaths?: readonly string[];
     initialSnapshotValid?: boolean;
     initialSnapshotIssues?: ConfigFileSnapshot["issues"];
-    prepareConfigCandidate?: (params: {
-      runtimeConfig: OpenClawConfig;
-      sourceConfig: OpenClawConfig;
-      previousSourceConfig: OpenClawConfig;
-    }) => Promise<{
-      runtimeConfig: OpenClawConfig;
-      compareConfig: OpenClawConfig;
-      runtimeEnv?: ReturnType<typeof prepareConfigRuntimeEnv>;
-    }>;
+    prepareConfigCandidate?: Parameters<
+      typeof startGatewayConfigReloader
+    >[0]["prepareConfigCandidate"];
     initialInternalWriteHash?: string | null;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
     runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;
     onConfigCandidateObserved?: () => void;
-    onConfigAccepted?: (
-      nextConfig: OpenClawConfig,
-      ownership: GatewayConfigReloadTransactionOwnership,
-      sourceConfig: OpenClawConfig,
-      acceptance: {
-        runtimeApplied: boolean;
-        publishSource?: () => Promise<() => Promise<void>>;
-      },
-    ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
-    onEffectiveConfigUnchanged?: (
-      nextConfig: OpenClawConfig,
-      ownership: GatewayConfigReloadTransactionOwnership,
-      sourceConfig: OpenClawConfig,
-    ) => Promise<{ rollback: () => Promise<void>; commit?: () => void }>;
+    onConfigAccepted?: Parameters<typeof startGatewayConfigReloader>[0]["onConfigAccepted"];
+    onEffectiveConfigUnchanged?: Parameters<
+      typeof startGatewayConfigReloader
+    >[0]["onEffectiveConfigUnchanged"];
     onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
     onConfigRevisionApplied?: (hash: string) => void;
     onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
-    onNoopConfigCommit?: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      ownership: GatewayConfigReloadTransactionOwnership,
-      sourceConfig: OpenClawConfig,
-    ) => Promise<void>;
+    onNoopConfigCommit?: Parameters<typeof startGatewayConfigReloader>[0]["onNoopConfigCommit"];
     onHotReload?: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"];
-    onRestart?: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      ownership: GatewayConfigReloadTransactionOwnership,
-      sourceConfig: OpenClawConfig,
-    ) => void | Promise<void>;
+    onRestart?: Parameters<typeof startGatewayConfigReloader>[0]["onRestart"];
   } = {},
 ) {
   const watcher = createWatcherMock();
@@ -5885,79 +5859,93 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("rolls back masked source publication when superseded after acceptance", async () => {
-    const initialConfig = {
-      gateway: { reload: {} },
-      logging: { level: "info" as const },
-    } satisfies OpenClawConfig;
-    const sourceConfig = {
-      ...initialConfig,
-      logging: { level: "debug" as const },
-    } satisfies OpenClawConfig;
-    const publicationEvents: string[] = [];
-    let publicationId = 0;
-    const rollbackSource = vi.fn(async () => {});
-    let emitSupersedingChange = () => {};
-    const harness = createReloaderHarness(
-      vi
-        .fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-write" }))
-        .mockResolvedValueOnce(
-          makeSnapshot({ config: sourceConfig, sourceConfig, hash: "masked-source-superseded" }),
-        ),
-      {
+  it.each(["supersession", "acceptance failure", "rollback failure"])(
+    "settles masked source publication after %s",
+    async (failure) => {
+      const initialConfig = {
+        gateway: { reload: {} },
+        logging: { level: "info" as const },
+      } satisfies OpenClawConfig;
+      const sourceConfig = {
+        ...initialConfig,
+        logging: { level: "debug" as const },
+      } satisfies OpenClawConfig;
+      const publicationEvents: string[] = [];
+      let publicationId = 0;
+      const rollbackSource = vi.fn(async () => {
+        if (failure === "rollback failure") {
+          throw new Error(failure);
+        }
+      });
+      let rejectAcceptance = failure === "acceptance failure";
+      let emitSupersedingChange = () => {};
+      const harness = createReloaderHarness(
+        vi
+          .fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-write" }))
+          .mockResolvedValueOnce(
+            makeSnapshot({ config: sourceConfig, sourceConfig, hash: "masked-source-superseded" }),
+          ),
+        {
+          initialConfig,
+          onConfigAccepted: async (_nextConfig, _ownership, _sourceConfig, acceptance) => {
+            await acceptance.publishSource?.();
+            queueMicrotask(emitSupersedingChange);
+            if (rejectAcceptance) {
+              rejectAcceptance = false;
+              throw new Error(failure);
+            }
+          },
+          onEffectiveConfigUnchanged: async () => {
+            const id = publicationId++;
+            return {
+              rollback: async () => {
+                publicationEvents.push(`rollback:${id}`);
+                await rollbackSource();
+              },
+              commit: () => {
+                publicationEvents.push(`commit:${id}`);
+              },
+            };
+          },
+        },
+      );
+      await harness.reloader.ready;
+      emitSupersedingChange = () => {
+        emitSupersedingChange = () => {};
+        harness.watcher.emit("change");
+      };
+
+      harness.emitWrite({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig,
+        runtimeConfig: sourceConfig,
+        preparedCandidate: {
+          runtimeConfig: initialConfig,
+          compareConfig: initialConfig,
+          reapplyRuntimeOverlays: () => initialConfig,
+        },
+        persistedHash: "masked-source-superseded",
+        revision: 1,
+        fingerprint: "runtime-masked-source-superseded",
+        sourceFingerprint: "source-masked-source-superseded",
+        writtenAtMs: Date.now(),
+      });
+      await vi.runAllTimersAsync();
+
+      expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledTimes(2);
+      expect(harness.onEffectiveConfigUnchanged.mock.calls.map((call) => call[2])).toEqual([
+        sourceConfig,
         initialConfig,
-        onConfigAccepted: async (_nextConfig, _ownership, _sourceConfig, acceptance) => {
-          const rollback = await acceptance.publishSource?.();
-          queueMicrotask(emitSupersedingChange);
-          return rollback;
-        },
-        onEffectiveConfigUnchanged: async () => {
-          const id = publicationId++;
-          return {
-            rollback: async () => {
-              publicationEvents.push(`rollback:${id}`);
-              await rollbackSource();
-            },
-            commit: () => {
-              publicationEvents.push(`commit:${id}`);
-            },
-          };
-        },
-      },
-    );
-    await harness.reloader.ready;
-    emitSupersedingChange = () => {
-      emitSupersedingChange = () => {};
-      harness.watcher.emit("change");
-    };
+      ]);
+      expect(rollbackSource).toHaveBeenCalledOnce();
+      expect(publicationEvents).toEqual(["rollback:0", "commit:1"]);
+      if (failure !== "supersession") {
+        expect(harness.log.error).toHaveBeenCalledWith(`config reload failed: Error: ${failure}`);
+      }
 
-    harness.emitWrite({
-      configPath: "/tmp/openclaw.json",
-      sourceConfig,
-      runtimeConfig: sourceConfig,
-      preparedCandidate: {
-        runtimeConfig: initialConfig,
-        compareConfig: initialConfig,
-        reapplyRuntimeOverlays: () => initialConfig,
-      },
-      persistedHash: "masked-source-superseded",
-      revision: 1,
-      fingerprint: "runtime-masked-source-superseded",
-      sourceFingerprint: "source-masked-source-superseded",
-      writtenAtMs: Date.now(),
-    });
-    await vi.runAllTimersAsync();
-
-    expect(harness.onEffectiveConfigUnchanged).toHaveBeenCalledTimes(2);
-    expect(harness.onEffectiveConfigUnchanged.mock.calls.map((call) => call[2])).toEqual([
-      sourceConfig,
-      initialConfig,
-    ]);
-    expect(rollbackSource).toHaveBeenCalledOnce();
-    expect(publicationEvents).toEqual(["rollback:0", "commit:1"]);
-
-    await harness.reloader.stop();
-  });
+      await harness.reloader.stop();
+    },
+  );
 
   it("retains the accepted candidate overlay when a watcher echoes the same hash", async () => {
     const sourceConfig = makeZeroDebounceHookWrite("overlay-echo").sourceConfig;

@@ -215,12 +215,13 @@ nodes and operator connections stay open. Legacy nodes reconnect when hosted sur
 descriptors change so their protocol limits are recalculated. Pending node handshakes
 also recheck those capabilities before admission.
 
-Plugin hot reload uses the package metadata discovered at Gateway startup.
+Automatic config hot reload reuses the current plugin inventory.
 Enablement, plugin config, and account changes do not rescan plugin files.
-Install, update, uninstall, and explicit plugin metadata refresh require a
-Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
-Changing an agent's workspace also does not discover plugins in the new
-directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+Supported install, update, uninstall, reload, and metadata refresh actions prepare
+and publish a new plugin inventory through the running Gateway, including when
+`gateway.reload.mode` is `off`.
+Changing an agent's workspace alone does not refresh discovery; use an explicit
+metadata refresh or restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
 
 During channel or plugin hot reload, Gateway-hosted channel webhook routes return
 `503` with `Retry-After: 1` until replacement ingress registers. Senders must honor

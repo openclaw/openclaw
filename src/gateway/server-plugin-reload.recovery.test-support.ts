@@ -34,7 +34,6 @@ import { createChannelManager } from "./server-channels.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 export async function createPluginReloadRecoveryFixture(
   {
@@ -172,13 +171,7 @@ export async function createPluginReloadRecoveryFixture(
       retireGatewayRuntimeBindings: vi.fn(),
     };
   };
-  let gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
-  const lifetime = createGatewaySidecarStopOwner({
-    getRegistered: () => gatewayLifetimeSidecars,
-    setRegistered: (next) => {
-      gatewayLifetimeSidecars = next;
-    },
-  });
+  const lifetime = createGatewaySidecarStopOwner();
   const metadata = retainGatewayPluginMetadata();
   const snapshot =
     options.pluginMetadataSnapshot ??
@@ -190,13 +183,8 @@ export async function createPluginReloadRecoveryFixture(
     kernel: { pluginRuntimeGeneration: owner, pluginMetadata: metadata },
     runtimeState: {
       cronState: {},
-      get gatewayLifetimeSidecars() {
-        return gatewayLifetimeSidecars;
-      },
-      set gatewayLifetimeSidecars(next: GatewayPostReadySidecarHandle[]) {
-        gatewayLifetimeSidecars = next;
-      },
-      postReadySidecars: [],
+      gatewayLifetimeSidecars: lifetime,
+      postReadySidecars: createGatewaySidecarStopOwner(),
     },
     registerGatewayLifetimeSidecars: lifetime.publish,
     ambientEnvTriggers: "suppress",

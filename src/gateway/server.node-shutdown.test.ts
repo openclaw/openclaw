@@ -115,7 +115,7 @@ test.for(["direct", "restart"] as const)(
             }
             return result;
           });
-          kernel.registerGatewayLifetimeSidecars([{ stop: stopDependencies }]);
+          kernel.registerGatewayLifetimeSidecars({ stop: stopDependencies });
           node = await connectGatewayClient({
             url: `ws://127.0.0.1:${port}`,
             token: "secret",

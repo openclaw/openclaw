@@ -114,7 +114,7 @@ export async function verifyManagedCandidateRetirement(
     expect(order.filter((entry) => entry.endsWith(":2"))).toEqual([]);
     expect(process.listenerCount(event)).toBe(before);
     expect(queuedStart).not.toHaveBeenCalled();
-    expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars).toEqual([]);
+    expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
     if (action === "shutdown") {
       shuttingDown = fixture.lifetime.sealAndJoin();
     } else {
@@ -469,7 +469,7 @@ export async function verifyCandidateCleanupRecovery(
   expect(fixture.siblingStop).toHaveBeenCalledOnce();
   expect(fixture.candidateStop).toHaveBeenCalledTimes(2);
   await expect(fixture.lifetime.stop()).resolves.toBeUndefined();
-  expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars).toEqual([]);
+  expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
 }
 
 export async function verifyCommittedRetirementOwnership(

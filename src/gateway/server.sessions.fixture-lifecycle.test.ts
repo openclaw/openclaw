@@ -480,11 +480,11 @@ test("observes retained Gateway owners through fixture teardown", async () => {
   });
   let stopCalls = 0;
   // This independent producer belongs to the generic owner, not the connection scope.
-  kernel.registerGatewayLifetimeSidecars([{ stop: async () => {
+  kernel.registerGatewayLifetimeSidecars({ stop: async () => {
     stopCalls++;
     releaseProducer.resolve();
     await producer;
-  } }]);
+  } });
   let connectionCleanupFinished = false;
   const trackCleanup = kernel.connectionWork.trackCleanup.bind(kernel.connectionWork);
   vi.spyOn(kernel.connectionWork, "trackCleanup").mockImplementationOnce(run =>

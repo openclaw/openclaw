@@ -46,7 +46,7 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { resolveGatewayModelSupportsImages } from "./session-utils-model.js";
 
 const mocks = getPreparedModelRuntimeMocks();
@@ -72,7 +72,7 @@ const context = {
   getRuntimeConfig: () => config,
   logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as GatewayRequestContext;
-let sidecars: GatewayPostReadySidecarHandle[] = [];
+let sidecars = createGatewaySidecarStopOwner();
 
 beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
@@ -91,7 +91,7 @@ beforeEach(async () => {
     entries: [model],
     routeVariants: [model],
   });
-  sidecars = [];
+  sidecars = createGatewaySidecarStopOwner();
 });
 
 function configureAuthFixture(
@@ -151,9 +151,7 @@ function configureHarnessOwnedUnresolvedAuth() {
 }
 
 afterEach(async ({ task }) => {
-  for (const sidecar of sidecars) {
-    await sidecar.stop();
-  }
+  await sidecars.stop();
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
   vi.unstubAllEnvs();
 });
@@ -452,7 +450,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       try {
         await publishOwner(nativeConfig);
         const lifecycle = await createLifecycle(() => currentConfig);
-        await lifecycle.attachContext(nativeContext, sidecars);
+        await lifecycle.attachContext(nativeContext, sidecars.publish);
         const expectedModels = (available: boolean) =>
           wildcard && !available
             ? []
@@ -730,7 +728,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       configureAuthFixture(kind, rejected);
       await publishOwner();
       const lifecycle = await createLifecycle();
-      await lifecycle.attachContext(context, sidecars);
+      await lifecycle.attachContext(context, sidecars.publish);
 
       await expectAvailable(lifecycle, available);
     },
@@ -740,7 +738,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     await publishOwner();
     const lifecycle = await createLifecycle();
 
-    await lifecycle.attachContext(context, sidecars);
+    await lifecycle.attachContext(context, sidecars.publish);
 
     await expectAvailable(lifecycle);
   });
@@ -777,7 +775,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
     } as GatewayRequestContext;
 
-    await lifecycle.attachContext(currentContext, sidecars);
+    await lifecycle.attachContext(currentContext, sidecars.publish);
 
     await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
       models: [
@@ -794,7 +792,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     configureHarnessOwnedUnresolvedAuth();
     await publishOwner();
     const lifecycle = await createLifecycle();
-    await lifecycle.attachContext(context, sidecars);
+    await lifecycle.attachContext(context, sidecars.publish);
     await expectAvailable(lifecycle, false);
     const profileStore = mocks.preparedAuthStore;
     if (!profileStore) {
@@ -857,7 +855,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     configureAuthFixture("unresolved-secret-ref");
     await publishOwner(orderedConfig);
     const lifecycle = await createLifecycle(() => orderedConfig);
-    await lifecycle.attachContext(orderedContext, sidecars);
+    await lifecycle.attachContext(orderedContext, sidecars.publish);
     await expectAvailable(lifecycle, false, orderedConfig, orderedContext);
     const profileStore = mocks.preparedAuthStore;
     if (!profileStore) {
@@ -917,7 +915,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     mocks.configuredAgentIds = ["main", "worker"];
     await publishOwner();
     const lifecycle = await createLifecycle();
-    const ownedSidecars: GatewayPostReadySidecarHandle[] = [];
+    const ownedSidecars = createGatewaySidecarStopOwner();
     const failure = new Error("worker auth publication failed");
     const phases: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
@@ -927,7 +925,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     let healthyDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     let metadataRead: Promise<void> | undefined;
     try {
-      await lifecycle.attachContext(context, ownedSidecars);
+      await lifecycle.attachContext(context, ownedSidecars.publish);
       await expectAvailable(lifecycle);
       mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(failure);
       expect(mocks.mutationListener).toBeTypeOf("function");
@@ -975,16 +973,14 @@ describe("gateway chat metadata lifecycle composition", () => {
       await expectAvailable(lifecycle);
     } finally {
       unregister();
-      for (const sidecar of ownedSidecars) {
-        await sidecar.stop();
-      }
+      await ownedSidecars.stop();
       await Promise.allSettled([failedDispatch, healthyDispatch, metadataRead]);
     }
   });
 
   it("recovers a failed catch-up when the prepared owner publishes after attachment", async () => {
     const lifecycle = await createLifecycle();
-    await lifecycle.attachContext(context, sidecars);
+    await lifecycle.attachContext(context, sidecars.publish);
     await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow(
       'prepared chat metadata owner is unavailable for agent "main"',
     );
