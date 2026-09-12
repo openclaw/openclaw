@@ -11,7 +11,11 @@ import {
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -271,8 +275,12 @@ function configureCandidateKey(candidate: {
   configFile: "openclaw.json" | "auth-profile-store";
   path: string;
   agentId?: string;
+  authProfileStore?: string;
 }): string {
   if (candidate.configFile === "auth-profile-store") {
+    if (candidate.authProfileStore === "shared") {
+      return `auth-profiles:shared:${candidate.path}`;
+    }
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
   return `openclaw:${candidate.path}`;
@@ -333,11 +341,39 @@ function loadAuthProfileStoreForConfigure(params: {
 }
 
 /**
+ * Loads the canonical shared auth-profile store for configure candidate
+ * discovery. Shared candidates are only surfaced under `state-db` ownership,
+ * where the shared database is distinct from every agent database; under
+ * `legacy-main` ownership the shared row lives in the main agent database and
+ * the agent scope already covers it. Returns undefined when there is nothing
+ * to offer so legacy flows keep their exact candidate list.
+ */
+function loadSharedAuthProfileStoreForConfigure(
+  env: NodeJS.ProcessEnv,
+  agentId: string,
+): { agentId: string; store: AuthProfileStore } | undefined {
+  let ownership: { location: string };
+  try {
+    ownership = resolveSharedAuthStoreOwnership(env);
+  } catch {
+    return undefined;
+  }
+  if (ownership.location !== "state-db") {
+    return undefined;
+  }
+  const store = loadPersistedSharedAuthProfileStore(env);
+  if (!store || Object.keys(store.profiles).length === 0) {
+    return undefined;
+  }
+  return { agentId, store };
+}
+
+/**
  * Counts plaintext (non-SecretRef) credentials in the canonical shared
- * auth-profile store. `secrets configure` only edits the selected agent's
- * local store; shared profiles are not writable here. Surfacing the count
- * lets an operator know a shared plaintext migration is pending so they do
- * not mistake "no shared candidate" for "shared store is clean".
+ * auth-profile store. Shared profiles migrate through shared-store candidates
+ * that carry the explicit shared owner. Surfacing the count lets an operator
+ * know a shared plaintext migration is pending so they do not mistake
+ * "no shared candidate" for "shared store is clean".
  *
  * Classification mirrors `secrets audit` (audit.ts): the raw shared row is
  * read without normalization so a stored `key` survives even when a sibling
@@ -874,6 +910,7 @@ export async function runSecretsConfigureInteractive(
       config: snapshot.config,
       agentId: configureAgentId,
     });
+    const sharedAuthProfiles = loadSharedAuthProfileStoreForConfigure(env, configureAgentId);
     const candidates = buildConfigureCandidatesForScope({
       config: stagedConfig,
       authoredOpenClawConfig: snapshot.resolved,
@@ -881,18 +918,18 @@ export async function runSecretsConfigureInteractive(
         agentId: configureAgentId,
         store: authStore,
       },
+      ...(sharedAuthProfiles ? { sharedAuthProfiles } : {}),
     });
-    // `secrets configure` only edits the selected agent's local auth-profile
-    // store. Shared-store credentials are not writable here (routing a shared
-    // SecretRef through this plan would write to the per-agent database).
+    // Shared-store credentials migrate through candidates that carry the
+    // explicit shared owner; only agent-local mappings stay agent-scoped.
     // Warn when the canonical shared store still carries plaintext so the
     // operator knows a shared migration is pending rather than already clean.
     const sharedPlaintextCount = countSharedAuthProfilePlaintext(env);
     if (sharedPlaintextCount > 0) {
       log.warn(
         `Shared auth-profile store has ${sharedPlaintextCount} plaintext credential(s). ` +
-          "`secrets configure` edits the selected agent's local store only and cannot migrate shared credentials. " +
-          "Run `openclaw secrets audit` to review them; a shared-store SecretRef migration path is tracked separately.",
+          "Select a shared-store candidate below to migrate it with an explicit shared owner. " +
+          "Run `openclaw secrets audit` to review them.",
         { output: process.stderr },
       );
     }

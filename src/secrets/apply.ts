@@ -408,11 +408,12 @@ function applyConfigTargetMutations(params: {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
         params.changedFiles.add(
-          resolveAuthStoreTargetForAgent({
+          resolveAuthStoreTarget({
             nextConfig: params.nextConfig,
             stateDir: params.stateDir,
             env: params.env,
             agentId,
+            authProfileStore: target.authProfileStore,
           }).path,
         );
       }
@@ -562,32 +563,49 @@ function resolveAuthStoreForTarget(params: {
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
-  const authStoreTarget = resolveAuthStoreTargetForAgent({
+  const authStoreTarget = resolveAuthStoreTarget({
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
     env: params.env,
     agentId,
+    authProfileStore: params.target.authProfileStore,
   });
   const authStorePath = authStoreTarget.path;
   const existing = params.authStoreByPath.get(authStorePath);
-  const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
+  const loaded =
+    existing ??
+    (authStoreTarget.kind === "shared"
+      ? loadPersistedSharedAuthProfileStore(authStoreTarget.env)
+      : loadPersistedAuthProfileStore(authStoreTarget.agentDir));
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
   params.authStoreByPath.set(authStorePath, store);
   params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
   return { path: authStorePath, store };
 }
 
-function resolveAuthStoreTargetForAgent(params: {
+function resolveAuthStoreTarget(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
   agentId: string;
-}): Extract<AuthProfileStoreTarget, { kind: "agent" }> {
+  authProfileStore?: string;
+}): AuthProfileStoreTarget {
   const scopedEnv = {
     ...params.env,
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_AGENT_DIR: undefined,
   };
+  // Explicit shared ownership routes to the canonical shared state database so
+  // apply and audit agree on which store owns the profile. Omitted (and "agent")
+  // preserve legacy agent-database behavior, including v1 local profile creation.
+  if (params.authProfileStore === "shared") {
+    return {
+      kind: "shared",
+      path: resolveSharedAuthStorePath(scopedEnv),
+      env: scopedEnv,
+      stateDir: params.stateDir,
+    };
+  }
   const agentDir = resolveAgentDir(params.nextConfig, params.agentId, scopedEnv);
   return { kind: "agent", agentDir, path: resolveAuthProfileDatabasePath(agentDir) };
 }

@@ -102,6 +102,66 @@ describe("secrets configure plan helpers", () => {
     expect(openaiCandidate?.authProfileProvider).toBe("openai");
   });
 
+  it("marks shared-scope candidates with the shared owner and threads it into plans", () => {
+    const candidates = buildConfigureCandidatesForScope({
+      config: {} as OpenClawConfig,
+      authProfiles: {
+        agentId: "main",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk",
+            },
+          },
+        },
+      },
+      sharedAuthProfiles: {
+        agentId: "main",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:shared": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk",
+            },
+          },
+        },
+      },
+    });
+    const agentCandidate = candidates.find((entry) => entry.path === "profiles.openai:default.key");
+    const sharedCandidate = candidates.find((entry) => entry.path === "profiles.openai:shared.key");
+    expect(agentCandidate?.authProfileStore).toBeUndefined();
+    expect(sharedCandidate?.authProfileStore).toBe("shared");
+    expect(sharedCandidate?.agentId).toBe("main");
+    expect(sharedCandidate?.label).toContain("shared store");
+    if (!sharedCandidate) {
+      throw new Error("Expected a shared auth-profile candidate.");
+    }
+
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: new Map([
+        [
+          "shared",
+          {
+            ...sharedCandidate,
+            ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        ],
+      ]),
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]).toMatchObject({
+      path: "profiles.openai:shared.key",
+      agentId: "main",
+      authProfileStore: "shared",
+    });
+  });
+
   it("captures existing refs for prefilled configure prompts", () => {
     const candidates = buildConfigureCandidatesForScope({
       config: {
