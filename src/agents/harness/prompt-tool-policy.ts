@@ -45,6 +45,9 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
+          // Native core tools live beside entries; snapshot them so later
+          // toolsAllow narrowing can restore or gate the same instances.
+          directCoreEntries: [...(currentCatalog.directCoreEntries ?? [])],
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -72,10 +75,17 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       const allowedEntries = filterTools(catalog.entries, toolsAllow, (entry) =>
         isAgentTool(entry.tool) ? getPluginToolMeta(entry.tool) : undefined,
       );
+      const allowedDirectCore = filterTools(catalog.directCoreEntries, toolsAllow, (entry) =>
+        isAgentTool(entry.tool) ? getPluginToolMeta(entry.tool) : undefined,
+      );
       const catalogCount = restrictToolSearchCatalog({
         catalogRef: catalog.ref,
-        allowedToolNames: new Set(allowedEntries.map((entry) => entry.name)),
+        allowedToolNames: new Set([
+          ...allowedEntries.map((entry) => entry.name),
+          ...allowedDirectCore.map((entry) => entry.name),
+        ]),
         baselineEntries: catalog.entries,
+        baselineDirectCoreEntries: catalog.directCoreEntries,
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
       const tools = baselineTools.filter((tool) => {
