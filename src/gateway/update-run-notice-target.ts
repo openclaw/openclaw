@@ -23,10 +23,25 @@ type NoticeTarget =
   | { kind: "internal"; session: NoticeSession & { entry: SessionEntry } }
   | { kind: "none"; reason: string };
 
+function isChannelUpdateNoticeSendDisabled(cfg: OpenClawConfig, channel: string): boolean {
+  // SAFETY: channel config blocks are provider-discriminated; this read only
+  // inspects the optional per-channel actions.sendMessage flag.
+  const channels = cfg.channels as
+    | Record<string, { actions?: { sendMessage?: boolean } } | undefined>
+    | undefined;
+  return channels?.[channel]?.actions?.sendMessage === false;
+}
+
 export function authorizeUpdateRunNoticeTarget(
   cfg: OpenClawConfig,
   target: NoticeTarget,
 ): NoticeTarget {
+  if (target.kind === "route" && isChannelUpdateNoticeSendDisabled(cfg, target.route.channel)) {
+    return {
+      kind: "none",
+      reason: `channel ${target.route.channel} has actions.sendMessage disabled; update lifecycle notices are outbound sends`,
+    };
+  }
   return target.kind === "route" &&
     !isConfiguredCommandOwner(cfg, { ...target.route, senderId: target.route.to })
     ? { kind: "none", reason: "target is not a configured command owner" }

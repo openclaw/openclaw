@@ -135,6 +135,40 @@ describe("update.run acknowledgement", () => {
       verification: { noticeDelivered: false },
     });
   });
+  it("keeps update notices off channels with actions.sendMessage disabled", async () => {
+    // The lifecycle-notice path is an outbound send: a channel configured with
+    // actions.sendMessage=false must not receive update notices even when the
+    // selected chat is a configured command owner.
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.extractDeliveryInfo).mockImplementationOnce(() => ({
+      deliveryContext: { channel: "telegram", to: "12345" },
+      threadId: undefined,
+    }));
+    resolveGatewayLifecycleNoticeRouteMock.mockImplementationOnce(
+      ({ deliveryContext, threadId }) =>
+        deliveryContext?.channel === "telegram" && deliveryContext.to
+          ? {
+              ...deliveryContext,
+              channel: "telegram",
+              to: deliveryContext.to,
+              threadId,
+            }
+          : undefined,
+    );
+    const response = await captureUpdateRunPayload(
+      { sessionKey: "agent:main:telegram:dm:12345" },
+      {
+        update: {},
+        commands: { ownerAllowFrom: ["telegram:12345"] },
+        channels: { telegram: { actions: { sendMessage: false } } },
+      },
+    );
+    expect(response).toMatchObject({ ok: true, ackDelivered: false, ackQueued: false });
+    expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
+    expect(getUpdateRun(expectDefined(response, "update response").runId)).toMatchObject({
+      verification: { noticeDelivered: false },
+    });
+  });
 
   it.each([false, true])(
     "awaits the chat acknowledgement before updating (managed=%s)",
