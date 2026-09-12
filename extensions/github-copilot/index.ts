@@ -489,6 +489,28 @@ export default definePluginEntry({
           ? clearGithubCopilotDomainConfigPatch()
           : undefined;
 
+      const suppliedToken =
+        ctx.opts?.tokenProvider === PROVIDER_ID
+          ? normalizeOptionalSecretInput(ctx.opts.token)
+          : undefined;
+      if (suppliedToken) {
+        return {
+          profiles: [
+            {
+              profileId: DEFAULT_COPILOT_PROFILE_ID,
+              credential: { type: "token", provider: PROVIDER_ID, token: suppliedToken },
+              ...(ctx.secretInputMode === "plaintext"
+                ? {}
+                : {
+                    secretStorage: { kind: "store", namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX },
+                  }),
+            },
+          ],
+          defaultModel: DEFAULT_COPILOT_MODEL,
+          ...(configPatch ? { configPatch } : {}),
+        };
+      }
+
       const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
       // Only offer to reuse the stored token when it was minted for the same
       // domain. A domain switch (either direction) must re-run the device flow so
@@ -544,7 +566,7 @@ export default definePluginEntry({
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
-                `URL: ${verificationUrl}`,
+                `URL: <${verificationUrl}>`,
                 `Code: ${userCode}`,
                 `Code expires in ${expiresInMinutes} minutes. Never share it.`,
                 "",

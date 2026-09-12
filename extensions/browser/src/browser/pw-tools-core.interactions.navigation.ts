@@ -82,7 +82,7 @@ export function toFriendlyInteractionError(err: unknown, label: string): Error {
 
 export function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSignal): void {
   if (isBrowserObservedDialogBlockedError(signal?.reason)) {
-    markObservedDialogsHandledRemotelyForPage(page);
+    markObservedDialogsHandledRemotelyForPage(page, signal.reason.browserState.dialogs.pending);
   }
 }
 

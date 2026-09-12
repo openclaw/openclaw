@@ -90,14 +90,89 @@ describe("Crabbox warm-profile Doctor migration", () => {
       const result = await migration.migrateLegacyState(input());
       expect(result.warnings).toEqual([]);
       resetPluginStateStoreForTests();
-      const { operation, ...metadata } = record;
+      const { operation, lastUsedAtMs: _lastUsedAtMs, ...metadata } = record;
       expect(openCrabboxWarmImageStore(env).lookup("profile")).toEqual({
-        version: 2,
-        image: metadata,
+        version: 3,
+        image: {
+          ...metadata,
+          lastDemandAtMs: null,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+        },
         allocations: {},
         ...(operation ? { operation } : {}),
       });
       expect(await migration.detectLegacyState(input())).toBeNull();
+      expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
+    },
+  );
+
+  it.each(["capture", "retire"] as const)(
+    "migrates v2 with %s custody without changing allocation or runtime identities",
+    async (operationType) => {
+      const runtimeIdentity = {
+        nodeBootstrapSha256: "a".repeat(64),
+        workerBundleSha256: "b".repeat(64),
+        executionMode: "worker-turn",
+      };
+      const allocation = {
+        choice: { kind: "checkpoint", checkpointId: image.checkpointId },
+        machineClass: "standard",
+        os: "linux",
+        phase: "prepared",
+        baseCommit: "c".repeat(40),
+        runtimeIdentity,
+      };
+      const operation =
+        operationType === "capture"
+          ? {
+              type: "capture",
+              id: "capture-v2",
+              leaseId: "cbx_v2",
+              provider: "aws",
+              startedAtMs: 30,
+              phase: "uncertain",
+            }
+          : { type: "retire", checkpointId: "chk_old" };
+      const record = {
+        version: 2,
+        projectKey: "project-v2",
+        image: { ...image, runtimeIdentity },
+        allocations: { cbx_v2: allocation },
+        operation,
+      };
+      await legacyImages().register("profile", record);
+
+      expect((await migration.migrateLegacyState(input())).warnings).toEqual([]);
+      resetPluginStateStoreForTests();
+      const migrated = openCrabboxWarmImageStore(env).lookup("profile");
+      expect(migrated).toEqual({
+        version: 3,
+        projectKey: "project-v2",
+        image: {
+          checkpointId: image.checkpointId,
+          kind: image.kind,
+          state: image.state,
+          createdAtMs: image.createdAtMs,
+          runtimeIdentity,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: null,
+        },
+        allocations: {
+          cbx_v2: {
+            ...allocation,
+            preparationKey: null,
+            cacheKey: null,
+            purpose: null,
+            demandAtMs: null,
+            imageGeneration: null,
+          },
+        },
+        operation,
+      });
       expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
     },
   );
@@ -111,7 +186,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
     resetPluginStateStoreForTests();
 
     expect(openCrabboxWarmImageStore(env).lookup("reserved")).toEqual({
-      version: 2,
+      version: 3,
       allocations: {},
       operation: {
         type: "capture",
@@ -145,7 +220,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
     const rows = [
       { ...image, operation: { type: "capture", checkpointId: "unknown-paid-artifact" } },
       { ...image, unrecognizedCleanupObligation: "preserve" },
-      { version: 3, allocations: {} },
+      { version: 4, allocations: {} },
     ];
     const store = legacyImages();
     for (const [index, row] of rows.entries()) {

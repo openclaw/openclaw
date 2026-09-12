@@ -419,7 +419,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
   ]);
 }
 
-export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }
@@ -817,6 +817,10 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
+    fragments: contexts.flatMap(
+      ({ context }) =>
+        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
+    ),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };

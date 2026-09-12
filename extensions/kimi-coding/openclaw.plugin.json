@@ -1,10 +1,11 @@
 {
   "id": "kimi",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["kimi", "kimi-coding"],
+  "providers": ["kimi", "kimi-code", "kimi-coding"],
   "providerRequest": {
     "providers": {
       "kimi": {

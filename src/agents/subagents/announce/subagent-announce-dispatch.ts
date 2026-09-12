@@ -9,11 +9,6 @@ type SubagentAnnounceDeliveryDisposition =
   | "delivered"
   | "session_queued"
   | "intentional_non_delivery"
-  // Non-terminal, and NOT an attempt: no announce turn was started, so no
-  // retry rung was consumed and nothing failed. The row parks until its
-  // requester's lane frees. Distinct from "retryable", which means a transport
-  // attempt did happen and did not land.
-  | "deferred_requester_busy"
   | "retryable"
   | "ambiguous"
   | "permanent_failure";
@@ -25,7 +20,6 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
-  | "requester_lane_busy"
   | "source_owner_changed"
   | "steer_dropped"
   | "visible_reply_missing";
@@ -42,6 +36,8 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   /** Direct delivery that already committed the requester's visible final. */
   requesterVisibleFinalDelivered?: true;
+  /** Bounded visible final returned by the direct requester synthesis turn. */
+  finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   // Stops fallback delivery when ownership changed or another terminal result

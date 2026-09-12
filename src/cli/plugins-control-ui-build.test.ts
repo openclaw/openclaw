@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginImportFixture,
   unresolvedPluginImportCases,
@@ -84,15 +85,82 @@ describe("native plugin browser builds", () => {
     expect(await buildPluginControlUi(project)).toEqual(first);
     assert.ok(first.styles?.[0]);
     const stylesheet = path.join(project.rootDir, first.styles[0]);
-    await fs.writeFile(stylesheet, ".tampered {}");
+    const script = path.join(project.rootDir, first.entry);
+    const generation = path.dirname(script);
+    const originalStyles = await fs.readFile(stylesheet, "utf8");
+    if (process.platform !== "win32") {
+      await fs.chmod(generation, 0o700);
+      await fs.chmod(stylesheet, 0o600);
+      await fs.chmod(script, 0o600);
+    }
+    // CSS sorts before JavaScript; reject the later mismatch before normalizing either file.
+    await fs.writeFile(script, "export const tampered = true;");
     await expect(buildPluginControlUi(project)).rejects.toThrow(
       "immutable Control UI build was modified",
     );
-    expect(await fs.readFile(stylesheet, "utf8")).toBe(".tampered {}");
+    expect(await fs.readFile(script, "utf8")).toBe("export const tampered = true;");
+    expect(await fs.readFile(stylesheet, "utf8")).toBe(originalStyles);
+    if (process.platform !== "win32") {
+      expect(
+        await Promise.all(
+          [generation, stylesheet, script].map(
+            async (target) => (await fs.stat(target)).mode & 0o777,
+          ),
+        ),
+      ).toEqual([0o700, 0o600, 0o600]);
+    }
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
   });
+
+  // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
+  // are asserted where the Gateway can actually run as a different UID.
+  it.skipIf(process.platform === "win32")(
+    "normalizes fresh and validated browser generation permissions",
+    async () => {
+      const project = await fixture();
+      // A restrictive umask on the build host leaves the parent owner-only as well.
+      const generations = path.join(project.rootDir, "dist/control-ui");
+      await fs.mkdir(generations, { recursive: true, mode: 0o700 });
+      const first = await buildPluginControlUi(project);
+      const generation = path.join(project.rootDir, path.dirname(first.entry));
+      const modeOf = async (target: string) => ((await fs.stat(target)).mode & 0o777).toString(8);
+      expect(await modeOf(generations)).toBe("755");
+      expect(await modeOf(generation)).toBe("755");
+      assert.ok(first.styles?.[0]);
+      const script = path.join(project.rootDir, first.entry);
+      const stylesheet = path.join(project.rootDir, first.styles[0]);
+      expect(await modeOf(script)).toBe("644");
+      expect(await modeOf(stylesheet)).toBe("644");
+      const originalAssets = await Promise.all(
+        [script, stylesheet].map((file) => fs.readFile(file)),
+      );
+
+      // A generation published by an earlier build stays reusable and is normalized in place.
+      await fs.chmod(generations, 0o700);
+      await fs.chmod(generation, 0o700);
+      await fs.chmod(script, 0o600);
+      await fs.chmod(stylesheet, 0o600);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(first);
+      expect(await Promise.all([generations, generation, script, stylesheet].map(modeOf))).toEqual([
+        "700",
+        "700",
+        "600",
+        "600",
+      ]);
+      expect(await buildPluginControlUi(project)).toEqual(first);
+      expect(await modeOf(generations)).toBe("755");
+      expect(await modeOf(generation)).toBe("755");
+      expect(await modeOf(script)).toBe("644");
+      expect(await modeOf(stylesheet)).toBe("644");
+      expect(await Promise.all([script, stylesheet].map((file) => fs.readFile(file)))).toEqual(
+        originalAssets,
+      );
+      expect(await modeOf(project.rootDir)).toBe("700");
+      expect(await modeOf(path.dirname(generations))).toBe("700");
+    },
+  );
 
   it("bundles browser-safe primitive SDK exports", async () => {
     const project = await fixture();
@@ -106,6 +174,49 @@ describe("native plugin browser builds", () => {
     expect(built.asDateTimestampMs("0")).toBeUndefined();
     expect(built.asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(built.truncateUtf16Safe("A😀B", 2)).toBe("A");
+  });
+
+  it("bundles SDK source instead of stale dist under NODE_ENV=production", async () => {
+    const project = await fixture();
+    const sdkRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-build-sdk-"));
+    directories.push(sdkRoot);
+    await Promise.all(
+      ["src/plugin-sdk", "dist/plugin-sdk", "extensions"].map((dir) =>
+        fs.mkdir(path.join(sdkRoot, dir), { recursive: true }),
+      ),
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        bin: { openclaw: "openclaw.mjs" },
+        exports: { "./plugin-sdk/control-ui": { default: "./dist/plugin-sdk/control-ui.js" } },
+      }),
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "src/plugin-sdk/control-ui.ts"),
+      'export const origin = "source";',
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "dist/plugin-sdk/control-ui.js"),
+      'export const origin = "stale dist";',
+    );
+    await fs.writeFile(
+      path.join(project.rootDir, project.source),
+      'export { origin } from "openclaw/plugin-sdk/control-ui";',
+    );
+    const build = (nodeEnv: string | undefined) =>
+      withEnvAsync({ NODE_ENV: nodeEnv, OPENCLAW_DEV_SOURCE_ROOT: sdkRoot }, () =>
+        buildPluginControlUi(project),
+      );
+
+    const development = await build(undefined);
+    const production = await build("production");
+
+    expect(production).toEqual(development);
+    const built = await import(pathToFileURL(path.join(project.rootDir, production.entry)).href);
+    expect(built.origin).toBe("source");
   });
 
   it.each(unresolvedPluginImportCases)(

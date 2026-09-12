@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 export function contextWith(
@@ -13,9 +13,19 @@ export function contextWith(
 ) {
   const request = vi.fn().mockResolvedValue({ models });
   const navigate = vi.fn();
+  const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
+  const emitCatalogChanged = () => {
+    for (const listener of listeners) {
+      listener({ type: "event", event: "chat.metadata.changed", payload: {} });
+    }
+  };
   const context = {
     navigate,
     gateway: {
+      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       snapshot: {
         phase: "connected",
         client: { request },
@@ -40,7 +50,7 @@ export function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, navigate, request };
+  return { context, navigate, request, emitCatalogChanged };
 }
 
 export function deferred<T>() {

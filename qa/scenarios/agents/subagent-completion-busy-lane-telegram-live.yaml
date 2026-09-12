@@ -25,7 +25,6 @@ scenario:
   codeRefs:
     - src/process/command-queue.ts
     - src/agents/subagents/announce/subagent-announce.ts
-    - src/agents/subagents/registry/subagent-registry-lane-park.ts
     - src/agents/subagents/registry/subagent-registry-lifecycle.ts
   execution:
     kind: flow
@@ -163,9 +162,9 @@ flow:
             expr: "parentToolEvents.length === 2 && spawnEvent?.timestamp >= attemptStartedAt && spawnEvent.timestamp <= execEvent?.timestamp"
             message: requester tool timeline was incomplete or out of order
         - assert:
-            expr: "execEvent.timestamp <= completedChild.endedAt && completedChild.endedAt <= proofStat.mtimeMs"
+            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofStat.mtimeMs"
             message:
-              expr: "`child did not finish while exec held the requester lane; execStarted=${String(execEvent?.timestamp)} childEnded=${String(completedChild.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
+              expr: "`child did not finish while exec held the requester lane; execStarted=${String(proofContents.startedAt)} childEnded=${String(completedChild.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
         - assert:
             expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofContents.finishedAt"
             message: exec proof interval did not contain child completion
@@ -198,4 +197,4 @@ flow:
             expr: duplicateMatches.length === 1
             message:
               expr: "`expected one deferred child completion during duplicate window, saw ${duplicateMatches.length}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: execEvent.timestamp, childEndedAt: completedChild.endedAt, execFinishedAt: proofContents.finishedAt, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.endedAt, execFinishedAt: proofContents.finishedAt, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"

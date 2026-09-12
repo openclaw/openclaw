@@ -1,6 +1,7 @@
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -22,10 +23,6 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import {
-  hasParkedAnnounceOutlivedExpiry,
-  parkAnnounceForRequesterLane,
-} from "./subagent-registry-lane-park.js";
 import {
   beginSubagentCleanup,
   retireSupersededCleanupIfNeeded,
@@ -75,7 +72,6 @@ export const finalizeResumedAnnounceGiveUp = async (
   const params = context.options;
   const { runId, entry, reason, cleanup, cleanupGeneration, retryCount, completedAt } =
     giveUpParams;
-  context.takeRequesterLaneReleaseWaiter(runId)?.();
   if (shouldSuspendPendingFinalDelivery(entry)) {
     suspendPendingFinalDelivery(context, {
       runId,
@@ -199,9 +195,6 @@ const finalizeSubagentCleanup = async (
   if (!entry) {
     return;
   }
-  // Any outcome supersedes an earlier lane-busy park. The deferred branch below
-  // re-arms its own waiter, so releasing unconditionally here cannot strand one.
-  context.takeRequesterLaneReleaseWaiter(runId)?.();
   if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
     return;
@@ -329,27 +322,6 @@ const finalizeSubagentCleanup = async (
   }
 
   const now = Date.now();
-
-  if (announceOutcome === "deferred_requester_busy") {
-    // No announce turn ever started, so there is nothing to classify as a
-    // failed attempt. Hold the row against the requester's turn boundary — but
-    // only inside the announce window, so a permanently busy requester still
-    // gives up loudly through the existing expiry path.
-    if (hasParkedAnnounceOutlivedExpiry(entry, now)) {
-      await finalizeResumedAnnounceGiveUp(context, {
-        runId,
-        entry,
-        reason: "expiry",
-        cleanup,
-        cleanupGeneration,
-        completedAt: now,
-      });
-      return;
-    }
-    parkAnnounceForRequesterLane(context, { runId, entry, now });
-    return;
-  }
-
   const deferredDecision = resolveDeferredCleanupDecision({
     entry,
     now,
@@ -573,6 +545,7 @@ export const startSubagentAnnounceCleanupFlow = (
     childSessionKey: pendingPayload.childSessionKey,
     childRunId: pendingPayload.childRunId,
     requesterSessionKey: pendingPayload.requesterSessionKey,
+    requesterAgentId: resolveSubagentRequesterAgentId(params.getRuntimeConfig(), entry),
     requesterOrigin,
     requesterDisplayKey: pendingPayload.requesterDisplayKey,
     task: pendingPayload.task,

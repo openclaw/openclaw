@@ -8,10 +8,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
 import { syncPersistedExternalCliAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import {
+  isPersistedExternalCliAuthProfile,
+  readExternalCliBootstrapCredential,
+} from "./external-cli-sync.js";
+import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -81,6 +86,34 @@ describe("auth external oauth helpers", () => {
     testing.resetResolveExternalAuthProfilesForTest();
   });
 
+  it("recognizes only persisted external CLI provenance as managed ownership", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const credential = createCredential({
+      provider: "minimax-portal",
+      authFlow: "external-cli",
+    });
+
+    expect(isPersistedExternalCliAuthProfile({ profileId, credential })).toBe(true);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId,
+        credential: { ...credential, authFlow: "device-code" },
+      }),
+    ).toBe(false);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId,
+        credential: { ...credential, authFlow: undefined },
+      }),
+    ).toBe(false);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId: "openai:default",
+        credential: { ...credential, provider: "openai" },
+      }),
+    ).toBe(false);
+  });
+
   it("overlays provider-managed runtime oauth profiles onto the store", () => {
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
       {
@@ -117,55 +150,20 @@ describe("auth external oauth helpers", () => {
     );
     expect(resolveParams.config).toBe(cfg);
     expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes and removes a prepared built-in CLI profile authoritatively", () => {
-    const expires = createUsableOAuthExpiry();
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "startup-access", refresh: "startup-refresh", expires }),
-    );
-    const startup = overlayExternalAuthProfiles(
-      {
-        ...createStore(),
-        order: { openai: ["openai:default"] },
-        lastGood: { openai: "openai:default" },
-        usageStats: { "openai:default": { lastUsed: 1 } },
-      },
-      {
-        externalCliProviderIds: ["openai"],
-      },
-    );
-    expect(getRuntimeExternalCliProfileIds(startup)).toEqual(["openai:default"]);
-
-    const retained = overlayExternalAuthProfiles(startup);
-    expect(retained.profiles["openai:default"]).toMatchObject({
-      access: "startup-access",
-      refresh: "startup-refresh",
-    });
-    expect(getRuntimeExternalCliProfileIds(retained)).toEqual(["openai:default"]);
-
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "rotated-access", refresh: "rotated-refresh", expires }),
-    );
-    const rotated = overlayExternalAuthProfiles(retained, {
-      externalCliProfileIds: ["openai:default"],
-    });
-    expect(rotated.profiles["openai:default"]).toMatchObject({
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-    });
-    expect(getRuntimeExternalCliProfileIds(rotated)).toEqual(["openai:default"]);
-
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(null);
-    const loggedOut = overlayExternalAuthProfiles(rotated, {
+  it("never creates a Codex overlay during login refresh or logout", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(createCredential());
+    const initial = overlayExternalAuthProfiles(createStore(), {
       externalCliProviderIds: ["openai"],
     });
-    expect(loggedOut.profiles["openai:default"]).toBeUndefined();
-    expect(loggedOut.order).toBeUndefined();
-    expect(loggedOut.lastGood).toBeUndefined();
-    expect(loggedOut.usageStats).toBeUndefined();
-    expect(getRuntimeExternalCliProfileIds(loggedOut)).toEqual([]);
+    expect(initial.profiles).toEqual({});
+    expect(
+      overlayExternalAuthProfiles(initial, { externalCliProfileIds: ["openai:default"] }).profiles,
+    ).toEqual({});
+    expect(getRuntimeExternalCliProfileIds(initial)).toEqual([]);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("does not reinterpret legacy MiniMax metadata as managed CLI ownership", () => {
@@ -215,8 +213,54 @@ describe("auth external oauth helpers", () => {
     expect(synced.profiles[profileId]).toMatchObject({
       access: "fresh-minimax-access",
       refresh: "fresh-minimax-refresh",
+      authFlow: "external-cli",
     });
     expect(readMiniMaxCliCredentialsCachedMock).toHaveBeenCalledOnce();
+  });
+
+  it("backfills durable provenance for a matching usable MiniMax CLI profile", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const expires = createUsableOAuthExpiry();
+    const existing = createCredential({
+      provider: "minimax-portal",
+      access: "shared-minimax-access",
+      refresh: "shared-minimax-refresh",
+      expires,
+    });
+    readMiniMaxCliCredentialsCachedMock.mockReturnValueOnce({
+      ...existing,
+      access: "rotated-minimax-access",
+    });
+
+    const synced = syncPersistedExternalCliAuthProfiles(createStore({ [profileId]: existing }));
+
+    expect(synced.profiles[profileId]).toEqual({
+      ...existing,
+      authFlow: "external-cli",
+    });
+    expect(readMiniMaxCliCredentialsCachedMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not assign CLI provenance from access-token equality alone", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const existing = createCredential({
+      provider: "minimax-portal",
+      access: "shared-minimax-access",
+      refresh: "native-minimax-refresh",
+      expires: createUsableOAuthExpiry(),
+      authFlow: "device-code",
+    });
+    readMiniMaxCliCredentialsCachedMock.mockReturnValueOnce({
+      ...existing,
+      refresh: "external-minimax-refresh",
+      authFlow: undefined,
+    });
+
+    const store = createStore({ [profileId]: existing });
+    const synced = syncPersistedExternalCliAuthProfiles(store);
+
+    expect(synced).toBe(store);
+    expect(isPersistedExternalCliAuthProfile({ profileId, credential: existing })).toBe(false);
   });
 
   it("refreshes persisted MiniMax without granting runtime CLI ownership", () => {
@@ -244,6 +288,7 @@ describe("auth external oauth helpers", () => {
     expect(prepared.profiles[profileId]).toMatchObject({
       access: "fresh-minimax-access",
       refresh: "fresh-minimax-refresh",
+      authFlow: "external-cli",
     });
     expect(getRuntimeExternalCliProfileIds(prepared)).toEqual([]);
   });
@@ -303,33 +348,20 @@ describe("auth external oauth helpers", () => {
     expect(getRuntimeExternalCliProfileIds(refreshed)).toEqual(["claude-cli:default"]);
   });
 
-  it("publishes a usable scoped CLI bootstrap into the runtime auth owner", () => {
-    const agentDir = "/tmp/openclaw-external-oauth-publication";
-    readCodexCliCredentialsCachedMock.mockReturnValue(
-      createCredential({ expires: createUsableOAuthExpiry() }),
-    );
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      const scoped = ensureAuthProfileStore(agentDir, {
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
-
-      expect(scoped.profiles["openai:default"]?.type).toBe("oauth");
-      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]?.type).toBe(
-        "oauth",
-      );
-      expect(listener).toHaveBeenCalledWith({
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: true,
-      });
-    } finally {
-      unregister();
-    }
+  it("does not publish Codex credentials from an ordinary store read", () => {
+    const agentDir = "/tmp/openclaw-native-no-import";
+    readCodexCliCredentialsCachedMock.mockReturnValue(createCredential());
+    const scoped = ensureAuthProfileStore(agentDir, {
+      externalCliProviderIds: ["openai"],
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    expect(scoped.profiles["openai:default"]).toBeUndefined();
+    expect(
+      getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
+    ).toBeUndefined();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("does not replace an explicit unresolved API-key profile with CLI OAuth", () => {
@@ -392,9 +424,9 @@ describe("auth external oauth helpers", () => {
       expect(hydrated.profiles["openai:configured"]).toEqual(
         resolved.profiles["openai:configured"],
       );
-      expect(hydrated.profiles["openai:default"]?.type).toBe("oauth");
+      expect(hydrated.profiles["openai:default"]).toBeUndefined();
       expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles).toEqual(hydrated.profiles);
-      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).not.toHaveBeenCalled();
     } finally {
       unregister();
     }
@@ -422,13 +454,13 @@ describe("auth external oauth helpers", () => {
       env: { OPENAI_API_KEY: "env-api-key" },
     });
 
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
     expect(store.profiles["openai:default"]).toBeUndefined();
     expect(ambientOnly.openai).toBeUndefined();
     expect(credentials.openai).toEqual({ type: "api_key", key: "env-api-key" });
   });
 
-  it("keeps explicitly requested external profiles outside the ambient pin", () => {
+  it("requires explicit import even when an old external profile is requested", () => {
     const cfg = {
       models: {
         providers: {
@@ -445,7 +477,7 @@ describe("auth external oauth helpers", () => {
       externalCliProfileIds: ["openai:default"],
     });
 
-    expect(store.profiles["openai:default"]?.type).toBe("oauth");
+    expect(store.profiles["openai:default"]).toBeUndefined();
   });
 
   it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
@@ -500,58 +532,117 @@ describe("auth external oauth helpers", () => {
     expect(profile.accountId).toBe("acct-cli");
   });
 
-  it("uses Codex CLI OAuth when the stored Codex profile has no inline token material", () => {
-    const cliCredential = createCredential({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      expires: createUsableOAuthExpiry(),
-      accountId: "acct-cli",
-    });
-    const tokenlessCredential = {
-      type: "oauth",
-      provider: "openai",
-      expires: Date.now() - 60_000,
-      accountId: "acct-cli",
-    } as OAuthCredential;
-    readCodexCliCredentialsCachedMock.mockReturnValue(cliCredential);
-
-    const overlaid = overlayExternalAuthProfiles(
-      createStore({
-        "openai:default": tokenlessCredential,
-      }),
-      {
-        config: {
-          models: {
-            providers: {
-              openai: {
-                auth: "api-key",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
-      },
+  it("preserves an empty host profile instead of copying the native account", () => {
+    const tokenlessCredential = createCredential({ access: "", refresh: "", expires: 0 });
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ access: "native-access", refresh: "native-refresh" }),
     );
-
-    const overlaidProfile = overlaid.profiles["openai:default"];
-    expect(overlaidProfile?.type).toBe("oauth");
-    if (!overlaidProfile || overlaidProfile.type !== "oauth") {
-      throw new Error("expected overlaid OAuth profile");
-    }
-    expect(overlaidProfile.access).toBe("fresh-cli-access-token");
-    expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
-    expect(overlaidProfile.accountId).toBe("acct-cli");
-    const managedCredential = readExternalCliBootstrapCredential({
-      store: createStore({
-        "openai:default": tokenlessCredential,
+    const store = createStore({ "openai:default": tokenlessCredential });
+    expect(overlayExternalAuthProfiles(store).profiles["openai:default"]).toEqual(
+      tokenlessCredential,
+    );
+    expect(
+      readExternalCliBootstrapCredential({
+        store,
+        profileId: "openai:default",
+        credential: tokenlessCredential,
       }),
-      profileId: "openai:default",
-      credential: tokenlessCredential,
+    ).toBeNull();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+  });
+
+  it("never clears a fenced Codex profile from an unordered external snapshot", () => {
+    const profileId = "openai:default";
+    const claimed = createCredential({
+      access: "claimed-access",
+      refresh: "claimed-refresh",
+      expires: 1,
+      accountId: "acct-cli",
+      email: "user@example.test",
     });
-    expect(managedCredential?.access).toBe("fresh-cli-access-token");
-    expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
-    expect(managedCredential?.accountId).toBe("acct-cli");
+    const fence = createOAuthRefreshFence({ profileId, credential: claimed });
+    const store = createStore({ [profileId]: fence });
+
+    const resolveCandidate = (candidate: OAuthCredential) => {
+      readCodexCliCredentialsCachedMock.mockReturnValue(candidate);
+      return readExternalCliBootstrapCredential({
+        store,
+        profileId,
+        credential: fence,
+      });
+    };
+
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "claimed-access",
+          refresh: "claimed-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "claimed-access",
+          refresh: "new-generation-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "new-generation-access",
+          refresh: "claimed-refresh",
+          expires: 1,
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "new-generation-access",
+          refresh: "claimed-refresh",
+          expires: createUsableOAuthExpiry(),
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "other-account-access",
+          refresh: "other-account-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-other",
+        }),
+      ),
+    ).toBeNull();
+
+    const failedFence = createFailedOAuthRefreshFence(fence);
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "new-generation-access",
+        refresh: "new-generation-refresh",
+        expires: createUsableOAuthExpiry(),
+        accountId: "acct-cli",
+      }),
+    );
+    expect(
+      readExternalCliBootstrapCredential({
+        store: createStore({ [profileId]: failedFence }),
+        profileId,
+        credential: failedFence,
+      }),
+    ).toBeNull();
+    expect(
+      syncPersistedExternalCliAuthProfiles(store, {
+        externalCliProfileIds: [profileId],
+      }).profiles[profileId],
+    ).toEqual(fence);
   });
 
   it("keeps healthy local oauth even when external cli has a fresher token", () => {
@@ -589,11 +680,7 @@ describe("auth external oauth helpers", () => {
 
     const overlaid = overlayExternalAuthProfiles(
       createStore({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-local",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-local"),
       }),
     );
 

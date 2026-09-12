@@ -215,11 +215,14 @@ describe("sidebar session live-run projection", () => {
     },
   );
 
-  it("carries active cloud disk pressure into the existing sidebar badge model", () => {
+  it("carries active cloud identity, machine facts, and disk pressure into the sidebar", () => {
     const projected = projectSidebarSession({
       placement: {
         state: "active",
         environmentId: "environment-disk",
+        providerId: "machine0",
+        profileId: "team",
+        machine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
         generation: 1,
         activeOwnerEpoch: 2,
         workspaceBaseManifestRef: "manifest-disk",
@@ -239,6 +242,9 @@ describe("sidebar session live-run projection", () => {
 
     expect(projected).toMatchObject({
       placementState: "active",
+      placementProviderId: "machine0",
+      placementProfileId: "team",
+      placementMachine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
       diskSpaceStatus: "critical",
     });
   });
@@ -346,6 +352,7 @@ describe("sidebar navigation lineage ownership", () => {
       expect(known).toHaveLength(2);
       const request = vi.fn();
       const lineage = await fetchSessionLineage({
+        captureReconcile: () => vi.fn(),
         client: createTestGatewayClient(request),
         sessionKey: cached.key,
         knownRows: known,
@@ -506,6 +513,7 @@ describe("sidebar navigation lineage ownership", () => {
       [navigationParent, controlParent, child].map((row) => [row.key, row]),
     );
     const lineage = await fetchSessionLineage({
+      captureReconcile: () => vi.fn(),
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows,
@@ -542,6 +550,7 @@ describe("sidebar navigation lineage ownership", () => {
     expect(projected[0]?.children.map((row) => row.key)).toEqual([child.key]);
 
     const lineage = await fetchSessionLineage({
+      captureReconcile: () => vi.fn(),
       client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
       sessionKey: child.key,
       knownRows: new Map([controlParent, childWithBlankParent].map((row) => [row.key, row])),

@@ -1,10 +1,21 @@
-// Qa Lab tests cover slack desktop smoke plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
+
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
+  return {
+    ...actual,
+    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
+      binary,
+      version: "0.55.0",
+    })),
+  };
+});
 
 function describeFetchInput(input: RequestInfo | URL) {
   if (typeof input === "string") {

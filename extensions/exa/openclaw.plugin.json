@@ -1,5 +1,6 @@
 {
   "id": "exa",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },

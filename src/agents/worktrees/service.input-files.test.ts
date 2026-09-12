@@ -226,6 +226,7 @@ it.each(["host", "writable sandbox", "cloud"])(
         currentManifestRef: manifestRef,
         base: base.manifest,
         current,
+        acceptance: { kind: "reconcile" },
         journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
       });
       expect(applied.conflictPaths).toEqual([]);

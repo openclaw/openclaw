@@ -103,6 +103,13 @@ summary: "Page"
 ### Hidden nested fenced heading
 \`\`\`
 \`\`\`\`
+
+~~~md
+### Hidden fenced heading with a suffixed closer
+~~~json
+### Still hidden after the invalid closer
+~~~
+# Visible after the fenced block
 `,
       "utf8",
     );
@@ -120,8 +127,50 @@ summary: "Page"
     expect(output).not.toContain("metadata comment must not become a heading");
     expect(output).not.toContain("Hidden fenced heading");
     expect(output).not.toContain("Hidden nested fenced heading");
+    expect(output).not.toContain("Still hidden after the invalid closer");
+    expect(output).toContain("  - H1: Visible after the fenced block");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
+  });
+
+  it.each([
+    ["backtick text suffix", "```md", "```json", "```"],
+    ["backtick nonbreaking space", "```md", "```\u00a0", "```"],
+    ["tilde nonbreaking space", "~~~md", "~~~\u00a0", "~~~"],
+    ["line separator in opening info", "```md\u2028info", "```json", "```"],
+    ["paragraph separator in opening info", "~~~md\u2029info", "~~~json", "~~~"],
+    ["different fence character", "```md", "~~~", "```"],
+  ])("keeps example headings hidden with %s", (_name, opening, invalidClosing, closing) => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-");
+    mkdirSync(path.join(tempRepoRoot, "docs"));
+    writeFileSync(
+      path.join(tempRepoRoot, "docs", "page.md"),
+      `${opening}\n# Hidden example\n${invalidClosing}\n## Still hidden\n${closing}\n# Visible after close\n`,
+    );
+
+    const output = runDocsList(tempRepoRoot, ["--headings"]);
+
+    expect(output).not.toContain("H1: Hidden example");
+    expect(output).not.toContain("H2: Still hidden");
+    expect(output).toContain("H1: Visible after close");
+  });
+
+  it.each([
+    ["spaces", "~~~", "~~~   "],
+    ["tabs", "```", "```\t\t"],
+    ["a longer marker", "~~~", "~~~~~ \t"],
+  ])("resumes headings after a valid closing fence with %s", (_name, opening, closing) => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-close-");
+    mkdirSync(path.join(tempRepoRoot, "docs"));
+    writeFileSync(
+      path.join(tempRepoRoot, "docs", "page.md"),
+      `${opening}\n# Hidden example\n${closing}\n# Visible after close\n`,
+    );
+
+    const output = runDocsList(tempRepoRoot, ["--headings"]);
+
+    expect(output).not.toContain("H1: Hidden example");
+    expect(output).toContain("H1: Visible after close");
   });
 
   it("normalizes injected Windows paths for nested page routes", () => {

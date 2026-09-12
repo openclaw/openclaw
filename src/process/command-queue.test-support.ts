@@ -1,4 +1,3 @@
-import { clearCommandLaneReleaseListenersForTest } from "./command-queue.js";
 import { resetGatewayWorkAdmission } from "./gateway-work-admission.js";
 
 type CommandQueueStateShape = {
@@ -12,7 +11,6 @@ type CommandQueueStateShape = {
 /** Hard-reset the process-global command queue between isolated tests. */
 export function resetCommandQueueStateForTest(): void {
   resetGatewayWorkAdmission();
-  clearCommandLaneReleaseListenersForTest();
   const key = Symbol.for("openclaw.commandQueueState");
   const state = (globalThis as Record<PropertyKey, unknown>)[key] as
     | CommandQueueStateShape

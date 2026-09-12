@@ -17,7 +17,6 @@ import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
-import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -27,6 +26,7 @@ import type {
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
+import { trimToUndefined } from "../../gateway/credentials.js";
 import type { HostDesktopStatus } from "../../gateway/desktop/host-source.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
@@ -58,10 +58,12 @@ import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
 import {
   inspectDaemonPortStatuses,
+  resolveGatewayStatusProbeConfig,
   resolveGatewayStatusSummary,
   type GatewayStatusSummary,
   type PortStatusSummary,
 } from "./status.gateway.js";
+import type { LaunchdJobDiagnostics } from "./status.launchd.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -98,7 +100,7 @@ type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
 const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
-const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
+const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
 const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
 const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
 const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
@@ -203,7 +205,7 @@ async function readStatusConfig(params: {
 export type DaemonStatus = {
   cli?: CliStatusSummary;
   logFile?: string;
-  service: {
+  service: LaunchdJobDiagnostics & {
     label: string;
     loaded: boolean | null;
     loadState: GatewayServiceLoadState;
@@ -215,7 +217,6 @@ export type DaemonStatus = {
     configAudit?: ServiceConfigAudit;
     gatewayHeap?: GatewayHeapLimitReport;
     restartHandoff?: GatewayRestartHandoff;
-    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -425,10 +426,9 @@ export async function gatherDaemonStatus(
       rpcUrlOverride: opts.rpc.url,
       localPortOverride,
     });
-  const probeMode =
-    localPortOverride === undefined && daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
-  const shouldInspectLocalGateway = probeMode === "local" && !probeUrlOverride;
+  const hasUrlOverride = Boolean(probeUrlOverride);
+  const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
+  const shouldInspectLocalGateway = !hasUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -446,7 +446,7 @@ export async function gatherDaemonStatus(
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
     deep: opts.deep,
-    gatewayMode: probeMode,
+    gatewayMode: shouldInspectLocalGateway ? "local" : "remote",
   });
 
   const extraServices = opts.deep
@@ -458,14 +458,12 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
-  const staleUpdateLaunchdJobs =
-    opts.deep && process.platform === "darwin"
-      ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
-            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
-          )
-          .catch(() => [])
-      : [];
+  const launchdDiagnostics =
+    process.platform === "darwin"
+      ? await loadLaunchdDiagnosticsModule().then(({ gatherLaunchdJobDiagnostics }) =>
+          gatherLaunchdJobDiagnostics(serviceEnv, Boolean(opts.deep)),
+        )
+      : {};
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const localCertificate =
@@ -480,8 +478,8 @@ export async function gatherDaemonStatus(
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const explicitAuth = {
-      token: opts.rpc.token,
-      password: opts.rpc.password,
+      token: trimToUndefined(opts.rpc.token),
+      password: trimToUndefined(opts.rpc.password),
     };
     const canResolveProbeAuth =
       opts.allowExecSecretRefs !== false ||
@@ -489,14 +487,19 @@ export async function gatherDaemonStatus(
         cfg: daemonCfg,
         env: mergedDaemonEnv,
         explicitAuth,
-        mode: probeMode,
+        mode: "local",
       });
-    if (canResolveProbeAuth) {
+    if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
+      daemonProbeAuth = explicitAuth;
+    } else if (daemonCfg.gateway?.auth?.mode === "none") {
+      daemonProbeAuth = {};
+    } else if (canResolveProbeAuth) {
+      // Trusted-proxy probes still use the local-direct password owned by this resolver.
       const probeAuthResolution = await loadGatewayProbeAuthModule().then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({
             cfg: daemonCfg,
-            mode: probeMode,
+            mode: "local",
             env: mergedDaemonEnv,
             explicitAuth,
           }),
@@ -515,10 +518,11 @@ export async function gatherDaemonStatus(
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
           url: probeUrl,
+          ...(probeUrlOverride ? { urlOverride: probeUrlOverride } : {}),
           localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
-          config: daemonCfg,
+          config: resolveGatewayStatusProbeConfig({ config: daemonCfg, hasUrlOverride }),
           tlsFingerprint: localCertificate?.ok
             ? localCertificate.value.fingerprintSha256
             : undefined,
@@ -580,6 +584,7 @@ export async function gatherDaemonStatus(
     const loadInstallRecords = () =>
       loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv,
+        artifactPreservingReadOnly: true,
       });
     try {
       if (opts.pluginVersionTarget === "restart") {
@@ -674,7 +679,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
-      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
+      ...launchdDiagnostics,
     },
     config: {
       cli: cliConfigSummary,

@@ -5,7 +5,7 @@ import { CHECK_IDS } from "./check-ids.js";
 import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
 import { policyEvidenceFinding as sandboxPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
-import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
+import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
 
@@ -22,7 +22,7 @@ export function sandboxPostureFindings(
   const sandboxPolicy = policy.sandbox;
   if (
     isRecord(sandboxPolicy) &&
-    sandboxPolicyShapeFinding(sandboxPolicy, { policyDocName, policyPath }) === undefined
+    posturePolicyShapeFinding("sandbox", sandboxPolicy, { policyDocName, policyPath }) === undefined
   ) {
     findings.push(
       ...sandboxPostureFindingsForRule(
@@ -40,7 +40,7 @@ export function sandboxPostureFindings(
   for (const target of agentScopedPolicyTargets(policy)) {
     const scopedSandboxPolicy = target.overlay.sandbox;
     if (
-      sandboxPolicyShapeFinding(scopedSandboxPolicy, {
+      posturePolicyShapeFinding("sandbox", scopedSandboxPolicy, {
         policyDocName,
         policyPath,
         targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/sandbox`,

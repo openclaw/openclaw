@@ -16,6 +16,13 @@ The tool is exposed only when the originating client advertises the
 `ui-commands` capability. At least one capable Control UI must still be
 connected when the tool runs; otherwise the Gateway returns `UNAVAILABLE`.
 
+A client advertises `ui-commands` in the `caps` array it sends during the
+Gateway connect handshake (see
+[Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)). The
+bundled Control UI advertises it already, so there is nothing to turn on there.
+A client that does not advertise it is never offered `screen`, so the tool is
+absent rather than failing at call time.
+
 ## Actions
 
 | Action                            | Effect                                     | Optional inputs                                |
@@ -46,5 +53,5 @@ panels.
 ## Related
 
 - [Control UI](/web/control-ui)
-- [Gateway protocol](/gateway/protocol#rpc-method-families)
+- [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Browser tool](/tools/browser)

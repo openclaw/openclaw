@@ -1,7 +1,7 @@
 /**
  * CLI session persistence helpers.
- * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
- * Claude CLI state in one normalized session-store contract.
+ * Keeps provider-keyed session bindings and reuse fingerprints in one
+ * normalized session-store contract.
  */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -67,7 +67,7 @@ export function assertCliSessionBindingResultCommitAllowed(
   }
 }
 
-/** Store a CLI session binding and mirror it to legacy/simple session-id fields. */
+/** Store a CLI session binding and mirror it to the provider-keyed session-id map. */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -124,9 +124,6 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 /** Remove the stored CLI session binding for one provider. */
@@ -185,6 +182,30 @@ export type CliSessionReuseResult =
       drift: { reasons: CliSessionContentDriftReason[] };
     }
   | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
+
+const CLI_SESSION_DRIFT_NOTE_PREFIX =
+  "OpenClaw resumed this CLI session after prompt content changed.";
+
+/** User-turn note telling a resumed CLI session that its prompt content drifted. */
+export function buildCliSessionDriftNote(reasons: readonly CliSessionContentDriftReason[]): string {
+  return `${CLI_SESSION_DRIFT_NOTE_PREFIX} Follow the current turn's instructions; changed=${reasons.join(",")}.`;
+}
+
+const CLI_SESSION_DRIFT_NOTE_PREFIXES = [
+  buildCliSessionDriftNote(["system-prompt"]),
+  buildCliSessionDriftNote(["prompt-tools"]),
+  buildCliSessionDriftNote(["system-prompt", "prompt-tools"]),
+].map((note) => `${note}\n\n`);
+
+// Match only complete notes the producer emits; similar native user text is not context.
+export function stripCliSessionDriftNote(text: string): string {
+  for (const prefix of CLI_SESSION_DRIFT_NOTE_PREFIXES) {
+    if (text.startsWith(prefix)) {
+      return text.slice(prefix.length);
+    }
+  }
+  return text;
+}
 
 /** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {

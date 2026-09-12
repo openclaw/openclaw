@@ -197,7 +197,7 @@ describe("session typing handler", () => {
     });
   });
 
-  it("keeps a live draft preview when another connection sends boolean-only typing", async () => {
+  it("keeps a draft beside boolean-only typing until its connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.useFakeTimers();
       vi.setSystemTime(40_000);
@@ -243,8 +243,62 @@ describe("session typing handler", () => {
         typing: true,
         preview: "still drafting",
       });
+
+      await vi.advanceTimersByTimeAsync(100);
+      await callTyping({
+        ...params,
+        typing: false,
+        client: client("alice", "alice-preview-tab"),
+      });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(broadcast.mock.lastCall?.[1]).toMatchObject({ typing: true });
+      expect(broadcast.mock.lastCall?.[1]).not.toHaveProperty("preview");
     });
   });
+
+  it.each([
+    { state: "queued", delayMs: 100 },
+    { state: "published", delayMs: 250 },
+  ])(
+    "replaces a stopped connection's $state preview with the live draft",
+    async ({ state, delayMs }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(50_000);
+        const sessionKey = `agent:main:stopped-${state}-preview`;
+        const sessionId = `session-stopped-${state}-preview`;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "owner" },
+            visibility: "shared",
+          },
+        );
+        mocks.presence = [
+          { user: profileUser("alice"), watchedSessions: [sessionKey] },
+          { user: profileUser("owner"), watchedSessions: [sessionKey] },
+        ];
+        const broadcast = vi.fn();
+        const params = { sessionKey, sessionId, context: context(broadcast) };
+        const liveTab = client("alice", "live-tab");
+        const stoppedTab = client("alice", "stopped-tab");
+        await callTyping({ ...params, typing: true, preview: "live draft", client: liveTab });
+        await vi.advanceTimersByTimeAsync(delayMs);
+        await callTyping({ ...params, typing: true, preview: "stopped draft", client: stoppedTab });
+        await vi.advanceTimersByTimeAsync(50);
+        await callTyping({ ...params, typing: false, client: stoppedTab });
+        const callsBeforeFlush = broadcast.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(250);
+
+        expect(broadcast.mock.lastCall?.[1]).toMatchObject({ typing: true, preview: "live draft" });
+        expect(
+          broadcast.mock.calls.slice(callsBeforeFlush).map((call) => call[1].preview),
+        ).not.toContain("stopped draft");
+      });
+    },
+  );
 
   it.each([
     { agentId: "main", expected: ["agent:main:global"] },

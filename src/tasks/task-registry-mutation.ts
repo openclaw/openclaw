@@ -15,6 +15,7 @@ import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-que
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
@@ -225,8 +226,8 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   }
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
-    task: cloneTaskRecord(next),
-    previous: cloneTaskRecord(current),
+    task: cloneTaskRecordForObserver(next),
+    previous: cloneTaskRecordForObserver(current),
   }));
   return cloneTaskRecord(next);
 }
@@ -265,8 +266,8 @@ export function publishTaskRecordAfterAtomicStore(
   const emit = () =>
     emitTaskRegistryObserverEvent(() => ({
       kind: "upserted",
-      task: cloneTaskRecord(next),
-      ...(current ? { previous: cloneTaskRecord(current) } : {}),
+      task: cloneTaskRecordForObserver(next),
+      ...(current ? { previous: cloneTaskRecordForObserver(current) } : {}),
     }));
   if (options?.deferredObserverEvents) {
     options.deferredObserverEvents.push(emit);

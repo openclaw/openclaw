@@ -32,32 +32,29 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
-  return {
-    ok: true,
-    json: async () => ({
-      candidates: [
-        {
-          content: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: "audio/L16;codec=pcm;rate=24000",
-                  data: typeof audio === "string" ? audio : audio.toString("base64"),
-                },
+  return Response.json({
+    candidates: [
+      {
+        content: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: typeof audio === "string" ? audio : audio.toString("base64"),
               },
-            ],
-          },
+            },
+          ],
         },
-      ],
-    }),
-  };
+      },
+    ],
+  });
 }
 
 function installGoogleTtsRequestMock(pcm = Buffer.from([1, 0, 2, 0])) {
-  postJsonRequestMock.mockResolvedValue({
+  postJsonRequestMock.mockImplementation(async () => ({
     response: googleTtsResponse(pcm),
     release: vi.fn(async () => {}),
-  });
+  }));
   return postJsonRequestMock;
 }
 
@@ -305,10 +302,7 @@ describe("Google speech provider", () => {
     const requestSequence = vi
       .fn()
       .mockResolvedValueOnce({
-        response: {
-          ok: true,
-          json: async () => ({ candidates: [{ content: { parts: [{ text: "not audio" }] } }] }),
-        },
+        response: Response.json({ candidates: [{ content: { parts: [{ text: "not audio" }] } }] }),
         release: vi.fn(async () => {}),
       })
       .mockResolvedValueOnce({
@@ -333,11 +327,11 @@ describe("Google speech provider", () => {
   });
 
   it("rejects Gemini audio with non-canonical base64 pad bits", async () => {
-    const malformedResponse = {
+    const malformedResponse = async () => ({
       response: googleTtsResponse("ZE=="),
       release: vi.fn(async () => {}),
-    };
-    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    });
+    const requestSequence = vi.fn().mockImplementation(malformedResponse);
     postJsonRequestMock.mockImplementation(requestSequence);
     const provider = buildGoogleSpeechProvider();
 
@@ -360,11 +354,11 @@ describe("Google speech provider", () => {
     const pcmBase64url = pcm.toString("base64url");
     expect(pcmBase64url).toMatch(/[-_]/);
     expect(pcmBase64url).not.toMatch(/[+/]/);
-    const response = {
+    const response = async () => ({
       response: googleTtsResponse(pcmBase64url),
       release: vi.fn(async () => {}),
-    };
-    const requestSequence = vi.fn().mockResolvedValue(response);
+    });
+    const requestSequence = vi.fn().mockImplementation(response);
     postJsonRequestMock.mockImplementation(requestSequence);
     const provider = buildGoogleSpeechProvider();
 
@@ -383,11 +377,11 @@ describe("Google speech provider", () => {
   });
 
   it("rejects Gemini audio with a mixed base64 alphabet", async () => {
-    const malformedResponse = {
+    const malformedResponse = async () => ({
       response: googleTtsResponse("aGVsbG8+_"),
       release: vi.fn(async () => {}),
-    };
-    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    });
+    const requestSequence = vi.fn().mockImplementation(malformedResponse);
     postJsonRequestMock.mockImplementation(requestSequence);
     const provider = buildGoogleSpeechProvider();
 
@@ -715,7 +709,7 @@ describe("Google speech provider", () => {
         "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
       ),
     );
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: new Response(
         JSON.stringify({
           error: {
@@ -729,7 +723,7 @@ describe("Google speech provider", () => {
         },
       ),
       release: vi.fn(async () => {}),
-    });
+    }));
     const provider = buildGoogleSpeechProvider();
 
     await expect(

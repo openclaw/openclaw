@@ -13,6 +13,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
@@ -234,11 +235,7 @@ describe("attemptServerEndpointCompaction", () => {
   });
 
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
-    const messages = createSession().messages.concat({
-      role: "user",
-      content: "trailing turn",
-      timestamp: 3,
-    });
+    const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));
     const { result } = attempt({ context: { systemPrompt: "system", messages } });
 
     await expect(result).resolves.toBeUndefined();

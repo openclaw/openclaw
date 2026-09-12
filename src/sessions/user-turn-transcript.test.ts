@@ -5,6 +5,7 @@ import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
@@ -813,11 +814,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
+      recorder.markRuntimePersisted(makeUserMessage("runtime-owned turn", 123));
 
       await expect(recorder.persistFallback()).resolves.toBeUndefined();
       await expect(readTranscriptMessages(target)).resolves.toEqual([]);
@@ -837,11 +834,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
+      recorder.markRuntimePersisted(makeUserMessage("runtime-owned turn", 123));
 
       await expect(recorder.persistApproved()).resolves.toBeUndefined();
       await expect(readTranscriptMessages(target)).resolves.toEqual([]);
@@ -867,11 +860,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
+      recorder.markRuntimePersisted(makeUserMessage("runtime-owned turn", 123));
 
       await expect(recorder.persistApproved()).resolves.toBeUndefined();
       await expect(
@@ -1015,11 +1004,7 @@ describe("user turn transcript persistence", () => {
       });
       recorder.markRuntimePersistencePending(
         runtimePersistenceStarted.then(() => {
-          recorder.markRuntimePersisted({
-            role: "user",
-            content: "pending runtime turn",
-            timestamp: 123,
-          });
+          recorder.markRuntimePersisted(makeUserMessage("pending runtime turn", 123));
         }),
       );
 

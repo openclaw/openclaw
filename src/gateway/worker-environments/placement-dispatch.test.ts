@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveWorkerPlacementDestination } from "./placement-destination.js";
 import {
   type DispatchStage,
   type PlacementStore,
@@ -17,6 +18,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
@@ -24,9 +26,9 @@ describe("worker placement dispatch", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
   const createTestHarness = (
-    options: Parameters<typeof createHarness>[1] = {},
+    options: Parameters<typeof createHarness>[2] = {},
     store: PlacementStore = placementStore,
-  ) => createHarness(store, { workspacePath: path.join(root, "workspace"), ...options });
+  ) => createHarness(database, store, { workspacePath: path.join(root, "workspace"), ...options });
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
@@ -83,24 +85,51 @@ describe("worker placement dispatch", () => {
     expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
   });
 
-  it("provisions an inherited dispatch from the exact durable profile snapshot", async () => {
-    const harness = createTestHarness();
-    const inheritedProfile = {
-      providerId: "fake",
-      profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
-    };
+  it.each([false, true])(
+    "provisions an inherited dispatch with its exact profile and setup authority (%s)",
+    async (runSetupScript) => {
+      const harness = createTestHarness();
+      const inheritedProfile = {
+        providerId: "fake",
+        profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
+      };
 
-    await harness.service.dispatch({ ...REQUEST, inheritedProfile, machineClass: "beast" });
+      await harness.service.dispatch({
+        ...REQUEST,
+        inheritedProfile,
+        runSetupScript,
+        machineClass: "beast",
+        os: "os-a",
+      });
 
-    expect(harness.environments.create).not.toHaveBeenCalled();
-    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-      { profileId: REQUEST.profileId, ...inheritedProfile },
-      expect.stringMatching(/^session-dispatch:/u),
-      "beast",
-      REQUEST.executionMode,
-      path.join(root, "workspace"),
-      undefined,
-    );
+      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
+        { profileId: REQUEST.profileId, ...inheritedProfile },
+        expect.stringMatching(/^session-dispatch:/u),
+        "beast",
+        REQUEST.executionMode,
+        path.join(root, "workspace"),
+        undefined,
+        "os-a",
+        runSetupScript,
+        inheritedProfile,
+      );
+    },
+  );
+
+  it("normalizes profile OS overrides and rejects choices without a profile", () => {
+    const cfg = { cloudWorkers: { profiles: { cloud: { provider: "fake" } } } };
+    expect(resolveWorkerPlacementDestination({ cfg, profileId: " cloud ", os: " os-a " })).toEqual({
+      ok: true,
+      value: { profileId: "cloud", os: "os-a" },
+    });
+    for (const target of [
+      { profileId: "cloud", os: " " },
+      { deviceId: "device", os: "os-a" },
+      { os: "os-a" },
+    ]) {
+      expect(resolveWorkerPlacementDestination({ cfg, ...target }).ok).toBe(false);
+    }
   });
 
   it("reports the final durable placement after startup failure teardown", async () => {
@@ -191,6 +220,11 @@ describe("worker placement dispatch", () => {
         remoteWorkspaceDir: active.remoteWorkspaceDir,
       },
     });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: otherRequest.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
     placementStore.transition({
       sessionId: otherRequest.sessionId,
       from: "starting",
@@ -209,6 +243,11 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(otherClaim);
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
 
     await harness.service.reconcile();
 
@@ -752,45 +791,6 @@ describe("worker placement dispatch", () => {
 
     expect(harness.placements.current()).toMatchObject({ state: "active" });
     expect(harness.log).toEqual(["environment:reconcile"]);
-  });
-
-  it("fails closed when an active worker turn claim cannot be proven live after restart", async () => {
-    const harness = createTestHarness();
-    await harness.environments.attachSession({
-      environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
-    placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "claim-1",
-      runId: "run-1",
-      owner: {
-        kind: "worker",
-        environmentId: harness.attached.environmentId,
-        ownerEpoch: harness.attached.ownerEpoch,
-      },
-    });
-    harness.log.length = 0;
-
-    await harness.service.reconcile();
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      recoveryError: "Active worker turn claim cannot be proven live after gateway restart",
-    });
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "workspace",
-      "placement:draining",
-      "placement:reconciling",
-      "teardown:stop",
-      "teardown:destroy",
-      "placement:failed",
-    ]);
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
   it("fails closed instead of activating a synced placement after restart", async () => {

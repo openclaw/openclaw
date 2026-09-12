@@ -833,7 +833,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the earlier-history action fixed while loading and reveals the fetched page", async () => {
+  it("keeps the earlier-history action fixed while loading and preserves the reader after retry", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -955,6 +955,8 @@ suite.define(() => {
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
+    const readerAnchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, readerAnchor);
     await gateway.resolveDeferred("chat.history", {
       messages: older,
       hasMore: true,
@@ -974,9 +976,8 @@ suite.define(() => {
           ),
       )
       .toBe(1100);
-    const firstOlderMessage = page.getByText(/^older native message 1\n/);
-    await firstOlderMessage.waitFor();
-    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+    await waitForPaintedVirtualRowAnchor(thread, readerAnchor);
+    expectPaintedVirtualRowAnchor(readerAnchor, await stopVirtualRowPaintProbe(thread));
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
@@ -1000,8 +1001,11 @@ suite.define(() => {
     // Single staging slot: the parked page must not chain further prefetches.
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     // Consuming the staged page needs no round trip: the exhausted empty page
-    // applies instantly and removes the boundary and its sentinel.
-    await showEarlier.click();
+    // applies instantly and removes the boundary and its sentinel. Invoke the
+    // action without scrolling: renewed upward intent can itself consume it.
+    await thread.evaluate((element) => {
+      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
+    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);

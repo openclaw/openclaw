@@ -157,19 +157,6 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   });
 }
 
-export function formatReasoningMarkdown(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lines = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => `_${line}_`);
-  return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
-}
-
 function isTextOnlyContent(content: unknown): boolean {
   if (typeof content === "string") {
     return true;

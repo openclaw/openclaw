@@ -1,5 +1,4 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +20,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -30,12 +30,17 @@ import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
+  /** In-process executor only; workers must reacquire authority, never deserialize this. */
+  /** Legacy live context is unsupported; its presence is refusal-only. */
+  recovery?: unknown;
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;
     env: NodeJS.ProcessEnv;
     /** Prepared before replacement; never load the old authority graph after activation. */
     requesterAuthority?: UpdateRequesterAuthority;
+    /** Live local executor only. A child must independently acquire its owner. */
+    executorFence?: UpdateRecoveryFence;
   };
   acceptCapabilities?: boolean;
   json?: boolean;
@@ -72,8 +77,9 @@ export class UpdatePreMutationError extends Error {
   constructor(
     readonly reason: string,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "UpdatePreMutationError";
   }
 }
@@ -444,49 +450,84 @@ const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
 export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
+  timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
     return "skipped";
   }
 
-  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
-    },
-    encoding: "utf-8",
-    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  let failure: string;
+  try {
+    const result = await runCommandWithTimeout(
+      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      {
+        cwd: root,
+        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+        input: "",
+        timeoutMs,
+        killProcessTree: true,
+      },
+    );
+    if (result.code === 0) {
+      return "completed";
+    }
+    failure =
+      result.termination === "timeout"
+        ? `timed out after ${timeoutMs / 1000}s`
+        : result.stderr.trim();
+  } catch (error) {
+    failure = String(error);
+  }
+  if (!jsonMode) {
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${failure ? `: ${failure}` : ""}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
+  }
+  return "failed";
+}
+
+export async function confirmUpdateDowngrade(params: {
+  opts: UpdateCommandOptions;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<boolean> {
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const { opts, currentVersion, targetVersion, tag } = params;
+  const run = opts.run!;
+  if (!process.stdin.isTTY || opts.json) {
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "downgrade-confirmation-required" },
+      { env: run.env },
+    );
+    defaultRuntime.error(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
+    defaultRuntime.exit(1);
+    return false;
+  }
+
+  const targetLabel = targetVersion ?? `${tag} (unknown)`;
+  const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({
+    message: stylePromptMessage(message),
+    initialValue: false,
   });
-
-  if (result.error) {
-    if (!jsonMode) {
-      const err = result.error as NodeJS.ErrnoException;
-      const reason =
-        err.code === "ETIMEDOUT"
-          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
-          : String(result.error);
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
+  if (isCancel(ok) || !ok) {
+    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted("Update cancelled."));
     }
-    return "failed";
+    defaultRuntime.exit(0);
+    return false;
   }
 
-  if (result.status !== 0) {
-    if (!jsonMode) {
-      const stderr = (result.stderr ?? "").trim();
-      const detail = stderr ? ` (${stderr})` : "";
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
-    }
-    return "failed";
-  }
-  return "completed";
+  return true;
 }

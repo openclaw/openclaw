@@ -16,7 +16,11 @@ import {
   type PluginToolMetadataRegistration,
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
+import {
+  isReservedControlUiTabSlug,
+  validateControlUiNativeRoutePlacement,
+} from "./registry-control-ui-policy.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -319,6 +323,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
+    const slug = descriptor.slug;
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
     // The flat API predates required surface/label; preserve shipped JS-plugin behavior.
     const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
@@ -348,6 +353,31 @@ export function createHostRegistrars(state: PluginRegistryState) {
     }
     if (!validateControlUiNativeRoutePlacement({ record, placement, pushDiagnostic })) {
       return;
+    }
+    if (slug !== undefined) {
+      if (
+        typeof slug !== "string" ||
+        slug.trim() !== slug ||
+        slug.length > 64 ||
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
+        surface !== "tab" ||
+        placement?.startsWith("route:") ||
+        isReservedControlUiTabSlug(slug)
+      ) {
+        reportRegistrationError(
+          record,
+          `control UI descriptor slug requires an unreserved lowercase alphanumeric/hyphen segment of at most 64 characters on a tab without native route placement: ${id}`,
+        );
+        return;
+      }
+      const owner = registry.controlUiDescriptors.find((entry) => entry.descriptor.slug === slug);
+      if (owner) {
+        reportRegistrationError(
+          record,
+          `control UI tab slug already registered by ${owner.pluginId}: ${slug}`,
+        );
+        return;
+      }
     }
     if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
       reportRegistrationError(
@@ -424,6 +454,16 @@ export function createHostRegistrars(state: PluginRegistryState) {
     if (lifecycle.cleanup !== undefined && typeof lifecycle.cleanup !== "function") {
       reportRegistrationError(record, `runtime lifecycle cleanup must be a function: ${id}`);
       return;
+    }
+    const inspection = getPluginRegistryInspectionResources(registry);
+    const dispose = inspection ? lifecycle.dispose : undefined;
+    if (dispose !== undefined && typeof dispose !== "function") {
+      reportRegistrationError(record, `runtime lifecycle dispose must be a function: ${id}`);
+      return;
+    }
+    if (inspection && dispose) {
+      // A disposer may be inherited and require the original registration as its receiver.
+      inspection.register(record.id, { id, dispose: () => dispose.call(lifecycle) });
     }
     registry.runtimeLifecycles.push({
       pluginId: record.id,

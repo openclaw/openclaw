@@ -450,7 +450,14 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     }
 
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
-    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+    await expectRetainedBoardPresentation(page, "expanded");
+    await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
+    await sidePanel
+      .locator('[data-region-header="side"]')
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
+    await expectRetainedBoardPresentation(page, "split");
+    await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
     if (artifactDir) {
       await appContent.waitFor();
       await writeFile(

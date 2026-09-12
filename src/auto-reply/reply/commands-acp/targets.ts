@@ -50,7 +50,9 @@ async function resolveSessionKeyByToken(
   return null;
 }
 
-export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
+export function resolveBoundAcpThreadSessionKey(
+  params: Parameters<typeof resolveAcpCommandBindingContext>[0],
+): string | undefined {
   const commandTargetSessionKey = normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? "";
   const activeSessionKey =
     commandTargetSessionKey || (normalizeOptionalString(params.sessionKey) ?? "");

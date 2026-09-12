@@ -23,7 +23,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 vi.mock("./verified-inference.js", async (importOriginal) => {
@@ -256,7 +256,7 @@ describe("runSystemAgentTui", () => {
 
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const catalogPreparation = vi.mocked(preparedModelCatalog.readPreparedModelCatalog);
     const publishedSnapshot = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
       .mockReturnValue(undefined);

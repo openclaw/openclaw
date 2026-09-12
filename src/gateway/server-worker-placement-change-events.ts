@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
+import { readWorkerPlacementIdentity } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 export function createGatewayWorkerPlacementChangePublisher(params: {
   placements: Pick<WorkerSessionPlacementStore, "list">;
@@ -80,4 +82,29 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
       }
     }
   };
+}
+
+export function subscribeGatewayWorkerMachineShapeChanges(params: {
+  placements: Pick<WorkerSessionPlacementStore, "list">;
+  environments: Pick<
+    WorkerEnvironmentService,
+    "get" | "readMachineShape" | "subscribeMachineShapeChanged"
+  >;
+  getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
+}) {
+  return params.environments.subscribeMachineShapeChanged((profileId) => {
+    const context = params.getSessionChangeContext?.();
+    if (!context) {
+      return;
+    }
+    for (const placement of params.placements.list()) {
+      if (readWorkerPlacementIdentity(placement, params.environments)?.profileId === profileId) {
+        emitSessionsChanged(context, {
+          reason: "placement",
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+        });
+      }
+    }
+  });
 }
