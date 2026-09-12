@@ -180,20 +180,24 @@ export async function prepareReplyAgentPayloads(state: {
           committedMessagingToolSourceReplyDelivery ||
           runResult.didSendDeterministicApprovalPrompt === true,
       });
-  const emptyInteractiveReplyPayload = terminalFailurePayload
-    ? undefined
-    : buildEmptyInteractiveReplyPayload({
-        isInteractive,
-        isHeartbeat,
-        silentExpected: followupRun.run.silentExpected,
-        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-        hasPendingContinuation: pendingContinuation,
-        hasExplicitSilentReply: deliberateSilentTerminalReply,
-        hasCommittedDelivery: successfulTerminalDelivery,
-        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
-        sessionCtx,
-        cfg,
-      });
+  const retryBlockedSourceReply = rawPayloadArray.some((payload) =>
+    blockReplyPipeline?.isFinalPayloadRetryBlocked?.(payload),
+  );
+  const emptyInteractiveReplyPayload =
+    terminalFailurePayload || retryBlockedSourceReply
+      ? undefined
+      : buildEmptyInteractiveReplyPayload({
+          isInteractive,
+          isHeartbeat,
+          silentExpected: followupRun.run.silentExpected,
+          allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+          hasPendingContinuation: pendingContinuation,
+          hasExplicitSilentReply: deliberateSilentTerminalReply,
+          hasCommittedDelivery: successfulTerminalDelivery,
+          hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
+          sessionCtx,
+          cfg,
+        });
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
     if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
       return undefined;
@@ -498,9 +502,7 @@ export async function prepareReplyAgentPayloads(state: {
       (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
-  const hasDeliveredBlockStream = Boolean(
-    blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
-  );
+  const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
   const canDeliverStandaloneFallbackNotice =
     hasDeliveredBlockStream || successfulSideEffectDelivery;
   if (

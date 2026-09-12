@@ -8,6 +8,7 @@ import {
 } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
+import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -79,8 +80,12 @@ async function sendDirectBlockReply(params: {
 }) {
   const deliveryIndex = params.directlySentBlockPayloads.length;
   params.directlySentBlockPayloads.push(undefined);
-  await params.onBlockReply(params.payload);
-  if (isReplyPayloadTerminalContent(params.trackingPayload)) {
+  const delivery = await deliverBlockReply(() => params.onBlockReply(params.payload));
+  if (
+    delivery.outcome === "delivered" &&
+    !delivery.pending &&
+    isReplyPayloadTerminalContent(params.trackingPayload)
+  ) {
     params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
     params.directlySentBlockPayloads[deliveryIndex] = params.trackingPayload;
   }

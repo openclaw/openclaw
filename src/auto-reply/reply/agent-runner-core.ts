@@ -197,7 +197,7 @@ export function hasSuccessfulSourceReplyDelivery(params: {
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
-    (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
+    params.blockReplyPipeline?.didStream() ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
@@ -216,9 +216,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   return (
-    (params.blockReplyPipeline?.didStreamTerminalReply?.() === true &&
-      !params.blockReplyPipeline.isAborted()) ||
-    sentTerminalBlock === true
+    params.blockReplyPipeline?.didStreamTerminalReply?.() === true || sentTerminalBlock === true
   );
 }
 

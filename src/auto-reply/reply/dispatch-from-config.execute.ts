@@ -16,6 +16,7 @@ import {
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
@@ -447,6 +448,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                 },
                 onBlockReply: (inputPayload, context) => {
+                  setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
                   // A monitor decides notify only after its structured final result.
                   if (state.replyOperationRunState.heartbeat) {
                     return Promise.resolve();

@@ -364,6 +364,9 @@ export async function buildReplyPayloads(params: {
     if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
+    if (params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(payload)) {
+      return null;
+    }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (!reply.hasMedia) {
       // Aggregate coverage suppresses plain text split across streamed blocks; rich content needs
@@ -390,10 +393,14 @@ export async function buildReplyPayloads(params: {
       mediaUrls: undefined,
       audioAsVoice: undefined,
     });
-    const textWasSent = params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)
-      ? true
-      : hasDirectlySentText(textOnlyPayload);
-    if (!textWasSent) {
+    const textShouldBeOmitted =
+      params.blockReplyPipeline?.hasSentPayload(textOnlyPayload) ||
+      params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(
+        copyReplyPayloadMetadata(payload, { text: payload.text }),
+      )
+        ? true
+        : hasDirectlySentText(textOnlyPayload);
+    if (!textShouldBeOmitted) {
       return payload;
     }
     return copyReplyPayloadMetadata(payload, {
