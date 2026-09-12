@@ -290,3 +290,263 @@ describe("terminal snapshot reconciliation", () => {
     ]);
   });
 });
+
+describe("live terminal reconciliation", () => {
+  it("resolves a live replay against several same-run rows when one row carries terminal evidence", () => {
+    const runId = "duplicate-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Answer with a color.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolCall = createAssistantMessage("[toolCall]", { id: "assistant-tool", seq: 2, runId });
+    const reply = createAssistantMessage("answered with red", {
+      id: "assistant-reply",
+      seq: 5,
+      runId,
+    });
+    const replay = createAssistantMessage("answered with red");
+
+    const state = projectLiveSessionMessage(
+      createSessionProjection(scope, [user, toolCall, reply]),
+      replay,
+      { runId },
+    );
+
+    expect(state.messages).toEqual([user, toolCall, reply]);
+  });
+
+  it("retains the live unsequenced terminal when history with a later tool boundary arrives first", () => {
+    const runId = "partial-history-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const synthetic = createAssistantMessage("Still working.");
+    const earlier = createAssistantMessage("Still working.", {
+      id: "assistant-earlier",
+      seq: 2,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 3, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = reconcileSessionProjectionSnapshot(state, [user, earlier, laterToolBoundary], scope);
+    expect(state.messages).toEqual([user, earlier, laterToolBoundary]);
+
+    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+
+    expect(state.messages).toEqual([user, earlier, laterToolBoundary, synthetic]);
+  });
+
+  it("restores a suppressed replay when later history contradicts its position match", () => {
+    const runId = "position-recovery-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const synthetic = createAssistantMessage("Still working.");
+    const unmarkedReply = createAssistantMessage("Still working.", {
+      id: "assistant-unmarked",
+      seq: 3,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary-2", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = reconcileSessionProjectionSnapshot(state, [user, toolBoundary, unmarkedReply], scope);
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedReply]);
+
+    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedReply]);
+
+    expect(
+      reconcileSessionProjectionSnapshot(
+        state,
+        [user, toolBoundary, unmarkedReply, laterToolBoundary],
+        scope,
+      ).messages,
+    ).toEqual([user, toolBoundary, unmarkedReply, laterToolBoundary, synthetic]);
+  });
+
+  it("keeps a later distinct final visible when tentative recovery cannot represent it", () => {
+    const runId = "multi-final-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const firstFinal = createAssistantMessage("First final answer.");
+    const secondFinal = createAssistantMessage("Second final answer.");
+    const unmarkedSecondFinal = createAssistantMessage("Second final answer.", {
+      id: "assistant-unmarked",
+      seq: 3,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary-2", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: firstFinal,
+    });
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: secondFinal,
+    });
+    state = reconcileSessionProjectionSnapshot(
+      state,
+      [user, toolBoundary, unmarkedSecondFinal],
+      scope,
+    );
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedSecondFinal]);
+
+    state = projectLiveSessionMessage(state, structuredClone(secondFinal), { runId });
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedSecondFinal, secondFinal]);
+
+    expect(
+      reconcileSessionProjectionSnapshot(
+        state,
+        [user, toolBoundary, unmarkedSecondFinal, laterToolBoundary],
+        scope,
+      ).messages,
+    ).toEqual([user, toolBoundary, unmarkedSecondFinal, laterToolBoundary, secondFinal]);
+  });
+
+  it("keeps a sequence-fenced terminal tail reconciling against its later durable row", () => {
+    const runId = "fenced-tail-run";
+    const commentary = {
+      role: "assistant",
+      content: [{ type: "text", text: "Checking the workspace." }],
+      openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+      __openclaw: { id: "assistant-commentary", seq: 2, runId },
+    };
+    const answer = {
+      role: "assistant",
+      content: [{ type: "text", text: "The final answer is ready." }],
+      __openclaw: { id: "assistant-answer", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope, [commentary, answer]), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: createAssistantMessage("Checking the workspace.The final answer is ready."),
+    });
+    const messagesBefore = state.messages;
+    // A boundary-split tail replays only the suffix of the accepted final. Its
+    // sequence fence reconciles it against the later durable answer row, so it
+    // must not be retained as a distinct later final once that row matched.
+    state = projectLiveSessionMessage(state, createAssistantMessage("The final answer is ready."), {
+      runId,
+      afterSequence: 2,
+    });
+    expect(state.messages).toEqual(messagesBefore);
+  });
+
+  it("keeps a same-caption reply with a distinct attachment and still deduplicates exact replays", () => {
+    const runId = "attachment-run";
+    const attachment = (data: string) => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data },
+    });
+    const user = {
+      role: "user",
+      content: [{ text: "Export the chart.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const summary = createAssistantMessage("Chart exported.", {
+      id: "assistant-summary",
+      seq: 2,
+      runId,
+    });
+    const captioned = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-a")],
+      __openclaw: { id: "assistant-captioned", seq: 3, runId },
+    };
+    const replay = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-a")],
+    };
+    const distinct = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-b")],
+    };
+
+    let state = projectLiveSessionMessage(
+      createSessionProjection(scope, [user, summary, captioned]),
+      replay,
+      { runId },
+    );
+    expect(state.messages).toEqual([user, summary, captioned]);
+
+    state = projectLiveSessionMessage(state, distinct, { runId });
+    expect(state.messages).toEqual([user, summary, captioned, distinct]);
+
+    const mediaCaptioned = createAssistantMessage("Result", {
+      id: "assistant-media",
+      seq: 3,
+      runId,
+      media: [{ type: "image", url: "chart-a" }],
+    });
+    const mediaDistinct = createAssistantMessage("Result", {
+      media: [{ type: "image", url: "chart-b" }],
+    });
+    const mediaState = createSessionProjection(scope, [user, summary, mediaCaptioned]);
+    expect(projectLiveSessionMessage(mediaState, mediaDistinct, { runId }).messages).toEqual([
+      user,
+      summary,
+      mediaCaptioned,
+      mediaDistinct,
+    ]);
+  });
+});

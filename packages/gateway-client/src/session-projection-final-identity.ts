@@ -14,6 +14,7 @@ import {
 type TerminalProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  afterSequence?: number | null;
   live: boolean;
 };
 
@@ -104,6 +105,68 @@ function hasTerminalStopReason(message: unknown): boolean {
   );
 }
 
+/**
+ * Completed-run snapshot-context check over one snapshot: indexes are built in a
+ * single sweep and reused across every candidate row of a reconciliation pass.
+ */
+function createCompletedRunSnapshotContextCheck(
+  snapshot: readonly TerminalProjectionEntry[],
+  runId: string | null,
+): (entry: TerminalProjectionEntry) => boolean {
+  let snapshotIndexes: Map<TerminalProjectionEntry, number> | undefined;
+  let firstUserIndex = -1;
+  let lastAssistantIndex = -1;
+  return (entry: TerminalProjectionEntry): boolean => {
+    if (!runId || entry.identity?.runId !== runId) {
+      return false;
+    }
+    if (!snapshotIndexes) {
+      const indexes = new Map<TerminalProjectionEntry, number>();
+      snapshot.forEach((candidate, index) => {
+        if (candidate.identity?.runId === runId) {
+          // Keep indexOf's first-occurrence identity when a snapshot repeats an entry.
+          if (!indexes.has(candidate)) {
+            indexes.set(candidate, index);
+          }
+          if (candidate.identity.role === "user" && firstUserIndex < 0) {
+            firstUserIndex = index;
+          } else if (candidate.identity.role === "assistant") {
+            lastAssistantIndex = index;
+          }
+        }
+      });
+      snapshotIndexes = indexes;
+    }
+    const entryIndex = snapshotIndexes.get(entry);
+    return (
+      entryIndex !== undefined &&
+      firstUserIndex >= 0 &&
+      firstUserIndex < entryIndex &&
+      lastAssistantIndex <= entryIndex
+    );
+  };
+}
+
+/** Terminal evidence shared by snapshot promotion and live replay reconciliation. */
+function hasTerminalProjectionEvidence(
+  entry: TerminalProjectionEntry,
+  runId: string | null,
+  hasCompletedRunSnapshotContext: (entry: TerminalProjectionEntry) => boolean,
+): boolean {
+  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
+  return (
+    metadata?.runTerminal === true ||
+    (entry.identity?.runId === runId && hasTerminalStopReason(entry.message)) ||
+    hasCompletedRunSnapshotContext(entry)
+  );
+}
+
+/** Explicit terminal markers that later history cannot contradict. */
+function hasExplicitTerminalEvidence(entry: TerminalProjectionEntry): boolean {
+  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
+  return metadata?.runTerminal === true || hasTerminalStopReason(entry.message);
+}
+
 /** Read stable persisted identity first, falling back to canonical display content. */
 export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
   if (!hasDisplayableSessionMessage(message)) {
@@ -162,58 +225,59 @@ export function findUniqueSnapshotTerminalMatch(
   if (!terminalContent || readFinalContentIdentity(run.message) !== terminalContent) {
     return null;
   }
-  let snapshotIndexes: Map<TerminalProjectionEntry, number> | undefined;
-  let firstUserIndex = -1;
-  let lastAssistantIndex = -1;
-  const hasCompletedRunSnapshotContext = (entry: TerminalProjectionEntry): boolean => {
-    const runId = current.identity?.runId;
-    if (!runId || entry.identity?.runId !== runId) {
-      return false;
-    }
-    if (!snapshotIndexes) {
-      const indexes = new Map<TerminalProjectionEntry, number>();
-      snapshot.forEach((candidate, index) => {
-        if (candidate.identity?.runId === runId) {
-          // Keep indexOf's first-occurrence identity when a snapshot repeats an entry.
-          if (!indexes.has(candidate)) {
-            indexes.set(candidate, index);
-          }
-          if (candidate.identity.role === "user" && firstUserIndex < 0) {
-            firstUserIndex = index;
-          } else if (candidate.identity.role === "assistant") {
-            lastAssistantIndex = index;
-          }
-        }
-      });
-      snapshotIndexes = indexes;
-    }
-    const entryIndex = snapshotIndexes.get(entry);
-    return (
-      entryIndex !== undefined &&
-      firstUserIndex >= 0 &&
-      firstUserIndex < entryIndex &&
-      lastAssistantIndex <= entryIndex
-    );
-  };
-  const durableTerminalMatches = matches.filter((entry) => {
-    const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
-    return (
-      (metadata?.runTerminal === true ||
-        (entry.identity?.runId === current.identity?.runId &&
-          hasTerminalStopReason(entry.message)) ||
-        hasCompletedRunSnapshotContext(entry)) &&
-      readFinalContentIdentity(entry.message) === terminalContent
-    );
-  });
-  const entry = durableTerminalMatches.length === 1 ? durableTerminalMatches[0] : undefined;
+  const entry = findUniqueTerminalContentMatch(
+    matches,
+    terminalContent,
+    snapshot,
+    current.identity?.runId ?? null,
+  );
   if (!entry) {
     return null;
   }
-  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
   return {
     entry,
-    inferred: metadata?.runTerminal !== true && !hasTerminalStopReason(entry.message),
+    inferred: !hasExplicitTerminalEvidence(entry),
   };
+}
+
+/**
+ * Pick the unique durable row that carries terminal evidence and matches the
+ * replay content; shared by snapshot promotion and live reconciliation.
+ */
+function findUniqueTerminalContentMatch<T extends TerminalProjectionEntry>(
+  matches: readonly T[],
+  content: string,
+  snapshot: readonly TerminalProjectionEntry[],
+  runId: string | null,
+): T | null {
+  const hasCompletedRunSnapshotContext = createCompletedRunSnapshotContextCheck(snapshot, runId);
+  const candidates = matches.filter(
+    (entry) =>
+      hasTerminalProjectionEvidence(entry, runId, hasCompletedRunSnapshotContext) &&
+      readFinalContentIdentity(entry.message) === content,
+  );
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
+}
+
+/**
+ * Match an unsequenced live replay to exactly one durable row sharing the same
+ * terminal evidence and full display content as snapshot reconciliation.
+ */
+export function findUniqueLiveTerminalMatch<T extends TerminalProjectionEntry>(
+  current: TerminalProjectionEntry,
+  matches: readonly T[],
+  snapshot: readonly TerminalProjectionEntry[],
+): T | null {
+  const content = readFinalContentIdentity(current.message);
+  if (!content) {
+    return null;
+  }
+  return findUniqueTerminalContentMatch(
+    matches,
+    content,
+    snapshot,
+    current.identity?.runId ?? null,
+  );
 }
 
 /** Check whether ordinary single-match promotion needs terminal-content verification. */
@@ -230,4 +294,61 @@ export function isUnsequencedLiveTerminal(
     run.status !== "streaming" &&
     readFinalContentIdentity(current.message) === readFinalContentIdentity(run.message),
   );
+}
+
+/**
+ * Keep a position-inferred live match recoverable until later history confirms
+ * it; shared with snapshot reconciliation's tentative recovery record.
+ */
+export function withTentativeRecovery<TRun extends { message?: unknown; status: string }>(
+  run: TRun | undefined,
+  entry: TerminalProjectionEntry,
+  matched: TerminalProjectionEntry,
+): TRun | null {
+  if (
+    !run ||
+    !matched.identity ||
+    !isUnsequencedLiveTerminal(entry, run) ||
+    hasExplicitTerminalEvidence(matched)
+  ) {
+    return null;
+  }
+  return { ...run, inferredSnapshotTerminal: { entry, matchedIdentity: matched.identity } };
+}
+
+/**
+ * Check whether a live unsequenced assistant reply is a distinct later reply of
+ * the run rather than its immutable first final. Tentative recovery cannot
+ * represent these entries, so suppression must not drop them silently.
+ * Sequence-fenced tails reconcile against their later durable row instead.
+ */
+function isDistinctLaterLiveFinal(
+  current: TerminalProjectionEntry,
+  run: TerminalProjectionRun | undefined,
+): boolean {
+  const content = readFinalContentIdentity(current.message);
+  return Boolean(
+    current.live &&
+    current.identity?.role === "assistant" &&
+    !current.identity.id &&
+    current.identity.sequence === null &&
+    current.afterSequence === undefined &&
+    run &&
+    run.status !== "streaming" &&
+    content !== null &&
+    content !== readFinalContentIdentity(run.message),
+  );
+}
+
+/**
+ * Keep a later distinct final visible when tentative recovery cannot represent
+ * it: without explicit terminal evidence, a contradicted position match would
+ * have no recovery record to restore the suppressed reply.
+ */
+export function shouldKeepLaterFinalVisible(
+  entry: TerminalProjectionEntry,
+  matched: TerminalProjectionEntry,
+  run: TerminalProjectionRun | undefined,
+): boolean {
+  return !hasExplicitTerminalEvidence(matched) && isDistinctLaterLiveFinal(entry, run);
 }

@@ -4,9 +4,12 @@ import { asNullableRecord as readRecord } from "@openclaw/normalization-core/rec
 import {
   canRecoverSessionProjectionFinal,
   hasSessionProjectionAcceptedFinal,
+  findUniqueLiveTerminalMatch,
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   readSessionProjectionFinalMessageIdentity,
+  shouldKeepLaterFinalVisible,
+  withTentativeRecovery,
 } from "./session-projection-final-identity.js";
 import {
   hasDisplayableSessionMessage,
@@ -400,7 +403,9 @@ export function projectLiveSessionMessage(
   const matches = state.entries.filter((entry) => entryMatches(entry, incoming));
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
-    (matches.length === 1 ? matches[0] : undefined);
+    (matches.length === 1
+      ? matches[0]
+      : findUniqueLiveTerminalMatch(incoming, matches, state.entries));
   if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
@@ -411,7 +416,16 @@ export function projectLiveSessionMessage(
   if (!existing.pending && existing.identity?.id && !incoming.identity.id) {
     // A terminal projection carries no transcript identity; adopting it over the
     // durable row would lose the ID every later snapshot reconciles against.
-    return state;
+    const runId = incoming.identity?.runId ?? null;
+    const recovered = runId ? withTentativeRecovery(state.runs[runId], incoming, existing) : null;
+    if (runId && recovered) {
+      return { ...state, runs: { ...state.runs, [runId]: recovered } };
+    }
+    // Keep a later distinct final visible when tentative recovery cannot
+    // represent it; suppressing it would leave no record to restore it later.
+    return shouldKeepLaterFinalVisible(incoming, existing, runId ? state.runs[runId] : undefined)
+      ? withEntries(state, insertEntry(state.entries, incoming, state.runs))
+      : state;
   }
   if (
     incoming.identity.sequence !== null &&
@@ -474,13 +488,8 @@ export function reconcileSessionProjectionSnapshot(
         run
       ) {
         // Tentative history matches retain their original live ordering until confirmed.
-        runs[current.identity.runId] = {
-          ...run,
-          inferredSnapshotTerminal: {
-            entry: current,
-            matchedIdentity: terminalMatch.entry.identity,
-          },
-        };
+        runs[current.identity.runId] =
+          withTentativeRecovery(run, current, terminalMatch.entry) ?? run;
       }
       continue;
     }
