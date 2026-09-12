@@ -98,6 +98,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   modelCatalog: ModelCatalogSnapshot;
   /** Reads a completed full catalog without starting provider discovery. */
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+  /** Reads validated executable rows from this owner's accepted provider publication. */
+  readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
   loadFullModelCatalog?: (
     options?: PreparedModelCatalogRefreshOptions,
@@ -207,6 +209,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;
   nativeSource: string;

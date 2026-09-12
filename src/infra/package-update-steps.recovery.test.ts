@@ -45,6 +45,15 @@ describe("npm lifecycle policy preflight", () => {
         expect(result.failedStep?.stderrTail).toContain(
           "Unable to determine the owning npm version",
         );
+        expect(result.failedStep).toMatchObject({
+          failureFacts: [
+            expect.objectContaining({
+              check: "npm lifecycle policy preflight",
+              code: "global-install-failed",
+              message: expect.stringContaining("Unable to determine the owning npm version"),
+            }),
+          ],
+        });
         expect(runCommand).not.toHaveBeenCalled();
         expect(runStep).not.toHaveBeenCalled();
         expect(result.recovery).toEqual(
@@ -407,7 +416,7 @@ describe("package update recovery safety", () => {
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
         } else {
           const activationFailed = outcome === "activation failed" || outcome === "backup failed";
-          expect(phases).toEqual(
+          expect(phases, JSON.stringify(result.failedStep)).toEqual(
             activationFailed ? ["validate", "stop"] : ["validate", "stop", "migrate"],
           );
           expect(result.failedStep?.name ?? null).toBe(
@@ -789,7 +798,10 @@ describe("package update recovery safety", () => {
 
         const expectedVersion = outcome === "success" ? "2.0.0" : "1.0.0";
         expect(result.afterVersion).toBe(expectedVersion);
-        expect(await fs.readFile(stateCanary, "utf8")).toBe("mutated by candidate Doctor\n");
+        await expect(
+          fs.readFile(stateCanary, "utf8"),
+          JSON.stringify(result.failedStep),
+        ).resolves.toBe("mutated by candidate Doctor\n");
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain(`"version":"${expectedVersion}"`);
@@ -891,6 +903,9 @@ describe("package update recovery safety", () => {
       }
 
       expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+      expect(result.failedStep).toMatchObject({
+        failureFacts: [expect.objectContaining({ check: "package-swap", code: "swap-failed" })],
+      });
       expect(result.failedStep?.stderrTail).toContain("launcher restoration denied");
       expect(result.failedStep?.stderrTail).toContain(targetCmdShim);
       expect(result.recovery).toEqual({

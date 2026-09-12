@@ -24,14 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
 import { tasksListCommand, tasksShowCommand } from "./tasks.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -113,7 +106,7 @@ describe("tasks JSON commands", () => {
         task: "Refresh schedule",
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -123,7 +116,7 @@ describe("tasks JSON commands", () => {
         tasks: [jsonRoundTrip(cliTask)],
       });
 
-      const emptyRuntime = createRuntime();
+      const emptyRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "subagent" }, emptyRuntime);
       expect(readJsonLog(emptyRuntime)).toStrictEqual({
         count: 0,
@@ -166,19 +159,19 @@ describe("tasks JSON commands", () => {
         endedAt: Date.now(),
       });
 
-      const listRuntime = createRuntime();
+      const listRuntime = createTestRuntime();
       await tasksListCommand({ status: "succeeded" }, listRuntime);
       const listOutput = vi.mocked(listRuntime.log).mock.calls.flat().join("\n");
       expect(listOutput).toContain("Task pressure: 0 queued · 0 running · 1 issues");
       expect(listOutput).toMatch(/\bblocked\s+pending\b/);
 
-      const blockedRuntime = createRuntime();
+      const blockedRuntime = createTestRuntime();
       await tasksListCommand({ status: "blocked" }, blockedRuntime);
       const blockedOutput = vi.mocked(blockedRuntime.log).mock.calls.flat().join("\n");
       expect(blockedOutput).toContain(task.taskId.slice(0, 9));
       expect(blockedOutput).not.toContain(completed.taskId.slice(0, 9));
 
-      const blockedJsonRuntime = createRuntime();
+      const blockedJsonRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, status: "blocked" }, blockedJsonRuntime);
       expect(readJsonLog(blockedJsonRuntime)).toMatchObject({
         count: 1,
@@ -187,7 +180,7 @@ describe("tasks JSON commands", () => {
         tasks: [{ taskId: task.taskId, status: "succeeded", terminalOutcome: "blocked" }],
       });
 
-      const succeededJsonRuntime = createRuntime();
+      const succeededJsonRuntime = createTestRuntime();
       await tasksListJsonCommand({ json: true, status: "succeeded" }, succeededJsonRuntime);
       expect(readJsonLog(succeededJsonRuntime)).toMatchObject({
         count: 2,
@@ -198,11 +191,11 @@ describe("tasks JSON commands", () => {
         ]),
       });
 
-      const showRuntime = createRuntime();
+      const showRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId }, showRuntime);
       expect(vi.mocked(showRuntime.log).mock.calls.flat().join("\n")).toContain("status: blocked");
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createTestRuntime();
       await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
       expect(readJsonLog(jsonRuntime)).toMatchObject({
         status: "succeeded",
@@ -222,7 +215,7 @@ describe("tasks JSON commands", () => {
         task: "Inspect issue backlog",
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksListJsonCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -265,7 +258,7 @@ describe("tasks JSON commands", () => {
         updatedAt: now - 40 * 60_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditJsonCommand({ json: true, limit: 1 }, runtime);
 
       expect(readJsonLog(runtime)).toStrictEqual({
@@ -324,7 +317,7 @@ describe("tasks JSON commands", () => {
 
   it("reports blank audit filters as absent in JSON output", async () => {
     await withTaskJsonStateDir(async () => {
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       await tasksAuditJsonCommand({ json: true, severity: "  ", code: "\t" }, runtime);
 
       expect(readJsonLog(runtime)).toMatchObject({
@@ -365,7 +358,7 @@ describe("tasks JSON commands", () => {
     const query = vi.spyOn(taskRuntime, "listTaskRecords").mockImplementation(() => {
       throw new Error("task JSON query performed");
     });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => run(runtime));
@@ -390,7 +383,7 @@ describe("tasks JSON commands", () => {
           loadSnapshot,
         },
       });
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await tasksAuditJsonCommand({ json: true }, runtime);
 

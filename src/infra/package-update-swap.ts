@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode, isErrno } from "./errors.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
@@ -34,7 +34,9 @@ import {
   type StagedPackageSwapResult,
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
+import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   verifyPackageUpdateRecovery,
@@ -82,6 +84,7 @@ export async function swapStagedPackageInstall(
     exitCode: number,
     stdoutTail: string | null,
     stderrTail: string | null,
+    code = "swap-failed",
   ): UpdateStepResult => ({
     name: "global install swap",
     command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot ?? "unknown root"}`,
@@ -90,6 +93,17 @@ export async function swapStagedPackageInstall(
     exitCode,
     stdoutTail,
     stderrTail,
+    ...(exitCode !== 0
+      ? {
+          failureFacts: [
+            createUpdateFailureFact({
+              check: "package-swap",
+              code,
+              message: stderrTail ?? undefined,
+            }),
+          ],
+        }
+      : {}),
     ...(exitCode === 0 && warnings.length > 0
       ? {
           advisory: {
@@ -651,30 +665,9 @@ export async function swapStagedPackageInstall(
       await copyPathEntry(shim.source, shim.destination);
     }
     activationCompleted = true;
-    let postVerifyStep: UpdateStepResult | null = null;
-    if (params.postVerifyStep) {
-      try {
-        postVerifyStep = await params.postVerifyStep(targetPackageRoot);
-      } catch (error) {
-        postVerifyStep = {
-          name: "post-install verification",
-          command: "verify installed package",
-          cwd: targetPackageRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: formatErrorMessage(error),
-        };
-      }
-      postVerifyStep ??= {
-        name: "post-install verification",
-        command: "verify installed package",
-        cwd: targetPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail:
-          "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-      };
-    }
+    const postVerifyStep = params.postVerifyStep
+      ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
+      : null;
     if (postVerifyStep && isBlockingPackageUpdateStep(postVerifyStep) && !retained) {
       const rollbackMessages = await restoreSwap();
       return {
@@ -733,7 +726,16 @@ export async function swapStagedPackageInstall(
     return {
       status: "failed",
       activePackageRoot,
-      step: step(1, null, errors.join("\n")),
+      step: step(
+        1,
+        null,
+        errors.join("\n"),
+        isErrno(error) && typeof error.code === "string"
+          ? error.code
+          : error instanceof Error
+            ? error.name
+            : "swap-failed",
+      ),
       postVerifyStep: null,
       packageRollbackVerified: retained ? false : packageRollbackVerified,
     };

@@ -139,7 +139,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       snapshot.sourceConfig,
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
-    if (!res.found) {
+    if (!res.found || res.value === undefined) {
       const message = isConfigSchemaPath(schema, parsedPath)
         ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
@@ -151,7 +151,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       exitCliAfterOutput(runtime, 1);
     }
     if (opts.json) {
-      writeRuntimeJson(runtime, res.value ?? null);
+      writeRuntimeJson(runtime, res.value);
     } else if (
       typeof res.value === "string" ||
       typeof res.value === "number" ||
@@ -159,7 +159,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     ) {
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
-      writeRuntimeJson(runtime, res.value ?? null);
+      writeRuntimeJson(runtime, res.value);
     }
   } catch (err) {
     if (err instanceof ExitError) {

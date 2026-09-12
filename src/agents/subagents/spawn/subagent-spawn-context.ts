@@ -166,7 +166,7 @@ export async function prepareContextEngineSubagentSpawn(params: {
         async dispose() {
           // Cancellation may already be rolling back while its caller unwinds.
           await rollback?.catch(() => {});
-          await dispose().catch(() => {});
+          await dispose();
         },
       },
     };

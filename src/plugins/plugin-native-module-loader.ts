@@ -69,7 +69,7 @@ export function bindNativePluginInstanceModuleLoader(
           if (target) {
             artifact.prepareModule(target);
           }
-          artifact.prepareNativeScopes();
+          artifact.prepareNativeScopes(target ?? source);
           return target;
         });
       },
@@ -129,7 +129,7 @@ export function bindNativePluginInstanceModuleLoader(
       withPluginCache(cache, () => {
         const captured = artifact.resolve(source, rejectHardlinks);
         artifact.prepareModule(captured);
-        artifact.prepareNativeScopes();
+        artifact.prepareNativeScopes(captured);
         return loader(toSafeImportPath(captured));
       }),
     artifact.hasSource,

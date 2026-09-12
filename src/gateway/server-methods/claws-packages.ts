@@ -16,9 +16,11 @@ import {
   capturePluginRuntimeApplications,
   projectPluginRuntimeFailure,
 } from "../../plugins/lifecycle.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
-import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
+import {
+  pluginLifecycleError,
+  withGatewayPluginLifecycleLease,
+} from "./plugins-lifecycle-error.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -91,8 +93,8 @@ export const clawsPackageHandlers = {
         });
       });
       const applyOwnedRuntime = captured.applyRuntime;
-      const { runtimeFailure, ...removed } = await withPluginLifecycleLease(
-        { signal },
+      const { runtimeFailure, ...removed } = await withGatewayPluginLifecycleLease(
+        signal,
         async (lease) => {
           const beforePersistentApply = () => {
             assertCurrent();

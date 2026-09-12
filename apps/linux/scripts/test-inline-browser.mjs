@@ -342,10 +342,12 @@ try {
     await tabReady(firstId, `${base}/two`);
     assert.equal(await child.evaluate('window.fixtureName'), 'two');
   });
-  await record('SPA pushState, hash, and history navigation update native state', async () => {
+  await record('title-only changes and SPA history update native state', async () => {
     // Native Chromium Back skips history entries created without user activation.
     // Exercise the user-initiated SPA path, as with the popup interaction below.
-    await child.evaluate('history.pushState({fixture:true}, "", "/spa-pushed"); document.title="Inline fixture SPA"', true);
+    await child.evaluate('document.title="Inline fixture SPA"');
+    await until(async () => (await state()).tabs.find(tab => tab.id === firstId).title === 'Inline fixture SPA', 'title-only publication without navigation');
+    await child.evaluate('history.pushState({fixture:true}, "", "/spa-pushed")', true);
     await until(async () => { const tab = (await state()).tabs.find(tab => tab.id === firstId); return tab.url === `${base}/spa-pushed` && tab.title === 'Inline fixture SPA' && tab.canGoBack; }, 'SPA URL and title publication');
     await child.evaluate('location.hash="fixture-fragment"', true);
     await until(async () => (await state()).tabs.find(tab => tab.id === firstId).url === `${base}/spa-pushed#fixture-fragment`, 'hash URL publication');

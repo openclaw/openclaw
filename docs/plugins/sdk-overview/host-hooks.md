@@ -271,6 +271,18 @@ separately when distinct identities share a combined reference. Human-name
 matching, alias/date version selection, and case-insensitive glob scopes remain
 available.
 
+`ModelRegistry.fork(authStorage, publishedModels?)` creates an isolated registry.
+`authStorage` supplies that caller's credentials. The optional `publishedModels`
+is a read-only map from provider ID to complete validated runtime model rows;
+an empty array withdraws that provider's rows. Omitted providers keep the captured
+catalog. Forks retain the current source's authored request settings and runtime
+registrations, and later `refresh()` calls retain the captured model publication.
+Published model metadata does not supply credentials or authorize an account.
+The optional argument requires a host release containing executable catalog
+publication; the v2026.9.4 host supports only `fork(authStorage)`.
+This session-extension subpath is runtime-only and does not publish TypeScript
+declarations.
+
 Session extension SDK and supported TypeBox imports share the host's modules.
 
 The contracts intentionally split authority:

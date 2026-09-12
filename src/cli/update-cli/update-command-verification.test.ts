@@ -5,7 +5,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
@@ -152,6 +154,7 @@ describe("update readiness generation", () => {
     { transition: "unchanged-pidless", supplied: false },
     { transition: "first-final-health-error", supplied: false },
     { transition: "last-final-health-error", supplied: false },
+    { transition: "readyz-error", supplied: false },
     { transition: "unchanged", supplied: true },
     { transition: "replacement", supplied: true },
   ] as const)(
@@ -202,7 +205,9 @@ describe("update readiness generation", () => {
       server = createServer((req, res) => {
         if (req.url === "/readyz") {
           reached.resolve();
-          void release.promise.then(() => res.writeHead(200).end());
+          void release.promise.then(() =>
+            res.writeHead(transition === "readyz-error" ? 503 : 200).end(),
+          );
         } else {
           res.writeHead(200).end();
         }
@@ -226,8 +231,9 @@ describe("update readiness generation", () => {
       const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
       const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
       const onVerified = vi.fn();
+      const updateResult: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
       const verification = verifyUpdatedGateway({
-        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        result: updateResult,
         opts: { json: true, run: { runId: "synthetic-update", env: {} } },
         serviceEnv: probeParams.env,
         signal: controller.signal,
@@ -253,6 +259,23 @@ describe("update readiness generation", () => {
       release.resolve();
       const result = await verification;
       expect(result.ok).toBe(unchanged);
+      if (transition === "readyz-error") {
+        const report = await prepareUpdateFailureReport(
+          {
+            attemptId: "loopback-readyz-failure",
+            result: { ...updateResult, status: "error", reason: result.summary },
+          },
+          { env: {}, stateDir: "/synthetic-state" },
+        );
+        const local = JSON.stringify(updateResult);
+        for (const output of [local, report.body]) {
+          expect(output).toContain("readyz-unhealthy");
+          expect(output).toContain(
+            "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+          );
+        }
+        expect(report.body).toContain("Failing check readyz (readyz-unhealthy)");
+      }
       if (unchanged) {
         expect(onVerified).toHaveBeenCalledOnce();
         expect(recordUpdateRunVerification).toHaveBeenLastCalledWith(

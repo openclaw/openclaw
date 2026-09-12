@@ -80,6 +80,7 @@ describe("tool-catalog", () => {
       "portal",
       "automations",
       "gateway",
+      "plugins",
       "get_goal",
       "create_goal",
       "update_goal",

@@ -1475,59 +1475,129 @@ describe("backupVerifyCommand", () => {
     }
   });
 
-  it("validates cross-asset, dangling, and escaping relative symbolic links", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-safe-symlinks-");
-    const archivePath = path.join(tempDir, "backup.tar.gz");
-    const stateAssetRoot = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const workspaceAssetRoot = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/workspace`;
-    const manifest = createBackupManifest(stateAssetRoot);
-    manifest.assets.push({
+  it.each([
+    {
+      platform: "linux",
+      stateDir: "/tmp/.openclaw",
+      workspaceDir: "/tmp/workspace",
       kind: "workspace",
-      sourcePath: "/tmp/workspace",
-      archivePath: workspaceAssetRoot,
-    });
-    const archiveEntries = [
-      encodeTarEntry({
+    },
+    {
+      platform: "win32",
+      stateDir: "C:\\state",
+      workspaceDir: "D:\\credentials",
+      kind: "credentials",
+    },
+  ])(
+    "backupVerifyCommand accepts older $platform cross-asset links and checks external records",
+    async ({ platform, stateDir, workspaceDir, kind }) => {
+      const tempDir = tempDirs.make("openclaw-backup-safe-symlinks-");
+      const archivePath = path.join(tempDir, "backup.tar.gz");
+      const stateAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir);
+      const workspaceAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, workspaceDir);
+      const manifest = createBackupManifest(stateAssetRoot, TEST_ARCHIVE_ROOT, stateDir);
+      manifest.platform = platform;
+      manifest.assets.push({
+        kind,
+        sourcePath: workspaceDir,
+        archivePath: workspaceAssetRoot,
+      });
+      const archiveEntries = [
+        encodeTarEntry({
+          path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+          contents: `${JSON.stringify(manifest)}\n`,
+        }),
+        encodeTarEntry({ path: `${stateAssetRoot}/state.txt`, contents: "state\n" }),
+        encodeTarEntry({ path: `${workspaceAssetRoot}/workspace.txt`, contents: "workspace\n" }),
+        encodeTarEntry({
+          path: `${stateAssetRoot}/workspace-link`,
+          type: "SymbolicLink",
+          linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+        }),
+        encodeTarEntry({
+          path: `${stateAssetRoot}/dangling-link`,
+          type: "SymbolicLink",
+          linkpath: "missing-durable-file.txt",
+        }),
+      ];
+      await fs.writeFile(
+        archivePath,
+        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+      );
+
+      await expect(
+        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+      ).resolves.toMatchObject({
+        ok: true,
+        assetCount: 2,
+        symlinkCount: 2,
+        externalSymbolicLinks: [
+          {
+            entryPath: `${stateAssetRoot}/workspace-link`,
+            linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+          },
+        ],
+      });
+
+      manifest.externalSymbolicLinks = [];
+      archiveEntries[0] = encodeTarEntry({
         path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
         contents: `${JSON.stringify(manifest)}\n`,
-      }),
-      encodeTarEntry({ path: `${stateAssetRoot}/state.txt`, contents: "state\n" }),
-      encodeTarEntry({ path: `${workspaceAssetRoot}/workspace.txt`, contents: "workspace\n" }),
-      encodeTarEntry({
-        path: `${stateAssetRoot}/workspace-link`,
-        type: "SymbolicLink",
-        linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
-      }),
-      encodeTarEntry({
-        path: `${stateAssetRoot}/dangling-link`,
-        type: "SymbolicLink",
-        linkpath: "missing-durable-file.txt",
-      }),
-    ];
-    await fs.writeFile(
-      archivePath,
-      gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
-    );
+      });
+      await fs.writeFile(
+        archivePath,
+        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+      );
+      await expect(
+        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+      ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
 
-    await expect(
-      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-    ).resolves.toMatchObject({ ok: true, assetCount: 2, symlinkCount: 2 });
-
-    archiveEntries.push(
-      encodeTarEntry({
-        path: `${stateAssetRoot}/escaping-link`,
-        type: "SymbolicLink",
-        linkpath: "../outside-declared-assets",
-      }),
-    );
-    await fs.writeFile(
-      archivePath,
-      gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
-    );
-    await expect(
-      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-    ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
-  });
+      delete manifest.externalSymbolicLinks;
+      archiveEntries[0] = encodeTarEntry({
+        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+        contents: `${JSON.stringify(manifest)}\n`,
+      });
+      archiveEntries.push(
+        encodeTarEntry({
+          path: `${stateAssetRoot}/escaping-link`,
+          type: "SymbolicLink",
+          linkpath: "../outside-declared-assets",
+        }),
+      );
+      await fs.writeFile(
+        archivePath,
+        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+      );
+      await expect(
+        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+      ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
+      manifest.externalSymbolicLinks = [
+        {
+          entryPath: `${stateAssetRoot}/workspace-link`,
+          linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+        },
+        {
+          entryPath: `${stateAssetRoot}/escaping-link`,
+          linkpath: "../outside-declared-assets",
+        },
+      ];
+      archiveEntries[0] = encodeTarEntry({
+        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+        contents: `${JSON.stringify(manifest)}\n`,
+      });
+      await fs.writeFile(
+        archivePath,
+        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+      );
+      await expect(
+        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+      ).resolves.toMatchObject({
+        ok: true,
+        symlinkCount: 3,
+        externalSymbolicLinks: manifest.externalSymbolicLinks,
+      });
+    },
+  );
 
   it("rejects unsafe hardlink targets", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-linkpath-"));

@@ -845,11 +845,14 @@ export async function runCliTurnCompactionLifecycle(
     failure = { error };
   }
   const cleanup = async () => {
-    await AsyncWorkScope.runWhenAllIdle(
-      () => [work],
-      () => work.run(() => work.drain()),
-    );
-    await resolvedContextEngine?.dispose?.();
+    try {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () => resolvedContextEngine?.dispose?.(),
+      );
+    } finally {
+      await work.run(() => work.drain());
+    }
   };
   if (work.hasPendingWork) {
     // A timeout can return before raw compaction settles. Its owner retains

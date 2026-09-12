@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { moduleResolve } from "import-meta-resolve";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -138,6 +137,56 @@ export function createPluginDependencyLookup(
   };
 }
 
+function pluginDependencyNames(manifest: Record<string, unknown> | undefined): Set<string> {
+  return new Set([
+    ...Object.keys(manifest?.dependencies ?? {}),
+    ...Object.keys(manifest?.optionalDependencies ?? {}),
+    ...Object.keys(manifest?.peerDependencies ?? {}),
+  ]);
+}
+
+type PluginNativeDependencyScope = { prepareDependencies?: () => void };
+
+export type PluginModuleCapture = {
+  prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
+  nativeScope: PluginNativeDependencyScope;
+  capture: (
+    specifier: string,
+    conditions: readonly string[],
+  ) => { target: URL } | { retryNative: true } | undefined;
+};
+
+/** Native resolvers need declared package lookups before they can resolve a deferred import. */
+export function createPluginNativeDependencyScopes(
+  resolve: ReturnType<typeof createPluginDependencyResolver>,
+  capture: (name: string, importer: string, root: string) => void,
+) {
+  const scopes = new Map<string, PluginNativeDependencyScope>();
+  return (source: string, manifest: Record<string, unknown> | undefined) => {
+    const key = path.dirname(source);
+    let scope = scopes.get(key);
+    if (!scope) {
+      const dependencies = [...pluginDependencyNames(manifest)].filter(
+        (name) => name !== "openclaw" && name !== "@openclaw/plugin-sdk",
+      );
+      scope = {
+        prepareDependencies: dependencies.length
+          ? () => {
+              for (const name of dependencies) {
+                const dependency = resolve(name, source);
+                if (dependency) {
+                  capture(name, source, dependency);
+                }
+              }
+            }
+          : undefined,
+      };
+      scopes.set(key, scope);
+    }
+    return scope;
+  };
+}
+
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
@@ -150,13 +199,8 @@ export function capturePluginDependencies(params: {
     optionalDependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
   } = params.manifestFile ? JSON.parse(fs.readFileSync(params.manifestFile, "utf8")) : {};
-  const dependencyNames = new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.optionalDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ]);
   const dependencies = [
-    ...[...dependencyNames].toSorted().map((name) => ({
+    ...[...pluginDependencyNames(manifest)].toSorted().map((name) => ({
       name,
       importer: path.join(params.root, "package.json"),
     })),
@@ -274,20 +318,13 @@ export const importTargetNames = (value: unknown): string[] => {
   return value && typeof value === "object" ? Object.values(value).flatMap(importTargetNames) : [];
 };
 
-/** Enumerate declared branches for acquisition; the runtime still selects its conditions. */
-function* pluginPackageTargetBranches(
-  value: unknown,
-  conditions: string[] = [],
-): Generator<{ target: string; conditions: string[] }> {
+/** Capture declared targets; native loading owns conditions and subpath selection. */
+function* pluginPackageTargets(value: unknown): Generator<string> {
   if (typeof value === "string") {
-    yield { target: value, conditions };
-  } else if (Array.isArray(value)) {
-    for (const item of value) {
-      yield* pluginPackageTargetBranches(item, conditions);
-    }
+    yield value;
   } else if (value && typeof value === "object") {
-    for (const [condition, target] of Object.entries(value)) {
-      yield* pluginPackageTargetBranches(target, [...conditions, condition]);
+    for (const target of Object.values(value)) {
+      yield* pluginPackageTargets(target);
     }
   }
 }
@@ -298,7 +335,7 @@ function visitPluginPackageTargetFiles(params: {
   boundary: string;
   target: string;
   wildcard: boolean;
-  visit: (filename: string, subpath?: string) => void;
+  visit: (filename: string) => void;
 }): void {
   if (!params.target.startsWith("./")) {
     return;
@@ -358,9 +395,8 @@ function visitPluginPackageTargetFiles(params: {
       }
       ancestors.delete(real);
     } else if (stat.isFile()) {
-      const match = matcher?.exec(source);
-      if (!matcher || match) {
-        params.visit(source, match?.[1]?.split(path.sep).join("/"));
+      if (!matcher || matcher.test(source)) {
+        params.visit(source);
       }
     }
   };
@@ -412,7 +448,6 @@ export function createPluginPackageMetadataCapture(params: {
     string,
     {
       manifest?: Record<string, unknown> | null;
-      lookups: Map<string, string>;
       prepareAliases(manifest: Record<string, unknown>): void;
     }
   >();
@@ -451,80 +486,24 @@ export function createPluginPackageMetadataCapture(params: {
         Object.keys(packageExports).some((key) => key.startsWith("."))
           ? (asOptionalRecord(packageExports) ?? {})
           : { ".": packageExports };
-      const lookups = new Map(scope.lookups);
-      if (typeof manifest.name === "string") {
-        lookups.set(manifest.name, metadata);
-      }
       const declarations = [
-        ...Object.entries(asOptionalRecord(manifest.imports) ?? {}).map(([key, value]) => ({
-          key,
-          value,
-          contexts: [{ request: key, parent: metadata }],
-        })),
-        ...Object.entries(exportMap).map(([key, value]) => ({
-          key,
-          value,
-          contexts: [...lookups].map(([name, parent]) => ({
-            request: name + key.slice(1),
-            parent,
-          })),
-        })),
+        ...Object.entries(asOptionalRecord(manifest.imports) ?? {}),
+        ...Object.entries(exportMap),
       ];
-      for (const { key, value, contexts } of declarations) {
-        if (contexts.length === 0) {
-          continue;
-        }
-        for (const { target, conditions } of pluginPackageTargetBranches(value)) {
+      for (const [key, value] of declarations) {
+        for (const target of pluginPackageTargets(value)) {
           visitPluginPackageTargetFiles({
             metadata: sourceMetadata,
             boundary: owner.sourceRoot,
             target,
             wildcard: key.includes("*"),
-            visit(filename, subpath) {
-              if (subpath === undefined) {
-                owner.captureTarget(
-                  path.join(
-                    path.dirname(metadata),
-                    path.relative(path.dirname(sourceMetadata), filename),
-                  ),
-                );
-                return;
-              }
-              const encoded = subpath.split("/").map(encodeURIComponent).join("/");
-              for (const { request, parent } of contexts) {
-                let selected: URL;
-                try {
-                  selected = moduleResolve(
-                    request.replaceAll("*", encoded),
-                    pathToFileURL(parent),
-                    new Set(conditions),
-                  );
-                } catch (error) {
-                  // Validate specificity and package '*' substitution with the existing resolver.
-                  if (
-                    !(error instanceof Error) ||
-                    !("url" in error) ||
-                    typeof error.url !== "string"
-                  ) {
-                    continue;
-                  }
-                  selected = new URL(error.url);
-                }
-                if (selected.protocol !== "file:") {
-                  continue;
-                }
-                const captured = fileURLToPath(selected);
-                const original = path.join(
-                  path.dirname(sourceMetadata),
-                  path.relative(path.dirname(metadata), captured),
-                );
-                if (
-                  fs.existsSync(original) &&
-                  fs.realpathSync(original) === fs.realpathSync(filename)
-                ) {
-                  params.packageForFile(captured)?.captureTarget(captured);
-                }
-              }
+            visit(filename) {
+              owner.captureTarget(
+                path.join(
+                  path.dirname(metadata),
+                  path.relative(path.dirname(sourceMetadata), filename),
+                ),
+              );
             },
           });
         }
@@ -539,7 +518,6 @@ export function createPluginPackageMetadataCapture(params: {
       }
       let aliasesPrepared = false;
       metadataScopes.set(metadata, {
-        lookups: new Map(),
         prepareAliases(manifest) {
           if (!aliasesPrepared) {
             prepareAliases(manifest);
@@ -552,17 +530,17 @@ export function createPluginPackageMetadataCapture(params: {
     setManifest(metadata: string, manifest: Record<string, unknown> | null | undefined) {
       metadataScopes.get(metadata)!.manifest = manifest;
     },
-    addLookup(metadata: string, name: string, importer: string) {
-      const scope = metadataScopes.get(metadata)!;
-      if (!scope.lookups.has(name)) {
-        scope.lookups.set(name, importer);
-        pendingScopes.add(metadata);
-      }
-    },
     get pending() {
       return pendingScopes.size > 0;
     },
-    prepare: prepareNativeScopes,
+    prepare(scope?: PluginNativeDependencyScope) {
+      // Bun invokes resolution hooks only after a package target exists.
+      if (scope?.prepareDependencies) {
+        scope.prepareDependencies();
+        delete scope.prepareDependencies;
+      }
+      prepareNativeScopes();
+    },
     createScope({
       root,
       destination,

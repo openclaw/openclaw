@@ -32,7 +32,7 @@ export type RedactMatch = ReturnType<typeof readRedactMatch>;
  * groups uses "" for unmatched captures; the last nonempty capture selects the
  * secret's last occurrence in match, or an empty array selects the whole match.
  */
-export type RedactMatcher = {
+type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
 };

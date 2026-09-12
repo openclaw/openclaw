@@ -2,15 +2,18 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import type { PortUsage } from "../../infra/ports.js";
 
-export type GatewayRestartWaitOutcome =
-  | "healthy"
-  | "plugin-errors"
-  | "channel-errors"
-  | "version-mismatch"
-  | "build-id-mismatch"
-  | "stale-pids"
-  | "stopped-free"
-  | "timeout";
+export const GATEWAY_RESTART_WAIT_OUTCOMES = [
+  "healthy",
+  "plugin-errors",
+  "channel-errors",
+  "version-mismatch",
+  "build-id-mismatch",
+  "stale-pids",
+  "stopped-free",
+  "timeout",
+] as const;
+
+export type GatewayRestartWaitOutcome = (typeof GATEWAY_RESTART_WAIT_OUTCOMES)[number];
 
 export type UnavailablePluginHealthSummary = {
   id: string;

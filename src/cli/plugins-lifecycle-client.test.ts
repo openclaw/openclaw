@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
@@ -71,6 +74,24 @@ describe("plugin lifecycle CLI transport", () => {
       );
     },
   );
+
+  it("does not select offline mutation when an existing owner cannot be inspected", async () => {
+    const { readActiveGatewayLockIdentity, GatewayLockError } = await vi.importActual<
+      typeof import("../infra/gateway-lock.js")
+    >("../infra/gateway-lock.js");
+    await withTestDir({ prefix: "plugin-lifecycle-owner-" }, async (dir) => {
+      await fs.writeFile(path.join(dir, "gateway.state.lock"), "{");
+      mocks.lock.mockImplementation((options) =>
+        readActiveGatewayLockIdentity({
+          ...options,
+          env: { OPENCLAW_STATE_DIR: dir, OPENCLAW_CONFIG_PATH: path.join(dir, "openclaw.json") },
+          lockDir: dir,
+        }),
+      );
+      await expect(resolvePluginLifecycleGateway()).rejects.toBeInstanceOf(GatewayLockError);
+      expect(mocks.call).not.toHaveBeenCalled();
+    });
+  });
 
   it("propagates a lost reply without retrying a possibly committed mutation", async () => {
     const failure = new Error("connection lost");

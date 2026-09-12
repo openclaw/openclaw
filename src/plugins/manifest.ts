@@ -226,6 +226,7 @@ export function loadPluginManifest(
     raw.autoEnableWhenConfiguredProviders,
   );
   const providers = normalizeTrimmedStringList(raw.providers);
+  const channels = normalizeTrimmedStringList(raw.channels);
   const contracts = capabilityNormalizers.normalizeManifestContracts(raw.contracts);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
@@ -254,7 +255,11 @@ export function loadPluginManifest(
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
     kind: parsePluginKind(raw.kind),
-    channels: normalizeTrimmedStringList(raw.channels),
+    channels,
+    channelAccountKeyPolicies: setupNormalizers.normalizeChannelAccountKeyPolicies(
+      raw.channelAccountKeyPolicies,
+      channels,
+    ),
     providers,
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
     capabilityCatalogEntry:

@@ -22,7 +22,6 @@ import {
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
-import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import {
   fenceScheduledGatewayContextResolver,
   runWithScheduledGatewayContext,
@@ -201,7 +200,7 @@ function startPendingOutboundDeliveryRecovery(params: {
               return;
             }
             assertQueuedConversationDeliveryAttemptAuthorized({
-              config: resolveGatewayPluginConfig({ config: getRuntimeConfig() }),
+              config: getRuntimeConfig(),
               agentId: attemptAuthority.agentId,
               operationId: attemptAuthority.operationId,
               ...(attemptAuthority.storePath ? { storePath: attemptAuthority.storePath } : {}),

@@ -127,8 +127,9 @@ and in Nix mode (`OPENCLAW_NIX_MODE=1`), including config composed with `$includ
 It preserves config and installation state. If changed capabilities need new
 consent, record that acceptance through the deployment owner before reloading.
 
-Changed declared capabilities may require another review. Interactive callers are
-prompted; use `--accept-capabilities` only after reviewing the change. If preparation
+Changed declared capabilities may require another review. Interactive text output
+prompts for consent; `--json` never prompts. Use `--accept-capabilities` only after
+reviewing the change, including when combining it with `--json`. If preparation
 fails, the error reports whether a replacement was published. A failure after
 publication can leave the new generation active; inspect the reported state before
 retrying.

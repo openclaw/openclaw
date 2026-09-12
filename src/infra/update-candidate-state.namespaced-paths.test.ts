@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import {
@@ -10,15 +9,12 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   readUpdateStateSchemaVersions,
-  type snapshotUpdateCandidateState,
   updateStateSchemaVersionsMatch,
-  UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 
 let root: string;
 beforeEach(async () => {
@@ -41,31 +37,13 @@ async function createDatabase(file: string): Promise<void> {
   }
 }
 
-async function runSnapshotWorker(
-  input: Omit<Parameters<typeof snapshotUpdateCandidateState>[0], "candidateRoot">,
+function runSnapshotWorker(
+  input: Omit<Parameters<typeof runUpdateCandidateSnapshotWorker>[0], "candidateRoot">,
 ) {
-  // Backup/VACUUM cannot be cancelled in-process; use the canary's worker before fixture cleanup.
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({
-        ...input,
-        candidateRoot: path.join(root, "candidate-host"),
-        mode: "snapshot",
-      }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
-  );
-  expect(result.code, result.stderr.toString("utf8")).toBe(0);
-  return UpdateCandidateStateSnapshotSchema.parse(JSON.parse(result.stdout.toString("utf8")))
-    .versions;
+  return runUpdateCandidateSnapshotWorker({
+    ...input,
+    candidateRoot: path.join(root, "candidate-host"),
+  });
 }
 
 // Windows registries can carry extended-length \\?\ agent paths (issue #144581):

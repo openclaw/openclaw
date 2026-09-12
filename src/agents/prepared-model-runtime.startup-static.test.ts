@@ -146,7 +146,11 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });
-      return { modelCatalog: catalog, configuredRuntimeModels: agentFacts.configuredRuntimeModels };
+      return {
+        modelCatalog: catalog,
+        runtimeModels: new Map(),
+        configuredRuntimeModels: agentFacts.configuredRuntimeModels,
+      };
     },
     loadAuth: async () => ({
       authStore: { version: 1, profiles: {} },

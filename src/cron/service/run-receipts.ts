@@ -1,5 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { isCronSelfRemovalCurrent, type CronActiveJobMarker } from "../active-jobs.js";
+import {
+  isCronSelfRemovalCurrent,
+  noteActiveCronJobScheduleMutation,
+  type CronActiveJobMarker,
+} from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
@@ -112,18 +117,42 @@ export function cronRunReceiptMutationHooks(params: {
   jobId: string;
   ownerChanged: boolean;
   triggerStateChanged: boolean;
+  scheduleChangedJob?: CronJob;
 }): CronStoreTransactionHooks | undefined {
   const ownerHooks = params.ownerChanged ? cronRunReceiptOwnerMutationHooks(params) : undefined;
-  if (!ownerHooks && !params.triggerStateChanged) {
+  if (!ownerHooks && !params.triggerStateChanged && !params.scheduleChangedJob) {
     return undefined;
   }
   return {
     ...ownerHooks,
     beforeWrite: (database) => {
+      if (params.scheduleChangedJob) {
+        const current = loadedCronStoreFromRows(
+          loadCronRows(
+            database,
+            cronStoreKey(params.state.deps.storePath),
+            new Set([params.jobId]),
+          ),
+        ).store.jobs[0];
+        if (current?.state.runningAtMs !== undefined) {
+          // A fresh nonce makes every committed edit a distinct state delta,
+          // even if a passive editor observed a retired run that has since ended.
+          params.scheduleChangedJob.state.runningScheduleChangeId = randomUUID();
+        } else {
+          delete params.scheduleChangedJob.state.runningScheduleChangeId;
+        }
+      }
       if (params.triggerStateChanged) {
         retireServiceCronRunTriggerStateInDatabase({ ...params, database });
       }
       ownerHooks?.beforeWrite?.(database);
+    },
+    afterCommit: () => {
+      ownerHooks?.afterCommit?.();
+      if (params.scheduleChangedJob) {
+        // Retire live ownership with the durable edit, never on a failed write.
+        noteActiveCronJobScheduleMutation(params.jobId);
+      }
     },
   };
 }
@@ -144,17 +173,19 @@ function retireServiceCronRunTriggerStateInDatabase(params: {
   const job = loadedCronStoreFromRows(loadCronRows(database, storeKey, new Set([jobId]))).store
     .jobs[0];
   const startedAtMs = job?.state.runningAtMs;
-  if (startedAtMs === undefined) {
+  if (!job || startedAtMs === undefined) {
     return;
   }
-  // An owner edit can terminalize the receipt before its completed task is
-  // reconciled. The selected task's exact receipt still owns those pending facts.
-  const { receiptId } = findCronTaskRunRecoveryInDatabase({
-    database,
-    jobId,
-    storeKey,
-    startedAt: startedAtMs,
-  });
+  // Owner edits close execution authority before scheduler reconciliation.
+  // Only legacy markers without a receipt association need task-history fallback.
+  const receiptId =
+    job.state.runningReceiptId ??
+    findCronTaskRunRecoveryInDatabase({
+      database,
+      jobId,
+      storeKey,
+      startedAt: startedAtMs,
+    }).receiptId;
   if (receiptId) {
     retireCronRunTriggerStateInDatabase({
       database,

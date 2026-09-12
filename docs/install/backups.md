@@ -38,7 +38,7 @@ committed state safely.
 
 ## Choose a path
 
-- One-off, everything, portable: `openclaw backup create` archive.
+- One-off state and workspace archive: `openclaw backup create`.
 - One database, compact and verified: `openclaw backup sqlite create`.
 - Versioned and incremental by content: `openclaw backup git create`.
 - Regular protection: provision the Gateway-owned backup automation.
@@ -48,6 +48,11 @@ committed state safely.
   `sqlite3_rsync`.
 
 ## Full archives
+
+Absolute symbolic links keep their original target locations, including links
+to separately backed-up config or credentials. Review these links before
+activating state on another host or at another path; see the
+[backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 
 ```bash
 openclaw backup create --output ~/Backups/openclaw --verify
@@ -352,7 +357,7 @@ openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 
 The target must not exist or must be empty, and it must not be inside the live
 state directory or any configured live agent directory. OpenClaw verifies
-archive structure, the manifest, hardlinks, symbolic-link containment, and
+archive structure, the manifest, hardlinks, symbolic-link entries, and
 SQLite databases before it writes the target. A non-empty target is refused,
 and a failed extraction cleans its incomplete output. The command never writes
 into live state or agent roots and has no force or in-place mode. Treat the

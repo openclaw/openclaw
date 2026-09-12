@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { PluginDiscoveryResult } from "./discovery.types.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
@@ -28,6 +29,7 @@ export type PluginProviderAuthAliasCandidate = {
 
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
+  channelAccountKeyPolicies?: ReadonlyMap<string, ChannelAccountKeyPolicy>;
   channelConfigs: ReadonlyMap<string, readonly string[]>;
   providers: ReadonlyMap<string, readonly string[]>;
   modelCatalogProviders: ReadonlyMap<string, readonly string[]>;

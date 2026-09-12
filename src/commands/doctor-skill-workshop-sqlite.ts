@@ -90,9 +90,12 @@ export type LegacyWorkshopMigrationInspection = {
 export async function inspectLegacySkillWorkshopMigration(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  // Lint's private database snapshot does not change persisted filesystem targets.
+  stateEnv?: NodeJS.ProcessEnv;
 }): Promise<LegacyWorkshopMigrationInspection> {
   const env = params.env ?? process.env;
-  const { records, appliedEvents } = await readWorkshopMigrationRecords(env, true);
+  const stateEnv = params.stateEnv ?? env;
+  const { records, appliedEvents } = await readWorkshopMigrationRecords(stateEnv, true);
   // Lint needs ownership counts, not adoption verification through writable recovery readers.
   const { external } = classifyWorkshopRelocation(
     records.filter(({ record }) => !isReadOnlyRehearsalProposal(record, env)),
@@ -103,6 +106,7 @@ export async function inspectLegacySkillWorkshopMigration(params: {
   const automationReferences = await inspectWorkshopAutomationReferences({
     config: params.config,
     env,
+    stateEnv,
     records,
     appliedEvents,
   });

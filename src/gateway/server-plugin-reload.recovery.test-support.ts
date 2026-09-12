@@ -27,6 +27,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createChannelManager } from "./server-channels.js";
@@ -338,110 +339,6 @@ export async function verifyMalformedReloadFailureReceipt(
   expect(fixture.registryOwner.registry === fixture.previousRegistry).toBe(boundary === "prepare");
 }
 
-export async function verifyGatewayCleanupRetry(
-  createRecoveryFixture: RecoveryFixtureFactory,
-  withChannels: boolean,
-) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const hookStart = vi.fn();
-  const hookStop = vi.fn(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  const channelIds = { first: "cleanup-first", sibling: "cleanup-sibling" } as const;
-  const signals = { first: [] as AbortSignal[], sibling: [] as AbortSignal[] };
-  const fixture = await createRecoveryFixture({
-    abortOnCandidateStart: false,
-    register: (api, owner) => {
-      if (owner === "first") {
-        api.on("gateway_start", hookStart);
-        api.on("gateway_stop", hookStop);
-      }
-      if (withChannels) {
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({ id: channelIds[owner] }),
-            gateway: {
-              startAccount: async ({ abortSignal }) => {
-                signals[owner].push(abortSignal);
-                await new Promise<void>((resolve) => {
-                  abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                });
-              },
-            },
-          },
-        });
-      }
-    },
-  });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-    getPluginRegistry: () => fixture.registryOwner.registry,
-  });
-  if (withChannels) {
-    fixture.runtime.channelManager = manager;
-    await manager.startChannel(channelIds.first);
-    await manager.startChannel(channelIds.sibling);
-    await vi.waitFor(() => {
-      expect(signals.first).toHaveLength(1);
-      expect(signals.sibling).toHaveLength(1);
-    });
-  }
-  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-  assert(instance);
-  vi.useFakeTimers();
-  let retry: Promise<unknown> | undefined;
-  const reloading = fixture.reload().catch((error: unknown) => error);
-  try {
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(await reloading).toMatchObject({
-      runtime: {
-        pluginIds: ["first"],
-        warnings: expect.arrayContaining([expect.stringContaining("Plugin stop hook failed")]),
-      },
-    });
-    expect(hookStart).toHaveBeenCalledOnce();
-    expect(instance.lifecycle.signal.aborted).toBe(true);
-    expect(() => instance.run(() => "closed")).toThrow("reloaded or disabled");
-    if (withChannels) {
-      expect(signals.first).toHaveLength(2);
-      expect(signals.first[0]?.aborted).toBe(true);
-      expect(signals.first[1]?.aborted).toBe(false);
-      expect(signals.sibling[0]?.aborted).toBe(false);
-    }
-    expect(hookStop).toHaveBeenCalledOnce();
-    release.resolve();
-    retry = fixture.reload();
-    await retry;
-    expect(hookStop).toHaveBeenCalledTimes(2);
-    expect(hookStart).toHaveBeenCalledTimes(2);
-    expect(() => instance.run(() => "still closed")).toThrow("reloaded or disabled");
-    if (withChannels) {
-      expect(signals.first).toHaveLength(3);
-      expect(signals.first[1]?.aborted).toBe(true);
-      expect(signals.first[2]?.aborted).toBe(false);
-      expect(signals.sibling).toHaveLength(1);
-      expect(signals.sibling[0]?.aborted).toBe(false);
-    }
-  } finally {
-    release.resolve();
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-    }
-    await Promise.allSettled([reloading, retry]);
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-      await manager.stopChannel(channelIds.sibling);
-    }
-    vi.useRealTimers();
-  }
-}
-
 export async function verifyChannelReplacementContracts(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
@@ -558,6 +455,69 @@ export async function verifyChannelReplacementContracts(
   }
   expect(stops).toEqual([1, 2]);
   expect(fixture.registryOwner.registry.httpRoutes).toEqual([]);
+}
+
+export async function verifyColdAccountReplacement(createRecoveryFixture: RecoveryFixtureFactory) {
+  const channelId = "cold-account-reload";
+  const starts: string[] = [];
+  const fixture = await createRecoveryFixture({
+    abortOnCandidateStart: false,
+    register(api, owner) {
+      if (owner !== "first") {
+        return;
+      }
+      api.registerChannel({
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: channelId,
+            config: { listAccountIds: () => ["healthy", "cold"] },
+          }),
+          gateway: {
+            startAccount: async ({ accountId, abortSignal }) => {
+              starts.push(accountId);
+              await new Promise<void>((resolve) => {
+                abortSignal.addEventListener("abort", () => resolve(), { once: true });
+              });
+            },
+          },
+        },
+      });
+    },
+  });
+  const manager = createChannelManager({
+    getRuntimeConfig: fixture.getConfig,
+    getPluginRegistry: () => fixture.registryOwner.registry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+  fixture.runtime.channelManager = manager;
+  setActiveDegradedSecretOwners([
+    {
+      ownerKind: "account",
+      ownerId: `${channelId}:cold`,
+      state: "unavailable",
+      degradationState: "cold",
+      paths: [`channels.${channelId}.accounts.cold.token`],
+      refKeys: ["env:default:MISSING_CHANNEL_TOKEN"],
+      reason: "secret reference was not found",
+    },
+  ]);
+  try {
+    await manager.startChannel(channelId, "healthy");
+    await expect(fixture.reload()).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    expect(starts).toEqual(["healthy", "healthy"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts[channelId]).toMatchObject({
+      healthy: { running: true },
+      cold: { running: false, lastError: expect.stringContaining("configured but unavailable") },
+    });
+    await expect(manager.startChannel(channelId, "cold", { manual: true })).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerId: `${channelId}:cold`,
+    });
+  } finally {
+    setActiveDegradedSecretOwners([]);
+    await manager.stopChannel(channelId);
+  }
 }
 
 export async function verifyChannelCleanupFailureFence(

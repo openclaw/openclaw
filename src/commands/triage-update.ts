@@ -7,6 +7,8 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { writeTextAtomic } from "../infra/json-files.js";
+import { normalizeUpdateFailureFacts } from "../infra/update-failure-facts.js";
+import { UpdateFailureFactSchema } from "../infra/update-run-schema.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
@@ -36,6 +38,7 @@ export const updateFailureSchema = z
             exitCode: z.number().int().nullable(),
             stdoutTail: z.string().nullish(),
             stderrTail: z.string().nullish(),
+            failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
             termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
             advisory: z
               .object({
@@ -300,6 +303,9 @@ export function sanitizeTriageUpdateFailure(
         // remain visible; stdout keeps its tail-only outcome excerpt.
         stderrTail: text(step.stderrTail, 384, "ends"),
         stdoutTail: text(step.stdoutTail, 160, "tail"),
+        failureFacts: step.failureFacts?.length
+          ? normalizeUpdateFailureFacts(step.failureFacts, redaction.env)
+          : undefined,
       })),
     },
     omittedDetails,
@@ -311,6 +317,8 @@ export function sanitizeTriageUpdateFailure(
       sanitized.result.steps.shift();
     } else if (removePluginDetails.length > 1) {
       removePluginDetails.pop()?.();
+    } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {
+      sanitized.result.steps[0]?.failureFacts?.pop();
     } else {
       throw new Error("Update failure diagnostics exceed the 4 KiB prompt limit.");
     }

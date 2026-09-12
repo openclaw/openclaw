@@ -182,6 +182,10 @@ describe("registered Control UI chat redaction", () => {
     `https://x.com/@user/status/${secret}`,
     `data:application/octet-stream;base64,AAAA/${secret}@`,
     `https://example.test:8080/path-${secret}`,
+    `https://example.test/${secret}@latest`,
+    `https://example.test/path-${secret}?foo=@`,
+    JSON.stringify([`${publicUrl}?safe=1`, publicUrl]),
+    JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl])),
   ])(
     "chat.send preserves %s in chat.history and recorded model input",
     async (url) => {
@@ -220,9 +224,9 @@ describe("registered Control UI chat redaction", () => {
       `https://example.test/#https://example.test/path-${masked}`,
     ],
     [
-      "at-sign beyond query cutoff",
-      `https://example.test/path-${secret}?foo=@`,
-      `https://example.test/path-${masked}?foo=@`,
+      "URL in parenthesized query value",
+      `https://example.test/?next=(https://example.test/path-${secret})`,
+      `https://example.test/?next=(https://example.test/path-${masked})`,
     ],
     ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) => [
       `userinfo before ${punctuation}`,

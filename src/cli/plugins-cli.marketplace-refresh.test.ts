@@ -91,6 +91,10 @@ describe("plugins marketplace refresh", () => {
         etag: '"abc"',
       }),
     );
+    mocks.pluginLifecycleGateway.mockResolvedValue({
+      runtime: { generation: 4 },
+      warnings: ["Previous plugin service could not stop."],
+    });
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -127,6 +131,10 @@ describe("plugins marketplace refresh", () => {
         verifiedAt: "2026-06-23T00:01:02.000Z",
       },
     });
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Previous plugin service could not stop."),
+    );
   });
 
   it("prints bounded signed feed trust state in text output", async () => {
@@ -134,11 +142,16 @@ describe("plugins marketplace refresh", () => {
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
       createHostedMarketplaceFeedFixture({ entries: [{ name: "@acme/calendar" }] }),
     );
+    mocks.pluginLifecycleGateway.mockResolvedValue({
+      runtime: { generation: 4 },
+      warnings: ["Previous plugin service could not stop."],
+    });
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({});
 
     const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(output).toContain("Previous plugin service could not stop.");
     expect(output).toContain("Marketplace catalog applied in Gateway generation 4.");
     expect(output).toContain("Trust:");
     expect(output).toContain("signed by acme-root-2026 (1/1)");

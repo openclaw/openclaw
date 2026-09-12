@@ -40,7 +40,7 @@ export type PluginLifecycleGateway = <T>(
 
 /** Select the local runtime owner before acquiring a lease the Gateway also needs. */
 export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGateway | null> {
-  const owner = await readActiveGatewayLockIdentity();
+  const owner = await readActiveGatewayLockIdentity({ requireInspection: true });
   if (!owner) {
     return null;
   }

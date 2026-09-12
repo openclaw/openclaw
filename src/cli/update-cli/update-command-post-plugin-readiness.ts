@@ -127,6 +127,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     ...pluginUpdate,
     status: "error",
     reason: "post-plugin-update-readiness-failed",
+    failureFacts: report.failureFacts,
     warnings: [
       ...(pluginUpdate.warnings ?? []),
       ...report.findings.map((finding) => readinessWarning(finding)),

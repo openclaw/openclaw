@@ -43,11 +43,11 @@ describe("Signal Doctor account key repair", () => {
   });
 
   it.each(["Work Phone", "Default.", "!!!"])(
-    "preserves a working inherited account for %s",
+    "normalizeCompatibilityConfig and doctor preserve an account without its own number for %s",
     async (key) => {
       const cfg: OpenClawConfig = {
         channels: {
-          signal: { account: "+12025550123", accounts: { [key]: { account: "+12025550124" } } },
+          signal: { account: "+12025550123", accounts: { [key]: { enabled: false } } },
         },
       };
       const promoted = moveSingleAccountChannelSectionToDefaultAccount({
@@ -84,7 +84,7 @@ describe("Signal Doctor account key repair", () => {
     },
   );
 
-  it("keeps the active default transport while repairing an independent named account", () => {
+  it("normalizeCompatibilityConfig keeps root transport while normalizing accounts with owned numbers", () => {
     const cfg: OpenClawConfig = {
       channels: {
         signal: {
@@ -98,15 +98,15 @@ describe("Signal Doctor account key repair", () => {
     };
     const result = normalizeCompatibilityConfig({ cfg });
     expect(Object.keys(result.config.channels?.signal?.accounts ?? {})).toEqual([
-      "Default.",
+      "default",
       "work-phone",
     ]);
     expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).baseUrl).toBe(
       "http://127.0.0.1:18996",
     );
-    expect(
-      resolveSignalAccount({ cfg: result.config, accountId: "default" }).config.account,
-    ).toBeUndefined();
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).config.account).toBe(
+      "+12025550124",
+    );
   });
 });
 

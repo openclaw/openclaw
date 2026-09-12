@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
@@ -55,6 +57,7 @@ async function fixture(
     restartRequired?: boolean;
     addProviderDuringLogin?: boolean;
     fresh?: boolean;
+    surface?: "cli" | "gateway";
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -226,7 +229,7 @@ async function fixture(
         authChoice: choice.choiceId,
         modelRef,
         nativeSessionCatalogsEnabled: false,
-        surface: "cli",
+        surface: options.surface ?? "cli",
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         prompter: activationConfirmed ? undefined : prompter,
         activationConfirmed,
@@ -409,6 +412,38 @@ describe("setup activation credentials and configuration", () => {
       );
     },
   );
+
+  it("records persisted root hashes when setup retains an unrelated include", async () => {
+    const setup = await fixture({ surface: "gateway" });
+    const includePath = path.join(path.dirname(setup.configPath), "logging.json5");
+    const included = '{level:"warn"}\n';
+    const before = `${JSON.stringify({ ...setup.config, logging: { $include: "./logging.json5" } })}\n`;
+    await fs.writeFile(includePath, included);
+    await fs.writeFile(setup.configPath, before);
+    clearConfigCache();
+    const beforeSnapshot = await readConfigFileSnapshot();
+
+    const result = await setup.activate();
+
+    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+    const after = await fs.readFile(setup.configPath, "utf8");
+    const afterSnapshot = await readConfigFileSnapshot();
+    expect(after).not.toBe(before);
+    expect(afterSnapshot.parsed).toMatchObject({ logging: { $include: "./logging.json5" } });
+    expect(await fs.readFile(includePath, "utf8")).toBe(included);
+    const entries = listSystemAgentAuditEntriesForTests();
+    expect(entries).toHaveLength(1);
+    const entry = entries[0]?.value;
+    assert.ok(entry);
+    expect(entry).toMatchObject({
+      operation: "openclaw.setup",
+      configPath: setup.configPath,
+      configHashBefore: createHash("sha256").update(before).digest("hex"),
+      configHashAfter: createHash("sha256").update(after).digest("hex"),
+    });
+    expect(entry.configHashBefore).not.toBe(beforeSnapshot.hash);
+    expect(entry.configHashAfter).not.toBe(afterSnapshot.hash);
+  });
 
   it("retains the saved sign-in after rejection and retries without another login", async () => {
     const setup = await fixture();

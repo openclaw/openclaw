@@ -36,7 +36,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelAccountStartOutcome } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -336,10 +335,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const rawChannel = (params as { channel?: unknown }).channel;
-    const runtimeConfig = context.getRuntimeConfig();
-    const cfg = resolveGatewayPluginConfig({
-      config: runtimeConfig,
-    });
+    const cfg = context.getRuntimeConfig();
     const runtime = context.getRuntimeSnapshot();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
     const requestedChannel =
@@ -607,6 +603,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     payload.statusIssues = collectGatewayChannelStatusIssues({
       payload,
       plugins: statusPlugins,
+      reloadingChannels: runtime.reloadingChannels,
       defaultAccountIds: defaultAccountIdMap,
       context,
       warnings: statusWarnings,
@@ -652,9 +649,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         startChannelAccount({
           channelId,
           accountId: parsedParams.accountId,
-          cfg: resolveGatewayPluginConfig({
-            config: context.getRuntimeConfig(),
-          }),
+          cfg: context.getRuntimeConfig(),
           context,
           plugin,
         }),

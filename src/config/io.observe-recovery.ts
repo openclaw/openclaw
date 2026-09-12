@@ -23,7 +23,7 @@ import {
   updateConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import { hashConfigRaw, resolveConfigSnapshotHash } from "./io.read-helpers.js";
+import { hashConfigRaw } from "./io.read-helpers.js";
 import type {
   ConfigRecoveryCandidatePreparation,
   NormalizedConfigIoDeps,
@@ -584,7 +584,6 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     raw: snapshot.raw,
     parsed: snapshot.parsed,
     resolved: snapshot.resolved,
@@ -672,7 +671,6 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   const now = new Date().toISOString();
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     raw: snapshot.raw,
     parsed: snapshot.parsed,
     resolved: snapshot.resolved,

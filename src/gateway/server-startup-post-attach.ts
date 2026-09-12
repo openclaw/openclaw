@@ -677,6 +677,9 @@ export async function startGatewaySidecars(params: {
       },
       stop: (options) => {
         pluginServicesStopRequested = true;
+        // Pending startup owns no services and may be waiting on this replacement.
+        resolvePluginServicesOwner?.(null);
+        resolvePluginServicesOwner = undefined;
         // Share the service owner, never a caller's expired replacement deadline.
         const stopPromise = ownedPluginServices.promise.then((handle) => handle?.stop(options));
         const deadlineAtMs = options?.strict ? options.deadlineAtMs : undefined;

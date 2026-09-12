@@ -39,6 +39,14 @@ classification stays with the pure record types, so decoding does not load
 provider or plugin runtime ownership. These operations and their transaction
 callbacks remain synchronous; this separation does not move SQL to a worker.
 
+SQLite worker transport preserves complete result values. Results within the
+64 MiB inline reply budget keep their existing reply path; larger results are
+serialized once and transferred in 8 MiB frames. The original operation retains
+its worker until the complete result and cleanup are acknowledged, including
+during shutdown. Framing does not paginate or repeat the database query, truncate
+results, or change request and queue budgets. Callers still materialize their
+complete result in memory.
+
 Acquire a connection once for an operation and pass that exact connection
 through its transactional helpers. SQLite write callbacks remain synchronous:
 finish asynchronous planning first, then reread authoritative rows after write

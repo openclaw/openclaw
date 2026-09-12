@@ -106,6 +106,154 @@ describe("config cli integration", () => {
     );
   });
 
+  it("classifies real unset model metadata without losing authored values", async () => {
+    const providerId = "qa-config-absence";
+    const providerPath = `models.providers.${providerId}`;
+    const modelPath = `${providerPath}.models[0]`;
+    const syntheticSecret = "qa-config-get-redaction-marker";
+    const raw = `${JSON.stringify(
+      {
+        agents: { entries: { main: {} } },
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://provider.example.invalid/v1",
+              api: "openai-completions",
+              apiKey: syntheticSecret,
+              models: [
+                {
+                  id: "qa-model",
+                  name: "QA Model",
+                  params: { qaNull: null, qaFalse: false, qaZero: 0, qaEmpty: "" },
+                },
+                {
+                  id: "qa-sized-model",
+                  name: "QA Sized Model",
+                  contextWindow: 32768,
+                  contextTokens: 16384,
+                },
+              ],
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+    await withConfigFileHarness("openclaw-config-cli-unset-model-", raw, async ({ configPath }) => {
+      const snapshot = await configRuntime.readConfigFileSnapshot({ observe: false });
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.issues).toEqual([]);
+      const authored = snapshot.sourceConfig.models?.providers?.[providerId]?.models[0];
+      const materialized = snapshot.config.models?.providers?.[providerId]?.models[0];
+      if (!authored || !materialized) {
+        throw new Error("Expected the authored and materialized model fixture");
+      }
+      for (const field of ["contextWindow", "contextTokens"] as const) {
+        expect(Object.hasOwn(authored, field)).toBe(false);
+        expect(materialized[field]).toBeUndefined();
+      }
+      expect(materialized.reasoning).toBe(false);
+
+      const get = (getterPath: string, json: boolean) => {
+        registeredRuntimeLogs.length = 0;
+        registeredRuntimeErrors.length = 0;
+        return runRegisteredConfigCommand([
+          "config",
+          "get",
+          getterPath,
+          ...(json ? ["--json"] : []),
+        ]);
+      };
+      await get(modelPath, true);
+      expect(registeredRuntimeErrors).toEqual([]);
+      expect(registeredRuntimeLogs).toHaveLength(1);
+      const modelJson = JSON.parse(registeredRuntimeLogs[0] ?? "");
+      expect(modelJson).toMatchObject({ id: "qa-model", reasoning: false });
+      expect(modelJson).not.toHaveProperty("contextWindow");
+      expect(modelJson).not.toHaveProperty("contextTokens");
+
+      const failures = [
+        {
+          field: "contextWindow",
+          prefix: "Config path is valid but unset",
+          remedy: "openclaw config set",
+        },
+        {
+          field: "contextTokens",
+          prefix: "Config path is valid but unset",
+          remedy: "openclaw config set",
+        },
+        {
+          field: "notAConfigField",
+          prefix: "Unknown config path",
+          remedy: "openclaw config schema",
+        },
+      ];
+      for (const { field, prefix, remedy } of failures) {
+        const getterPath = `${modelPath}.${field}`;
+        for (const json of [false, true]) {
+          await expect(get(getterPath, json)).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
+          let message: string;
+          if (json) {
+            expect(registeredRuntimeErrors).toEqual([]);
+            expect(registeredRuntimeLogs).toHaveLength(1);
+            const failure = JSON.parse(registeredRuntimeLogs[0] ?? "");
+            expect(failure).toEqual({
+              ok: false,
+              error: { type: "cli_error", message: expect.any(String) },
+            });
+            message = failure.error.message;
+          } else {
+            expect(registeredRuntimeLogs).toEqual([]);
+            expect(registeredRuntimeErrors).toHaveLength(1);
+            message = registeredRuntimeErrors[0] ?? "";
+          }
+          expect(message).toContain(`${prefix}: ${getterPath}.`);
+          expect(message).toContain(remedy);
+          expect(message).not.toContain(syntheticSecret);
+        }
+      }
+
+      const values = [
+        { path: `${modelPath}.params.qaNull`, value: null, text: "null" },
+        { path: `${modelPath}.params.qaFalse`, value: false, text: "false\n" },
+        { path: `${modelPath}.params.qaZero`, value: 0, text: "0\n" },
+        { path: `${modelPath}.params.qaEmpty`, value: "", text: "\n" },
+        { path: `${providerPath}.models[1].contextWindow`, value: 32768, text: "32768\n" },
+        { path: `${providerPath}.models[1].contextTokens`, value: 16384, text: "16384\n" },
+        {
+          path: `${providerPath}.apiKey`,
+          value: REDACTED_SENTINEL,
+          text: `${REDACTED_SENTINEL}\n`,
+        },
+      ];
+      for (const { path: getterPath, value, text } of values) {
+        for (const json of [false, true]) {
+          await get(getterPath, json);
+          expect(registeredRuntimeErrors).toEqual([]);
+          expect(registeredRuntimeLogs).toHaveLength(1);
+          if (json) {
+            expect(JSON.parse(registeredRuntimeLogs[0] ?? "")).toEqual(value);
+          } else {
+            expect(registeredRuntimeLogs).toEqual([text]);
+          }
+          expect(registeredRuntimeLogs.join("\n")).not.toContain(syntheticSecret);
+        }
+      }
+      await get(providerPath, true);
+      expect(JSON.parse(registeredRuntimeLogs[0] ?? "")).toMatchObject({
+        apiKey: REDACTED_SENTINEL,
+      });
+      expect(registeredRuntimeLogs.join("\n")).not.toContain(syntheticSecret);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+    });
+  });
+
   it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
     const schemaOnlySecrets = ["first-private-route", "second-private-route"];

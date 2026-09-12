@@ -10,9 +10,11 @@ import {
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
@@ -109,6 +111,9 @@ describe("doctor context-engine host compatibility", () => {
     async (disposalFails) => {
       const id = uniqueEngineId();
       const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(id, { record, registry });
       const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
       resources.attach(registry);
       const retired = vi.fn();
@@ -116,7 +121,13 @@ describe("doctor context-engine host compatibility", () => {
       const disposalStarted = createDeferred();
       const disposalGate = createDeferred();
       class DoctorEngine extends LegacyContextEngine {
-        override readonly info = { id, name: "Doctor custody fixture" };
+        override readonly info = {
+          id,
+          name: "Doctor custody fixture",
+          get hostRequirements(): ContextEngine["info"]["hostRequirements"] {
+            return undefined;
+          },
+        };
         async dispose() {
           expect(retired).not.toHaveBeenCalled();
           disposalStarted.resolve();
@@ -126,7 +137,12 @@ describe("doctor context-engine host compatibility", () => {
           }
         }
       }
-      registerContextEngineInRegistry(registry, id, () => new DoctorEngine(), "plugin:fixture");
+      registerContextEngineInRegistry(
+        registry,
+        id,
+        instance.wrap(() => new DoctorEngine()),
+        `plugin:${id}`,
+      );
       vi.mocked(acquirePluginRegistryForInspection).mockResolvedValue({
         registry,
         release: () => resources.release(),
@@ -153,8 +169,9 @@ describe("doctor context-engine host compatibility", () => {
         expect(retired).toHaveBeenCalledOnce();
       } finally {
         disposalGate.resolve();
-        await pending;
+        await pending.catch(() => {});
         await resources.release();
+        await instance.dispose();
         vi.mocked(acquirePluginRegistryForInspection).mockReset();
       }
     },

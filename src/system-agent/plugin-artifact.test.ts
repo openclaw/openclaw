@@ -24,6 +24,7 @@ vi.mock("../config/config.js", () => ({
     valid: true,
     config: {},
     parsed: mocks.parsed,
+    raw: `${JSON.stringify(mocks.parsed)}\n`,
     hash: "config",
   }),
 }));

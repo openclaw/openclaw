@@ -11,6 +11,8 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
+import { backupCreateCommand } from "../commands/backup.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -936,7 +938,7 @@ describe("createBackupArchive", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "does not promote a managed-skill link to its state ancestor into an archive root",
+    "backupCreateCommand does not promote a managed-skill link to its state ancestor into an archive root",
     async () => {
       await withOpenClawTestState(
         {
@@ -956,21 +958,24 @@ describe("createBackupArchive", () => {
           await fs.symlink(path.join("..", ".."), state.statePath("skills", "escape"), "dir");
 
           // An ancestor must not become a declared root: that would let the
-          // covered dedupe swallow the state asset and tar the whole ancestor
-          // tree. The planner declines, so the archive write stays fail-closed.
-          await expect(
-            createBackupArchive({
-              output: state.path("backup.tar.gz"),
-              includeWorkspace: false,
-            }),
-          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+          // covered dedupe swallow the state asset and tar the whole ancestor tree.
+          const result = await backupCreateCommand(createTestRuntime(), {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          expect(result.assets.some((asset) => asset.kind === "managed skill")).toBe(false);
+          expect(entries.some((entry) => entry.path.endsWith("/SKILL.md"))).toBe(false);
+          expect(entries.filter((entry) => entry.type === "SymbolicLink")).toHaveLength(1);
+          expect(result.externalSymbolicLinks).toHaveLength(1);
         },
       );
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "does not promote a managed-skill target containing another backup owner",
+    "backupCreateCommand does not promote a managed-skill target containing another backup owner",
     async () => {
       await withOpenClawTestState(
         {
@@ -997,19 +1002,23 @@ describe("createBackupArchive", () => {
             "dir",
           );
 
-          await expect(
-            createBackupArchive({
-              output: state.path("backup.tar.gz"),
-              includeWorkspace: false,
-            }),
-          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+          const result = await backupCreateCommand(createTestRuntime(), {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          expect(result.assets.some((asset) => asset.kind === "managed skill")).toBe(false);
+          expect(entries.some((entry) => entry.path.endsWith("/SKILL.md"))).toBe(false);
+          expect(entries.filter((entry) => entry.type === "SymbolicLink")).toHaveLength(1);
+          expect(result.externalSymbolicLinks).toHaveLength(1);
         },
       );
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "does not declare an external managed-skill target with incomplete metadata",
+    "backupCreateCommand does not declare an external managed-skill target with incomplete metadata",
     async () => {
       await withOpenClawTestState(
         {
@@ -1029,19 +1038,23 @@ describe("createBackupArchive", () => {
             "dir",
           );
 
-          await expect(
-            createBackupArchive({
-              output: state.path("backup.tar.gz"),
-              includeWorkspace: false,
-            }),
-          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+          const result = await backupCreateCommand(createTestRuntime(), {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          expect(result.assets.some((asset) => asset.kind === "managed skill")).toBe(false);
+          expect(entries.some((entry) => entry.path.endsWith("/SKILL.md"))).toBe(false);
+          expect(entries.filter((entry) => entry.type === "SymbolicLink")).toHaveLength(1);
+          expect(result.externalSymbolicLinks).toHaveLength(1);
         },
       );
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "does not declare an external managed-skill target whose SKILL.md escapes into the state asset",
+    "backupCreateCommand does not declare an external managed-skill target whose SKILL.md escapes into the state asset",
     async () => {
       await withOpenClawTestState(
         {
@@ -1069,14 +1082,16 @@ describe("createBackupArchive", () => {
             "dir",
           );
 
-          // The planner declines the escaping metadata, so the state asset's
-          // external link has no declared target and the write stays fail-closed.
-          await expect(
-            createBackupArchive({
-              output: state.path("backup.tar.gz"),
-              includeWorkspace: false,
-            }),
-          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+          const result = await backupCreateCommand(createTestRuntime(), {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          expect(result.assets.some((asset) => asset.kind === "managed skill")).toBe(false);
+          expect(entries.some((entry) => entry.path.endsWith("/SKILL.md"))).toBe(false);
+          expect(entries.filter((entry) => entry.type === "SymbolicLink")).toHaveLength(1);
+          expect(result.externalSymbolicLinks).toHaveLength(1);
         },
       );
     },
@@ -3299,57 +3314,93 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it.each([
+  it.runIf(process.platform !== "win32").each([
     {
-      label: "absolute",
+      label: "absolute file",
       relative: false,
       targetExists: true,
-      error: /Archive symbolic link target must be relative/iu,
+      directory: false,
+      internal: false,
+    },
+    {
+      label: "absolute directory",
+      relative: false,
+      targetExists: true,
+      directory: true,
+      internal: false,
     },
     {
       label: "dangling absolute",
       relative: false,
       targetExists: false,
-      error: /Archive symbolic link target must be relative/iu,
+      directory: false,
+      internal: false,
     },
     {
-      label: "declared-asset-escaping relative",
+      label: "external relative",
       relative: true,
       targetExists: true,
-      error: /Archive symbolic link is outside the declared backup assets/iu,
+      directory: false,
+      internal: false,
+    },
+    {
+      label: "internal relative",
+      relative: true,
+      targetExists: true,
+      directory: false,
+      internal: true,
     },
   ])(
-    "rejects $label symlink targets before publishing the archive",
-    async ({ relative, targetExists, error }) => {
-      if (process.platform === "win32") {
-        return;
-      }
-
+    "backupCreateCommand preserves and reports $label links through backupRestoreCommand",
+    async ({ relative, targetExists, directory, internal }) => {
       await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-backup-absolute-symlink-",
-          scenario: "minimal",
-        },
+        { layout: "state-only", prefix: "openclaw-backup-symbolic-link-", scenario: "minimal" },
         async (state) => {
-          const outputPath = state.path("absolute-symlink.tar.gz");
-          const outsideTarget = state.path("outside-target.txt");
-          if (targetExists) {
-            await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          const targetPath = internal
+            ? state.statePath("target.txt")
+            : state.path("outside-target");
+          if (directory) {
+            await fs.mkdir(targetPath);
+            await fs.writeFile(path.join(targetPath, "external.txt"), "outside\n");
+          } else if (targetExists) {
+            await fs.writeFile(targetPath, "target\n");
           }
-          await fs.symlink(
-            relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
-            state.statePath("ordinary-link"),
+          const linkpath = relative ? path.relative(state.stateDir, targetPath) : targetPath;
+          await fs.symlink(linkpath, state.statePath("ordinary-link"));
+          const runtime = createTestRuntime();
+          const result = await backupCreateCommand(runtime, {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const link = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/ordinary-link")),
+            "archived ordinary link",
           );
-
-          await expect(
-            createBackupArchive({
-              output: outputPath,
-              includeWorkspace: false,
-              nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
-            }),
-          ).rejects.toThrow(error);
-          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
+          expect(entries.some((entry) => entry.path.includes("/outside-target"))).toBe(false);
+          const externalSymbolicLinks = internal ? [] : [{ entryPath: link.path, linkpath }];
+          expect(result.externalSymbolicLinks ?? []).toEqual(externalSymbolicLinks);
+          expect(result.verified).toBe(true);
+          if (!internal) {
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringContaining(JSON.stringify(linkpath)),
+            );
+          }
+          const restored = state.path("restored");
+          await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
+          const restoredLink = path.join(restored, link.path);
+          expect(await fs.readlink(restoredLink)).toBe(linkpath);
+          if (internal) {
+            expect(await fs.readFile(restoredLink, "utf8")).toBe("target\n");
+          } else if (!targetExists) {
+            await expect(fs.stat(restoredLink)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(restored, result.archiveRoot, "manifest.json"), "utf8"),
+          );
+          expect(manifest.externalSymbolicLinks ?? []).toEqual(externalSymbolicLinks);
         },
       );
     },
@@ -3357,8 +3408,10 @@ describe("createBackupArchive", () => {
 
   it.runIf(process.platform !== "win32").each([
     { label: "direct config", kind: "config" as const, hops: 1 },
+    { label: "relative config", kind: "config" as const, hops: 1, relative: true },
     { label: "chained config", kind: "config" as const, hops: 2 },
     { label: "direct credentials", kind: "credentials" as const, hops: 1 },
+    { label: "relative credentials", kind: "credentials" as const, hops: 1, relative: true },
     { label: "chained credentials", kind: "credentials" as const, hops: 2 },
     { label: "volatile-path config", kind: "config" as const, hops: 1, volatile: true },
     {
@@ -3368,8 +3421,8 @@ describe("createBackupArchive", () => {
       volatile: true,
     },
   ])(
-    "creates, verifies, and restores a $label symlink through its declared asset",
-    async ({ kind, hops, volatile }) => {
+    "backupCreateCommand and backupRestoreCommand preserve the first hop of a $label link",
+    async ({ kind, hops, volatile, relative }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -3420,6 +3473,9 @@ describe("createBackupArchive", () => {
             await fs.symlink(externalSourcePath, intermediatePath);
             linkTarget = intermediatePath;
           }
+          if (relative) {
+            linkTarget = path.relative(path.dirname(sourcePath), linkTarget);
+          }
           await fs.symlink(linkTarget, sourcePath);
           const canonicalExternalSourcePath = await fs.realpath(externalSourcePath);
           const sourceContentsPath =
@@ -3428,7 +3484,7 @@ describe("createBackupArchive", () => {
               : path.join(externalSourcePath, "credentials.json");
           const expectedContents = await fs.readFile(sourceContentsPath, "utf8");
 
-          const result = await createBackupArchive({
+          const result = await backupCreateCommand(createTestRuntime(), {
             output: outputPath,
             includeWorkspace: false,
             nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
@@ -3450,9 +3506,11 @@ describe("createBackupArchive", () => {
           );
 
           expect(archivedLink.type).toBe("SymbolicLink");
-          expect(archivedLink.linkpath).toBe(
-            path.posix.relative(path.posix.dirname(archivedLink.path), managedAsset.archivePath),
-          );
+          expect(archivedLink.linkpath).toBe(linkTarget);
+          expect(result.externalSymbolicLinks).toContainEqual({
+            entryPath: archivedLink.path,
+            linkpath: linkTarget,
+          });
           expect(managedAsset.sourcePath).toBe(canonicalExternalSourcePath);
           if (volatile) {
             expect(result.assets).toContainEqual(expect.objectContaining({ kind, sourcePath }));
@@ -3478,17 +3536,101 @@ describe("createBackupArchive", () => {
           const restoredLinkPath = path.join(restorePath, archivedLink.path);
           const restoredAssetPath = path.join(restorePath, managedAsset.archivePath);
           expect(await fs.readlink(restoredLinkPath)).toBe(archivedLink.linkpath);
-          expect(await fs.realpath(restoredLinkPath)).toBe(await fs.realpath(restoredAssetPath));
           const restoredContentsPath =
-            kind === "config" ? restoredLinkPath : path.join(restoredLinkPath, "credentials.json");
+            kind === "config"
+              ? restoredAssetPath
+              : path.join(restoredAssetPath, "credentials.json");
           await expect(fs.readFile(restoredContentsPath, "utf8")).resolves.toBe(expectedContents);
         },
       );
     },
   );
 
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "backupCreateCommand reports a separately included workspace outside state (relative=%s) through backupRestoreCommand",
+    async (relative) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-backup-workspace-link-", scenario: "minimal" },
+        async (state) => {
+          const workspace = state.path("outside-workspace");
+          await fs.mkdir(workspace);
+          await fs.writeFile(path.join(workspace, "note.txt"), "workspace content\n");
+          await state.writeConfig({ agents: { defaults: { workspace } } });
+          const target = path.join(workspace, "note.txt");
+          const linkpath = relative ? path.relative(state.stateDir, target) : target;
+          await fs.symlink(linkpath, state.statePath("workspace-link"));
+          const runtime = createTestRuntime();
+          const result = await backupCreateCommand(runtime, {
+            output: state.path("backup.tar.gz"),
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const link = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/workspace-link")),
+            "workspace link",
+          );
+          expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
+          const report = [{ entryPath: link.path, linkpath }];
+          expect(result.externalSymbolicLinks).toEqual(report);
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(JSON.stringify(linkpath)),
+          );
+          const restored = state.path("restored");
+          const restore = await backupRestoreCommand(runtime, {
+            archive: result.archivePath,
+            target: restored,
+          });
+          expect(restore.externalSymbolicLinks).toEqual(report);
+          expect(await fs.readlink(path.join(restored, link.path))).toBe(linkpath);
+          const workspaceAsset = expectDefined(
+            result.assets.find((asset) => asset.kind === "workspace"),
+            "workspace asset",
+          );
+          expect(
+            await fs.readFile(path.join(restored, workspaceAsset.archivePath, "note.txt"), "utf8"),
+          ).toBe("workspace content\n");
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(restored, result.archiveRoot, "manifest.json"), "utf8"),
+          );
+          expect(manifest.externalSymbolicLinks).toEqual(report);
+        },
+      );
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
-    "rejects a declared absolute target containing a backslash before rewriting it",
+    "backupCreateCommand keeps the canonical state boundary when a workspace covers an aliased state directory",
+    async () => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-backup-state-alias-", scenario: "minimal" },
+        async (state) => {
+          const workspace = state.path("enclosing-workspace");
+          const canonicalState = path.join(workspace, "state");
+          await fs.mkdir(canonicalState, { recursive: true });
+          const config = path.join(canonicalState, "openclaw.json");
+          await fs.writeFile(config, JSON.stringify({ agents: { defaults: { workspace } } }));
+          const alias = state.path("state-alias");
+          await fs.symlink(canonicalState, alias);
+          state.envVars.OPENCLAW_STATE_DIR = alias;
+          state.envVars.OPENCLAW_CONFIG_PATH = config;
+          state.applyEnv();
+          const target = path.join(canonicalState, "note.txt");
+          await fs.writeFile(target, "internal content\n");
+          await fs.symlink(target, path.join(canonicalState, "internal-link"));
+          const result = await backupCreateCommand(createTestRuntime(), {
+            output: state.path("backup.tar.gz"),
+            verify: true,
+          });
+          expect(result.assets.map((asset) => asset.kind)).toEqual(["workspace"]);
+          expect(result.externalSymbolicLinks).toBeUndefined();
+          expect(result.verified).toBe(true);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "backupCreateCommand and backupRestoreCommand preserve a backslash in an absolute target",
     async () => {
       await withOpenClawTestState(
         {
@@ -3503,10 +3645,21 @@ describe("createBackupArchive", () => {
           await fs.rename(state.configPath, externalConfigPath);
           await fs.symlink(externalConfigPath, state.configPath);
 
-          await expect(
-            createBackupArchive({ output: outputPath, includeWorkspace: false }),
-          ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
-          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+          const runtime = createTestRuntime();
+          const result = await backupCreateCommand(runtime, {
+            output: outputPath,
+            includeWorkspace: false,
+            verify: true,
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const link = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/openclaw.json")),
+            "archived config link",
+          );
+          expect(link).toMatchObject({ type: "SymbolicLink", linkpath: externalConfigPath });
+          const restored = state.path("restored");
+          await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
+          expect(await fs.readlink(path.join(restored, link.path))).toBe(externalConfigPath);
         },
       );
     },

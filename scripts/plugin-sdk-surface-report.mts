@@ -369,7 +369,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: public provider-owned asynchronous embedding batch contract.
       // +2: canonical credential-value functions through the narrow secret-input surface.
       // +1: shared removed-model choice recovery text for channel consumers.
-      4462,
+      // +2: shared stored-account key selection and its plugin-owned policy type.
+      4464,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -504,7 +505,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choice reader.
       // +2: canonical env-value reader and managed SecretRef marker constructor.
-      2637,
+      // +1: shared stored-account key selection for channel readers and writers.
+      2638,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -267,6 +267,10 @@ OpenClaw calls a service's `stop()` at most once per startup attempt, including 
 times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;
 a cleanup failure is recorded rather than retried within that attempt.
 
+If a replacement fails, the Gateway may call `start()` again on the previous service to restore
+it. Recreate resources released by `stop()` and reset per-start flags so tools and background
+work remain usable after rollback.
+
 Service startup failures from a returned or awaited promise are recorded automatically. A service
 that intentionally starts required work in the background must report later failure and recovery
 through its generation-bound health reporter:

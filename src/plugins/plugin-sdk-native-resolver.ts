@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
+import { supportsNativeModuleAliasHooks, type BunPluginRuntime } from "./native-module-require.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -351,9 +352,29 @@ function listInternalCorePackageNativeAliases(
 
 function installResolver(): void {
   const native = getPluginCache().sdk.native;
+  if (installed || !(native.aliases.size || native.sdkProviders.size)) {
+    return;
+  }
+  // SAFETY: Bun exposes this synchronous public API; Node leaves the optional global absent.
+  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+  if (bun) {
+    bun.plugin({
+      name: "openclaw-plugin-sdk-alias",
+      setup(builder) {
+        builder.onResolve(
+          { filter: /^(?:openclaw|@openclaw)\/plugin-sdk\//u, namespace: "file" },
+          ({ path: request, importer }) => {
+            const target = resolveAliasTargetForParentPath(request, importer);
+            return target ? { path: target, namespace: "file" } : undefined;
+          },
+        );
+      },
+    });
+  }
   const previousResolveFilename = moduleWithResolver[nodeResolveFilenameProperty];
   // Packaged runtimes without aliases must retain the runtime's native resolution path.
-  if (installed || !previousResolveFilename || !(native.aliases.size || native.sdkProviders.size)) {
+  if (!previousResolveFilename || !supportsNativeModuleAliasHooks()) {
+    installed = Boolean(bun);
     return;
   }
   moduleWithResolver[nodeResolveFilenameProperty] = ((request, parent, isMain, options) =>

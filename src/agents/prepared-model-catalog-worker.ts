@@ -7,6 +7,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import type { Model } from "../llm/types.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
@@ -66,6 +67,7 @@ export type PreparedModelWorkerResult =
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
+      runtimeModels: Map<string, Model[]>;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
       providerAuthLabels: ModelCatalogAuthLabels;
@@ -204,9 +206,11 @@ type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (
     scope: PreparedModelRuntimeAuthScope,
   ) => Promise<PreparedModelRuntimeAuth & { credentials: Readonly<AuthStorageData> }>;
-  loadCatalog: (
-    providerIds?: readonly string[],
-  ) => Promise<Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">>;
+  loadCatalog: (providerIds?: readonly string[]) => Promise<
+    Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
+      runtimeModels: Map<string, Model[]>;
+    }
+  >;
 }>;
 
 export function createPreparedModelCatalogWorker(
@@ -303,10 +307,8 @@ export function createPreparedModelCatalogWorker(
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
       const { input } = workerInput;
-      const providerScope =
-        command.kind === "catalog" && command.providerIds
-          ? command.providerIds
-          : [...workerInput.providerIds, ...(command.providerIds ?? [])];
+      // Worker reconstruction consumes startup auth facts even for a scoped catalog request.
+      const providerScope = [...workerInput.providerIds, ...(command.providerIds ?? [])];
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
@@ -389,7 +391,11 @@ export function createPreparedModelCatalogWorker(
         credentials: message.credentials,
         providerAuthLabels: message.providerAuthLabels,
       });
-      return { modelCatalog, configuredRuntimeModels: message.configuredRuntimeModels };
+      return {
+        modelCatalog,
+        configuredRuntimeModels: message.configuredRuntimeModels,
+        runtimeModels: message.runtimeModels,
+      };
     },
     loadAuth: async ({ providerIds, profileIds }) => {
       const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>

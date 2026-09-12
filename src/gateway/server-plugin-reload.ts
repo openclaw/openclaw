@@ -108,7 +108,7 @@ export async function reloadGatewayPlugins(
   };
   const recordCleanup = (result: PluginHostCleanupResult) => {
     for (const pluginId of result.deferredPluginIds ?? []) {
-      const warning = `Plugin ${pluginId} cleanup is deferred until its admitted turn finishes.`;
+      const warning = `Plugin ${pluginId} cleanup is deferred until its admitted work finishes.`;
       log.info(warning);
       recordWarning(warning);
     }
@@ -197,6 +197,7 @@ export async function reloadGatewayPlugins(
         const result = await channelManager.startChannel(plugin.id, undefined, {
           manual: false,
           preserveManualStop: true,
+          skipUnavailableAccounts: true,
         });
         // Early rollback can retain a live account behind the public task-owned outcome.
         const failures = [...result].filter(
@@ -580,13 +581,20 @@ export async function reloadGatewayPlugins(
       }
       loaded?.retireGatewayRuntimeBindings();
       if (candidateRegistry) {
-        await disposePluginRegistryInstances(candidateRegistry, previousRegistry).catch(
-          onCleanupFailure("Plugin candidate cleanup failed"),
+        void disposePluginRegistryInstances(candidateRegistry, previousRegistry).catch(() => {});
+        // Rejected candidates keep the same physical cleanup owner as replaced generations.
+        kernel.pluginMetadata.retire(cache, (options) =>
+          waitForPluginRegistryRetirement(candidateRegistry, options),
+        );
+        await kernel.pluginMetadata
+          .waitForRetirement()
+          .then(recordCleanup)
+          .catch(onCleanupFailure("Plugin candidate cleanup failed"));
+      } else {
+        await retirePluginCache(cache).catch(
+          onCleanupFailure("Plugin candidate cache cleanup failed"),
         );
       }
-      await retirePluginCache(cache).catch(
-        onCleanupFailure("Plugin candidate cache cleanup failed"),
-      );
       // A pending signal blocks recovery work until delivery settles; suspension
       // must let this admitted reload finish. Only one-way drain owns teardown.
       if (phase !== "prepare") {

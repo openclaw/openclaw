@@ -135,6 +135,7 @@ export function retainGatewayPluginMetadata() {
   return {
     // Fence admission before teardown can fail, without retiring a live sibling's inventory.
     beginClose,
+    retire: releaseCache,
     runBootstrap<T>(run: () => T): T {
       if (owner.phase !== "booting" || !owner.cache) {
         throw new Error("Gateway plugin bootstrap has already finished");

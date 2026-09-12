@@ -33,6 +33,7 @@ type InteractiveJob = {
   failureValue: JsonValue;
   run: (signal: AbortSignal) => Promise<JsonValue | undefined>;
   resolve: (value: JsonValue) => void;
+  onResponse?: (value: JsonValue) => void;
 };
 
 type CodexInputRequest = { id: number | string; params?: JsonValue };
@@ -44,6 +45,11 @@ export function createCodexUserInputBridge(params: {
   turnId: string;
   signal?: AbortSignal;
   gatewayCall?: Parameters<typeof structuredInput.run>[0]["gatewayCall"];
+  onOrdinaryResponse?: (result: {
+    itemId: string;
+    questions: readonly AgentHarnessUserInputQuestion[];
+    response: JsonValue;
+  }) => void;
 }) {
   const jobs: InteractiveJob[] = [];
   let activeCompletion: Promise<void> | undefined;
@@ -63,7 +69,9 @@ export function createCodexUserInputBridge(params: {
       .then((value) => {
         // Lifecycle cancellation owns the request once observed, so a late
         // answer cannot cross into the queued replacement.
-        job.resolve(job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue));
+        const response = job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue);
+        job.onResponse?.(response);
+        job.resolve(response);
       })
       .finally(() => {
         if (jobs[0] === job) {
@@ -149,6 +157,15 @@ export function createCodexUserInputBridge(params: {
         abort: new AbortController(),
         cancelValue,
         failureValue: cancelValue,
+        // Secret requests never enter the transcript, including cancelled or mixed forms.
+        onResponse: requestParams.questions.some((question) => question.isSecret)
+          ? undefined
+          : (response) =>
+              params.onOrdinaryResponse?.({
+                itemId: requestParams.itemId,
+                questions: requestParams.questions,
+                response,
+              }),
         run: async (signal) => {
           const result = await execute(input, timeoutMs, signal);
           return result.status === "answered"
@@ -254,6 +271,7 @@ function readUserInputParams(value: JsonValue | undefined):
   | {
       threadId: string;
       turnId: string;
+      itemId: string;
       questions: AgentHarnessUserInputQuestion[];
       isBlocking: boolean;
     }
@@ -280,6 +298,7 @@ function readUserInputParams(value: JsonValue | undefined):
   return {
     threadId,
     turnId,
+    itemId,
     questions: parsed,
     isBlocking: readValue(snapshot, "isBlocking") !== false,
   };

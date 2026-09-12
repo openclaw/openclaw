@@ -15,11 +15,23 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pluginMutationHandlers } from "./plugins-mutations.js";
 
-it.each(
-  ["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"].flatMap((mode) =>
-    (["discovered", "accepted", "consent write"] as const).map((kind) => ({ mode, kind })),
+const readOnlyModes = ["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"] as const;
+
+it.each([
+  ...readOnlyModes.flatMap((mode) =>
+    (["discovered", "accepted", "consent write"] as const).map((kind) => ({
+      mode,
+      kind,
+      method: "plugins.reload" as const,
+    })),
   ),
-)("reloads without config writes under $mode ($kind)", async ({ mode, kind }) => {
+  ...[undefined, ...readOnlyModes].map((mode) => ({
+    mode,
+    kind: "accepted" as const,
+    method: "plugins.refresh" as const,
+  })),
+])("$method preserves root include config under $mode ($kind)", async ({ mode, kind, method }) => {
+  const reload = method === "plugins.reload";
   await withOpenClawTestState(
     {
       label: "readonly-plugin-reload",
@@ -70,23 +82,25 @@ it.each(
       const recordsBefore = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
       const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
         request.assertInvokerOwned?.();
-        expect(request.reason).toBe("reload");
-        expect(request.pluginIds).toEqual([pluginId]);
+        expect(request.reason).toBe(reload ? "reload" : "metadata");
+        expect(request.pluginIds).toEqual(reload ? [pluginId] : []);
         expect(request.write).toBeUndefined();
         expect(request.config.plugins).toEqual(config.plugins);
         return { operationId: "readonly-reload", generation: 2, pluginIds: [pluginId] };
       });
       const respond = vi.fn();
-      const params = {
-        plugins: [{ pluginId }],
-        ...(kind === "consent write" ? { acknowledgeCapabilities: { reviewToken } } : {}),
-      };
-      await withEnvAsync({ [mode]: "1" }, async () => {
+      const params = reload
+        ? {
+            plugins: [{ pluginId }],
+            ...(kind === "consent write" ? { acknowledgeCapabilities: { reviewToken } } : {}),
+          }
+        : {};
+      await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
         await expectDefined(
-          pluginMutationHandlers["plugins.reload"],
-          "reload handler",
+          pluginMutationHandlers[method],
+          "plugin lifecycle handler",
         )({
-          req: { type: "req", id: "readonly-reload", method: "plugins.reload", params },
+          req: { type: "req", id: "readonly-reload", method, params },
           params,
           client: null,
           isWebchatConnect: () => false,
@@ -110,7 +124,7 @@ it.each(
           expect.objectContaining({
             ok: true,
             restartRequired: false,
-            pluginIds: [pluginId],
+            ...(reload ? { pluginIds: [pluginId] } : {}),
             runtime: { operationId: "readonly-reload", generation: 2, pluginIds: [pluginId] },
           }),
           undefined,

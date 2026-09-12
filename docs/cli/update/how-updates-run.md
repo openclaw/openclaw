@@ -99,13 +99,44 @@ The deadline extends while private files continue changing. A stalled snapshot
 reports its size and applied budget. Snapshot time does not consume the separate
 runtime validation budget, which also honors the configured per-step timeout.
 
-Before copying databases, the updater estimates space for the SQLite snapshot
-set, temporary copies, and the candidate Doctor backup. If the system temporary
-filesystem is too small, it uses an OpenClaw-owned directory under the selected
-state directory's `tmp` folder. If neither filesystem has enough space, it
-refuses with the required size and the available space at both locations.
-Capacity estimates cannot reserve space against other processes writing to the
-same filesystem.
+Before copying, the updater measures the shared and agent SQLite database
+families and the installed plugin payloads and dependency trees that the
+rehearsal needs. Admission includes space for temporary copies and the candidate
+Doctor backup. Active plugin payloads remain in the snapshot so configuration
+and startup validation can load them; unreferenced plugin generations are not
+copied.
+
+The updater selects the first usable destination with enough measured free space:
+
+1. An explicit `TMPDIR`, when set.
+2. A private directory under `<state-dir>.update-captures/`, beside the selected
+   state directory on its filesystem.
+3. The system temporary directory.
+
+The update report records the measured SQLite and plugin sizes, the total
+required space, the checked destinations and their available space, and the
+selected location and reason. If none fits, snapshot preparation refuses before
+copying with `snapshot-capacity-insufficient` and explains how to free space or
+set `TMPDIR`. A path that cannot be allocated is recorded and skipped; if all
+fitting paths are unusable, `snapshot-location-unavailable` names their path or
+permission errors. Capacity checks do not reserve space against concurrent writes.
+The copy worker uses the inventoried plugin plan. If an install record, plugin
+owner, or database registration changes before its copy, preparation refuses
+that unmeasured state so the next update can inventory it again.
+These copies remain disposable validation state; rollback does not restore them.
+If even the initial SQLite inspection copy cannot fit, the refusal reports that
+required lower bound and marks plugin size as not yet inspected.
+
+Snapshot placement belongs to the updater already running. The published
+2026.9.3 and 2026.9.4 updaters prepare their snapshot before candidate code runs,
+so updating to this fix cannot change that first hop. If their system temporary
+filesystem is too small, select another filesystem with sufficient space:
+
+```bash
+TMPDIR=/var/tmp openclaw update --yes
+```
+
+Subsequent updates use the new updater's measured destination selection.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
@@ -132,6 +163,11 @@ or state, invalid or unattributed plugin-registry results, and failed core start
 or readiness checks. The updater reruns the failed check after each attempt and
 activates only after it passes. Failed or unavailable repair discards the
 candidate and leaves the serving Gateway untouched.
+Successful repair of a private rehearsal does not mean the update was applied:
+the updater validates a fresh candidate again before activation. If that check
+fails, the report retains the failed update and the command exits nonzero even
+when the previous Gateway remains healthy. Successful updates with warnings
+exit zero.
 Pre-activation repair uses disposable rehearsal state and configuration, then
 independently validates surviving candidate changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require

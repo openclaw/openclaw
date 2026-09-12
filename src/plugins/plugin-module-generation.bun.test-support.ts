@@ -151,6 +151,41 @@ try {
     assert.deepEqual(await instance.dispose(), { errors: [] });
   }
 
+  const deferredDependencyRoot = fixture("deferred-native-dependency", {
+    "package.json": JSON.stringify({
+      type: "module",
+      dependencies: { "deferred-dependency": "1" },
+    }),
+    "index.ts": "export const bridge = () => import('./bridge.mjs');",
+    "bridge.mjs": `import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      export const read = async (name) => (await import(name)).value;
+      export const readRequired = (name) => require(name).value;`,
+    "node_modules/deferred-dependency/package.json": JSON.stringify({
+      name: "deferred-dependency",
+      type: "module",
+      exports: { bun: "./bun.cjs", require: "./require.cjs", import: "./import.mjs" },
+    }),
+    "node_modules/deferred-dependency/bun.cjs": "exports.value = 42;",
+    "node_modules/deferred-dependency/require.cjs": "exports.value = 0;",
+    "node_modules/deferred-dependency/import.mjs": "export const value = 0;",
+  });
+  const deferredDependencyInstance = createInstance(deferredDependencyRoot, true);
+  const deferredDependencyEntry = deferredDependencyInstance.loadModule(
+    path.join(deferredDependencyRoot, "index.ts"),
+  ) as {
+    bridge(): Promise<{ read(name: string): Promise<number>; readRequired(name: string): number }>;
+  };
+  retained = deferredDependencyInstance.retainConsumer();
+  const deferredDependencyRetirement = deferredDependencyInstance.dispose();
+  await retained.run(async () => {
+    const deferredDependency = await deferredDependencyEntry.bridge();
+    assert.equal(await deferredDependency.read("deferred-dependency"), 42);
+    assert.equal(deferredDependency.readRequired("deferred-dependency"), 42);
+  });
+  retained.release();
+  assert.deepEqual(await deferredDependencyRetirement, { errors: [] });
+
   const dependency = fixture("linked-dependency", {
     "package.json": '{"name":"linked-dependency","type":"module","main":"./index.mjs"}',
     "index.mjs": "export const anchor = true;",
@@ -231,6 +266,10 @@ try {
           default: "./other/exact.mjs",
         },
         "#wild/*": { bun: "./targets/*.mjs", default: "./other/*.mjs" },
+        "#wild/blocked": null,
+        "#wild/shadow": "./targets/exact.mjs",
+        "#trailer/*.js": "./trailer/*.mjs",
+        "#alias/*": "wildcard-alias/feature/*",
         "#missing": "./missing.mjs",
         "#invalid": "../outside.mjs",
       },
@@ -245,6 +284,14 @@ try {
     "after-disposal.mjs": "export const value = 44;",
     "targets/exact.mjs": "export const value = 45;",
     "targets/leaf.mjs": "export const value = 46;",
+    "targets/blocked.mjs": "export const value = 0;",
+    "targets/shadow.mjs": "export const value = 0;",
+    "trailer/leaf.mjs": "export const value = 47;",
+    "node_modules/wildcard-alias/package.json": JSON.stringify({
+      type: "module",
+      exports: { "./feature/*": "./src/*.mjs" },
+    }),
+    "node_modules/wildcard-alias/src/leaf.mjs": "export const value = 48;",
     "other/exact.mjs": "export const value = 0;",
     "other/leaf.mjs": "export const value = 0;",
     "unused/package.json": "{invalid",
@@ -273,8 +320,16 @@ try {
   retained = oldNative.instance.retainConsumer();
   const retiring = oldNative.instance.dispose();
   assert.equal(await retained.run(() => oldNative.entry.read()), 42);
-  assert.equal(await retained.run(() => oldNative.entry.read("#exact")), 45);
+  assert.equal(await retained.run(() => oldNative.entry.read("#exact")), 45, "native condition");
   assert.equal(await retained.run(() => oldNative.entry.read("#wild/leaf")), 46);
+  assert.equal(
+    await retained.run(() => oldNative.entry.read("#wild/shadow")),
+    45,
+    "exact map entry",
+  );
+  assert.equal(await retained.run(() => oldNative.entry.read("#trailer/leaf.js")), 47);
+  assert.equal(await retained.run(() => oldNative.entry.read("#alias/leaf")), 48);
+  await assert.rejects(retained.run(() => oldNative.entry.read("#wild/blocked")));
   fs.writeFileSync(path.join(nativeRoot, "deep.mjs"), "export const value = 43;");
   const currentNative = loadNative();
   assert.equal(await currentNative.entry.read(), 43);

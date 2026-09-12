@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import {
   createReplyOperation,
   type ReplyOperation,
@@ -21,6 +22,7 @@ import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycl
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
@@ -562,6 +564,59 @@ describe("createGatewayCloseHandler", () => {
       process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalRestartTraceEnv;
     }
   });
+
+  it.each([
+    { ownership: "owned", retained: false },
+    { ownership: "unowned", retained: false },
+    { ownership: "owned", retained: true },
+    { ownership: "unowned", retained: true },
+  ] as const)(
+    "reports $ownership queued cleanup failure and honors retained resources ($retained)",
+    async ({ ownership, retained }) => {
+      const resolveGatewayContext = () => undefined;
+      const cleanupError = new Error("queued engine disposal failed");
+      const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
+      const onRemoved = vi.fn(async () => {
+        throw failure;
+      });
+      enqueueSwarmRun({
+        groupId: `failed-queued-cleanup-${ownership}`,
+        runId: `failed-queued-${ownership}`,
+        maxConcurrent: 1,
+        activeRunIds: [`failed-queued-blocker-${ownership}`],
+        lifecycleOwner: ownership === "owned" ? resolveGatewayContext : undefined,
+        start: async () => {},
+        onStartFailure: () => true,
+        onRemoved,
+      });
+      const retireRegistry = vi.fn(async () => {});
+      const closeSdkResources = vi.fn(async () => {});
+      const clearSecretsRuntimeSnapshot = vi.fn();
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          resolveGatewayContext,
+          closeSdkResources,
+          clearSecretsRuntimeSnapshot,
+          closePluginRegistry: async (onRetirement) => {
+            await onRetirement?.(retireRegistry);
+            return { memoryErrors: [] };
+          },
+        }),
+      );
+      try {
+        await expect(close()).rejects.toMatchObject({ errors: [failure] });
+        expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
+        expect(closeSdkResources).toHaveBeenCalledTimes(ownership === "owned" && retained ? 0 : 1);
+        expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
+        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
+      } finally {
+        releaseSwarmRun(`failed-queued-blocker-${ownership}`);
+        const { testing } =
+          await import("../agents/subagents/swarm/swarm-scheduler.test-support.js");
+        testing.reset();
+      }
+    },
+  );
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",

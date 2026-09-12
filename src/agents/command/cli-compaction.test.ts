@@ -19,6 +19,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
@@ -293,6 +294,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resources.register("fixture", { id: "resource", dispose: retire });
       const cleanupStarted = createDeferred();
       const cleanupGate = createDeferred();
+      const cleanupFile = path.join(tmpDir, `owned-${mode}-cleanup.txt`);
       const controller = new AbortController();
       const staleError = new Error("compaction owner retired");
       const compactCalls: CompactParams[] = [];
@@ -301,6 +303,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         async dispose() {
           cleanupStarted.resolve();
           await cleanupGate.promise;
+          await fs.writeFile(cleanupFile, "disposed", { signal: getAsyncWorkSignal() });
           if (mode === "failure") {
             throw new Error("cleanup failed too");
           }
@@ -365,6 +368,7 @@ describe("runCliTurnCompactionLifecycle", () => {
           expect(error).toBe(mode === "stale" ? staleError : undefined);
         }
         expect(compactCalls).toHaveLength(mode === "native" || mode === "stale" ? 0 : 1);
+        expect(await fs.readFile(cleanupFile, "utf8")).toBe("disposed");
         expect(retire).toHaveBeenCalledTimes(1);
       } finally {
         cleanupGate.resolve();

@@ -293,7 +293,26 @@ async function resolveSelectedContextEngineInfo(params: {
             : undefined,
         });
       engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
-      outcome = { ok: true, result: { info: engine.info, warnings: [] } };
+      const info = engine.info;
+      const requirements = info.hostRequirements?.["agent-run"];
+      outcome = {
+        ok: true,
+        result: {
+          info: {
+            id: info.id,
+            name: info.name,
+            hostRequirements: requirements
+              ? {
+                  "agent-run": {
+                    requiredCapabilities: [...requirements.requiredCapabilities],
+                    unsupportedMessage: requirements.unsupportedMessage,
+                  },
+                }
+              : undefined,
+          },
+          warnings: [],
+        },
+      };
     }
   } catch (error) {
     outcome = { ok: false, error };

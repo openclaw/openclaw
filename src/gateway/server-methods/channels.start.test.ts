@@ -17,17 +17,12 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   readConfigFileSnapshot: vi.fn(),
-  applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -108,7 +103,6 @@ describe("channelsHandlers channels.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
       gateway: { startAccount: vi.fn() },
@@ -123,9 +117,6 @@ describe("channelsHandlers channels.start", () => {
   it("resolves the default account and starts the channel runtime", async () => {
     const { respond, startChannel } = await runChannelsStart(true);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-    });
     expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account", { manual: true });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -414,7 +405,6 @@ describe("channel controls remain independent of diagnostic inspection", () => {
       const registry = createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]);
       setActivePluginRegistry(registry);
       mocks.getRuntimeConfig.mockReturnValue({});
-      mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
       mocks.getChannelPlugin.mockReturnValue(plugin);
       const manager = createChannelManager({
         getRuntimeConfig: mocks.getRuntimeConfig,

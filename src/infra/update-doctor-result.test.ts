@@ -27,6 +27,12 @@ describe("post-install doctor result IPC", () => {
     { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
     { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
+      status: "error" as const,
+      failureFacts: [
+        { check: "doctor", code: "doctor-failed", message: "Required migration failed" },
+      ],
+    },
+    {
       status: "ok" as const,
       configChanges: [
         { kind: "key" as const, key: "agents" },
@@ -199,13 +205,14 @@ describe("post-install doctor result IPC", () => {
     await expect(fs.access(resultPath)).rejects.toThrow();
   });
 
-  it("accepts newer child advisory copy and normalizes it to the parent copy", async () => {
+  it("accepts newer child advisory copy without letting malformed optional facts change its outcome", async () => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
     resultPaths.push(resultPath);
     await fs.writeFile(
       resultPath,
       JSON.stringify({
         status: "advisory",
+        failureFacts: [{ check: "doctor", message: 42 }],
         advisory: {
           kind: "package-post-install-doctor",
           reason: "deferred-configured-plugin-repair",

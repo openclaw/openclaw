@@ -174,6 +174,7 @@ async function readPendingTriageUpdateFailure(
           exitCode: step.log?.exitCode ?? null,
           stderrTail: step.log?.stderrTail,
           stdoutTail: step.log?.stdoutTail,
+          failureFacts: step.failureFacts,
         })),
       },
     },

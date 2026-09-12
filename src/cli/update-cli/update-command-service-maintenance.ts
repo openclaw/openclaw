@@ -13,6 +13,7 @@ import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-updat
 import {
   formatServiceInspectionReason,
   ServiceInspectionError,
+  type ServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
@@ -97,6 +98,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
   const unavailable = (): ManagedGatewayUpdateVerdict => ({
     kind: "unavailable",
     message: serviceInspectionBlockMessage(state),
+    ...(state.inspectionReason ? { inspectionReason: state.inspectionReason } : {}),
   });
   if (!command) {
     return !state.installed &&
@@ -221,6 +223,7 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
         ? inspection.message
         : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
+      inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,
     );
   }
   return inspection.kind === "owned" && verdict?.kind === "owned" && !verdict.refreshDefinition
@@ -399,10 +402,15 @@ async function stopManagedServiceBeforeMutableUpdate(
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
     message: string,
+    inspectionReason?: ServiceInspectionReason,
   ): PreManagedServiceStop => ({
     ...base,
     serviceMutationAllowed: false,
-    serviceUpdateVerdict: { kind: "unavailable", message },
+    serviceUpdateVerdict: {
+      kind: "unavailable",
+      message,
+      ...(inspectionReason ? { inspectionReason } : {}),
+    },
     blockMessage: message,
   });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
@@ -444,6 +452,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       err instanceof ServiceInspectionError
         ? err.message
         : GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+      err instanceof ServiceInspectionError ? err.reason : undefined,
     );
   }
   assertCurrent();
@@ -489,7 +498,11 @@ async function stopManagedServiceBeforeMutableUpdate(
   };
   assertCurrent();
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
+    return markInspectionUnavailable(
+      inspected,
+      serviceUpdateVerdict.message,
+      serviceUpdateVerdict.inspectionReason,
+    );
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {

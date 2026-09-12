@@ -115,6 +115,9 @@ A schema-valid but unset path explains that the runtime default applies; an unkn
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
 
+Explicit `null`, `false`, `0`, and empty strings remain readable values in both modes;
+`--json` preserves their types. Optional fields with no runtime value are reported as unset.
+
 ```bash
 openclaw config get browser.executablePath
 openclaw config get agents.defaults.model --json

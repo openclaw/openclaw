@@ -2414,7 +2414,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
-  it("drops replayed tool calls that are no longer allowlisted", async () => {
+  it("preserves completed toolCall history outside the current allowlist", async () => {
     const messages = [
       {
         role: "assistant",
@@ -2426,30 +2426,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
-      messages: Array<{ role?: string }>;
-    };
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-  it("drops replayed tool names that are no longer allowlisted", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
-      },
-      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
-    ];
+    const expectedMessages = structuredClone(messages);
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
@@ -2462,7 +2439,30 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toStrictEqual([]);
+    expect(seenContext.messages).toStrictEqual(expectedMessages);
+  });
+  it("preserves completed toolUse history outside the current allowlist", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
+      },
+      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
+    ];
+    const expectedMessages = structuredClone(messages);
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toStrictEqual(expectedMessages);
   });
 
   it("drops ambiguous mangled replay names instead of guessing a tool", async () => {

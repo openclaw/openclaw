@@ -2,6 +2,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
+import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -273,7 +274,24 @@ async function publishPreMutationUpdateOutcome(
       mode: params.installKind === "git" ? "git" : "unknown",
       root: params.root,
       reason: params.reason,
-      steps: [],
+      steps:
+        outcome.status === "error"
+          ? [
+              {
+                name: params.reason,
+                command: "openclaw update",
+                cwd: params.root,
+                durationMs: 0,
+                exitCode: 1,
+                failureFacts: normalizeUpdateFailureFacts(
+                  params.failureFacts ?? [
+                    { check: params.reason, code: params.reason, message: params.message },
+                  ],
+                  run?.env,
+                ),
+              },
+            ]
+          : [],
       ...(outcome.status === "skipped"
         ? { before: { version: await readPackageVersion(params.root) } }
         : {}),

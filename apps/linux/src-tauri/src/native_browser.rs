@@ -323,7 +323,6 @@ impl NativeBrowserState {
             let navigation_label = label.clone();
             let load_owner = self.clone();
             let load_clock = Arc::new(AtomicU64::new(0));
-            let title_owner = self.clone();
             let popup_owner = self.clone();
             let popup_app = app.clone();
             let popup_label = label.clone();
@@ -332,7 +331,6 @@ impl NativeBrowserState {
             let bootstrap = Arc::new(AtomicBool::new(true));
             let navigation_bootstrap = bootstrap.clone();
             let load_bootstrap = bootstrap.clone();
-            let title_bootstrap = bootstrap.clone();
             let navigation_epoch = Arc::new(AtomicU64::new(0));
             let navigation_clock = navigation_epoch.clone();
             let failed_epoch = Arc::new(AtomicU64::new(u64::MAX));
@@ -402,19 +400,6 @@ impl NativeBrowserState {
                         tab.url = view.url().map(|url| url.to_string()).unwrap_or(url);
                         tab.loading = !finished && tab.url != "about:blank";
                         tab.initial_finished |= finished;
-                        host.publish(view.app_handle());
-                    }
-                });
-            })
-            .on_document_title_changed(move |view, title| {
-                if title_bootstrap.load(Ordering::SeqCst) {
-                    return;
-                }
-                let owner = title_owner.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut host = owner.inner.lock().await;
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == view.label()) {
-                        tab.title = title;
                         host.publish(view.app_handle());
                     }
                 });

@@ -15,8 +15,59 @@ import {
   type PluginRuntimeApplication,
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../../plugins/plugin-lifecycle-lease.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+
+class GatewayPluginLifecycleBusyError extends Error {
+  constructor(cause: OpenClawStateLeaseError) {
+    super("Another plugin or config operation is already running; retry when it completes.", {
+      cause,
+    });
+    this.name = "GatewayPluginLifecycleBusyError";
+  }
+}
+
+export async function withGatewayPluginLifecycleLease<T>(
+  signal: AbortSignal | undefined,
+  run: (lease: PluginLifecycleLeaseContext) => Promise<T>,
+): Promise<T> {
+  let entered = false;
+  try {
+    // An admitted RPC cannot wait on a config reload that is draining that RPC.
+    return await withPluginLifecycleLease({ signal, waitMs: 0 }, (lease) => {
+      entered = true;
+      return run(lease);
+    });
+  } catch (error) {
+    if (
+      !entered &&
+      error instanceof OpenClawStateLeaseError &&
+      error.code === "OPENCLAW_STATE_LEASE_TIMEOUT"
+    ) {
+      throw new GatewayPluginLifecycleBusyError(error);
+    }
+    if (
+      error instanceof OpenClawStateLeaseError &&
+      error.code === "OPENCLAW_STATE_LEASE_ABORTED" &&
+      signal?.aborted &&
+      error.cause === signal.reason
+    ) {
+      throw signal.reason;
+    }
+    throw error;
+  }
+}
 
 export function pluginLifecycleError(error: unknown, application?: PluginRuntimeApplication) {
+  if (error instanceof GatewayPluginLifecycleBusyError) {
+    return errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+      retryable: true,
+      retryAfterMs: 1_000,
+    });
+  }
   const failure = projectPluginRuntimeFailure(error, application);
   const cause = error instanceof PluginInstallPersistedError ? error.cause : error;
   const lifecycleError = cause instanceof ManagedPluginLifecycleError ? cause : undefined;

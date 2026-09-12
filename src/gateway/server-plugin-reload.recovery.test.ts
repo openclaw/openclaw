@@ -39,13 +39,17 @@ import {
   verifyExpandedReplacementTargets,
   verifyCommittedRetirementOwnership,
   verifyPendingServiceCleanupRetry,
+  verifyGatewayCleanupRetry,
+  verifyPendingServiceCleanupRollback,
+  verifyFailedRecoveryServiceOwnership,
+  verifyCandidateCleanupRecovery,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
 import { verifyGatewayMemoryReplacement } from "./server-plugin-reload.memory.test-support.js";
 import {
   createPluginReloadRecoveryFixture,
   verifyChannelReplacementContracts,
+  verifyColdAccountReplacement,
   verifyChannelCleanupFailureFence,
-  verifyGatewayCleanupRetry,
   verifyMalformedReloadFailureReceipt,
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
@@ -56,7 +60,6 @@ import {
   registerTranscriptFixture,
   startTranscriptReloadFixtureSidecars,
 } from "./server-plugin-reload.transcripts.test-support.js";
-import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -153,6 +156,9 @@ it.each(["services", "channel"] as const)(
 it("disables and re-enables a plugin after its service cleanup fails", () =>
   verifyServiceCleanupRecovery(createRecoveryFixture));
 
+it("preserves pending old service cleanup when candidate startup fails", () =>
+  verifyPendingServiceCleanupRollback(createRecoveryFixture));
+
 it("keeps a live Gateway's generated setup callbacks through another Gateway's reload", () =>
   verifyGatewayCacheOwnership(
     createRecoveryFixture,
@@ -202,6 +208,9 @@ it.each(["retry", "shutdown"] as const)(
 
 it("replaces channel command provenance while keeping webhook ingress retryable", () =>
   verifyChannelReplacementContracts(createRecoveryFixture));
+
+it("keeps cold accounts isolated while replacing their plugin and healthy accounts", () =>
+  verifyColdAccountReplacement(createRecoveryFixture));
 
 it.each(["rejection", "timeout"] as const)(
   "replaces channels after cleanup %s while retaining predecessor fences and warnings",
@@ -826,68 +835,11 @@ describe("Gateway plugin service recovery ownership", () => {
     },
   );
 
-  it("keeps retained and failed-recovery services owned after recovery startup rejects", async () => {
-    const startFailure = new Error("previous service failed to restart");
-    const stopFailure = new Error("previous service cleanup failed");
-    const fixture = await createRecoveryFixture({
-      recoveryStart: async () => {
-        throw startFailure;
-      },
-      recoveryStop: async () => {
-        throw stopFailure;
-      },
-    });
-    const failure = await fixture.reload().catch((error: unknown) => error);
-    expect(failure).toMatchObject({
-      details: { phase: "activate", committed: false },
-      cause: {
-        errors: [
-          expect.any(GatewayConfigReloadSupersededError),
-          expect.objectContaining({ errors: expect.arrayContaining([startFailure]) }),
-        ],
-      },
-    });
-    expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
-    const shutdown = await fixture.owner
-      .currentServices()!
-      .stop({ strict: true, deadlineAtMs: Date.now() + 5_000 })
-      .catch((error: unknown) => error);
-    expect(shutdown).toMatchObject({
-      errors: [expect.objectContaining({ cause: stopFailure })],
-    });
-    expect(fixture.siblingStop).toHaveBeenCalledOnce();
-    expect(fixture.firstStop).toHaveBeenCalledTimes(2);
-  });
+  it("keeps retained and failed-recovery services owned after recovery startup rejects", () =>
+    verifyFailedRecoveryServiceOwnership(createRecoveryFixture));
 
-  it("restores the previous service after candidate cleanup fails and permits another attempt", async () => {
-    const stopFailure = new Error("candidate service cleanup failed");
-    const fixture = await createRecoveryFixture({
-      candidateStop: async () => {
-        throw stopFailure;
-      },
-    });
-    for (const attempt of [1, 2]) {
-      const failure = await fixture.reload().catch((error: unknown) => error);
-      expect(fixture.firstStart).toHaveBeenCalledTimes(attempt + 1);
-      expect(failure).toMatchObject({
-        details: { phase: "activate", committed: false },
-        cause: expect.any(GatewayConfigReloadSupersededError),
-      });
-      expect(fixture.candidateStop).toHaveBeenCalledTimes(attempt);
-      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-      expect(fixture.siblingStart).toHaveBeenCalledOnce();
-      expect(fixture.siblingStop).not.toHaveBeenCalled();
-    }
-    await expect(
-      fixture.owner.currentServices()!.stop({ strict: true, deadlineAtMs: Date.now() + 5_000 }),
-    ).resolves.toBeUndefined();
-    expect(fixture.siblingStop).toHaveBeenCalledOnce();
-    expect(fixture.candidateStop).toHaveBeenCalledTimes(2);
-    await expect(fixture.lifetime.stop()).resolves.toBeUndefined();
-    expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars).toEqual([]);
-  });
+  it("restores the previous service after candidate cleanup fails and permits another attempt", () =>
+    verifyCandidateCleanupRecovery(createRecoveryFixture));
 
   it.each(["suspension", "restart signal"] as const)(
     "restores the previous plugin runtime after failed replacement during reversible %s",

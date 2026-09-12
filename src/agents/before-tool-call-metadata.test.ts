@@ -27,6 +27,23 @@ function createTool(): AnyAgentTool {
 }
 
 describe("before-tool-call metadata across plugin views", () => {
+  it("recognizes wrapper metadata after module reevaluation and object spread", async () => {
+    const source = createTool();
+    const context = { runId: "cross-module-metadata" };
+    const wrapped = wrapToolWithBeforeToolCallHook(source, context);
+    const options = getBeforeToolCallDiagnosticOptions(wrapped);
+    // Independent SDK source evaluation must share marker and host state with compiled core.
+    vi.resetModules();
+    const other = await import("./before-tool-call-metadata.js");
+    const spread = { ...wrapped };
+    expect(other.isToolWrappedWithBeforeToolCallHook(spread)).toBe(true);
+    expect(other.getBeforeToolCallHookContext(spread)).toBe(context);
+    expect(other.getBeforeToolCallSourceTool(wrapped)).toBe(source);
+    expect(other.getBeforeToolCallDiagnosticOptions(spread)).toBe(options);
+    other.setBeforeToolCallDiagnosticsEnabled(spread, false);
+    expect(options?.emitDiagnostics).toBe(false);
+  });
+
   it("preserves host context and mutable diagnostic identity through nested views and copies", async () => {
     const inner = new PluginInstance("inner-metadata");
     const outer = new PluginInstance("outer-metadata");

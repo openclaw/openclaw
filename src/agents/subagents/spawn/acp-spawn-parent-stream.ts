@@ -22,7 +22,7 @@ import {
 import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveNormalizedAccountEntry } from "../../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { normalizeAssistantPhase } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis as truncate } from "../../../shared/text-truncate.js";
@@ -121,9 +121,10 @@ function resolveParentProgressStreamingEntry(params: {
   if (!channelCfg) {
     return undefined;
   }
-  const accountCfg = resolveNormalizedAccountEntry(
+  const accountCfg = resolveChannelAccountEntry(
     channelCfg.accounts,
     normalizeAccountId(params.deliveryContext?.accountId),
+    channelId,
     normalizeAccountId,
   );
   return mergeStreamingEntry(channelCfg, accountCfg);

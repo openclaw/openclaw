@@ -12,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
@@ -391,7 +392,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       config: state.candidate,
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
-      currentHash: snapshot.hash ?? null,
+      currentHash: hashConfigRaw(snapshot.raw),
       auditRecords: readRecentConfigAuditRecords({
         env: process.env,
         homedir,
@@ -693,10 +694,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (configuredOpencodePluginIds.length > 0) {
     const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
     activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
-      resolveEnabledProviderPluginIds({
-        config: cfg,
-        onlyPluginIds: configuredOpencodePluginIds,
-      }),
+      resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
     );
   }
   noteOpencodeProviderOverrides(cfg, {

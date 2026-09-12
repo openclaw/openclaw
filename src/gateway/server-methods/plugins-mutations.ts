@@ -22,7 +22,10 @@ import {
   setManagedPluginEnabled,
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
-import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
+import {
+  pluginLifecycleError,
+  withGatewayPluginLifecycleLease,
+} from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -69,15 +72,13 @@ function lifecycleHandler<T>(
           },
         });
       });
-      const { application, plugin, pluginId, pluginIds, removed, warnings } = await run(
-        params,
-        {
-          applyRuntime: captured.applyRuntime,
-          beforePersistentApply,
-          ...(signal ? { signal } : {}),
-        },
-        client,
-      );
+      const lifecycle: PluginLifecycleOptions = {
+        applyRuntime: captured.applyRuntime,
+        beforePersistentApply,
+        ...(signal ? { signal } : {}),
+      };
+      const { application, plugin, pluginId, pluginIds, removed, warnings } =
+        await withGatewayPluginLifecycleLease(signal, () => run(params, lifecycle, client));
       if (!application) {
         throw new Error("Plugin lifecycle did not return a runtime application receipt.");
       }

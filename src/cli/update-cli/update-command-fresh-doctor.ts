@@ -15,8 +15,13 @@ import {
   createUpdatePostInstallDoctorResultPath,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  UpdateDoctorError,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import {
+  createUpdateFailureFact,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
@@ -81,11 +86,13 @@ async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> 
 function createPostPluginDoctorExecutionFailure(
   pluginUpdate: PostCorePluginUpdateResult,
   reason: string,
+  failureFacts?: UpdateFailureFact[],
 ): PostCorePluginUpdateResult {
   return {
     ...pluginUpdate,
     status: "error",
     reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+    ...(failureFacts?.length ? { failureFacts } : {}),
     warnings: [
       ...(pluginUpdate.warnings ?? []),
       {
@@ -160,6 +167,20 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       }
     }
     const redaction = { env: process.env, stateDir: resolveStateDir() };
+    const failureFacts = doctorResult?.failureFacts?.length
+      ? doctorResult.failureFacts
+      : [
+          createUpdateFailureFact({
+            check: "doctor",
+            code: "doctor-failed",
+            message:
+              typeof result?.stderr === "string" && result.stderr.trim()
+                ? result.stderr
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
+          }),
+        ];
     const details = (["stderr", "stdout"] as const).flatMap((stream) => {
       const output = result?.[stream];
       if (typeof output !== "string" || !output.trim()) {
@@ -179,11 +200,17 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       return excerpt ? [`${stream}: ${excerpt}`] : [];
     });
     if (details.length > 0) {
-      throw new Error(`Updated ${params.phase} Doctor failed:\n${details.join("\n")}`, {
-        cause: error,
-      });
+      throw new UpdateDoctorError(
+        `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`,
+        failureFacts,
+        { cause: error },
+      );
     }
-    throw error;
+    throw new UpdateDoctorError(
+      error instanceof Error ? error.message : String(error),
+      failureFacts,
+      { cause: error },
+    );
   } finally {
     doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
     if (doctorResult?.warnings?.length) {
@@ -257,7 +284,11 @@ export async function completePostCorePluginUpdate(params: {
         });
       }
     } catch (err) {
-      pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
+      pluginUpdate = createPostPluginDoctorExecutionFailure(
+        params.pluginUpdate,
+        String(err),
+        err instanceof UpdateDoctorError ? err.failureFacts : undefined,
+      );
       freshConfigValid = false;
     }
   }

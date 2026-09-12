@@ -384,9 +384,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private activeTrigger: "focus" | "pointer" | null = null;
   private readonly hovercard = new PortaledHovercardController(() => this.close());
   private stopI18n: (() => void) | null = null;
-  // Spans the synchronous focus() that hands focus back to the trigger, so the
-  // card the user just dismissed cannot reopen under them (handleCardKeyDown).
-  private suppressFocusOpen = false;
   private readonly previewTask = new Task(this, {
     autoRun: false,
     args: () => [this.activeTarget] as const,
@@ -414,7 +411,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.addEventListener("pointerout", this.handlePointerOut);
     this.addEventListener("focusin", this.handleFocusIn);
     this.addEventListener("focusout", this.handleFocusOut);
-    this.addEventListener("keydown", this.handleKeyDown);
+    this.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
     this.addEventListener("click", this.handleClick);
     this.stopI18n ??= i18n.subscribe(() => this.requestUpdate());
   }
@@ -424,7 +421,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.removeEventListener("pointerout", this.handlePointerOut);
     this.removeEventListener("focusin", this.handleFocusIn);
     this.removeEventListener("focusout", this.handleFocusOut);
-    this.removeEventListener("keydown", this.handleKeyDown);
+    this.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
     this.removeEventListener("click", this.handleClick);
     this.stopI18n?.();
     this.stopI18n = null;
@@ -507,7 +504,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleFocusIn = (event: Event) => {
-    if (this.suppressFocusOpen) {
+    if (this.hovercard.restoringFocus) {
       return;
     }
     const anchor = githubLinkAnchorFromEvent(event);
@@ -527,45 +524,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     }
     this.hovercard.focusInside = false;
     this.scheduleIntentClose();
-  };
-
-  private readonly handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      this.close();
-      return;
-    }
-    // The card is portaled to document.body and never lands next to its trigger
-    // in the tab sequence; forward Tab in, and let the card hand focus back
-    // (handleCardKeyDown), so its links stay keyboard-reachable at all.
-    if (event.key !== "Tab" || event.shiftKey || event.target !== this.activeAnchor) {
-      return;
-    }
-    const [first] = this.hovercard.focusables();
-    if (!first) {
-      return;
-    }
-    event.preventDefault();
-    first.focus();
-  };
-
-  private readonly handleCardKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" && event.key !== "Tab") {
-      return;
-    }
-    // Tab moves between the card's own links normally and only exits at the edge
-    // of that run: the card has no tab-sequence neighbour, so leaving it lands on
-    // the trigger like Escape does instead of dropping focus to the document.
-    const focusables = this.hovercard.focusables();
-    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
-    if (event.key === "Tab" && document.activeElement !== edge) {
-      return;
-    }
-    event.preventDefault();
-    const anchor = this.activeAnchor;
-    this.close();
-    this.suppressFocusOpen = true;
-    anchor?.focus({ preventScroll: true });
-    this.suppressFocusOpen = false;
   };
 
   private readonly handleClick = () => {
@@ -642,7 +600,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     } else {
       // The provider's delegated listeners do not see the portaled card.
       card.addEventListener("pointerleave", this.handleCardPointerLeave);
-      card.addEventListener("keydown", this.handleCardKeyDown);
+      card.addEventListener("keydown", this.hovercard.handleCardKeyDown);
       this.hovercard.markTrigger(anchor);
       this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
     }

@@ -114,9 +114,7 @@ export async function runWriteConfigHealth(
       const includeWrite = includeBoundary ? includeSnapshot : undefined;
       const writeSource =
         confirmedConfigSource ??
-        (includeWrite
-          ? { path: includeWrite.path, hash: hashConfigRaw(includeWrite.raw) }
-          : undefined);
+        (includeWrite ? { path: includeWrite.path, hash: includeWrite.hash } : undefined);
       const writeConfig = () =>
         transformConfigFile({
           ...(writeSource ? { baseHash: writeSource.hash } : {}),

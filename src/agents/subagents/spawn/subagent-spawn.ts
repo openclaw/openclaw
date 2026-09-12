@@ -9,6 +9,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
@@ -582,6 +583,9 @@ export async function spawnSubagentDirect(
       activateSwarmRun({
         groupId: swarmSchedulerGroupKey,
         runId: childRunId,
+        lifecycleOwner: gatewayContextResolver
+          ? getCanonicalGatewayContextResolver(gatewayContextResolver)
+          : undefined,
         start: async () => {
           await runWithGatewayIndependentRootWorkContinuation(async () => {
             const launch = await launchChildRun();
@@ -622,7 +626,7 @@ export async function spawnSubagentDirect(
             }
             await emitSpawnLifecycleHooks(gatewayRunId);
           }, "subagents:spawn");
-          await pipelineResult.state.contextEnginePreparation?.dispose();
+          await pipelineResult.state.contextEnginePreparation?.dispose().catch(() => {});
         },
         onStartFailure: async (error) => {
           if (error instanceof GatewayDrainingError) {
@@ -657,8 +661,13 @@ export async function spawnSubagentDirect(
           }
           return true;
         },
-        onRemoved: async () => {
-          await rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation);
+        onRemoved: async (reason) => {
+          if (reason === "shutdown") {
+            // Restart replays queuedLaunch without repeating its durable context preparation.
+            await pipelineResult.state.contextEnginePreparation?.dispose();
+          } else {
+            await pipelineResult.state.contextEnginePreparation?.rollback();
+          }
         },
       });
       contextEnginePreparation = undefined;
@@ -700,7 +709,7 @@ export async function spawnSubagentDirect(
     if (params.collect && contextEnginePreparation) {
       await rollbackPreparedContextEngine(contextEnginePreparation);
     } else {
-      await contextEnginePreparation?.dispose();
+      await contextEnginePreparation?.dispose().catch(() => {});
     }
   }
 }

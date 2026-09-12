@@ -1,6 +1,7 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -198,25 +199,85 @@ describe("plugins cli policy mutations", () => {
     },
   );
 
-  it.each([undefined, "OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"])(
-    "reloads one CLI-selected plugin through the cohort wire contract (%s)",
-    async (mode) => {
+  it.each([
+    { mode: undefined, json: false, acceptCapabilities: true },
+    { mode: "OPENCLAW_CONFIG_READONLY", json: false, acceptCapabilities: true },
+    { mode: "OPENCLAW_NIX_MODE", json: false, acceptCapabilities: true },
+    { mode: undefined, json: true, acceptCapabilities: false },
+    { mode: undefined, json: true, acceptCapabilities: true },
+  ])(
+    "reloads one CLI-selected plugin (mode=$mode, json=$json, accept=$acceptCapabilities)",
+    async ({ mode, json, acceptCapabilities }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-      pluginLifecycleGatewayMock.mockResolvedValue({
+      const receipt = {
         ok: true,
         pluginIds: ["alpha"],
         restartRequired: false,
         runtime: { operationId: "reload-alpha", generation: 2, pluginIds: ["alpha"] },
+      };
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "alpha",
+        manifest: { name: "Alpha", hooks: ["agent:bootstrap"] },
+        record: { source: "npm", spec: "@acme/alpha" },
+        config: {},
       });
-      await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
-        await runPluginsCommand(["plugins", "reload", "alpha", "--accept-capabilities"]);
+      const consentRequired = new Error("Plugin alpha requires capability consent.");
+      pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
+        if (json) {
+          const consent = args[2];
+          if (typeof consent !== "function") {
+            throw consentRequired;
+          }
+          expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+        }
+        return receipt;
       });
+      const streams = [process.stdin, process.stdout].map((stream) => ({
+        stream,
+        descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+      }));
+      try {
+        for (const { stream } of streams) {
+          Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
+        }
+        await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
+          const reload = runPluginsCommand([
+            "plugins",
+            "reload",
+            "alpha",
+            ...(json ? ["--json"] : []),
+            ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+          ]);
+          if (json && !acceptCapabilities) {
+            await expect(reload).rejects.toBe(consentRequired);
+          } else {
+            await reload;
+          }
+        });
+      } finally {
+        for (const { stream, descriptor } of streams) {
+          if (descriptor) {
+            Object.defineProperty(stream, "isTTY", descriptor);
+          } else {
+            Reflect.deleteProperty(stream, "isTTY");
+          }
+        }
+      }
       expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
         "plugins.reload",
         { plugins: [{ pluginId: "alpha" }] },
-        expect.any(Function),
+        acceptCapabilities ? expect.any(Function) : undefined,
       );
-      expect(pluginsCliRuntimeLogs).toContain('Reloaded plugin "alpha" (generation 2).');
+      expect(promptYesNoMock).not.toHaveBeenCalled();
+      if (json) {
+        if (acceptCapabilities) {
+          expect(JSON.parse(pluginsCliRuntimeLogs.join("\n"))).toEqual(receipt);
+        } else {
+          expect(pluginsCliRuntimeLogs).toEqual([]);
+        }
+      } else {
+        expect(pluginsCliRuntimeLogs).toContain('Reloaded plugin "alpha" (generation 2).');
+      }
       expect(configWriteMock).not.toHaveBeenCalled();
     },
   );

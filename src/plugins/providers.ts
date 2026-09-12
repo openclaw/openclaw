@@ -403,8 +403,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
       }),
   });
 }
-type ModelSupportMatchKind = "pattern" | "prefix";
-
 function resolveManifestRegistry(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -463,10 +461,7 @@ function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: 
   return { provider, modelId };
 }
 
-function resolveModelSupportMatchKind(
-  plugin: PluginManifestRecord,
-  modelId: string,
-): ModelSupportMatchKind | undefined {
+function matchesModelPattern(plugin: PluginManifestRecord, modelId: string): boolean {
   const patterns = plugin.modelSupport?.modelPatterns ?? [];
   for (const patternSource of patterns) {
     // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
@@ -474,16 +469,10 @@ function resolveModelSupportMatchKind(
     // will not match via that pattern but other patterns/prefixes still apply.
     const regex = compileSafeRegex(patternSource, "u");
     if (regex?.test(modelId)) {
-      return "pattern";
+      return true;
     }
   }
-  const prefixes = plugin.modelSupport?.modelPrefixes ?? [];
-  for (const prefix of prefixes) {
-    if (modelId.startsWith(prefix)) {
-      return "prefix";
-    }
-  }
-  return undefined;
+  return false;
 }
 
 function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
@@ -700,20 +689,30 @@ export function resolveOwningPluginIdsForModelRef(params: {
     ...params,
     includeDisabled: true,
   });
-  const matchedByPattern = manifestRegistry.plugins
-    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "pattern")
-    .map((plugin) => plugin.id);
+  const matchedByPattern = manifestRegistry.plugins.filter((plugin) =>
+    matchesModelPattern(plugin, parsed.modelId),
+  );
   const preferredPatternPluginIds = resolvePreferredManifestPluginIds(
     manifestRegistry,
-    matchedByPattern,
+    matchedByPattern.map((plugin) => plugin.id),
   );
   if (preferredPatternPluginIds) {
     return preferredPatternPluginIds;
   }
 
-  const matchedByPrefix = manifestRegistry.plugins
-    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "prefix")
-    .map((plugin) => plugin.id);
+  const patternMatches = matchedByPattern.length > 0 ? new Set(matchedByPattern) : undefined;
+  const matchedByPrefix: string[] = [];
+  for (const plugin of manifestRegistry.plugins) {
+    if (patternMatches?.has(plugin)) {
+      continue;
+    }
+    for (const prefix of plugin.modelSupport?.modelPrefixes ?? []) {
+      if (parsed.modelId.startsWith(prefix)) {
+        matchedByPrefix.push(plugin.id);
+        break;
+      }
+    }
+  }
   return resolvePreferredManifestPluginIds(manifestRegistry, matchedByPrefix);
 }
 

@@ -20,6 +20,7 @@ import {
   type ConfigExternalChangeAuditRecord,
 } from "../config/io.audit.js";
 import type { ConfigWriteNotification } from "../config/io.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
@@ -463,7 +464,7 @@ export function startGatewayConfigReloader(opts: {
     } = {},
   ) => {
     let transactionEpoch = initialEpoch;
-    const { hash: persistedHash, parsed: authoredConfig } = sourceSnapshot;
+    const { hash: persistedHash } = sourceSnapshot;
     const {
       config: candidateRuntimeConfig = sourceSnapshot.config,
       compareConfig: nextSourceConfig = sourceSnapshot.sourceConfig,
@@ -769,13 +770,7 @@ export function startGatewayConfigReloader(opts: {
         await checkpoint();
         assertCurrent();
         currentSourceConfig = nextSourceConfig;
-        if (typeof persistedHash === "string") {
-          if (authoredConfig !== undefined) {
-            updateAcceptedSnapshot(persistedHash, authoredConfig);
-          } else {
-            currentRawHash = persistedHash;
-          }
-        }
+        updateAcceptedSnapshot(hashConfigRaw(sourceSnapshot.raw), sourceSnapshot.parsed);
         if (options.runtimeApplied === false) {
           // Persisted-but-skipped candidates are not runtime truth. Keep the
           // effective baseline so a later safe edit cannot publish them indirectly.
@@ -996,7 +991,7 @@ export function startGatewayConfigReloader(opts: {
         throw new GatewayConfigReloadSupersededError();
       }
       if (snapshot.valid && typeof snapshot.hash === "string") {
-        updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
+        updateAcceptedSnapshot(hashConfigRaw(snapshot.raw), snapshot.parsed);
       }
     });
     if (snapshot.valid) {
@@ -1107,7 +1102,7 @@ export function startGatewayConfigReloader(opts: {
       }
       await observeCandidateWatchedPaths(snapshot.includedPaths ?? []);
       assertLeaseOwned();
-      const observedRawHash = snapshot.hash ?? null;
+      const observedRawHash = hashConfigRaw(snapshot.raw);
       const previousObservedRawHash = lastObservedRawHash;
       const newObservedRawHash = observedRawHash !== previousObservedRawHash;
       lastObservedRawHash = observedRawHash;
@@ -1193,7 +1188,7 @@ export function startGatewayConfigReloader(opts: {
         await appliedRevision.flush(currentConfig);
         return;
       }
-      const nextRawHash = snapshot.hash ?? null;
+      const nextRawHash = observedRawHash;
       const externalChangedPaths = diffConfigPaths(currentSourceConfig, snapshot.sourceConfig);
       const fingerprintedAuthoredChangedPaths = diffConfigPaths(
         currentFingerprintedAuthoredConfig,
@@ -1517,7 +1512,7 @@ export function startGatewayConfigReloader(opts: {
         acceptedIncludedPaths.size === includedPaths.length &&
         includedPaths.every((path) => acceptedIncludedPaths.has(path));
       const sameRoot = snapshot.exists
-        ? typeof snapshot.hash === "string" && snapshot.hash === currentRawHash
+        ? hashConfigRaw(snapshot.raw) === currentRawHash
         : currentRawHash === null;
       // Without includes, equal authored bytes prove the initial scan found no disk edit.
       // Included files can change without changing the root file hash.

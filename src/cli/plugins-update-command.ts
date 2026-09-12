@@ -1,5 +1,6 @@
 // `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
 import { isDeepStrictEqual } from "node:util";
+import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -225,7 +226,13 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
   if (changed) {
     if (gateway) {
       try {
-        const result = await gateway<{ runtime: { generation: number } }>("plugins.refresh", {});
+        const result = await gateway<PluginsRefreshResult>("plugins.refresh", {});
+        if (!result.runtime) {
+          throw new Error("Plugin update did not return a runtime application receipt.");
+        }
+        for (const warning of result.warnings ?? []) {
+          defaultRuntime.log(theme.warn(warning));
+        }
         defaultRuntime.log(
           `Applied plugin updates in Gateway generation ${result.runtime.generation}.`,
         );

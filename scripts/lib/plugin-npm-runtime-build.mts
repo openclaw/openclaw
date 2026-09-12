@@ -529,7 +529,7 @@ function readPackageDirArg(argv: string[]) {
     throw new Error(usage());
   }
   const extraArg = args[1];
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
   return prepareIndex === -1 ? { packageDir } : { packageDir, prepareNativeImport: true };

@@ -29,12 +29,17 @@ const pluginRegistryMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex:
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
-  resolveInstalledManifestRegistryIndexFingerprint:
-    pluginRegistryMocks.resolveInstalledManifestRegistryIndexFingerprint,
-}));
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const { selectInstalledPluginManifestRecords } =
+    await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    selectInstalledPluginManifestRecords,
+    loadPluginManifestRegistryForInstalledIndex:
+      pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    resolveInstalledManifestRegistryIndexFingerprint:
+      pluginRegistryMocks.resolveInstalledManifestRegistryIndexFingerprint,
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry:

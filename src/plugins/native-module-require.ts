@@ -43,6 +43,33 @@ const moduleWithResolver = Module as typeof Module & {
   }) => { deregister: () => void };
 };
 
+let nativeAliasHookSupport: boolean | undefined;
+
+/** Older Bun loses createRequire's parent when its private resolver is wrapped. */
+export function supportsNativeModuleAliasHooks(): boolean {
+  if (!process.versions.bun) {
+    return true;
+  }
+  if (nativeAliasHookSupport !== undefined) {
+    return nativeAliasHookSupport;
+  }
+  const previous = moduleWithResolver["_resolveFilename"];
+  if (!previous) {
+    return (nativeAliasHookSupport = false);
+  }
+  let retainsParent = false;
+  moduleWithResolver["_resolveFilename"] = (request, parent) => {
+    retainsParent = typeof parent?.filename === "string";
+    return request;
+  };
+  try {
+    createRequire(import.meta.url).resolve(fileURLToPath(import.meta.url));
+  } finally {
+    moduleWithResolver["_resolveFilename"] = previous;
+  }
+  return (nativeAliasHookSupport = retainsParent);
+}
+
 type CapturedModuleResolver = (
   request: string,
   parent: string,
@@ -52,7 +79,7 @@ type CapturedModuleBinding = {
   resolve: CapturedModuleResolver;
   prepare: (request: string, parent: string) => string | undefined;
 };
-type BunPluginRuntime = {
+export type BunPluginRuntime = {
   plugin(options: {
     name: string;
     setup(builder: {

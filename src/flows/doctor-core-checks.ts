@@ -359,7 +359,8 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       await import("../commands/doctor-skill-workshop-sqlite.js");
     const inspection = await inspectLegacySkillWorkshopMigration({
       config: ctx.cfg,
-      env: process.env,
+      env: ctx.env,
+      stateEnv: process.env,
     });
     const automationFindings = (inspection.automationReferences ?? []).map((reference) => ({
       checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,

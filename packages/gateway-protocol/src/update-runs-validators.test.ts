@@ -63,7 +63,51 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
+  it("carries a bounded failing check through history responses", () => {
+    const fact = {
+      check: "readyz",
+      code: "readyz-unhealthy",
+      message: "Readiness returned HTTP 503.",
+    };
+    const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
+    const failed = {
+      ...run,
+      steps: [step],
+    };
+    expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
+    expect(
+      validateUpdateRunsGetResult({
+        run: {
+          ...failed,
+          steps: [
+            {
+              ...step,
+              failureFacts: Array.from({ length: 6 }, () => fact),
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+
   it.each([
+    {
+      snapshotCapacity: {
+        reason: "snapshot-location-unavailable",
+        sqliteBytes: 1024,
+        pluginBytes: 2048,
+        requiredBytes: 8192,
+        selection: null,
+        candidates: [
+          {
+            kind: "explicit-tmpdir",
+            directory: "/synthetic/file",
+            availableBytes: 16384,
+            allocationError: "not a directory",
+          },
+        ],
+      },
+    },
     { configChange: { kind: "key", key: "meta" } },
     { configChange: { kind: "migration", message: "Enabled the configured provider." } },
     {
@@ -73,11 +117,26 @@ describe("update run wire contract", () => {
         keys: ["meta", "plugins", "wizard"],
       },
     },
-  ])("carries typed Doctor evidence through the wire projection: %j", (evidence) => {
+    ...[null, { kind: "state-volume", directory: "/synthetic/state.update-captures" }].map(
+      (selection) => ({
+        snapshotCapacity: {
+          reason: selection ? selection.kind : "snapshot-capacity-insufficient",
+          sqliteBytes: 1024,
+          pluginBytes: 2048,
+          requiredBytes: 8192,
+          candidates: [
+            { kind: "system-tmpdir", directory: "/synthetic/tmp", availableBytes: null },
+          ],
+          selection,
+        },
+      }),
+    ),
+  ])("carries typed update evidence through the wire projection: %j", (evidence) => {
     const record = LedgerRecordSchema.parse({
       ...run,
       steps: [{ ...run.steps[0], ...evidence }],
     });
+    expect(record.steps[0]).toMatchObject(evidence);
     expect(validateUpdateRunRecord(record)).toBe(true);
     expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
     expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);

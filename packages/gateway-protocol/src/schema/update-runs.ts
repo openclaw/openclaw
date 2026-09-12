@@ -27,6 +27,11 @@ const driver = closedObject({
   pid: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   startIdentity: Type.String({ pattern: "^\\d+$", maxLength: 128 }),
 });
+const snapshotLocation = closedObject({
+  kind: Type.Enum(["explicit-tmpdir", "state-volume", "system-tmpdir"]),
+  directory: text,
+});
+const snapshotBytes = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -76,6 +81,18 @@ export const UpdateRunRecordSchema = closedObject({
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
       detail: Type.Optional(text),
+      failureFacts: Type.Optional(
+        Type.Array(
+          closedObject({
+            check: Type.String({ maxLength: 128 }),
+            code: Type.String({ maxLength: 80 }),
+            message: Type.Optional(Type.String({ maxLength: 200 })),
+            affectedKey: Type.Optional(Type.String({ maxLength: 128 })),
+            pluginId: Type.Optional(Type.String({ maxLength: 80 })),
+          }),
+          { maxItems: 5 },
+        ),
+      ),
       configChange: Type.Optional(
         Type.Union([
           closedObject({ kind: Type.Literal("key"), key: text }),
@@ -87,6 +104,29 @@ export const UpdateRunRecordSchema = closedObject({
           reason: text,
           message: text,
           keys: Type.Array(text, { maxItems: 32 }),
+        }),
+      ),
+      snapshotCapacity: Type.Optional(
+        closedObject({
+          sqliteBytes: snapshotBytes,
+          pluginBytes: Type.Union([snapshotBytes, Type.Null()]),
+          requiredBytes: snapshotBytes,
+          reason: Type.Enum([
+            "explicit-tmpdir",
+            "state-volume",
+            "system-tmpdir",
+            "snapshot-capacity-insufficient",
+            "snapshot-location-unavailable",
+          ]),
+          candidates: Type.Array(
+            closedObject({
+              ...snapshotLocation.properties,
+              availableBytes: Type.Union([snapshotBytes, Type.Null()]),
+              allocationError: Type.Optional(text),
+            }),
+            { maxItems: 3 },
+          ),
+          selection: Type.Union([snapshotLocation, Type.Null()]),
         }),
       ),
     }),

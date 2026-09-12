@@ -22,10 +22,12 @@ import {
 } from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
+  AWS_SECRET_ACCESS_KEY_MATCHER,
   BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
   DEFAULT_REDACT_PATTERNS,
+  DEFAULT_REDACT_STRING_PATTERNS,
   FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
@@ -122,12 +124,11 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:password|pass|passphrase|passwd)\s*[=:]|jwt\s*[=:]|session=|code=|\bsig\s*=`,
   String.raw`\bBearer\s+`,
   // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
-  String.raw`:\/\/[^\/\s:@]*:[^\/\s@]+@`,
+  String.raw`:\/\/[^\/\s:@]*:[^\s@]+@`,
   // Vendor token prefixes and webhook hosts, ordered like DEFAULT_REDACT_PATTERNS.
   String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|gldt-|glcbt-|glptt-|glft-|glimt-|glagent-|glwt-|glsoat-|glffct-|glrt-|glrtr-|GR1348941|_gitlab_session=|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|\bSG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
   String.raw`(?:^|[^A-Za-z0-9_])(?:am_|sk_)`,
   String.raw`A[KS]IA[A-Z0-9]|AKID|LTAI|hf_|api_org_|r8_`,
-  String.raw`[A-Za-z0-9/+=]{40}`,
   String.raw`\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,}`,
   // Obfuscated form/URL keys: percent escapes can rewrite any key letter, while plus or
   // invisible splices break the literal key-name triggers above mid-word. After a splice the
@@ -153,8 +154,6 @@ type RedactOptions = {
 type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: ResolvedRedactPattern[];
-  redactFormBodies: boolean;
-  redactStructuredAuthHeaders?: boolean;
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
@@ -209,18 +208,12 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
     );
     return defaultResolvedPatterns;
   }
-  return value.map(parsePattern).filter((re): re is ResolvedRedactPattern => Boolean(re));
-}
-
-function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolean {
-  if (!value || usesBuiltInRedactPatterns(value)) {
-    return true;
-  }
-  const source = new Set(value);
-  return (
-    DEFAULT_REDACT_PATTERNS.every((pattern) => source.has(pattern)) ||
-    TOOL_PAYLOAD_REDACT_PATTERNS.every((pattern) => source.has(pattern))
-  );
+  return [
+    ...new Set([
+      ...value.map(parsePattern).filter((re): re is ResolvedRedactPattern => Boolean(re)),
+      AWS_SECRET_ACCESS_KEY_MATCHER,
+    ]),
+  ];
 }
 
 function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
@@ -664,24 +657,17 @@ function redactMatch(
   return `${match.slice(0, tokenIndex)}${masked}${match.slice(tokenIndex + token.length)}`;
 }
 
-function redactText(
+export function redactText(
   text: string,
   patterns: ResolvedRedactPattern[],
   options?: {
     fullContext?: boolean;
-    redactFormBodies?: boolean;
-    redactStructuredAuthHeaders?: boolean;
     preserveSourceAssignment?: (text: string, offset: number) => boolean;
   },
 ): string {
-  let next = text;
-  if (options?.redactStructuredAuthHeaders) {
-    next = redactStructuredAuthHeaders(next, "***");
-  }
-  if (options?.redactFormBodies) {
-    next = redactAssignmentValues(next, "url");
-    next = redactFormBody(next);
-  }
+  let next = redactFormBody(
+    redactAssignmentValues(redactStructuredAuthHeaders(text, "***"), "url"),
+  );
   for (const pattern of patterns) {
     const replace = (match: RedactMatch) =>
       redactMatch(match, pattern, options?.preserveSourceAssignment);
@@ -696,7 +682,7 @@ function redactText(
 }
 
 function couldMatchDefaultRedactPatterns(text: string): boolean {
-  return DEFAULT_REDACT_PREFILTER_RE.test(text);
+  return DEFAULT_REDACT_PREFILTER_RE.test(text) || AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text);
 }
 
 function markPatternMatchRedaction(
@@ -735,18 +721,14 @@ export function computeSensitiveRedactionBitmap(
 ): boolean[] {
   // oxlint-disable-next-line unicorn/no-new-array -- Fill the dense bitmap without a callback for every character.
   const bitmap = new Array<boolean>(text.length).fill(false);
-  if (resolved.mode === "off" || !resolved.patterns.length || !text) {
+  if (resolved.mode === "off" || !text) {
     return bitmap;
   }
-  if (resolved.redactStructuredAuthHeaders) {
-    for (const range of findStructuredAuthParamRanges(text)) {
-      markBitmapRange(bitmap, range.start, range.end);
-    }
+  for (const range of findStructuredAuthParamRanges(text)) {
+    markBitmapRange(bitmap, range.start, range.end);
   }
-  if (resolved.redactFormBodies) {
-    markAssignmentValues(text, "url", bitmap);
-    markFormBodyRedactions(text, bitmap);
-  }
+  markAssignmentValues(text, "url", bitmap);
+  markFormBodyRedactions(text, bitmap);
   for (const pattern of resolved.patterns) {
     for (const match of iterateRedactMatches(text, pattern)) {
       markPatternMatchRedaction(bitmap, text, pattern, match);
@@ -780,17 +762,9 @@ export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOpt
     return {
       mode,
       patterns: [],
-      redactFormBodies: false,
     };
   }
-  const patterns = resolvePatterns(resolved.patterns);
-  const includesDefaults = patterns.length > 0 && includesDefaultRedactPatterns(resolved.patterns);
-  return {
-    mode,
-    patterns,
-    redactFormBodies: includesDefaults,
-    redactStructuredAuthHeaders: includesDefaults,
-  };
+  return { mode, patterns: resolvePatterns(resolved.patterns) };
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
@@ -809,13 +783,7 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
     return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
-  if (!resolved.patterns.length) {
-    return exactRedacted;
-  }
-  return redactText(exactRedacted, resolved.patterns, {
-    redactFormBodies: resolved.redactFormBodies,
-    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-  });
+  return redactText(exactRedacted, resolved.patterns);
 }
 
 export function redactToolDetail(detail: string): string {
@@ -870,8 +838,6 @@ function redactToolPayloadTextWithPolicy(
   const resolved = resolveRedactOptions(options);
   return redactText(redactRegisteredSecretValues(text, maskToken), resolved.patterns, {
     fullContext: true,
-    redactFormBodies: resolved.redactFormBodies,
-    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
   });
 }
 
@@ -899,8 +865,6 @@ export function redactInputTextWithSourcePolicy(
     : redactRegisteredSecretValues(text, maskToken);
   return redactText(prepared, resolvePatterns(), {
     fullContext: true,
-    redactFormBodies: true,
-    redactStructuredAuthHeaders: true,
     preserveSourceAssignment,
   });
 }
@@ -959,10 +923,7 @@ function redactSensitiveFieldValueWithOptions(
   const redacted =
     !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
     couldMatchDefaultRedactPatterns(exactRedacted)
-      ? redactText(exactRedacted, resolved.patterns, {
-          redactFormBodies: resolved.redactFormBodies,
-          redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-        })
+      ? redactText(exactRedacted, resolved.patterns)
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
@@ -1121,8 +1082,8 @@ export function redactModelVisibleSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveModelVisibleToolPayloadRedaction());
 }
 
-export function getDefaultRedactPatterns(): RedactPattern[] {
-  return [...DEFAULT_REDACT_PATTERNS];
+export function getDefaultRedactPatterns(): string[] {
+  return [...DEFAULT_REDACT_STRING_PATTERNS];
 }
 
 // Applies already-resolved redaction to a batch of lines without re-resolving options.
@@ -1134,16 +1095,6 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     return lines;
   }
   const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
-  if (!resolved.patterns.length) {
-    return exactRedactedLines;
-  }
-  const redactedLines = resolved.redactFormBodies
-    ? exactRedactedLines.map((line) => redactFormBody(redactAssignmentValues(line, "url")))
-    : exactRedactedLines;
-  let redacted = redactedLines.join("\n");
-  if (resolved.redactStructuredAuthHeaders) {
-    redacted = redactStructuredAuthHeaders(redacted, "***");
-  }
-  return redactText(redacted, resolved.patterns).split("\n");
+  return redactText(exactRedactedLines.join("\n"), resolved.patterns).split("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

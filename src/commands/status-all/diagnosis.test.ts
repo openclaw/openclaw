@@ -79,12 +79,7 @@ function createBaseParams(
     port: 18789,
     portUsage: { port: 18789, status: "busy", listeners, hints: [] },
     tailscaleMode: "off",
-    tailscale: {
-      backendState: null,
-      dnsName: null,
-      ips: [],
-      error: null,
-    },
+    tailscaleDns: null,
     tailscaleHttpsUrl: null,
     skillStatus: null,
     pluginCompatibility: [],
@@ -259,15 +254,14 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
   });
 
-  it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
+  it("keeps DNS context while daemon state remains unobserved", async () => {
     const params = createBaseParams([]);
-    params.tailscale.backendState = "Running";
-    params.tailscale.dnsName = "box.tail.ts.net";
+    params.tailscaleDns = "box.tail.ts.net";
 
     await appendStatusAllDiagnosis(params);
 
     const output = params.lines.join("\n");
-    expect(output).toContain("✓ Tailscale exposure: off · daemon Running · box.tail.ts.net");
+    expect(output).toContain("✓ Tailscale exposure: off · daemon unknown · box.tail.ts.net");
     expect(output).not.toContain("Tailscale: off");
   });
 
@@ -583,7 +577,6 @@ describe("status-all diagnosis port checks", () => {
       "Local gateway: not expected on this machine",
       "Remote gateway target: gateway.example.com:19000",
     ].join("\n");
-    params.tailscale.backendState = "Running";
     params.health = undefined;
     params.nodeOnlyGateway = {
       gatewayTarget: "gateway.example.com:19000",

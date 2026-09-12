@@ -12,6 +12,7 @@ import {
   type PluginLifecycleRuntimeApply,
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
 
 const managementMocks = vi.hoisted(() => ({
   install: vi.fn(),
@@ -179,16 +180,33 @@ describe("plugin management Gateway mutation handlers", () => {
     });
   });
 
-  it("preserves an earlier publication when a later management phase fails", async () => {
-    managementMocks.uninstall.mockImplementation(async (options) => {
-      await options.applyRuntime({ config: {}, pluginIds: ["workboard"], reason: "uninstall" });
-      throw new Error("file cleanup failed");
-    });
-    expect(await callHandler("plugins.uninstall", { pluginId: "workboard" })).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", details: { runtime: { ...application, committed: true } } },
-    });
-  });
+  it.each([
+    { label: "cleanup", error: new Error("file cleanup failed") },
+    {
+      label: "nested lease",
+      error: new OpenClawStateLeaseError("package cleanup lease timed out", {
+        code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+      }),
+    },
+  ])(
+    "preserves an earlier publication without making a later $label failure retryable",
+    async ({ error }) => {
+      managementMocks.uninstall.mockImplementation(async (options) => {
+        await options.applyRuntime({ config: {}, pluginIds: ["workboard"], reason: "uninstall" });
+        throw error;
+      });
+      const result = await callHandler("plugins.uninstall", { pluginId: "workboard" });
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining(error.message),
+          details: { runtime: { ...application, committed: true } },
+        },
+      });
+      expect(result.error).not.toHaveProperty("retryable");
+    },
+  );
 
   it.each([false, true])(
     "keeps successful application warnings with final facts when a later apply rejects: %s",

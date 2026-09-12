@@ -5430,6 +5430,7 @@ describe("runCodexAppServerAttempt", () => {
         { onStart, ...(preserveNativeModel ? { persistedThreads: ["thread-1"] } : {}) },
       );
       const params = createParams(sessionFile, workspaceDir);
+      params.registerPluginRuntimeRefreshConsumer = vi.fn();
       params.modelId = "synthetic-outer-model";
       params.authProfileStore = {
         version: 1,
@@ -5502,6 +5503,7 @@ describe("runCodexAppServerAttempt", () => {
       const selectedProfile = preserveNativeModel ? "openai:binding" : "openai:ordered";
       expect(onStart).toHaveBeenCalledWith(selectedProfile, expect.anything(), expect.anything());
       if (preserveNativeModel) {
+        expect(params.registerPluginRuntimeRefreshConsumer).not.toHaveBeenCalled();
         expectResumeRequest(harness.requests, { threadId: "thread-1" });
         const resume = harness.requests.find((request) => request.method === "thread/resume");
         expect(resume?.params).not.toHaveProperty("model");
@@ -8024,6 +8026,7 @@ describe("runCodexAppServerAttempt", () => {
       agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
       agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
       const params = createParams(sessionFile, workspaceDir);
+      params.registerPluginRuntimeRefreshConsumer = vi.fn();
       params.agentDir = agentDir;
       params.provider = "anthropic";
       params.modelId = "claude-opus-4-6";
@@ -8097,6 +8100,7 @@ describe("runCodexAppServerAttempt", () => {
         });
         const result = await run;
         expect(result.terminal).toEqual({ kind: "ok" });
+        expect(params.registerPluginRuntimeRefreshConsumer).not.toHaveBeenCalled();
         expect(beforePromptBuild).toHaveBeenCalled();
         for (let index = 0; index < beforePromptBuild.mock.calls.length; index += 1) {
           const context = mockCall(beforePromptBuild, "before_prompt_build", index)[1];

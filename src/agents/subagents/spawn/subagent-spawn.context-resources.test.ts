@@ -276,6 +276,9 @@ describe("spawn context-engine resource custody", () => {
     "draining",
     "retired-draining",
     "withdrawal",
+    "shutdown",
+    "shutdown-disposal-failure",
+    "shutdown-draining",
   ] as const)("keeps queued preparation alive until %s finishes", async (mode) => {
     const blockerStarted = createDeferred();
     const retryStarted = createDeferred();
@@ -299,7 +302,7 @@ describe("spawn context-engine resource custody", () => {
         if (mode === "withdrawal") {
           await disposalGate.promise;
         }
-        if (mode === "disposal-failure") {
+        if (mode === "disposal-failure" || mode === "shutdown-disposal-failure") {
           throw new Error("engine cleanup failed");
         }
       },
@@ -316,7 +319,7 @@ describe("spawn context-engine resource custody", () => {
         if (mode === "failure" || mode === "rollback-failure" || mode === "disposal-failure") {
           throw new Error("launch failed");
         }
-        if (mode === "retired-draining") {
+        if (mode === "retired-draining" || mode === "shutdown-draining") {
           retryStarted.resolve();
           await retryGate.promise;
           fixture.read();
@@ -343,6 +346,7 @@ describe("spawn context-engine resource custody", () => {
     });
     await blockerStarted.promise;
     let queuedRunId: string | undefined;
+    let closing: Promise<void> | undefined;
     try {
       const result = await spawn(
         { task: "synthetic queued child", collect: true, groupId: "resource-group" },
@@ -364,13 +368,22 @@ describe("spawn context-engine resource custody", () => {
         expect(fixture.database.isOpen).toBe(true);
         disposalGate.resolve();
         await release;
+      } else if (mode === "shutdown" || mode === "shutdown-disposal-failure") {
+        closing = scheduler.closeSwarmScheduler();
+        if (mode === "shutdown-disposal-failure") {
+          await expect(closing).rejects.toThrow("Swarm launch cleanup failed");
+        } else {
+          await closing;
+        }
+        expect(launches).toBe(0);
+        expect(settleLaunchFailure).not.toHaveBeenCalled();
       } else {
         if (mode === "retired-draining") {
           launchWork.run(() => scheduler.releaseSwarmRun("blocker"));
         } else {
           scheduler.releaseSwarmRun("blocker");
         }
-        if (mode === "draining" || mode === "retired-draining") {
+        if (mode === "draining" || mode === "retired-draining" || mode === "shutdown-draining") {
           await retryStarted.promise;
           expect(fixture.database.isOpen).toBe(true);
           expect(rollback).not.toHaveBeenCalled();
@@ -378,8 +391,17 @@ describe("spawn context-engine resource custody", () => {
             await launchWork.drain();
             expect(scheduler.releaseSwarmRun(result.runId!)).toBe(true);
             expect(fixture.database.isOpen).toBe(true);
+          } else if (mode === "shutdown-draining") {
+            let closed = false;
+            closing = scheduler.closeSwarmScheduler().finally(() => {
+              closed = true;
+            });
+            await Promise.resolve();
+            expect(closed).toBe(false);
+            expect(fixture.database.isOpen).toBe(true);
           }
           retryGate.resolve();
+          await closing;
         }
         await vi.waitFor(() => expect(fixture.retired).toHaveBeenCalledTimes(1));
       }
@@ -404,6 +426,7 @@ describe("spawn context-engine resource custody", () => {
     } finally {
       retryGate.resolve();
       disposalGate.resolve();
+      await closing?.catch(() => {});
       if (queuedRunId) {
         scheduler.removeQueuedSwarmRun(queuedRunId);
       }

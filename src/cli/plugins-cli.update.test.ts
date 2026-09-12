@@ -846,7 +846,12 @@ describe("plugins cli update", () => {
     pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
       const [method] = args;
       expect(held).toBe(false);
-      return method === "plugins.refresh" ? { runtime: { generation: 7 } } : {};
+      return method === "plugins.refresh"
+        ? {
+            runtime: { generation: 7 },
+            warnings: ["Previous plugin service could not stop."],
+          }
+        : {};
     });
     try {
       await runPluginsCommand(["plugins", "update", "brave"]);
@@ -854,6 +859,9 @@ describe("plugins cli update", () => {
         "plugins.list",
         "plugins.refresh",
       ]);
+      expect(pluginsCliRuntimeLogs).toContainEqual(
+        expect.stringContaining("Previous plugin service could not stop."),
+      );
       expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
     } finally {
       spy.mockRestore();

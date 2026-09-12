@@ -16,6 +16,10 @@ import {
   type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import {
+  createUpdateFailureFact,
+  normalizeUpdateFailureFacts,
+} from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -210,6 +214,16 @@ async function runDoctorHealthFlowWithResult(
           : "Doctor finished, but config fixes were not applied.",
       );
       exitCode = 1;
+      doctorResult = {
+        status: "error",
+        failureFacts: [
+          createUpdateFailureFact({
+            check: "config-write",
+            code: ctx.configWriteRefusal,
+            message: "Doctor config fixes were not applied.",
+          }),
+        ],
+      };
       return;
     }
     if (options.repair === true || options.yes === true) {
@@ -258,9 +272,34 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
+    const { DoctorStateMigrationRefusalError } =
+      await import("../infra/state-migrations.messages.js");
+    doctorResult = {
+      status: "error",
+      failureFacts:
+        error instanceof DoctorStateMigrationRefusalError
+          ? normalizeUpdateFailureFacts(
+              error.stepReceipts.flatMap((receipt) =>
+                receipt.outcome === "refused" && receipt.refusal
+                  ? [
+                      {
+                        check: receipt.id,
+                        code: receipt.refusal.code,
+                        message: receipt.refusal.message,
+                      },
+                    ]
+                  : [],
+              ),
+            )
+          : [
+              createUpdateFailureFact({
+                check: "doctor",
+                code: "doctor-failed",
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            ],
+    };
     if (maintenance) {
-      const { DoctorStateMigrationRefusalError } =
-        await import("../infra/state-migrations.messages.js");
       if (!(error instanceof DoctorStateMigrationRefusalError)) {
         effectiveRuntime.error(
           "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",

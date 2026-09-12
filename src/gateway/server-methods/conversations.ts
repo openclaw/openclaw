@@ -17,7 +17,6 @@ import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -238,8 +237,7 @@ export function createConversationHandlers(
       "conversations.list",
       validateConversationListParams,
       async ({ params: request, respond, context }) => {
-        const readCurrentConfig = () =>
-          resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+        const readCurrentConfig = () => context.getRuntimeConfig();
         try {
           respond(
             true,
@@ -269,8 +267,7 @@ export function createConversationHandlers(
       "conversations.send",
       validateConversationSendParams,
       async ({ params: request, respond, context, client }) => {
-        const readCurrentConfig = () =>
-          resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+        const readCurrentConfig = () => context.getRuntimeConfig();
         const config = readCurrentConfig();
         if (
           !validateConversationSourceSession({
@@ -345,8 +342,7 @@ export function createConversationHandlers(
       "conversations.turn",
       validateConversationTurnParams,
       async ({ params: request, respond, context, client }) => {
-        const readCurrentConfig = () =>
-          resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+        const readCurrentConfig = () => context.getRuntimeConfig();
         const config = readCurrentConfig();
         if (
           !validateConversationSourceSession({

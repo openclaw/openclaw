@@ -201,7 +201,6 @@ extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/run-attempt-tool-setup.ts	1
 extensions/codex/src/app-server/run-attempt-tools.ts	1
 extensions/codex/src/app-server/run-attempt-turn-request.ts	1
-extensions/codex/src/app-server/run-attempt-turn-state.ts	6
 extensions/codex/src/app-server/runtime-artifact.ts	2
 extensions/codex/src/app-server/sandbox-exec-server.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
@@ -223,7 +222,6 @@ extensions/codex/src/app-server/transcript-mirror.ts	4
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/app-server/upstream-fork-boundary.ts	1
 extensions/codex/src/app-server/usage-limit-error.ts	2
-extensions/codex/src/app-server/user-prompt-message.ts	1
 extensions/codex/src/command-handlers.ts	3
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
@@ -2115,7 +2113,7 @@ src/auto-reply/usage-bar/template.ts	1
 src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
-src/boards/sqlite-board-store.ts	3
+src/boards/sqlite-board-store.ts	1
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
@@ -3362,7 +3360,7 @@ src/plugins/runtime/runtime-llm-isolated.ts	3
 src/plugins/runtime/runtime-llm.runtime.ts	4
 src/plugins/runtime/runtime-taskflow.ts	1
 src/plugins/schema-validator.ts	6
-src/plugins/sdk-alias.ts	3
+src/plugins/sdk-alias.ts	2
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	11
 src/plugins/slots.ts	3

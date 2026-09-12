@@ -24,6 +24,7 @@ import {
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { backupCreateCommand } = await import("./backup.js");
+const actualTar = await vi.importActual<typeof import("tar")>("tar");
 
 type CapturedBackupManifest = {
   schemaVersion: 1;
@@ -200,14 +201,11 @@ describe("backup commands", () => {
     }
   });
 
-  it("creates an archive with a manifest and external workspace payload", async () => {
+  it("backupCreateCommand writes its manifest and external workspace payload into the archive", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     const configPath = path.join(tempHome.home, "custom-config.json");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
-    let capturedManifest: CapturedBackupManifest | null = null;
-    let capturedEntryPaths: string[] = [];
-    let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     try {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -227,21 +225,7 @@ describe("backup commands", () => {
       const runtime = createTestRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
-      tarCreateMock.mockImplementationOnce(
-        (options: { onWriteEntry?: (entry: { path: string }) => void }, entryPaths: string[]) =>
-          createMockTarStream({
-            beforeRead: async () => {
-              capturedManifest = JSON.parse(
-                await fs.readFile(
-                  expectDefined(entryPaths[0], "entryPaths[0] test invariant"),
-                  "utf8",
-                ),
-              ) as CapturedBackupManifest;
-              capturedEntryPaths = entryPaths;
-              capturedOnWriteEntry = options.onWriteEntry ?? null;
-            },
-          }),
-      );
+      tarCreateMock.mockImplementationOnce(actualTar.c);
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
         includeWorkspace: true,
@@ -251,12 +235,12 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(typeof capturedOnWriteEntry).toBe("function");
-      if (capturedManifest === null || capturedOnWriteEntry === null) {
-        throw new Error("Expected backup manifest and archive entry callback");
-      }
-      const manifest = capturedManifest as CapturedBackupManifest;
-      const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
+      const extracted = path.join(backupDir, "extracted");
+      await fs.mkdir(extracted);
+      await actualTar.x({ file: result.archivePath, gzip: true, cwd: extracted });
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(extracted, result.archiveRoot, "manifest.json"), "utf8"),
+      ) as CapturedBackupManifest;
       expect(manifest.schemaVersion).toBe(1);
       expect(manifest.createdAt).toBe(result.createdAt);
       expect(manifest.archiveRoot).toBe(result.archiveRoot);
@@ -293,27 +277,18 @@ describe("backup commands", () => {
       if (!stateAsset || !workspaceAsset) {
         throw new Error("Expected backup assets to include state and workspace entries.");
       }
-      expect(capturedEntryPaths).toEqual(
-        expect.arrayContaining(result.assets.map((asset) => asset.sourcePath)),
+      const configAsset = expectDefined(
+        result.assets.find((asset) => asset.kind === "config"),
+        "config asset",
       );
-
-      const manifestPath = expectDefined(capturedEntryPaths[0], "manifest archive path");
-      const remappedManifestEntry = { path: manifestPath };
-      onWriteEntry(remappedManifestEntry);
-      expect(remappedManifestEntry.path).toBe(
-        path.posix.join(buildBackupArchiveRoot(nowMs), "manifest.json"),
-      );
-
-      const remappedStateEntry = { path: stateAsset.sourcePath };
-      onWriteEntry(remappedStateEntry);
-      expect(remappedStateEntry.path).toBe(
-        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), stateAsset.sourcePath),
-      );
-
-      const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
-      onWriteEntry(remappedWorkspaceEntry);
-      expect(remappedWorkspaceEntry.path).toBe(
-        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), workspaceAsset.sourcePath),
+      expect(
+        await fs.readFile(path.join(extracted, stateAsset.archivePath, "state.txt"), "utf8"),
+      ).toBe("state\n");
+      expect(
+        await fs.readFile(path.join(extracted, workspaceAsset.archivePath, "SOUL.md"), "utf8"),
+      ).toBe("# external\n");
+      expect(await fs.readFile(path.join(extracted, configAsset.archivePath), "utf8")).toBe(
+        await fs.readFile(configPath, "utf8"),
       );
     } finally {
       envSnapshot.restore();
@@ -322,43 +297,30 @@ describe("backup commands", () => {
     }
   });
 
-  it("keeps volatile-skip notices out of json output", async () => {
+  it("backupCreateCommand omits volatile files and keeps notices out of JSON output", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-json-"));
     try {
       const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
-      tarCreateMock.mockImplementationOnce(
-        (
-          options: {
-            filter?: (entryPath: string, entryStat: { isDirectory: () => boolean }) => boolean;
-          },
-          entryPaths: string[],
-        ) =>
-          createMockTarStream({
-            beforeRead: () => {
-              const manifestPath = entryPaths[0];
-              const stateRoot = stateDir;
-              if (!manifestPath || !stateRoot) {
-                throw new Error("backup test expected manifest and state entries");
-              }
-              const fileStat = { isDirectory: () => false };
-              expect(options.filter?.(manifestPath, fileStat)).toBe(true);
-              expect(
-                options.filter?.(
-                  path.join(stateRoot, "agents", "main", "sessions", "s.jsonl"),
-                  fileStat,
-                ),
-              ).toBe(false);
-            },
-          }),
-      );
+      const sessions = path.join(stateDir, "sessions");
+      await fs.mkdir(sessions);
+      await fs.writeFile(path.join(sessions, "s.jsonl"), "volatile\n");
+      tarCreateMock.mockImplementationOnce(actualTar.c);
 
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
         json: true,
       });
 
+      const entries: string[] = [];
+      await actualTar.t({
+        file: result.archivePath,
+        onReadEntry: (entry) => {
+          entries.push(entry.path);
+        },
+      });
+      expect(entries.some((entry) => entry.endsWith("/sessions/s.jsonl"))).toBe(false);
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
       const [payload] = expectDefined(vi.mocked(runtime.log).mock.calls[0], "runtime log call");
@@ -386,15 +348,24 @@ describe("backup commands", () => {
     ).rejects.toThrow(/must not be written inside a source path/i);
   });
 
-  it("creates missing output parent directories", async () => {
+  it("backupCreateCommand creates missing output parent directories", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const outputPath = path.join(tempHome.home, "backups", "daily", "backup.tar.gz");
     await mockStateOnlyBackupPlan(stateDir);
 
+    tarCreateMock.mockImplementationOnce(actualTar.c);
     const result = await backupCreateCommand(createTestRuntime(), { output: outputPath });
 
     expect(result.archivePath).toBe(outputPath);
-    expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
+    expect((await fs.stat(outputPath)).isFile()).toBe(true);
+    const entries: string[] = [];
+    await actualTar.t({
+      file: outputPath,
+      onReadEntry: (entry) => {
+        entries.push(entry.path);
+      },
+    });
+    expect(entries).toContain(`${result.archiveRoot}/manifest.json`);
   });
 
   it.each([

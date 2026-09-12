@@ -296,6 +296,38 @@ surfaces (tools, hooks, services, Gateway methods, HTTP routes, plugin-owned
 CLI commands). Plain `inspect` and `list` are cold manifest/config/registry
 checks only.
 
+## Manage plugins from an agent conversation
+
+The owner-only `plugins` tool can list, inspect, search, install, enable, disable,
+uninstall, and reload plugins through the running Gateway. Agent installs accept
+official catalog plugin IDs or ClawHub package names. The `version` option applies
+only to ClawHub installs; official installs use the catalog selection. To activate edits to an
+already-installed local TypeScript plugin, use `reload` with its plugin ID.
+Installing new local, npm, Git, or archive sources still uses the CLI workflow
+above.
+
+In the embedded agent runtime, an applied change refreshes tools before the next
+model request after running code programs have settled. A parked program may need
+further model steps to wait for completion; completed actions and accepted steering
+remain in the transcript and are not replayed. Finish a running program before
+asking it to use changed tools.
+
+Managed Codex sessions continue in the same OpenClaw conversation after stopping
+the current native turn and its background terminals, then creating a thread with
+updated tools. Completed tool results, accepted follow-up messages, and ordinary
+question answers carry into that thread as bounded conversation context. If native cleanup or thread release
+fails, the attempt reports the failure and preserves the binding for recovery
+instead of replaying completed work.
+
+Imported or supervised native sessions keep their original ownership and tool
+definitions. They report the backend change but require a new managed conversation
+to use changed tools. Other runtimes without a refresh consumer do the same.
+
+Inventory and result output are bounded. Narrow `list` with `query`, inspect a
+specific plugin, or use the Control UI Plugins page for omitted details and
+capability reviews. A saved install can outlive a failed runtime activation:
+inspect that result before retrying activation, rather than reinstalling it.
+
 ## Update plugins
 
 ```bash

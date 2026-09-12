@@ -94,7 +94,7 @@ export async function withTempHomeCore<T>(
     initialized = true;
     return await fn(base);
   } finally {
-    if (!opts.skipSessionCleanup) {
+    if (initialized && !opts.skipSessionCleanup) {
       await cleanupSessionStateForTest({ stateDir: path.join(base, ".openclaw") }).catch(
         () => undefined,
       );

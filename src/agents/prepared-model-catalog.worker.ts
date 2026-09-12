@@ -8,6 +8,7 @@ import {
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import type { Model } from "../llm/types.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -340,11 +341,25 @@ export async function runPreparedModelCatalogWorkerRequest(
       ),
       ...credentials,
     };
+    const runtimeModels = new Map<string, Model[]>();
+    for (const model of facts.templateModelRegistry.getAll()) {
+      const provider = normalizeProviderId(model.provider);
+      const models = runtimeModels.get(provider) ?? [];
+      models.push(model);
+      runtimeModels.set(provider, models);
+    }
+    for (const outcome of facts.modelCatalog.providerOutcomes ?? []) {
+      const provider = normalizeProviderId(outcome.provider);
+      if (!runtimeModels.has(provider)) {
+        runtimeModels.set(provider, []);
+      }
+    }
     return {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
       snapshot: facts.modelCatalog,
+      runtimeModels,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>

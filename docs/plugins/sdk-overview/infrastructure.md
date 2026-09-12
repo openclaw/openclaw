@@ -137,8 +137,11 @@ while the worker is drained.
 The process-wide host starts lazily and permits at most four workers, 64 opening
 or live store clients (including clients sharing a database), 128 outstanding
 operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
-and each result to 64 MiB; capacity exhaustion rejects with
-`code: "overloaded"`. Operations for one database share its connection owner
+and capacity exhaustion rejects with `code: "overloaded"`. Results up to 64 MiB
+use an inline reply; larger results transfer their complete serialized value
+in bounded 8 MiB chunks. Callers still materialize the complete result in memory,
+and the original operation remains owned through transfer validation and cleanup.
+Operations for one database share its connection owner
 and execute in order. There are no reader replicas or worker-pool configuration
 options.
 

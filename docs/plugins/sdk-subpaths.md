@@ -289,8 +289,10 @@ The retained `openclaw/plugin-sdk/security-runtime` export and its
 - `mode` accepts `"tools"` (the default) or `"off"`. Registered exact secrets
   are masked even when mode is `"off"`.
 - `patterns` is a readonly array of strings, `RegExp` objects, or synchronous
-  matcher objects. An omitted or empty array uses built-in rules. A nonempty
-  array replaces those rules; it does not append to them. Rules run in order.
+  matcher objects. An omitted or empty array uses the default string rules. A
+  nonempty array replaces that string list. Built-in form-body, structured-auth,
+  and AWS bare-key protections always apply when mode is `"tools"`. String rules
+  run in order after form-body and structured-auth preprocessing.
 - String entries accept a regex source (default flags `gi`) or `/source/flags`.
   Strings pass the config regex safety validator. Regex entries gain `g` when
   absent. Captures select the value to mask; without captures, the whole match

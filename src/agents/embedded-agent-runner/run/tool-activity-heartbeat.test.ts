@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import {
   getBeforeToolCallSourceTool,
   isToolWrappedWithBeforeToolCallHook,
-  setBeforeToolCallMetadata,
 } from "../../before-tool-call-metadata.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { isCodeModeControlTool, markCodeModeControlTool } from "../../code-mode-control-tools.js";
@@ -136,16 +136,19 @@ describe("heartbeat wrapper metadata preservation", () => {
   });
 
   it("preserves before-tool-call marker on heartbeat-wrapped tools", () => {
-    const source: Record<string, unknown> = { name: "test-tool", execute: vi.fn() as never };
-    const sourceTool = { name: "inner-tool" };
-    setBeforeToolCallMetadata(source as never, sourceTool as never, {
-      diagnosticOptions: { emitDiagnostics: false },
-    });
+    const sourceTool = {
+      name: "test-tool",
+      label: "Test tool",
+      description: "Test tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    };
+    const source = wrapToolWithBeforeToolCallHook(sourceTool);
 
-    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source, RUN);
 
-    expect(isToolWrappedWithBeforeToolCallHook(wrapped as never)).toBe(true);
-    expect(getBeforeToolCallSourceTool(wrapped as never)).toBe(sourceTool);
+    expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
+    expect(getBeforeToolCallSourceTool(wrapped)).toBe(sourceTool);
   });
 
   it("preserves terminal presentation metadata on heartbeat-wrapped tools", () => {

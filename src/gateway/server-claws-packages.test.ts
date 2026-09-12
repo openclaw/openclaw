@@ -148,12 +148,12 @@ async function fixture(uninstallWarnings: string[] = []) {
   });
   const invoke = async (overrides: Partial<ClawPackageRemovalRequest> = {}) => {
     let response: unknown;
-    let failure: string | undefined;
+    let failure: Parameters<RespondFn>[2];
     const respond: RespondFn = (success, payload, error) => {
       if (success) {
         response = payload;
       } else {
-        failure = error?.message;
+        failure = error;
       }
     };
     await clawsPackageHandlers["claws.packages.remove"]({
@@ -167,7 +167,7 @@ async function fixture(uninstallWarnings: string[] = []) {
       signal: controller.signal,
     });
     if (failure) {
-      throw new Error(failure);
+      throw new Error(failure.message, { cause: failure });
     }
     return clawPackageRemovalResultSchema.parse(response);
   };
@@ -295,8 +295,10 @@ describe("Gateway Claw package cleanup owner", () => {
     },
   );
 
-  it("replans after acquiring the plugin lease when another Claw adds a dependency", async () => {
+  it("rejects lifecycle contention before removal and replans dependencies on retry", async () => {
     const f = await fixture();
+    const journal = readAgentDeletionJournal("worker");
+    const refs = readClawPackageRefs({ agentId: "worker" });
     const entered = createDeferred();
     const release = createDeferred();
     const holder = withPluginLifecycleLease({}, async () => {
@@ -305,11 +307,39 @@ describe("Gateway Claw package cleanup owner", () => {
       persistClawPackageRef({ ...f.plan, agent: { ...f.plan.agent, finalId: "other" } }, f.pkg);
     });
     await entered.promise;
-    const pending = f.invoke();
-    release.resolve();
-    await holder;
-    await expect(pending).rejects.toThrow("ownership changed");
-    expect(mocks.uninstall).not.toHaveBeenCalled();
+    let reply: unknown;
+    const pending = f
+      .invoke()
+      .catch((error: unknown) => error)
+      .then((result) => {
+        reply = result;
+      });
+    try {
+      await vi.waitFor(
+        () =>
+          expect(reply).toMatchObject({
+            cause: {
+              code: "UNAVAILABLE",
+              retryable: true,
+              message: expect.stringContaining("retry"),
+            },
+          }),
+        { timeout: 1_000 },
+      );
+      expect(mocks.uninstall).not.toHaveBeenCalled();
+      expect(f.applyRuntime).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("worker")).toEqual(journal);
+      expect(readClawPackageRefs({ agentId: "worker" })).toEqual(refs);
+      release.resolve();
+      await holder;
+      await expect(f.invoke()).rejects.toThrow("ownership changed");
+      expect(mocks.uninstall).not.toHaveBeenCalled();
+      expect(f.applyRuntime).not.toHaveBeenCalled();
+    } finally {
+      f.controller.abort();
+      release.resolve();
+      await Promise.allSettled([holder, pending]);
+    }
   });
 
   it.each(["journal", "request"])(

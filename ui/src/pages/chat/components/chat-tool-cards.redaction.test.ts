@@ -70,7 +70,22 @@ describe("tool-card redaction", () => {
     [
       "at-sign beyond query cutoff",
       `https://example.test/path-${secret}?foo=@`,
-      `https://example.test/path-${masked}?foo=@`,
+      `https://example.test/path-${secret}?foo=@`,
+    ],
+    [
+      "path ending in a version",
+      `https://example.test/${secret}@latest`,
+      `https://example.test/${secret}@latest`,
+    ],
+    [
+      "compact URLs after a query",
+      JSON.stringify([`${publicUrl}?safe=1`, publicUrl]),
+      JSON.stringify([`${publicUrl}?safe=1`, publicUrl]),
+    ],
+    [
+      "URL in parenthesized query value",
+      `https://example.test/?next=(https://example.test/path-${secret})`,
+      `https://example.test/?next=(https://example.test/path-${masked})`,
     ],
     ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) => [
       `userinfo before ${punctuation}`,

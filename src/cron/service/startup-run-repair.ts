@@ -62,6 +62,8 @@ export function markInterruptedStartupRun(params: {
   );
 
   job.state.runningAtMs = undefined;
+  job.state.runningReceiptId = undefined;
+  delete job.state.runningScheduleChangeId;
   job.state.lastRunAtMs = runningAtMs;
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";
@@ -148,11 +150,12 @@ export function restoreFinalizedStartupRun(params: {
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
-  // Finalization writes history first, so a later one-shot slot or disable in
-  // the job row owns lifecycle state when startup replays that older history.
+  // Committed edits own scheduling even if the clock repeats or moves back.
+  // Keep the existing one-shot protection for older pending runs without a nonce.
   const scheduleOwnership =
-    job.schedule.kind === "at" &&
-    (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt))
+    typeof job.state.runningScheduleChangeId === "string" ||
+    (job.schedule.kind === "at" &&
+      (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt)))
       ? "stale"
       : "current";
   // A once result can record no next run before a later edit retires its

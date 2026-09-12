@@ -1,5 +1,7 @@
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
@@ -24,6 +26,7 @@ import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
+import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -45,6 +48,7 @@ export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
+  waitForNativeItems: CodexAttemptNotificationController["waitForNativeTerminalItems"],
 ) {
   const { prompt, state: resourceState, projectorRef, trajectoryRecorder } = resources;
   const { context } = prompt;
@@ -72,6 +76,38 @@ export function createCodexAttemptServerRequestController(
     scheduleTurnReleaseAfterTerminalDynamicTool,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
+  let refreshDrain: ReturnType<typeof createDeferred<void>> | undefined;
+  let refreshStopping = false;
+  const settlePluginRuntimeRefresh = async (turnId: string) => {
+    if (!params.pluginRuntimeRefreshPending?.()) {
+      return;
+    }
+    refreshDrain ??= createDeferred<void>();
+    state.pluginRuntimeRefreshStop = refreshDrain.promise;
+    if (!refreshStopping && pendingOpenClawDynamicToolCompletionIds.size === 0) {
+      refreshStopping = true;
+      state.pendingTerminalDynamicToolRelease = undefined;
+      turnRuntime.steeringQueueRef.current?.cancel();
+      // Replies resume the old model. Persist every admitted result before stopping;
+      // Codex's interrupt completion does not depend on receiving these replies.
+      void turnRuntime
+        .interruptTurn(turnId, { locallyCompleted: true })
+        .then(async (confirmed) => {
+          if (!confirmed) {
+            throw new Error("Plugin reload could not confirm the previous Codex turn stopped.");
+          }
+          await terminateCodexBackgroundTerminals(
+            resourceState.client,
+            resourceState.thread.threadId,
+            params.oneShotCliRun === true,
+            waitForNativeItems,
+          );
+        })
+        .then(refreshDrain.resolve, refreshDrain.reject)
+        .finally(turnRuntime.completeTurn);
+    }
+    await refreshDrain.promise;
+  };
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
@@ -152,7 +188,9 @@ export function createCodexAttemptServerRequestController(
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
         markCurrentTurnRequestProgress();
-        return toCodexDynamicToolProtocolResponse(await replayedExecution) as JsonValue;
+        const response = await replayedExecution;
+        await settlePluginRuntimeRefresh(turnId);
+        return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       markCurrentTurnRequestProgress();
@@ -323,7 +361,9 @@ export function createCodexAttemptServerRequestController(
           });
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (response.terminate === true && response.success) {
+        if (params.pluginRuntimeRefreshPending?.()) {
+          await settlePluginRuntimeRefresh(turnId);
+        } else if (response.terminate === true && response.success) {
           scheduleTurnReleaseAfterTerminalDynamicTool({
             call,
             response,
@@ -356,6 +396,7 @@ export function createCodexAttemptServerRequestController(
             durationMs: Math.max(0, Date.now() - toolStartedAt),
           });
         }
+        await settlePluginRuntimeRefresh(turnId);
         throw error;
       } finally {
         toolOutcomeOrdinals.delete(call.callId);

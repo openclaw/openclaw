@@ -94,6 +94,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
         jobId: receipt.jobId,
         ...(job?.state.queuedAtMs !== undefined ? { queuedAtMs: job.state.queuedAtMs } : {}),
         ...(job?.state.runningAtMs !== undefined ? { runningAtMs: job.state.runningAtMs } : {}),
+        runningReceiptId: job?.state.runningReceiptId,
         receipt,
       };
       schedulingChanged =

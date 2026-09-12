@@ -13,6 +13,7 @@ import {
   capturePluginModuleSource,
   createPluginDependencyLookup,
   createPluginDependencyResolver,
+  createPluginNativeDependencyScopes,
   packageName,
   importTargetNames,
   createPluginSourceLinkCapture,
@@ -23,6 +24,7 @@ import {
   createPluginPackageMetadataCapture,
   createPluginSourceCapture,
   type PluginPackageCapture,
+  type PluginModuleCapture,
   isPluginPackageFile as inPackage,
   findPluginCapturedPackage,
 } from "./plugin-package-metadata-capture.js";
@@ -58,16 +60,7 @@ export function capturePluginGenerationArtifact(
     capture: captureAdmitted,
     assertModuleAvailable,
   } = sourceCapture;
-  const moduleCaptures = new Map<
-    string,
-    {
-      prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
-      capture: (
-        specifier: string,
-        conditions: readonly string[],
-      ) => { target: URL } | { retryNative: true } | undefined;
-    }
-  >();
+  const moduleCaptures = new Map<string, PluginModuleCapture>();
   const dependencyRoot = createPluginDependencyResolver();
   // Callers canonicalize roots; already-captured packages survive removal of their original files.
   const copyPackage = (
@@ -247,11 +240,6 @@ export function capturePluginGenerationArtifact(
         fs.symlinkSync(path.relative(path.dirname(link), captured), link, "junction");
         additions.add(link);
       }
-      metadataCapture.addLookup(
-        path.join(captured, "package.json"),
-        name,
-        capturedPaths.get(importer)!,
-      );
     };
     const scopes = metadataCapture.createScope({
       root,
@@ -261,6 +249,10 @@ export function capturePluginGenerationArtifact(
       hasSource: (source) => capturedPaths.has(source),
     });
     const references = new Map<string, Set<string>>();
+    const getNativeScope = createPluginNativeDependencyScopes(
+      dependencyRoot,
+      (name, source, dependency) => linkDependency(name, source, dependency, true),
+    );
     const scannedDirectories = new Set<string>();
     const captureFile = (source: string, options?: JitiOptions): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
@@ -554,7 +546,8 @@ export function capturePluginGenerationArtifact(
         }
         return { target: capturedPluginModuleUrl(captured, specifier, conditions) };
       };
-      moduleCaptures.set(target, { prepareDependency, capture: captureModule });
+      const nativeScope = getNativeScope(source, scope?.manifest);
+      moduleCaptures.set(target, { prepareDependency, nativeScope, capture: captureModule });
       if (entry && !executableEntry) {
         visitPluginSourceReferences(
           source,
@@ -659,8 +652,12 @@ export function capturePluginGenerationArtifact(
       },
       prepareDependency: (importer: string, specifier: string) =>
         captureAdmitted(() => moduleCaptures.get(importer)?.prepareDependency(specifier)).additions,
-      prepareNativeScopes: () =>
-        metadataCapture.pending ? captureAdmitted(metadataCapture.prepare) : undefined,
+      prepareNativeScopes: (importer?: string) => {
+        const scope = importer ? moduleCaptures.get(importer)?.nativeScope : undefined;
+        return scope?.prepareDependencies || metadataCapture.pending
+          ? captureAdmitted(() => metadataCapture.prepare(scope))
+          : undefined;
+      },
       prepareNativeModule: (importer: string, specifier: string) =>
         captureAdmitted(() => {
           const packageMap =

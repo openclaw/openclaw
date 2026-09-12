@@ -457,6 +457,7 @@ function buildRecord(params: {
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
+    channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
     providerDiscoverySource: providerSourceEntry
       ? resolveManifestPluginSourcePath({
