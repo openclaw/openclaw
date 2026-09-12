@@ -194,7 +194,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -212,14 +212,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
       for (const reload of [false, true]) {
         if (reload) {
           await page.reload();
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+          await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
         }
         expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
@@ -236,7 +236,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
         const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
@@ -286,7 +286,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
       expect(
         await requestPreviewGateway(page, [
           { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
@@ -307,7 +307,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
       const replies = await requestPreviewGateway(
         page,
         ["telegram", "claude"].map((search) => ({
@@ -362,7 +362,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.length = 0;
           await page.reload();
         }
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await page.getByRole("combobox", { name: "Chat composer", exact: true }).waitFor();
         await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
         expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
           previewOrigin,
