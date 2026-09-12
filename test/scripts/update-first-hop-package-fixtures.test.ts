@@ -54,6 +54,31 @@ function makePackageFixture() {
 }
 
 describe("first-hop package fixtures", () => {
+  it.each(["first-hop-tarball", "future-tarball", "negative-tarball", "future", "negative"])(
+    "keeps modern content inventories valid for %s",
+    async (method) => {
+      const root = tempDirs.make("openclaw-fixture-content-inventory-");
+      const packageRoot = path.join(root, "package");
+      fs.cpSync(makePackageFixture(), packageRoot, { recursive: true });
+      await writePackageDistInventory(packageRoot);
+      let transformedRoot = packageRoot;
+      const args = ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", method];
+      if (method.endsWith("-tarball")) {
+        const source = path.join(root, "source.tgz");
+        const output = path.join(root, "transformed.tgz");
+        execFileSync("tar", ["-czf", source, "-C", root, "package"]);
+        execFileSync(process.execPath, [...args, source, output]);
+        const extracted = path.join(root, "extracted");
+        fs.mkdirSync(extracted);
+        execFileSync("tar", ["-xzf", output, "-C", extracted]);
+        transformedRoot = path.join(extracted, "package");
+      } else {
+        execFileSync(process.execPath, [...args, packageRoot]);
+      }
+      expect(await collectPackageDistContentInventoryErrors(transformedRoot)).toEqual([]);
+    },
+  );
+
   it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
     const root = makePackageFixture();
     const createSource = (version: string) => {
@@ -257,7 +282,7 @@ describe("first-hop package fixtures", () => {
       const candidate = path.join(root, "candidate.tgz");
       execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
       const original = fs.readFileSync(candidate);
-      const receipts = [];
+      const receipts: ReturnType<typeof packFirstHopUpdateFixture>[] = [];
       for (const sequence of [0, 1]) {
         const output = path.join(root, `future-${sequence}.tgz`);
         const input = sequence === 0 ? candidate : path.join(root, "future-0.tgz");

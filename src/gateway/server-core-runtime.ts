@@ -165,6 +165,7 @@ export async function startGatewayCoreRuntime(input: {
         loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             minimalTestGateway,
+            updateCanary: runtime.opts.updateCanary,
             cfgAtStart,
             port,
             gatewayTls,

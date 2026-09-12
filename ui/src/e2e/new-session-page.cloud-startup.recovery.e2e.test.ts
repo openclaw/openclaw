@@ -123,8 +123,19 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await place.evaluate((element) => {
+        const onAfterShow = (event: Event) => {
+          if (event.target === element) {
+            element.removeEventListener("wa-after-show", onAfterShow);
+            element.setAttribute("data-test-picker-ready", "true");
+          }
+        };
+        element.addEventListener("wa-after-show", onAfterShow);
+      });
       await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="cloud:aws"]').hover();
+      await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
+      await page.locator('[data-value="cloud:aws"]').click();
       await page.locator('[data-value="machine:fast"]').click();
       await expect
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))

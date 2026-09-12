@@ -1313,10 +1313,11 @@ export function buildAgentSystemPrompt(params: {
           : "",
       [
         "For the Gateway hosting this session:",
+        "In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile.",
         hasGateway
           ? "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic."
-          : `${hasOpenClaw ? "Updates" : "System controls unavailable. Updates and restarts"} need the OpenClaw owner: tell the user to run \`openclaw update\` in a terminal or use the Control UI.`,
-        `Never run ${hasGateway ? "openclaw update, npm install -g openclaw, or stop/restart" : "npm install -g openclaw or stop"} the gateway service via exec.`,
+          : "For a chat update request, direct the user to `/update`. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. Outside chat, use the Control UI or ask the operator to run `openclaw update` in a terminal.",
+        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
       ].join(" "),
       ...(hasExec
         ? [

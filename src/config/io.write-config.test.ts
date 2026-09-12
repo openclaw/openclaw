@@ -1666,9 +1666,15 @@ describe("config io write", () => {
         { baseSnapshot: snapshot, assertConfigPathForWrite },
       );
       await expect(pending).rejects.toThrow("config path changed since last load");
-      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
-      await expect(pending).rejects.toHaveProperty("retryable", false);
-      await expect(pending).rejects.toBe(originalConflict);
+      const failure = await pending.catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath,
+        rollbackStatus: "restored",
+        cause: expect.any(ConfigMutationConflictError),
+      });
+      expect(failure).toHaveProperty("cause.retryable", false);
+      expect(requireRecord(failure, "post-commit config write error").cause).toBe(originalConflict);
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
@@ -4119,8 +4125,14 @@ describe("config io write", () => {
         },
       );
       await expect(pending).rejects.toThrow("config path changed since last load");
-      await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
-      await expect(pending).rejects.toHaveProperty("retryable", false);
+      const failure = await pending.catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath,
+        rollbackStatus: "restored",
+        cause: expect.any(ConfigMutationConflictError),
+      });
+      expect(failure).toHaveProperty("cause.retryable", false);
 
       expect(rollbackReadUsedInjectedFs).toBe(true);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);

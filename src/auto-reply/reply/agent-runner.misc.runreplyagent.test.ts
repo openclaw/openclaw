@@ -1396,40 +1396,62 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("does not treat diagnostic compaction metadata as a context-refresh trigger", async () => {
-    const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
-    await fs.writeFile(
-      path.join(workspaceDir, "AGENTS.md"),
-      [
-        "## Session Startup",
-        "Read the queued workspace startup file.",
-        "",
-        "## Red Lines",
-        "Never use the process cwd for this refresh.",
-      ].join("\n"),
-      "utf-8",
-    );
+  it.each([0, 1])(
+    "honors queued post-compaction sections with %i reported compactions",
+    async (compactionCount) => {
+      const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        [
+          "## Session Startup",
+          "Read the queued workspace startup file.",
+          "",
+          "## Red Lines",
+          "Never use the process cwd for this refresh.",
+        ].join("\n"),
+        "utf-8",
+      );
 
-    const { sessionKey } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-post-compaction-workspace-root-",
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+      const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-post-compaction-workspace-root-",
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
           },
         },
-      },
-      agentMeta: {
-        compactionCount: 1,
-        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-      },
-    });
+        agentMeta: {
+          compactionCount,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+        },
+      });
 
-    // agentMeta.compactionCount is diagnostic metadata from the harness result;
-    // post-compaction context refresh belongs to runner-owned compaction paths.
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-  });
+      // The session seed pins an unrelated source-less snapshot. It must not erase
+      // the queued turn's explicit compaction configuration.
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(firstMockCallArg(runEmbeddedAgentMock, "embedded run params")).toMatchObject({
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
+      });
+      const events = peekSystemEvents(sessionKey);
+      expect(events).toHaveLength(compactionCount);
+      if (compactionCount > 0) {
+        expect(events[0]).toContain("Post-compaction context refresh");
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+        expect(events[0]).toContain("Never use the process cwd for this refresh.");
+      }
+      // Result metadata can report presentation-only compaction, not durable writer custody.
+      expect(stored).toHaveProperty([sessionKey, "sessionId"], "session");
+      expect(stored).not.toHaveProperty([sessionKey, "compactionCount"]);
+    },
+  );
 });
 
 describe("runReplyAgent block streaming", () => {

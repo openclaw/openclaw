@@ -221,6 +221,7 @@ suite.define(() => {
             expect(request.params).toEqual({
               view: "configured",
               agentId: "main",
+              includeDefaultModels: true,
               ...(refresh ? { refresh: true } : {}),
             });
             expect(replies.get(request.id)?.ok).toBe(true);

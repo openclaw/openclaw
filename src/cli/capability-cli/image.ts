@@ -27,6 +27,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -72,6 +73,7 @@ async function runImageGenerate(params: {
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const inputImages =
     params.file && params.file.length > 0
@@ -153,6 +155,7 @@ async function runImageDescribe(params: {
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);

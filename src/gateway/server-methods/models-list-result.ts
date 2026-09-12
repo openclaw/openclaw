@@ -29,6 +29,7 @@ import {
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
@@ -47,8 +48,10 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
+import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
@@ -431,6 +434,23 @@ export async function prepareModelsListResult(
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   draft?.assertCurrent();
   const outcomeProjection = {
+    ...(params.params.includeDefaultModels
+      ? {
+          defaultModels: {
+            automaticUtilityModel:
+              resolveAutomaticUtilityModelRef({
+                cfg,
+                primaryProvider: resolveDefaultModelForAgent({
+                  cfg,
+                  manifestPlugins: metadataSnapshot,
+                  allowPluginNormalization: false,
+                }).provider,
+                primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+                metadataSnapshot,
+              }) ?? null,
+          },
+        }
+      : {}),
     ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
     ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
     ...(view === "provider-config" || (!scope && !params.requesterProfileId)

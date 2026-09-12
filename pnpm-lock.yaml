@@ -136,7 +136,7 @@ overrides:
   path-to-regexp: 8.4.2
   qs: 6.16.0
   node-domexception: npm:@nolyfill/domexception@1.0.28
-  typebox: 1.3.25
+  typebox: 1.3.26
   tar: 7.5.22
   tough-cookie: 6.0.2
   tsdown>rolldown-plugin-dts: 0.28.2
@@ -332,8 +332,8 @@ importers:
         specifier: 4.11.0
         version: 4.11.0
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -603,11 +603,11 @@ importers:
   extensions/amazon-bedrock:
     dependencies:
       '@aws-sdk/client-bedrock':
-        specifier: 3.1126.0
-        version: 3.1126.0
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: 3.1126.0
-        version: 3.1126.0
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.82
         version: 3.972.82
@@ -712,8 +712,8 @@ importers:
         specifier: 1.62.1
         version: 1.62.1
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -771,8 +771,8 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -830,8 +830,8 @@ importers:
         specifier: 1.8.0
         version: 1.8.0
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -858,8 +858,8 @@ importers:
   extensions/copilot:
     dependencies:
       '@github/copilot-sdk':
-        specifier: 1.0.11
-        version: 1.0.11
+        specifier: 1.0.13
+        version: 1.0.13
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -978,8 +978,8 @@ importers:
         specifier: 1.62.1
         version: 1.62.1
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1012,8 +1012,8 @@ importers:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       undici:
         specifier: 8.10.2
         version: 8.10.2
@@ -1086,8 +1086,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1105,8 +1105,8 @@ importers:
         specifier: 10.2.6
         version: 10.2.6
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1115,8 +1115,8 @@ importers:
   extensions/firecrawl:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1181,8 +1181,8 @@ importers:
         specifier: 3.10.1
         version: 3.10.1
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1253,8 +1253,8 @@ importers:
   extensions/imessage:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1300,8 +1300,8 @@ importers:
         specifier: 11.2.0
         version: 11.2.0
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1338,8 +1338,8 @@ importers:
   extensions/llm-task:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1353,8 +1353,8 @@ importers:
         specifier: 2026.6.11
         version: 2026.6.11
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1396,8 +1396,8 @@ importers:
         specifier: 11.15.0
         version: 11.15.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1437,8 +1437,8 @@ importers:
         specifier: 7.3.2
         version: 7.3.2
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1456,8 +1456,8 @@ importers:
         specifier: 7.10.0
         version: 7.10.0(@aws-sdk/credential-provider-node@3.972.82)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.4.3)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@lancedb/lancedb':
         specifier: 0.38.0
@@ -1494,8 +1494,8 @@ importers:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -1593,8 +1593,8 @@ importers:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1691,8 +1691,8 @@ importers:
   extensions/ollama:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1798,8 +1798,8 @@ importers:
   extensions/qa-channel:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1870,6 +1870,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/qwen:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/radius:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1965,8 +1971,8 @@ importers:
         specifier: 1.6.0
         version: 1.6.0
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       undici:
         specifier: 7.29.1
         version: 7.29.1
@@ -2019,8 +2025,8 @@ importers:
   extensions/tavily:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2042,8 +2048,8 @@ importers:
   extensions/teams-meetings:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2064,8 +2070,8 @@ importers:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       undici:
         specifier: 8.10.2
         version: 8.10.2
@@ -2086,11 +2092,11 @@ importers:
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: 3.1126.0
-        version: 3.1126.0
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@aws-sdk/s3-request-presigner':
-        specifier: 3.1126.0
-        version: 3.1126.0
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@tloncorp/tlon-skill':
         specifier: 0.5.0
         version: 0.5.0
@@ -2173,8 +2179,8 @@ importers:
   extensions/visitor-access:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2192,8 +2198,8 @@ importers:
   extensions/voice-call:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -2258,8 +2264,8 @@ importers:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(audio-decode@2.2.3)(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2280,8 +2286,8 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2302,8 +2308,8 @@ importers:
   extensions/xai:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -2340,8 +2346,8 @@ importers:
   extensions/zalouser:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
@@ -2359,8 +2365,8 @@ importers:
   extensions/zoom-meetings:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2387,8 +2393,8 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
 
   packages/ai:
     dependencies:
@@ -2408,8 +2414,8 @@ importers:
         specifier: 0.1.7
         version: 0.1.7
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/model-catalog-core':
         specifier: workspace:*
@@ -2437,8 +2443,8 @@ importers:
   packages/gateway-protocol:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
     devDependencies:
       '@openclaw/normalization-core':
         specifier: workspace:*
@@ -2447,8 +2453,8 @@ importers:
   packages/llm-core:
     dependencies:
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
 
   packages/markdown-core:
     dependencies:
@@ -2547,8 +2553,8 @@ importers:
         specifier: 1.13.12
         version: 1.13.12
       typebox:
-        specifier: 1.3.25
-        version: 1.3.25
+        specifier: 1.3.26
+        version: 1.3.26
 
   packages/plugin-package-contract: {}
 
@@ -2868,16 +2874,16 @@ packages:
     resolution: {integrity: sha512-Dtu0gr4dnATZAPwEYbpCsG+MpLM7OAliy2gTepEFQwl1vZ6DL3QMH2FveMa3HLvPsOdhJsPRB3KtxVhph9T75A==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock-runtime@3.1126.0':
-    resolution: {integrity: sha512-ZONPviICzWkG1OJcuVgYb/o1bXW8p39euhxHOK66VgW3hXT8WuxizS29TNSr9eIZfyQgvOix1LCO2kaPlM6FwQ==}
+  '@aws-sdk/client-bedrock-runtime@3.1127.0':
+    resolution: {integrity: sha512-IDl/lrPb90aH+pZFHGNDmgH9nAUQj5PlZH1sJ3w7RikctyjHSnY3oNjZhrLoaBoQn/rNK0zsP6OHEqEhj2tdLA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock@3.1126.0':
-    resolution: {integrity: sha512-cnBWils9sRM7WlnyuDjPrVo9TkL3P7DUe0ebCxXmSgESmmtmNhTi382dcTPPQyRSjmVRZHVXG0mOINS+N3I+Xw==}
+  '@aws-sdk/client-bedrock@3.1127.0':
+    resolution: {integrity: sha512-/26o4KbAYnWiCIu2k9SAXsragT5RuYg4lJKkgLnQ0CMEwRSiloe/Smh8ZfWnGidhGoW1jX0IqPEMrB0+BC78GQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1126.0':
-    resolution: {integrity: sha512-9v+D5TOnISyWDBkY5N+lSeQ3/pPNi1bltpd7wfY2nALO7GoGq9QbRQ8KyI4j/ctnnHq40otqV5KWKYARdYI0vg==}
+  '@aws-sdk/client-s3@3.1127.0':
+    resolution: {integrity: sha512-0ZSAgmEda33xPqVPt+bx2KzrXV1cUCKRRVPGliLu+V7DzHPa04CqPSi1maGEM4O0LDP0iI6HRSW5ULloNwayNw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.977.9':
@@ -2944,8 +2950,8 @@ packages:
     resolution: {integrity: sha512-NhEgryjlBF9w38ZXqGymQV28IhkYa1mKhlbYnqIis57AYwWGVYfUPgg/qC2rLRqOUfblxx++irvju10kVTa8Vw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/s3-request-presigner@3.1126.0':
-    resolution: {integrity: sha512-QeLZT7ynBL1ZxyreCF8alGG5iOExGg62erNnfgo/woAaw6wsIrJ5ceLynCBKASViqzdoU+Zn73E6PY7FjCO5kA==}
+  '@aws-sdk/s3-request-presigner@3.1127.0':
+    resolution: {integrity: sha512-vl3WBaE2fMqfnEhyqulKT6ZIPNsCR2caCps92tyt1yGfLVlDXScSXBDXf4m3E2ejXBb4pplX0EdwBukJyBXtBg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/signature-v4-multi-region@3.996.46':
@@ -2956,8 +2962,8 @@ packages:
     resolution: {integrity: sha512-ygIivKqh8aHzNkucOCXHyIBgBpLPfrSI0mCqXF+vLBsPTUKqj0VSqAY0GFPe7lQl4HntjOcQ+KSyS7oUV2C54Q==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/token-providers@3.1126.0':
-    resolution: {integrity: sha512-aW+4Kv0XK+sWeS5zURka8ABM8DrkPahsKZcIb0RjmxsW3kNLi52XMOu0oCxFTMYNYfmMNiko5iZ3B9Mmc41s9A==}
+  '@aws-sdk/token-providers@3.1127.0':
+    resolution: {integrity: sha512-Dv2TMWBshJ+tF6ahs2Sy5bh4Iabsd4GAQqVvE9XZmYmnoaVbpS2QKIKE/HRacc7bTtbjEEvP+laGzHvHlf1CiQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/types@3.974.5':
@@ -3516,65 +3522,53 @@ packages:
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@github/copilot-darwin-arm64@1.0.80':
-    resolution: {integrity: sha512-fzn4PnSx3+O/a3ip72KVsjnzORsEygK+0i21bFAnFBYS+0Wi1Pk+o/CmNsJ7aRbf1enSJrcH8UDVkyc9pMGEBg==}
+  '@github/copilot-sdk-darwin-arm64@1.0.13':
+    resolution: {integrity: sha512-AvBV5dzjNWpGwgoCnttrETnt7rLI4pTFQsRSM7GU5TK+YqShauffdMU06Bn/d+IDX2fj1Z4ThH7yl/gHCDvoNQ==}
     cpu: [arm64]
     os: [darwin]
-    hasBin: true
 
-  '@github/copilot-darwin-x64@1.0.80':
-    resolution: {integrity: sha512-PKsyGk5DccNzR3bYXcYTGB9N6sHzhzGqEwq/2t1qBwqPbrC98Zo2dOT2G40/QYpJ4XdrGmTmdmfPJQ9PJknlIQ==}
+  '@github/copilot-sdk-darwin-x64@1.0.13':
+    resolution: {integrity: sha512-ZNQmTnHwk8bO/E514k0sFBsuCVNpFj8jMH4jeLncASQM4RRdOqYhXlYLW7H/ts7ANjdfMJjJY29NUqzEWaADOA==}
     cpu: [x64]
     os: [darwin]
-    hasBin: true
 
-  '@github/copilot-linux-arm64@1.0.80':
-    resolution: {integrity: sha512-8oXwN2luyHEjIoSk8AkATBjXDhRoQtuiUvC93GpfQKFHI+I1eoOVwIsAq5fKP8jNCF2rOrYFIcTjwmRt38kCcQ==}
+  '@github/copilot-sdk-linux-arm64@1.0.13':
+    resolution: {integrity: sha512-km1jvveDwlJbht8luFyBurz0wUxPHSzdkZRMJEJgVHYfMn03gi0gdnZ6fC6JWgkiffNZpukSxRPJmPfRobw6Aw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
-    hasBin: true
 
-  '@github/copilot-linux-x64@1.0.80':
-    resolution: {integrity: sha512-qv1ytVNwA3IDK7kcQow+fAikD67t42+AQ8X42bK/7oudNiv4frVZMO0yh1DYIebVRcmEhmPvbVPY/ptVUK3cbA==}
+  '@github/copilot-sdk-linux-x64@1.0.13':
+    resolution: {integrity: sha512-4AbzC8Nb1dWYQ1uxbHGAh0ZAoOJeL3Ms1oe3byZLn8ENP1PfoyD8DJZUSsyXGYHxL7oLJyUqd3wyt18ifIg8iw==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
-    hasBin: true
 
-  '@github/copilot-linuxmusl-arm64@1.0.80':
-    resolution: {integrity: sha512-Qjyi+OlVnPC4Lkuy7blDMMwMUQI/yELl7gDnqQlaN8TEbhZqZueuf3p0a+kEjXcNsw4XtNYQc0eMJqSIYy/Pjg==}
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.13':
+    resolution: {integrity: sha512-pCUjly1nXcNpYDZNnKrglFIFejbb+QDkloilldu+0tTbSzb8gEmVsbGwpfwyZXfNQf5Je5FFjsOfQR9PXH1NDQ==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
-    hasBin: true
 
-  '@github/copilot-linuxmusl-x64@1.0.80':
-    resolution: {integrity: sha512-rBg8pugf+5FhiZxi2zkOr+rlcOVF6Xg63j1FvryfwPT4DJ2w5Na7O3lpS4sgu8QmsP5H+dAqjlXYLYsvSoVQ0g==}
+  '@github/copilot-sdk-linuxmusl-x64@1.0.13':
+    resolution: {integrity: sha512-y5RmqAbKSYHt+OwQdILIiiMSibXdd7/0kO7kFoTZCN2gn2eGRA8wJbXlf6KZh+yYgWSJGUL8677LDJd3WnIHbA==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
-    hasBin: true
 
-  '@github/copilot-sdk@1.0.11':
-    resolution: {integrity: sha512-ngrnfa9052fLTOMoY0iiQS2B6pFDYJpWNj3syCdjzdje0R5mWoij9b8exJZciLvX7BbJjKz2/lIdwo24av3e3A==}
+  '@github/copilot-sdk-win32-arm64@1.0.13':
+    resolution: {integrity: sha512-azISXh4pEVfX0hPzu58wZTYg3tdWG4L1nNpiRa/wdBxhcovbxw+eZVkI4C6FZMx0tiNYFkqWzVTV7oKskNybcw==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@github/copilot-sdk-win32-x64@1.0.13':
+    resolution: {integrity: sha512-lvS7kMbuuxydBQxPDHCkuUwbC858Rvcz3Q3vv0mxnLKuWJ75lAcqERefqA2p4beaPdez+ifZOA5heUT0rx3GnA==}
+    cpu: [x64]
+    os: [win32]
+
+  '@github/copilot-sdk@1.0.13':
+    resolution: {integrity: sha512-/j6/tGc9HOtcupuYFloOKk0fpScdpy65EVF1LKg2Z2VQOojCGPgBGkhgVGVDaqW7UB6TV2qbQZa9rKJimJ0wWQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
-
-  '@github/copilot-win32-arm64@1.0.80':
-    resolution: {integrity: sha512-+f7Vkd3vt2DYOxRnS8dStvYu3DY638N/AuLuIjxZp1F9GgwCUZK69wspqIxg2L59PmRRQcH4AGTrRDR60ENIZA==}
-    cpu: [arm64]
-    os: [win32]
-    hasBin: true
-
-  '@github/copilot-win32-x64@1.0.80':
-    resolution: {integrity: sha512-PO0kPqhRTWQfsqGaj4UN3cj8ttkcJYy4wmXiArtFm+03AIFu8xTvuhQDPn2xEOsUome7m7t2XomKoavcrCcRsw==}
-    cpu: [x64]
-    os: [win32]
-    hasBin: true
-
-  '@github/copilot@1.0.80':
-    resolution: {integrity: sha512-6tf93ZF56KOiTTAjK/UhLZkl1W543IzaTQly288kockJZFswpRTnQEI00Yvacpb39DTvTYu3/ha9SeKpo/pgZQ==}
-    hasBin: true
 
   '@google/genai@2.21.0':
     resolution: {integrity: sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q==}
@@ -9321,8 +9315,8 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
-  typebox@1.3.25:
-    resolution: {integrity: sha512-glTozrjba2L9Mqqy9Y9joPmrXGTW7aINuBPl8tdZJJIUIXprRWT1EU8riXUHhPOXSk4K3pDKL6OV5CkpoOKcbw==}
+  typebox@1.3.26:
+    resolution: {integrity: sha512-ey7mwY4ZDw0e0cEv2apwJq7jdMdUEZF1zpNLsHF5G4nY2w/Q+qPGt3ZvbxWml2H2yFYjZ20B/0j8ezny7xHUGg==}
 
   typescript@5.2.2:
     resolution: {integrity: sha512-mI4WrpHsbCIcwT9cF4FZvr80QUeKvsUsUvKDoR+X/7XHQH98xYD8YHZg7ANtz2GtZt/CBq2QJ0thkGJMHfqc1w==}
@@ -9912,14 +9906,14 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock-runtime@3.1126.0':
+  '@aws-sdk/client-bedrock-runtime@3.1127.0':
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.82
       '@aws-sdk/eventstream-handler-node': 3.972.34
       '@aws-sdk/middleware-eventstream': 3.972.29
       '@aws-sdk/middleware-websocket': 3.972.52
-      '@aws-sdk/token-providers': 3.1126.0
+      '@aws-sdk/token-providers': 3.1127.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.7.2
@@ -9927,11 +9921,11 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock@3.1126.0':
+  '@aws-sdk/client-bedrock@3.1127.0':
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.82
-      '@aws-sdk/token-providers': 3.1126.0
+      '@aws-sdk/token-providers': 3.1127.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.7.2
@@ -9939,7 +9933,7 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1126.0':
+  '@aws-sdk/client-s3@3.1127.0':
     dependencies:
       '@aws-sdk/checksums': 3.1000.29
       '@aws-sdk/core': 3.977.9
@@ -10119,7 +10113,7 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/s3-request-presigner@3.1126.0':
+  '@aws-sdk/s3-request-presigner@3.1127.0':
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/signature-v4-multi-region': 3.996.46
@@ -10144,7 +10138,7 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/token-providers@3.1126.0':
+  '@aws-sdk/token-providers@3.1127.0':
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.44
@@ -10862,49 +10856,44 @@ snapshots:
 
   '@gar/promise-retry@1.0.3': {}
 
-  '@github/copilot-darwin-arm64@1.0.80':
+  '@github/copilot-sdk-darwin-arm64@1.0.13':
     optional: true
 
-  '@github/copilot-darwin-x64@1.0.80':
+  '@github/copilot-sdk-darwin-x64@1.0.13':
     optional: true
 
-  '@github/copilot-linux-arm64@1.0.80':
+  '@github/copilot-sdk-linux-arm64@1.0.13':
     optional: true
 
-  '@github/copilot-linux-x64@1.0.80':
+  '@github/copilot-sdk-linux-x64@1.0.13':
     optional: true
 
-  '@github/copilot-linuxmusl-arm64@1.0.80':
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.13':
     optional: true
 
-  '@github/copilot-linuxmusl-x64@1.0.80':
+  '@github/copilot-sdk-linuxmusl-x64@1.0.13':
     optional: true
 
-  '@github/copilot-sdk@1.0.11':
+  '@github/copilot-sdk-win32-arm64@1.0.13':
+    optional: true
+
+  '@github/copilot-sdk-win32-x64@1.0.13':
+    optional: true
+
+  '@github/copilot-sdk@1.0.13':
     dependencies:
-      '@github/copilot': 1.0.80
       koffi: 3.2.1
       vscode-jsonrpc: 8.2.1
       zod: 4.4.3
-
-  '@github/copilot-win32-arm64@1.0.80':
-    optional: true
-
-  '@github/copilot-win32-x64@1.0.80':
-    optional: true
-
-  '@github/copilot@1.0.80':
-    dependencies:
-      detect-libc: 2.1.2
     optionalDependencies:
-      '@github/copilot-darwin-arm64': 1.0.80
-      '@github/copilot-darwin-x64': 1.0.80
-      '@github/copilot-linux-arm64': 1.0.80
-      '@github/copilot-linux-x64': 1.0.80
-      '@github/copilot-linuxmusl-arm64': 1.0.80
-      '@github/copilot-linuxmusl-x64': 1.0.80
-      '@github/copilot-win32-arm64': 1.0.80
-      '@github/copilot-win32-x64': 1.0.80
+      '@github/copilot-sdk-darwin-arm64': 1.0.13
+      '@github/copilot-sdk-darwin-x64': 1.0.13
+      '@github/copilot-sdk-linux-arm64': 1.0.13
+      '@github/copilot-sdk-linux-x64': 1.0.13
+      '@github/copilot-sdk-linuxmusl-arm64': 1.0.13
+      '@github/copilot-sdk-linuxmusl-x64': 1.0.13
+      '@github/copilot-sdk-win32-arm64': 1.0.13
+      '@github/copilot-sdk-win32-x64': 1.0.13
 
   '@google/genai@2.21.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(supports-color@10.2.2)':
     dependencies:
@@ -17070,7 +17059,7 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typebox@1.3.25: {}
+  typebox@1.3.26: {}
 
   typescript@5.2.2: {}
 

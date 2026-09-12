@@ -36,13 +36,7 @@ describe("openai completions stream", () => {
       }),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream, {
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream, {
       sawStreamDONE: () => true,
     });
 
@@ -134,13 +128,7 @@ describe("openai completions stream", () => {
       ),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
     expect(
@@ -380,13 +368,7 @@ describe("openai completions stream", () => {
         "tool_calls",
       ),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(chunks), output, model, stream);
 
     const toolStart = events.find((event) => event.type === "toolcall_start") as
       | { partial?: { content?: Array<{ type?: string; textSignature?: string }> } }
@@ -421,13 +403,7 @@ describe("openai completions stream", () => {
         "stop",
       ),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, { push() {} });
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
 
     expect(output.stopReason).toBe("stop");
     expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
@@ -447,13 +423,7 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({ role: "assistant" as const, content: "Ordinary answer." }),
       makeCompletionsChunk({ tool_calls: [] }, "stop"),
     ] as const;
-    async function* mockStream() {
-      for (const chunk of chunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, { push() {} });
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
 
     expect(output.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
   });
@@ -476,13 +446,7 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({ content: "Just a text reply." }, "stop"),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
     expect(output.content).toHaveLength(1);

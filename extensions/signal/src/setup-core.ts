@@ -377,6 +377,8 @@ function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfi
 
 export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
+  // Named accounts inherit the root number; moving it would change existing routes.
+  namedAccountPromotionKeys: [],
   prepareAccountConfigInput: ({ cfg, accountId, input }) =>
     prepareSignalSetupInput({ cfg, accountId, input }),
   singleAccountKeysToMove: [

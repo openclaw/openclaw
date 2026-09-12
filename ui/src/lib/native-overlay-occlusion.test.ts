@@ -22,12 +22,12 @@ afterEach(() => {
 describe("native overlay occlusion", () => {
   it("stays occluded until every overlay releases and tolerates repeated releases", () => {
     const changes = vi.fn();
-    cleanups.push(subscribeNativeOverlayOcclusion(changes));
+    cleanups.push(subscribeNativeOverlayOcclusion(changes, () => null));
     const first = acquireNativeOverlayOcclusion();
     const second = acquireNativeOverlayOcclusion();
     cleanups.push(first, second);
     const lateSubscriber = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(lateSubscriber);
+    const unsubscribe = subscribeNativeOverlayOcclusion(lateSubscriber, () => null);
     cleanups.push(unsubscribe);
 
     expect(changes.mock.calls).toEqual([[false], [true]]);
@@ -44,7 +44,7 @@ describe("native overlay occlusion", () => {
   it("does not acquire or subscribe without the native browser bridge", () => {
     bridge.available = false;
     const changes = vi.fn();
-    cleanups.push(subscribeNativeOverlayOcclusion(changes));
+    cleanups.push(subscribeNativeOverlayOcclusion(changes, () => null));
     const release = acquireNativeOverlayOcclusion();
     release();
     release();

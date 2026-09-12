@@ -2794,6 +2794,25 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build:ci-artifacts
 
+      - name: Prove desktop resize over node and SSH
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
+          DESKTOP_PROOF_CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          DESKTOP_PROOF_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DESKTOP_PROOF_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESKTOP_PROOF_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          bootstrap=scripts/test-desktop-resize-real.mts
+          if [[ ! -f "$bootstrap" ]]; then
+            if [[ "$FROZEN_TARGET" == "true" ]]; then
+              echo "::notice::Frozen target has no desktop resize fixture bootstrap; no desktop resize proof produced"
+              exit 0
+            fi
+            echo "::error::Current target is missing $bootstrap" >&2
+            exit 1
+          fi
+          node --import tsx "$bootstrap"
+
       - name: Test Control UI suites with a real Gateway
         env:
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
@@ -2840,6 +2859,15 @@ jobs:
             extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts \
             extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts \
             extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
+
+      - name: Upload sanitized desktop resize proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-resize-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/real-gateway/desktop-resize
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload model picker public observations
         if: always()
