@@ -72,6 +72,16 @@ describe("settled post-tool turn finalization context", () => {
       error: new Error("Stream ended without finish_reason"),
       captures: true,
     },
+    {
+      kind: "terminated-transport-body",
+      error: new Error("terminated"),
+      captures: true,
+    },
+    {
+      kind: "terminated-word-variant",
+      error: new Error("the request was terminated by the server"),
+      captures: false,
+    },
   ])("$kind final provider failure captures context=$captures", async ({ error, captures }) => {
     const result = await runSettledTurnWithFailedFinalCall(
       "agent:main:telegram:direct:settled",

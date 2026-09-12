@@ -7,8 +7,10 @@ import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-a
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import {
+  claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
   preemptAndDrainEmbeddedHeartbeatRun,
@@ -35,7 +37,7 @@ describe("embedded-agent active-run steering", () => {
     async (capability) => {
       const queueMessage = vi.fn(async () => {});
       const claimPendingUserInputAnswer = vi.fn(async () => true);
-      const handle = createEmbeddedRunHandle({ queueMessage });
+      const handle = createEmbeddedRunHandle({ queueMessage, runId: "legacy-run" });
       handle.claimPendingUserInputAnswer = claimPendingUserInputAnswer;
       if (capability) {
         handle.messageInjection = { isAvailable: () => true, queueMessage };
@@ -53,9 +55,95 @@ describe("embedded-agent active-run steering", () => {
       expect(queueMessage).not.toHaveBeenCalled();
       expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
       await expect(
+        claimPendingEmbeddedAgentQuestionAnswer("legacy-sink", "unscoped"),
+      ).resolves.toBeNull();
+      expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
+      await expect(
         queueEmbeddedAgentMessageWithOutcomeAsync("legacy-sink", "unscoped"),
       ).resolves.toMatchObject({ queued: true });
       expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["claimed", "unmatched", "unconfirmed"] as const)(
+    "claims only a pending question without steering ordinary input: %s",
+    async (outcome) => {
+      const queueMessage = vi.fn(async () => {});
+      const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
+      const handle = createEmbeddedRunHandle({ runId: "question-owner", queueMessage });
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          if (options?.isInboundUserMessage !== true) {
+            return false;
+          }
+          if (outcome === "unconfirmed") {
+            throw error;
+          }
+          return outcome === "claimed";
+        },
+      };
+      setActiveEmbeddedRun("question-session", handle);
+      const result = claimPendingEmbeddedAgentQuestionAnswer("question-session", "Green");
+      if (outcome === "unconfirmed") {
+        await expect(result).rejects.toBe(error);
+      } else {
+        expect(await result).toEqual(outcome === "claimed" ? { runId: "question-owner" } : null);
+      }
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["availability", "claim"] as const)(
+    "refuses a pending question claim when the captured backend is replaced during %s",
+    async (stage) => {
+      const entered = createDeferredCore();
+      const released = createDeferredCore();
+      const queueMessage = vi.fn(async () => {});
+      const replacement = createEmbeddedRunHandle({ runId: "replacement", queueMessage });
+      const claim = vi.fn(
+        async (
+          _text: string,
+          _options: EmbeddedAgentQueueMessageOptions | undefined,
+          assertCurrent: () => void,
+        ) => {
+          entered.resolve();
+          await released.promise;
+          assertCurrent();
+          return true;
+        },
+      );
+      const handle = createEmbeddedRunHandle({ runId: "question-owner", queueMessage });
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => {
+          if (stage === "availability") {
+            setActiveEmbeddedRun("question-session", replacement);
+          }
+          return true;
+        },
+        queueMessage,
+        claimPendingUserInputAnswer: claim,
+      };
+      setActiveEmbeddedRun("question-session", handle);
+      const result = claimPendingEmbeddedAgentQuestionAnswer("question-session", "Green");
+      try {
+        if (stage === "availability") {
+          await expect(result).resolves.toBeNull();
+          expect(claim).not.toHaveBeenCalled();
+        } else {
+          await entered.promise;
+          setActiveEmbeddedRun("question-session", replacement);
+          released.resolve();
+          await expect(result).rejects.toThrow("Message injection authority is no longer current");
+        }
+        expect(queueMessage).not.toHaveBeenCalled();
+      } finally {
+        released.resolve();
+      }
     },
   );
 

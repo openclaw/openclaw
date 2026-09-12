@@ -24,6 +24,34 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it.each([{ status: "running", pid: 7000 } as const, { status: "stopped" } as const])(
+    "retains boot identity in the finalized $status service snapshot",
+    async (runtime) => {
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.9.3", buildId: "candidate-build", bootId: "candidate-boot" },
+        }),
+      );
+
+      const snapshot = await inspectGatewayRestartWithSnapshot({
+        runtime,
+        expectedBuildId: "candidate-build",
+        portUsage: {
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 7000, commandLine: "openclaw-gateway" }],
+          hints: [],
+        },
+      });
+
+      expect(snapshot).toMatchObject({
+        healthy: true,
+        gatewayBuildId: "candidate-build",
+        gatewayBootId: "candidate-boot",
+      });
+    },
+  );
+
   it("treats a gateway listener child pid as healthy ownership", async () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 7000 },

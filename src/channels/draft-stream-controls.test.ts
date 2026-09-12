@@ -1,4 +1,5 @@
 // Draft stream control tests cover pause, resume, and cancellation handling for channel drafts.
+import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -236,6 +237,67 @@ describe("draft-stream-controls", () => {
     expect(deleteMessage).toHaveBeenCalledTimes(1);
     expect(messageId).toBeUndefined();
     expect(warn).toHaveBeenCalledWith("cleanup failed after delete: callback boom");
+  });
+
+  it("keeps deletion serialized when stop rejects during an earlier clear", async () => {
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "preview-old";
+    const deleteStarted = createDeferred();
+    const releaseDelete = createDeferred();
+    const pendingSend = createDeferred();
+    const stopError = new Error("flush failed");
+    const deletedIds: string[] = [];
+    let activeDeletes = 0;
+    let maxActiveDeletes = 0;
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 0,
+      state,
+      sendOrEditStreamMessage: () => pendingSend.promise,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage: async (id) => {
+        deletedIds.push(id);
+        activeDeletes += 1;
+        maxActiveDeletes = Math.max(maxActiveDeletes, activeDeletes);
+        try {
+          if (id === "preview-old") {
+            deleteStarted.resolve();
+            await releaseDelete.promise;
+          }
+        } finally {
+          activeDeletes -= 1;
+        }
+      },
+      warnPrefix: "cleanup failed",
+    });
+    const firstClear = lifecycle.clearWithStop(async () => {});
+    let stopped: Promise<unknown> | undefined;
+    let secondClear: Promise<void> | undefined;
+    try {
+      await deleteStarted.promise;
+      messageId = "preview-new";
+      lifecycle.update("Pending update");
+      stopped = lifecycle.stop().catch((error: unknown) => error);
+      expect(state.final).toBe(true);
+      secondClear = lifecycle.clear();
+      pendingSend.reject(stopError);
+      // Let queued promise reactions run while the first physical deletion is still held.
+      await nextMacrotask();
+      expect(maxActiveDeletes).toBe(1);
+
+      releaseDelete.resolve();
+      await Promise.all([firstClear, secondClear]);
+      expect(await stopped).toBe(stopError);
+      expect(deletedIds).toEqual(["preview-old", "preview-new"]);
+    } finally {
+      pendingSend.resolve();
+      releaseDelete.resolve();
+      await Promise.allSettled([firstClear, stopped, secondClear]);
+      lifecycle.loop.stop();
+    }
   });
 
   it("controls ignore updates after final", async () => {

@@ -197,6 +197,17 @@ export function isShellWrapperInvocation(argv: string[]): boolean {
   return isShellWrapperInvocationInternal(argv, 0);
 }
 
+/** Detect implicit POSIX startup in the requested shell, including dispatch wrappers. */
+export function hasPosixShellStartupBeforeInlineCommand(argv: string[]): boolean {
+  const candidate = resolveShellWrapperCandidate({ argv, depth: 0, state: null });
+  return Boolean(
+    candidate &&
+    POSIX_SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(candidate.token0)) &&
+    (hasPosixLoginStartupBeforeInlineCommand(candidate.argv, POSIX_INLINE_COMMAND_FLAGS) ||
+      hasPosixInteractiveStartupBeforeInlineCommand(candidate.argv, POSIX_INLINE_COMMAND_FLAGS)),
+  );
+}
+
 function normalizeRawCommand(rawCommand?: string | null): string | null {
   const trimmed = rawCommand?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;

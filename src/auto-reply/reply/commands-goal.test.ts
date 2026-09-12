@@ -38,6 +38,33 @@ async function upsertSessionEntry(params: {
   );
 }
 
+function buildGoalSessionFixture(
+  storePath: string,
+  targetSessionKey: string,
+  status: "active" | "paused",
+): Parameters<typeof upsertSessionEntry>[0] {
+  return {
+    storePath,
+    sessionKey: targetSessionKey,
+    entry: {
+      sessionId: "sess-main",
+      updatedAt: 1,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "finish the migration",
+        status,
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokenStartFresh: true,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+    },
+  };
+}
+
 function getSessionEntry(params: {
   storePath: string;
   sessionKey: string;
@@ -181,26 +208,7 @@ describe("goal commands", () => {
 
   it("resumes a goal and continues with a resume prompt", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish the migration",
-          status: "paused",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-    });
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "paused"));
 
     const params = buildGoalParams("/goal resume CI passed", storePath);
     const result = await handleGoalCommand(params, true);
@@ -214,26 +222,7 @@ describe("goal commands", () => {
 
   it("wraps command-looking resume notes before continuing", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish the migration",
-          status: "paused",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-    });
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "paused"));
 
     const params = buildGoalParams("/goal resume /fast off", storePath);
     const result = await handleGoalCommand(params, true);
@@ -250,26 +239,7 @@ describe("goal commands", () => {
 
   it("edits the objective in place and replies without continuing", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "finish the migration",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-    });
+    await upsertSessionEntry(buildGoalSessionFixture(storePath, sessionKey, "active"));
 
     const params = buildGoalParams("/goal edit finish the migration and update docs", storePath);
     const result = await handleGoalCommand(params, true);

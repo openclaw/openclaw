@@ -2,6 +2,7 @@
 
 import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -11,15 +12,10 @@ import { SessionOwnerFilterController } from "./session-owner-filter-controller.
 let originalLocalStorage: PropertyDescriptor | undefined;
 
 beforeEach(() => {
-  const values = new Map<string, string>();
   originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
-    value: {
-      getItem: (key: string) => values.get(key) ?? null,
-      removeItem: (key: string) => void values.delete(key),
-      setItem: (key: string, value: string) => void values.set(key, value),
-    },
+    value: createStorageMock(),
   });
 });
 

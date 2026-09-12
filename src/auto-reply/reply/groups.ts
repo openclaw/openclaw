@@ -181,17 +181,7 @@ export function buildGroupChatContext(params: {
   }
   if (canUseSilentReply) {
     lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
-    );
-    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
-    lines.push(
-      "Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.",
-    );
-    lines.push(
-      `If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "${params.silentToken}". Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.`,
-    );
-    lines.push(
-      `Any prose describing silence is wrong; the whole final answer must be only "${params.silentToken}".`,
+      `If no text reply is needed, including after a reaction or other action, reply with exactly "${params.silentToken}" as the entire final answer, without commentary, punctuation, or formatting.`,
     );
   }
   return lines.join(" ");

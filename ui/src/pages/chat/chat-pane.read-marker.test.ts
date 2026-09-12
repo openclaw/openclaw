@@ -58,13 +58,27 @@ describe("chat pane read markers", () => {
       name: "read-only scope",
       methods: ["sessions.patch"],
       scopes: ["operator.read"],
+      session: {},
     },
     {
       name: "unadvertised sessions.patch",
       methods: ["sessions.create"],
       scopes: ["operator.write"],
+      session: {},
     },
-  ])("does not mutate unread state with $name", ({ methods, scopes }) => {
+    ...(["read-only", "suggest", "draft"] as const).map((visibility) => ({
+      name: `${visibility} viewer participation`,
+      methods: ["sessions.patch"],
+      scopes: ["operator.write"],
+      session: { visibility, sharingRole: "viewer" as const },
+    })),
+    {
+      name: "draft member participation",
+      methods: ["sessions.patch"],
+      scopes: ["operator.write"],
+      session: { visibility: "draft" as const, sharingRole: "member" as const },
+    },
+  ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -79,6 +93,7 @@ describe("chat pane read markers", () => {
       kind: "direct" as const,
       updatedAt: 20,
       unread: true,
+      ...session,
     };
 
     pane.markSessionRead(row);
@@ -87,6 +102,40 @@ describe("chat pane read markers", () => {
     expect(patch).not.toHaveBeenCalled();
     expect(state.chatError).toBeNull();
     expect(state.lastError).toBeNull();
+  });
+
+  it.each([
+    { visibility: "shared", sharingRole: "viewer", scopes: ["operator.write"] },
+    { visibility: "read-only", sharingRole: "member", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "admin", scopes: ["operator.admin"] },
+  ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
+    const patch = vi.fn().mockResolvedValue({});
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: [...session.scopes] },
+      features: { methods: ["sessions.patch"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      updatedAt: 20,
+      unread: true,
+      visibility: session.visibility,
+      sharingRole: session.sharingRole,
+    };
+
+    pane.markSessionRead(row);
+    pane.markSessionRead(row);
+
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: null },
+    );
   });
 
   it("retries the read patch after a null (unsent) resolution", async () => {

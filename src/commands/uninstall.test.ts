@@ -75,7 +75,7 @@ describe("uninstallCommand", () => {
     expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
     expect(removeWorkspaceDirs).not.toHaveBeenCalled();
     expect(cleanupCommandLogMessages(runtime)).not.toContain(
-      "CLI still installed. Remove via npm/pnpm if desired.",
+      "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
     );
   });
 

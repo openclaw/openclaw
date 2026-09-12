@@ -21,7 +21,7 @@ describe("renderDiscordMarkdown", () => {
   it("converts tables only when requested and leaves length enforcement to chunking", () => {
     const table = "| A | B |\n| - | - |\n| x | y |";
     expect(renderDiscordMarkdown(table, "code")).toBe(
-      "```\n| A | B |\n| --- | --- |\n| x | y |\n```",
+      "```\n| A   | B   |\n| --- | --- |\n| x   | y   |\n```",
     );
 
     const oversized = "x".repeat(2_001);

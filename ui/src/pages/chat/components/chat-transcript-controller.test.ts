@@ -167,6 +167,71 @@ describe("chat transcript controller", () => {
     expect(transcriptSize(container)).toBe(540);
   });
 
+  it.each([false, true])(
+    "keeps the committed rows and message lookup together while a touch holds a prepend, idle=%s",
+    async (idleBeforeRelease) => {
+      const initial: TestContentRow[] = [
+        {
+          kind: "content",
+          key: "retained-row",
+          content: html`<div class="chat-bubble" data-message-id="retained">retained</div>`,
+        },
+      ];
+      const next: TestContentRow[] = [
+        {
+          kind: "content",
+          key: "expanded-row",
+          content: html`<div class="chat-bubble" data-message-id="older">older</div>
+            <div class="chat-bubble" data-message-id="retained">retained</div>`,
+        },
+      ];
+      const { container, session, transcript, renderRows } = await mountTestTranscript(
+        "touch-map",
+        initial,
+      );
+      try {
+        session.syncMessageRows(
+          new Map([["retained", "retained-row"]]),
+          new Map([["retained", "retained-row"]]),
+        );
+        renderRows(initial);
+        container.dispatchEvent(new Event("touchstart"));
+        if (idleBeforeRelease) {
+          // The finger can remain down after native offset notifications settle.
+          vi.useFakeTimers();
+          container.scrollTop = 10;
+          container.dispatchEvent(new Event("scroll"));
+          await vi.advanceTimersByTimeAsync(200);
+        }
+        session.syncMessageRows(
+          new Map([["retained", "expanded-row"]]),
+          new Map([
+            ["older", "expanded-row"],
+            ["retained", "expanded-row"],
+          ]),
+        );
+        renderRows(next);
+        expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([
+          "retained-row",
+        ]);
+        expect(container.textContent).not.toContain("older");
+        expect(session.activeMessageId(["retained"])).toBe("retained");
+        container.dispatchEvent(new Event("touchend"));
+        renderRows(next);
+        expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([
+          "expanded-row",
+        ]);
+        expect(container.textContent).toContain("older");
+        expect(session.activeMessageId(["retained"])).toBe("retained");
+      } finally {
+        transcript.hostDisconnected();
+        if (idleBeforeRelease) {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
+
   it("does not teardown an MCP row retained by an append", async () => {
     const initialRows = [
       { kind: "content" as const, key: "app", content: html`<mcp-app-view></mcp-app-view>` },
@@ -860,7 +925,7 @@ describe("chat transcript controller", () => {
         key: id,
         content: html`<div class="chat-bubble" data-entry-id=${id}>${id}</div>`,
       }));
-      const { container, session } = await mountTestTranscript(
+      const { container, session, renderRows } = await mountTestTranscript(
         `reveal-${interruption}`,
         rows,
         transcript,
@@ -879,7 +944,12 @@ describe("chat transcript controller", () => {
             ["first", "first"],
             ["second", "second"],
           ]),
+          new Map([
+            ["first", "first"],
+            ["second", "second"],
+          ]),
         );
+        renderRows(rows);
         if (interruption === "idle at end") {
           vi.useFakeTimers();
         }

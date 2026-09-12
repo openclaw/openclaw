@@ -133,6 +133,8 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    expect(section?.querySelector(".sidebar-session-catalog-new")).toBeNull();
+    expect(section?.querySelector(".sidebar-session-catalog-new-spacer")).not.toBeNull();
     const lead = section?.querySelector(".sidebar-session-group-toggle__lead");
     expect(lead?.querySelector(".sidebar-session-group-toggle__icon")).not.toBeNull();
     const providerIcon = lead?.querySelector(".sidebar-session-catalog-provider-icon");
@@ -249,7 +251,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
     expect(
       catalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
+        `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-unread-dot`,
       ),
     ).not.toBeNull();
     expect(
@@ -273,7 +275,7 @@ describe("AppSidebar session catalog pagination", () => {
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
     expect(
       runningCatalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .sidebar-session-indicator .session-glyph__ring`,
       ),
     ).not.toBeNull();
     expect(

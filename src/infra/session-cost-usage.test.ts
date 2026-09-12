@@ -1157,7 +1157,7 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 2;
+      currentRollup.version = 3;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
         writeSessionCostUsageRollup({
@@ -1206,7 +1206,7 @@ describe("session cost usage", () => {
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-      expect(appendedRollup.version).toBe(3);
+      expect(appendedRollup.version).toBe(4);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -2741,6 +2741,42 @@ describe("session cost usage", () => {
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it.each([
+    {
+      name: "indented message-ID code",
+      content: "    [message_id: literal]",
+      expected: "[message_id: literal]",
+    },
+    {
+      name: "fenced code after a generated hint",
+      content: "[message_id: generated]\n```text\n[message_id: literal]\n```",
+      expected: "```text\n[message_id: literal]\n```",
+    },
+    {
+      name: "visible text after internal context",
+      content:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible user text",
+      expected: "visible user text",
+    },
+  ])("preserves $name in user usage logs", async ({ content, expected }) => {
+    const root = await makeSessionCostRoot("logs-user-display");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "user", content },
+      }),
+      "utf-8",
+    );
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionFile });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toBe(expected);
+    });
   });
 
   it("does not split surrogate pairs when truncating session log content", async () => {

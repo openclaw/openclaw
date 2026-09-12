@@ -224,6 +224,74 @@ describe("GatewayChatClient operator scopes", () => {
         },
       });
       await approved.client.waitForReady();
+      const questionEvents = vi.fn();
+      approved.client.onEvent = questionEvents;
+      const question = {
+        id: "tui-question",
+        questions: [
+          { questionId: "target", header: "Target", question: "Which target?", options: [] },
+        ],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        status: "pending",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      };
+      approved.socket.receive({ type: "event", event: "question.requested", payload: question });
+      expect(questionEvents).toHaveBeenCalledWith({
+        event: "question.requested",
+        payload: question,
+      });
+
+      const listing = approved.client.listQuestions();
+      const listRequest = approved.socket.sent.find((frame) => frame.method === "question.list");
+      expect(listRequest?.params).toEqual({});
+      approved.socket.receive({
+        type: "res",
+        id: listRequest?.id,
+        ok: true,
+        payload: { questions: [question] },
+      });
+      await expect(listing).resolves.toEqual({ questions: [question] });
+
+      const answers = { answers: { target: ["Staging"] } };
+      const resolution = approved.client.resolveQuestion({
+        id: question.id,
+        answers,
+        resolutionId: "tui-answer",
+      });
+      const resolveRequest = approved.socket.sent.find(
+        (frame) => frame.method === "question.resolve",
+      );
+      expect(resolveRequest?.params).toEqual({
+        id: question.id,
+        answers,
+        resolutionId: "tui-answer",
+      });
+      const resolved = { id: question.id, status: "answered", answers };
+      approved.socket.receive({ type: "event", event: "question.resolved", payload: resolved });
+      approved.socket.receive({
+        type: "res",
+        id: resolveRequest?.id,
+        ok: true,
+        payload: { status: "answered", answers },
+      });
+      await expect(resolution).resolves.toEqual({ status: "answered", answers });
+      expect(questionEvents).toHaveBeenCalledWith({
+        event: "question.resolved",
+        payload: resolved,
+      });
+      const recovery = approved.client.getQuestion(question.id);
+      const getRequest = approved.socket.sent.find((frame) => frame.method === "question.get");
+      expect(getRequest?.params).toEqual({ id: question.id });
+      const terminalQuestion = { ...question, status: "answered", answers };
+      approved.socket.receive({
+        type: "res",
+        id: getRequest?.id,
+        ok: true,
+        payload: { question: terminalQuestion },
+      });
+      await expect(recovery).resolves.toEqual({ question: terminalQuestion });
       expect(storeDeviceAuthToken).toHaveBeenCalledWith({
         deviceId: deviceIdentity.deviceId,
         role: "operator",

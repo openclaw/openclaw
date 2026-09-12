@@ -47,8 +47,8 @@ it("marks idle and reentrant execution without deferring either callback", async
     expect(order).toEqual(["outer", "inner"]);
     expect(outerTiming.startedAt).toBe(0);
     expect(await pending).toBe("result");
-    expect(innerTiming).toEqual({ startedAt: 5, finishedAt: 10 });
-    expect(outerTiming).toEqual({ startedAt: 0, finishedAt: 15 });
+    expect(innerTiming).toEqual({ startedAt: 5, finishedAt: 10, reentrant: true });
+    expect(outerTiming).toEqual({ startedAt: 0, finishedAt: 15, reentrant: false });
     expect(queues.size).toBe(0);
   } finally {
     await pending.catch(() => {});

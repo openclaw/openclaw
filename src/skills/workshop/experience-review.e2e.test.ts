@@ -33,11 +33,8 @@ import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
 } from "./experience-review.test-support.js";
-import {
-  getSkillProposalRunProgress,
-  inspectSkillProposal,
-  listSkillProposals,
-} from "./service.js";
+import { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import { inspectSkillProposal, listSkillProposals } from "./service.js";
 
 const modelId = "gpt-5.6-luna";
 const { positiveMessages, interruptedMessages } = createExperienceReviewMessages(modelId);

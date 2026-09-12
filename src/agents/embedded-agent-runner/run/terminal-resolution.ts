@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
-import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -34,7 +33,7 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
-import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
+import { countSettledTurnDeliveryPayloads } from "./incomplete-turn-classification.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
@@ -126,27 +125,11 @@ export function resolveSettledTurnFinalizationRequest(input: {
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  // Generated errors are fallback surfaces, not authored answers. Trust their
-  // producer provenance; the recovery owner still requires exact settlement,
-  // transient-failure context, and no delivery or asynchronous work.
-  const hasNoAssistantText = input.attempt.assistantTexts.every((text) => !text.trim());
-  const canFinalizeProviderError =
-    input.attempt.settledTurnFinalizationContext &&
-    !hasComposedVisibleAnswerAfterSettledTools(input.attempt);
-  const hasOnlySyntheticErrorPayload =
-    (input.payloadsWithToolMedia?.length ?? 0) > 0 &&
-    input.payloadsWithToolMedia?.every((payload) => {
-      const metadata = getReplyPayloadMetadata(payload);
-      return (
-        payload.isError === true &&
-        Object.keys(payload).every((key) => key === "text" || key === "isError") &&
-        ((hasNoAssistantText && metadata?.toolErrorWarning) ||
-          (canFinalizeProviderError && metadata?.terminalProviderError))
-      );
-    });
-  const preparedPayloadCount = hasOnlySyntheticErrorPayload
-    ? 0
-    : (input.payloadsWithToolMedia?.length ?? 0);
+  // Generated errors and pre-tool commentary are fallback surfaces, not authored answers.
+  const preparedPayloadCount = countSettledTurnDeliveryPayloads({
+    payloads: input.payloadsWithToolMedia,
+    attempt: input.attempt,
+  });
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: input.runParams.trigger === "cron",
     payloadCount: preparedPayloadCount,

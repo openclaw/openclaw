@@ -6,20 +6,28 @@ import {
   getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -34,7 +42,7 @@ let state: OpenClawTestState;
 describe("prepared reply dispatch runtime", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("returns undefined while the Gateway lifecycle is inactive", async () => {
@@ -42,6 +50,81 @@ describe("prepared reply dispatch runtime", () => {
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
     ).resolves.toBeUndefined();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("holds inspected input through accepted preparation and refuses a retired result", async () => {
+    const database = new DatabaseSync(state.path("prepared-registration.sqlite"));
+    database.exec(
+      "CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)",
+    );
+    const registry = createEmptyPluginRegistry();
+    const resources = new PluginRegistryInspectionResources();
+    resources.attach(registry);
+    let disposalCount = 0;
+    resources.runRegistration("prepared-native", () => {
+      resources.register("prepared-native", {
+        id: "sqlite",
+        dispose: () => {
+          disposalCount += 1;
+          database.close();
+        },
+      });
+    });
+    const entered = createDeferred();
+    const finish = createDeferred();
+    let observedValue: unknown;
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      entered.resolve();
+      await finish.promise;
+      observedValue = database.prepare("SELECT value FROM observations").get()?.value;
+      return { entries: [] };
+    });
+    const config = {};
+    const metadata = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const preparation = prepareWorkspaceBuildGroup(
+      [
+        {
+          config,
+          agentDir: state.agentDir("default"),
+          workspaceDir: state.workspaceDir,
+          env: state.env,
+          skipCredentials: true,
+        },
+      ],
+      "static",
+      {},
+      () => registry,
+      undefined,
+      metadata,
+    );
+    const outcome = preparation.catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        entered.promise,
+        preparation.then(() => {
+          throw new Error("Preparation completed before its static catalog dependency");
+        }),
+      ]);
+      await resources.release();
+      expect(database.isOpen).toBe(true);
+      expect(disposalCount).toBe(0);
+      finish.resolve();
+      expect(await outcome).toEqual(
+        new Error("Prepared media capability provider source is retired"),
+      );
+      expect(observedValue).toBe(42);
+      expect(database.isOpen).toBe(false);
+      expect(disposalCount).toBe(1);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([outcome, resources.release()]);
+      if (database.isOpen) {
+        database.close();
+      }
+    }
   });
 
   it("carries newly selected provider auth into a derived generation and its refresh", async () => {
@@ -222,6 +305,103 @@ describe("prepared reply dispatch runtime", () => {
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
   });
+
+  it.each(["loaded", "disabled", "error", "absent", "not-imported"] as const)(
+    "preserves a selected provider's %s outcome when borrowing its parent lease",
+    async (outcome) => {
+      mocks.configuredAgentIds = ["default"];
+      const config = {
+        agents: { defaults: { model: "custom/model" } },
+        plugins: {
+          slots: { memory: "none" },
+          entries: { qwen: { enabled: outcome !== "disabled" } },
+        },
+      };
+      const registry = createEmptyPluginRegistry();
+      if (outcome !== "absent") {
+        registry.plugins.push(
+          createPluginRecord({
+            id: "qwen",
+            origin: "bundled",
+            status: outcome === "not-imported" ? "loaded" : outcome,
+            enabled: outcome !== "disabled",
+            imported: outcome === "loaded",
+            error: outcome === "error" ? "provider fixture failed to load" : undefined,
+          }),
+        );
+      }
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+        params.selections?.some(
+          (selection: { provider: string }) => selection.provider === "bailian-token-plan",
+        )
+          ? registry
+          : createEmptyPluginRegistry(),
+      );
+      const metadata = createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: makeRegistry([
+          { id: "qwen", origin: "bundled", channels: [], providers: ["bailian-token-plan"] },
+        ]),
+      });
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot: {
+          ...metadata,
+          owners: {
+            ...metadata.owners,
+            providers: new Map([["bailian-token-plan", ["qwen"]]]),
+          },
+        },
+      });
+      const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+      const input = {
+        config,
+        agentId: "default",
+        agentDir: published.agentDir,
+        workspaceDir: published.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          { provider: "bailian-token-plan", modelId: "qwen3.7-max", runtime: "openclaw" },
+        ],
+      };
+      const parent = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "static",
+        pluginGeneration: published.pluginGeneration,
+      });
+      expect(parent.pluginGeneration).not.toBe(published.pluginGeneration);
+      let active = true;
+      try {
+        await withPreparedModelRuntimePluginGenerationScope(
+          parent.pluginGeneration,
+          async () => {
+            const borrowing = acquireAgentRunPreparedModelRuntime(input, {
+              catalogMode: "static",
+              pluginGeneration: parent.pluginGeneration,
+            });
+            if (outcome === "absent" || outcome === "not-imported") {
+              await expect(borrowing).rejects.toThrow("plugin generation was superseded");
+              return;
+            }
+            const nested = await borrowing;
+            expect(nested.snapshot).toBe(parent.snapshot);
+            expect(registryContainsRuntimePluginIds(registry, ["qwen"])).toBe(outcome === "loaded");
+            if (outcome === "error") {
+              expect(nested.snapshot.pluginRegistry?.plugins[0]?.error).toBe(
+                "provider fixture failed to load",
+              );
+            }
+            nested.release();
+          },
+          () => (active ? parent.snapshot : undefined),
+        );
+      } finally {
+        active = false;
+        parent.release();
+      }
+    },
+  );
 
   it("atomically replaces one complete prepared dispatch runtime across a Gateway refresh", async () => {
     mocks.configuredAgentIds = ["default"];

@@ -1,5 +1,6 @@
 {
   "id": "discord",
+  "categories": ["channels", "voice"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "discord-legacy-state" }]

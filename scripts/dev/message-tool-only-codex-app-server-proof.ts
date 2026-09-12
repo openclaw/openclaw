@@ -523,33 +523,33 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
     dynamicToolNames: [],
   };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `mto-appserver-${arm}-`));
-  const promptSubmission = buildPromptSubmission(scenario);
-  const workspaceDir = path.join(root, "workspace");
-  const agentDir = path.join(root, "agent");
-  const codexHome = path.join(root, "codex-home");
-  for (const dir of [workspaceDir, agentDir, codexHome]) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  for (const [name, contents] of Object.entries(WORKSPACE_FILES)) {
-    fs.writeFileSync(path.join(workspaceDir, name), contents, "utf8");
-  }
-  // The message tool persists the source reply into the session transcript before it
-  // reaches the transport, and refuses to write when the store has no entry whose
-  // sessionId matches this attempt ("session rebound"). Seed the real store so the
-  // production persistence step succeeds instead of short-circuiting the send.
-  const sessionStorePath = path.join(root, "sessions.json");
-  const sessionId = `proof-${arm}-${scenario.id}-${replicate}`;
-  await replaceSessionEntry(
-    {
-      agentId: "main",
-      sessionKey: String(scenario.ctx.SessionKey),
-      storePath: sessionStorePath,
-    },
-    { sessionId, updatedAt: Date.now() },
-  );
   let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
   let host: Awaited<ReturnType<typeof createAgentHarnessHostCapabilitiesForTest>> | undefined;
   try {
+    const promptSubmission = buildPromptSubmission(scenario);
+    const workspaceDir = path.join(root, "workspace");
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(root, "codex-home");
+    for (const dir of [workspaceDir, agentDir, codexHome]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    for (const [name, contents] of Object.entries(WORKSPACE_FILES)) {
+      fs.writeFileSync(path.join(workspaceDir, name), contents, "utf8");
+    }
+    // The message tool persists the source reply into the session transcript before it
+    // reaches the transport, and refuses to write when the store has no entry whose
+    // sessionId matches this attempt ("session rebound"). Seed the real store so the
+    // production persistence step succeeds instead of short-circuiting the send.
+    const sessionStorePath = path.join(root, "sessions.json");
+    const sessionId = `proof-${arm}-${scenario.id}-${replicate}`;
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: String(scenario.ctx.SessionKey),
+        storePath: sessionStorePath,
+      },
+      { sessionId, updatedAt: Date.now() },
+    );
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
       JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
@@ -732,18 +732,18 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
  * Resolved once against a throwaway app-server so concurrent trials never contend on
  * `model/list` (three simultaneous app-servers reliably time that request out).
  */
-async function resolveDefaultModelId(): Promise<string> {
+async function resolveDefaultModelId(): Promise<string | undefined> {
   const configured = values.model?.trim();
   if (configured) {
     return configured;
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mto-appserver-models-"));
-  const agentDir = path.join(root, "agent");
-  const codexHome = path.join(root, "codex-home");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.mkdirSync(codexHome, { recursive: true });
   let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
   try {
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(root, "codex-home");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
       JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
@@ -766,9 +766,6 @@ async function resolveDefaultModelId(): Promise<string> {
       data: Array<{ model: string; isDefault?: boolean }>;
     }>("model/list", { limit: 100, cursor: null, includeHidden: false }, { timeoutMs: 120_000 });
     const modelId = listed.data.find((entry) => entry.isDefault)?.model ?? listed.data[0]?.model;
-    if (!modelId) {
-      skip("Codex model/list returned no models reachable with these credentials.");
-    }
     return modelId;
   } finally {
     await client?.closeAndWait().catch(() => undefined);
@@ -878,7 +875,9 @@ initializeGlobalHookRunner(
   ]),
 );
 
-const resolvedModelId = await resolveDefaultModelId();
+const resolvedModelId =
+  (await resolveDefaultModelId()) ??
+  skip("Codex model/list returned no models reachable with these credentials.");
 console.log(
   `Driving ${tasks.length} real Codex app-server turns on ${resolvedModelId} ` +
     `(${ARMS.length} arms x ${SCENARIOS.length} scenarios x ${REPLICATES} replicates, ` +
@@ -887,7 +886,13 @@ console.log(
 const trials = await runPool(tasks, CONCURRENCY);
 
 function cell(arm: Arm, scenarioId: string) {
-  const rows = trials.filter((trial) => trial.arm === arm && trial.scenarioId === scenarioId);
+  const rows = trials.filter(
+    (trial) =>
+      trial.arm === arm &&
+      trial.scenarioId === scenarioId &&
+      trial.chatContextPresent === true &&
+      trial.currentInboundContextPresent === true,
+  );
   const delivered = rows.filter((trial) => trial.delivered.length > 0).length;
   const errored = rows.filter((trial) => trial.error).length;
   return { rows, delivered, errored, n: rows.length };
@@ -1113,13 +1118,13 @@ if (!toolNames.has("message")) {
 if (errored.length > trials.length / 4) {
   failures.push(`${errored.length}/${trials.length} turns errored; the sample is not trustworthy`);
 }
-if (trials.some((trial) => trial.chatContextPresent === false)) {
+if (trials.some((trial) => trial.chatContextPresent !== true)) {
   failures.push(
     "the arm's chat-context paragraph was NOT byte-present in the developer instructions sent " +
       "to the app-server; the A/B is not testing the changed prompt",
   );
 }
-if (trials.some((trial) => trial.currentInboundContextPresent === false)) {
+if (trials.some((trial) => trial.currentInboundContextPresent !== true)) {
   failures.push(
     "the production currentInboundContext bytes were NOT present in Codex turn/start input",
   );

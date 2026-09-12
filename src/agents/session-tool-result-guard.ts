@@ -42,7 +42,6 @@ import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
 } from "./session-raw-append-message.js";
-import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import type { SessionManager } from "./sessions/index.js";
 import {
@@ -674,7 +673,7 @@ export function installSessionToolResultGuard(
   const originalAppendWithTranscriptAnchor =
     sessionManager.appendMessageWithTranscriptAnchor.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
-  const pendingState = createPendingToolCallState();
+  const pending = new Map<string, string | undefined>();
   const persistMessage = (message: AgentMessage, sourceAppend?: CodeModeSourceAppend) => {
     const transformer = opts?.transformMessageForPersistence;
     const persisted = transformer ? transformer(message) : message;
@@ -736,9 +735,11 @@ export function installSessionToolResultGuard(
       persistedMessage.role === "toolResult" ? extractToolResultId(persistedMessage) : null;
     // Update only committed state, before callbacks can re-enter or throw.
     if (persistedId) {
-      pendingState.delete(persistedId);
+      pending.delete(persistedId);
     }
-    pendingState.trackToolCalls(extractPendingAssistantToolCalls(persistedMessage));
+    for (const call of extractPendingAssistantToolCalls(persistedMessage)) {
+      pending.set(call.id, call.name);
+    }
     if (!appended) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
@@ -801,11 +802,11 @@ export function installSessionToolResultGuard(
   };
 
   const flushPendingToolResults = () => {
-    if (pendingState.size() === 0) {
+    if (pending.size === 0) {
       return;
     }
     if (allowSyntheticToolResults) {
-      for (const [id, name] of pendingState.entries()) {
+      for (const [id, name] of pending.entries()) {
         const synthetic = makeMissingToolResult({
           toolCallId: id,
           toolName: name,
@@ -837,11 +838,11 @@ export function installSessionToolResultGuard(
         }
       }
     }
-    pendingState.clear();
+    pending.clear();
   };
 
   const clearPendingToolResults = () => {
-    pendingState.clear();
+    pending.clear();
   };
 
   const guardedAppend = (
@@ -857,7 +858,7 @@ export function installSessionToolResultGuard(
         allowedToolNames: opts?.allowedToolNames,
       });
       if (sanitized.length === 0) {
-        if (pendingState.shouldFlushForSanitizedDrop()) {
+        if (pending.size > 0) {
           flushPendingToolResults();
         }
         return undefined;
@@ -873,7 +874,7 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
-      const toolName = id ? pendingState.getToolName(id) : undefined;
+      const toolName = id ? pending.get(id) : undefined;
       const normalizedToolResult = normalizePersistedToolResultName(
         nextMessage,
         toolName,
@@ -932,22 +933,22 @@ export function installSessionToolResultGuard(
       (nextRole === "assistant" &&
         toolCalls.length === 0 &&
         isTranscriptOnlyOpenClawAssistantMessage(nextMessage));
-    if (
-      !transcriptOnly &&
-      pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)
-    ) {
-      flushPendingToolResults();
+    if (!transcriptOnly) {
+      const toolCallCount = toolCalls.length;
+      if (pending.size > 0 && (toolCallCount === 0 || nextRole !== "assistant")) {
+        flushPendingToolResults();
+      }
     }
     // If synthetic results are disabled, a new assistant tool-call turn is a safe
     // boundary to drop older pending ids. When synthetic results are enabled,
     // do not synthesize here: parallel tool-result appends can still be racing
     // this assistant append, and transcript repair can move late real results
     // back into strict provider order before the next replay.
-    if (
-      !allowSyntheticToolResults &&
-      pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)
-    ) {
-      flushPendingToolResults();
+    if (!allowSyntheticToolResults) {
+      const toolCallCount = toolCalls.length;
+      if (pending.size > 0 && toolCallCount > 0) {
+        flushPendingToolResults();
+      }
     }
 
     const transformedMessage = persistMessage(nextMessage, sourceAppend);
@@ -1045,7 +1046,7 @@ export function installSessionToolResultGuard(
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
     },
-    getPendingIds: pendingState.getPendingIds,
+    getPendingIds: () => Array.from(pending.keys()),
     setTranscriptRunId: (runId, errors) => {
       transcriptRunId = runId;
       assistantErrorTranscript = errors;

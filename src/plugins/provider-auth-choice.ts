@@ -503,12 +503,14 @@ export async function prepareAuthChoiceLoadedPluginProvider(
     let resolved = resolveProviderPluginChoice({
       providers,
       choice: params.authChoice,
+      manifestChoice: manifestAuthChoice ?? installCatalogEntry,
     });
     if (!resolved && setupProvider) {
       providers = resolveScopedRuntimeProviders(enabledConfig);
       resolved = resolveProviderPluginChoice({
         providers,
         choice: params.authChoice,
+        manifestChoice: manifestAuthChoice ?? installCatalogEntry,
       });
     }
     if (!resolved && installCatalogEntry) {
@@ -546,6 +548,7 @@ export async function prepareAuthChoiceLoadedPluginProvider(
       resolved = resolveProviderPluginChoice({
         providers,
         choice: params.authChoice,
+        manifestChoice: manifestAuthChoice ?? installCatalogEntry,
       });
     }
     if (!resolved) {

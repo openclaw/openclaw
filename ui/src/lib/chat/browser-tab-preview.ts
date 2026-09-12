@@ -31,14 +31,10 @@ export function latestBrowserTabCards(
       }
       for (const card of extractToolCardsCached(message)) {
         const revision = browserTabCardRevision(card);
-        if (
-          card.preview?.kind === "browser-tab" &&
-          revision &&
-          resolveToolCardOutcome(card, false) === "succeeded"
-        ) {
-          const key = browserTabKey(card.preview);
+        if (card.browserTab && revision && resolveToolCardOutcome(card, false) === "succeeded") {
+          const key = browserTabKey(card.browserTab);
           latest.delete(key);
-          latest.set(key, { tab: card.preview, revision });
+          latest.set(key, { tab: card.browserTab, revision });
         }
       }
     }

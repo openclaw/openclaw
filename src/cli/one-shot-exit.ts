@@ -1,5 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { drainOneShotOutput } from "./one-shot-output.js";
+import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -7,7 +9,6 @@ type VitestWorkerMarkers = {
 };
 
 const SYSTEM_CA_FLAG = "--use-system-ca";
-const ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS = 5_000;
 
 let requestedExitCode: number | "process" | undefined;
 
@@ -79,9 +80,10 @@ function requestExitAfterSystemCaCliCompletion(
   if (platform !== "darwin" || !usesSystemCa || runtime !== defaultRuntime) {
     return false;
   }
-  if (requestedExitCode === undefined) {
-    requestedExitCode = params.exitCode ?? "process";
+  if (requestedExitCode !== undefined) {
+    return false;
   }
+  requestedExitCode = params.exitCode ?? "process";
   return true;
 }
 
@@ -107,11 +109,14 @@ export async function runCliWithExitFinalization(params: {
       requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
     }
   } finally {
-    requestExitAfterSystemCaCliCompletion(runtime, {
+    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
       execArgv: params.execArgv,
       platform: params.platform,
     });
+    if (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers)) {
+      await waitForPendingCliDisposers();
+    }
     flushExitAfterOneShotOutput(runtime, params.env, params.markers);
   }
 }
@@ -135,6 +140,20 @@ export function requestExitAfterOneShotOutput(
   return true;
 }
 
+/** A recorded command outcome must not be held hostage by resource cleanup. */
+export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): void {
+  if (isVitestWorker(process.env)) {
+    return;
+  }
+  setTimeout(() => {
+    try {
+      onStall();
+    } finally {
+      defaultRuntime.exit(exitCode);
+    }
+  }, 10_000).unref();
+}
+
 function flushExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
   env: NodeJS.ProcessEnv = process.env,
@@ -148,22 +167,5 @@ function flushExitAfterOneShotOutput(
 
   const exit = () =>
     runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
-  let pendingStreams = 2;
-
-  // A missing pipe callback must not leave a completed one-shot command alive forever.
-  const fallback = setTimeout(exit, ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS);
-  fallback.unref();
-
-  const drain = (stream: NodeJS.WriteStream) => {
-    stream.write("", () => {
-      pendingStreams -= 1;
-      if (pendingStreams === 0) {
-        clearTimeout(fallback);
-        setImmediate(exit);
-      }
-    });
-  };
-
-  drain(process.stdout);
-  drain(process.stderr);
+  drainOneShotOutput(exit);
 }

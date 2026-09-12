@@ -293,6 +293,10 @@ export async function recordShortTermRecalls(params: {
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score * addedSignals);
       const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeRecentDistinct(queryHashesBase, queryHash, MAX_QUERY_HASHES);
+      const userQueryHashes =
+        signalType === "recall"
+          ? mergeRecentDistinct(existing?.userQueryHashes ?? [], queryHash, MAX_QUERY_HASHES)
+          : existing?.userQueryHashes;
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
       // Workspace-file hits without explicit provenance retain the index's
@@ -338,6 +342,7 @@ export async function recordShortTermRecalls(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt,
         queryHashes,
+        ...(userQueryHashes ? { userQueryHashes } : {}),
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,

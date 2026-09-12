@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -84,12 +84,13 @@ const MAX_TRIAL_ERROR_RATE = 0.1;
 const CONCURRENCY = 6;
 const ANTHROPIC_MAX_TOKENS = 6000;
 const GROUPS_MODULE_RELATIVE_PATH = "src/auto-reply/reply/groups.ts";
+const DEFAULT_BASELINE_REF = "3dd3003f49ce71f38c0ecf84dbdbc95023498a69";
 
 const { values } = parseArgs({
   options: {
     trials: { type: "string", default: "10" },
     models: { type: "string" },
-    "base-ref": { type: "string", default: "origin/main" },
+    "base-ref": { type: "string", default: DEFAULT_BASELINE_REF },
     json: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
@@ -147,13 +148,28 @@ async function loadBaselineGroupsModule(baseRef: string): Promise<GroupsModule> 
       /(import\(\s*")(\.\.?\/[^"]+)("\s*\))/g,
       (_m, head, spec, tail) => head + absolutize(spec) + tail,
     );
-  const file = path.join(mkdtempSync(path.join(tmpdir(), "mto-proof-baseline-")), "groups.ts");
-  writeFileSync(file, rewritten, "utf8");
-  return (await import(pathToFileURL(file).href)) as GroupsModule;
+  const root = mkdtempSync(path.join(tmpdir(), "mto-proof-baseline-"));
+  try {
+    const file = path.join(root, "groups.ts");
+    writeFileSync(file, rewritten, "utf8");
+    return (await import(pathToFileURL(file).href)) as GroupsModule;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 const patchedGroups = (await import("../../src/auto-reply/reply/groups.js")) as GroupsModule;
-const baselineGroups = await loadBaselineGroupsModule(values["base-ref"] ?? "origin/main");
+const baselineOid = execFileSync(
+  "git",
+  ["rev-parse", `${values["base-ref"] ?? DEFAULT_BASELINE_REF}^{commit}`],
+  { cwd: repoRoot, encoding: "utf8" },
+).trim();
+const patchedOid = execFileSync("git", ["rev-parse", "HEAD^{commit}"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+}).trim();
+console.log(`Proof commits: baseline ${baselineOid}; patched ${patchedOid}`);
+const baselineGroups = await loadBaselineGroupsModule(baselineOid);
 
 const messageTool = createMessageTool({
   sourceReplyOnly: true,

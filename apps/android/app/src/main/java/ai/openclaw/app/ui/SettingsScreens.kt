@@ -1632,6 +1632,7 @@ private fun GatewaySettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val uriHandler = LocalUriHandler.current
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
@@ -1672,9 +1673,9 @@ private fun GatewaySettingsScreen(
   }
 
   pendingSetupResetPlan?.let { plan ->
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingSetupResetPlan = null },
-      title = { Text(nativeString("Replace gateway setup?")) },
+      title = nativeString("Replace gateway setup?"),
       text = {
         Text(
           gatewaySettingsSetupResetConfirmationText(),
@@ -1682,7 +1683,10 @@ private fun GatewaySettingsScreen(
           color = ClawTheme.colors.text,
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingSetupResetPlan = null }) {
+          Text(nativeString("Cancel"))
+        }
         TextButton(
           onClick = {
             pendingSetupResetPlan = null
@@ -1692,11 +1696,6 @@ private fun GatewaySettingsScreen(
           Text(nativeString("Replace setup"))
         }
       },
-      dismissButton = {
-        TextButton(onClick = { pendingSetupResetPlan = null }) {
-          Text(nativeString("Cancel"))
-        }
-      },
       containerColor = ClawTheme.colors.surface,
     )
   }
@@ -1704,9 +1703,9 @@ private fun GatewaySettingsScreen(
   pendingForgetStableId?.let { stableId ->
     val entry = pairedGateways.firstOrNull { it.stableId == stableId }
     val gatewayName = entry?.name ?: nativeString("this gateway")
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingForgetStableId = null },
-      title = { Text(nativeString("Forget gateway?")) },
+      title = nativeString("Forget gateway?"),
       text = {
         Text(
           nativeString(
@@ -1715,7 +1714,8 @@ private fun GatewaySettingsScreen(
           ),
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
         TextButton(
           onClick = {
             pendingForgetStableId = null
@@ -1724,9 +1724,6 @@ private fun GatewaySettingsScreen(
         ) {
           Text(nativeString("Forget"))
         }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
       },
       containerColor = ClawTheme.colors.surface,
     )
@@ -1821,6 +1818,18 @@ private fun GatewaySettingsScreen(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
+        }
+      }
+    }
+    gatewayConnectionDisplay.problem?.takeIf { it.isNetworkFailure }?.let { problem ->
+      Text(
+        text = recoveryGatewayAuthDetail(problem),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      gatewayNetworkRecoveryHelpUrl(problem)?.let { url ->
+        TextButton(onClick = { uriHandler.openUri(url) }) {
+          Text(nativeString("Set up Tailscale"))
         }
       }
     }

@@ -1,5 +1,6 @@
 {
   "id": "zoom-meetings",
+  "categories": ["voice", "tools"],
   "name": "Zoom meetings",
   "description": "Join Zoom meetings as a Chrome browser guest.",
   "cliCommands": [

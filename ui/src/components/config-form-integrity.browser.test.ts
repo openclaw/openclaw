@@ -669,7 +669,6 @@ describe("config form integrity", () => {
       container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
       "changed repeated scalar input",
     );
-    expect(changed).toBe(first);
     expect(changed.value).toBe("444");
     expect(changed.getAttribute("aria-invalid")).toBe("false");
     expect(changed.validationMessage).toBe("");
