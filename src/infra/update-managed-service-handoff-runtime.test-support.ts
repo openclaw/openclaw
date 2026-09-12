@@ -2,8 +2,15 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ManagedRepairBoundary } from "./update-managed-service-handoff-boundary-contract.test-support.js";
-import { managedRepairConfig } from "./update-managed-service-handoff-repair.test-support.js";
+import { expect } from "vitest";
+import type {
+  ManagedRepairBoundary,
+  ManagedServiceBoundaryOptions,
+} from "./update-managed-service-handoff-boundary-contract.test-support.js";
+import {
+  managedRepairConfig,
+  prepareManagedRepairSpawnEnv,
+} from "./update-managed-service-handoff-repair.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
 export async function prepareManagedServiceRuntimeFixture(params: {
@@ -87,4 +94,58 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     );
   }
   return { sourceRuntimeImport, ledgerRuntimeImport };
+}
+
+export async function prepareManagedServiceSpawn(
+  root: string,
+  scriptPath: string,
+  childEnv: NodeJS.ProcessEnv,
+  options?: Pick<ManagedServiceBoundaryOptions, "repair" | "beforeParkNotice">,
+) {
+  let env = options?.repair ? await prepareManagedRepairSpawnEnv(root, childEnv) : childEnv;
+  const deadlinePath = path.join(root, "notice-deadline.json");
+  const releasePath = path.join(root, "notice-deadline-release");
+  if (options?.beforeParkNotice === "stalled") {
+    const preloadPath = path.join(root, "notice-clock-preload.cjs");
+    // Keep other processes and deadlines native; release only after the parent observes the notice.
+    const source = `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
+      const fs = require("node:fs");
+      const setTimeout = global.setTimeout;
+      const clearTimeout = global.clearTimeout;
+      const polls = new Map();
+      let captured = false;
+      global.clearTimeout = (timer) => {
+        clearInterval(polls.get(timer));
+        polls.delete(timer);
+        return clearTimeout(timer);
+      };
+      global.setTimeout = (callback, delay, ...args) => {
+        const timer = setTimeout(callback, delay, ...args);
+        if (delay !== 10_000) return timer;
+        if (captured) throw new Error("duplicate pre-park notice deadline");
+        captured = true;
+        fs.writeFileSync(${JSON.stringify(deadlinePath)}, JSON.stringify({ requestedMs: delay }));
+        const poll = setInterval(() => {
+          if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
+          global.clearTimeout(timer);
+          callback.apply(timer, args);
+        }, 5);
+        polls.set(timer, poll);
+        return timer;
+      };
+    }`;
+    await fs.writeFile(preloadPath, source);
+    env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
+  }
+  return {
+    env,
+    releaseNoticeDeadline: async (parentSignal: NodeJS.Signals | null) => {
+      expect(parentSignal).toBeNull();
+      await expect(
+        fs.readFile(deadlinePath, "utf8").then((value) => JSON.parse(value)),
+        "expected one captured 10,000ms pre-park deadline",
+      ).resolves.toEqual({ requestedMs: 10_000 });
+      await fs.writeFile(releasePath, "release");
+    },
+  };
 }
