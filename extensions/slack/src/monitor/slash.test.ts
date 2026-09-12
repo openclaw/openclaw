@@ -320,7 +320,7 @@ function createArgMenusHarness(
     isChannelAllowed: () => true,
     resolveChannelName: async () => ({ name: "dm", type: "im" }),
     resolveUserName: async () => ({ name: "Ada" }),
-  } as unknown;
+  };
 
   Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = {
@@ -1617,7 +1617,7 @@ function createPolicyHarness(overrides?: {
     resolveChannelName:
       overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
     resolveUserName: async () => ({ name: "Ada" }),
-  } as unknown;
+  };
 
   Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
